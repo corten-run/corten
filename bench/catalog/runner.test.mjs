@@ -17,9 +17,14 @@ test("an existing catalog results directory is reserved, including a failed or c
   const sentinel = join(dir, "sentinel");
   writeFileSync(sentinel, "do not overwrite");
   try {
-    const result = spawnSync(process.execPath, [join(here, "run.mjs"), round, "--check-only"], { cwd: repo, encoding: "utf8", windowsHide: true, timeout: 10000 });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /EEXIST/);
+    for (const extra of [[], ["--group", "catalog-page"]]) {
+      const result = spawnSync(process.execPath, [join(here, "run.mjs"), round, "--check-only", ...extra], {
+        cwd: repo, encoding: "utf8", windowsHide: true, timeout: 10000,
+        env: { ...process.env, BENCH_APPS: "corten", BENCH_TIER: "matched" },
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /EEXIST/, "full native inventory remains available despite legacy tier/subset environment");
+    }
     assert.equal(readFileSync(sentinel, "utf8"), "do not overwrite");
     assert.equal(existsSync(join(dir, "summary.json")), false);
   } finally {

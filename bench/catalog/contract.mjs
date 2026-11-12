@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spread } from "../fullstack/passes.mjs";
+import { groupDescriptor } from "./group.mjs";
 
 export const workload = "catalog-v1";
 export const sources = ["fixture", "api"];
@@ -110,6 +111,7 @@ export function parseArgs(args, available) {
     seen.add(flag);
     if (flag === "--build") options.build = true;
     else if (flag === "--check-only") options.checkOnly = true;
+    else if (flag === "--group") options.group = groupDescriptor(rest[++i]).group;
     else if (flag === "--apps") {
       const names = rest[++i]?.split(",");
       if (!names?.length || new Set(names).size !== names.length || names.some((n) => !Object.hasOwn(available, n))) throw new Error("--apps must name distinct page apps");
@@ -121,6 +123,11 @@ export function parseArgs(args, available) {
       if (!/^\d+$/.test(value ?? "") || !Number.isSafeInteger(n) || n < min || n > max) throw new Error(`${flag} must be an integer from ${min} through ${max}`);
       options[key] = n;
     } else throw new Error(`unknown option ${flag}`);
+  }
+  if (options.group !== undefined) {
+    assert.ok(!seen.has("--apps"), "--group cannot be combined with --apps");
+    options.apps = groupDescriptor(options.group).apps;
+    assert.ok(options.apps.every((app) => Object.hasOwn(available, app)), "catalog group requires every registry app in the native page inventory");
   }
   if (options.passes % 2 !== 1) throw new Error("--passes must be 1, 3 or 5");
   return options;

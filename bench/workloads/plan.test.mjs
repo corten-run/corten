@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { nightly } from "../marketplace/droplet-contract.mjs";
+import { groupDescriptor } from "../catalog/group.mjs";
 import { groupNames } from "./registry.mjs";
 import { markdown, plan } from "./plan.mjs";
 
@@ -10,6 +11,12 @@ test("planning discovers current official options, but never fabricates ready ev
     const p = plan(name);
     assert.ok(p.coverage.cells.every((c) => c.parity === "not-run" && c.measurement === "not-run"));
     if (name === "localized-marketplace") assert.deepEqual(p.execution.options, nightly);
+    else if (name === "catalog-page") {
+      assert.equal(p.execution.runner, "bench/catalog/run.mjs");
+      assert.deepEqual(p.execution.descriptor, groupDescriptor(name));
+      assert.equal(p.execution.status, "requires-exact-image-page-and-json-browser-gates");
+      assert.match(p.execution.cloud, /not-integrated/);
+    }
     else assert.equal(p.execution.status, "pending-group-runner-integration");
   }
 });
