@@ -100,7 +100,8 @@ export async function run(args) {
   const options = Array.isArray(args) ? parseOptions(args) : args;
   assert.match(options.round ?? "", /^w[1-9]\d*$/);
   const targets = options.targets ? validateTargets(JSON.parse(readFileSync(resolve(options.targets), "utf8")))
-    : Object.fromEntries(candidates.map((app) => [app, { image: `cb-marketplace-${app}`, ...(app === "corten" ? { readback: { path: "/api/alerts" } } : {}) }]));
+    : Object.fromEntries(candidates.map((app) => [app, { image: `cb-marketplace-${app}` }]));
+  for (const target of Object.values(targets)) target.readback ??= { path: "/api/alerts" };
   const records = fixtureRecords(), plan = createBrowserPlan({ records });
   assert.ok(options.cases === null || options.cases.every((key) => plan.cases.some((p) => p.key === key)), "unknown case key");
   const folder = resolve(options.out);
@@ -120,7 +121,7 @@ export async function run(args) {
     options, images: {}, builds: {}, browser: null, cells: emptyCells(plan), complete: false, qualificationPassed: false, readyForLoad: false,
     retainedFamilies: retainedFamilies.map((f) => ({ ...f, outcome: "not-run", reason: "Retained; not replaced by native browser diagnostics" })),
     limits: ["No comparative result until all selected native capabilities and exact-image source provenance pass",
-      "Native retired-page cleanup/probe instrumentation is unavailable; context closure alone does not qualify",
+      "Browser-primitive resource observations do not invent framework ownership or probes into destroyed realms",
       "No load, production HTTP, repeated timing, build, CPU, memory or instruction qualification"], cleanupFailures: [], failures: [] };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2) + "\n"); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   save();
@@ -196,9 +197,13 @@ export async function run(args) {
             stillSameProcess: after.State.Running && before.State.StartedAt === after.State.StartedAt && before.RestartCount === after.RestartCount,
             configuration: { cpus: 1, memoryBytes: 2 ** 30, marketplaceSource: profile.source, fixtureSha256: summary.fixtureSha256 } };
           if (!cell.evidence.provenance.stillSameProcess) { cell.evidence.failures.push("App stopped/restarted during journey"); cell.outcome = "failed"; }
-          if (!summary.images[app].imageSourceVerified) cell.evidence.gaps.push("Image lacks matching clean source-commit labels; immutable image identity is captured, source correspondence is unverified");
+          if (!summary.images[app].imageSourceVerified) {
+            cell.evidence.gaps.push("Image lacks matching clean source-commit labels; immutable image identity is captured, source correspondence is unverified");
+            cell.qualificationPassed = false;
+            if (cell.outcome === "captured") cell.outcome = "unsupported";
+          }
           summary.cells[app][index] = cell;
-          console.log(`${app} ${profile.key}: ${cell.outcome}; ${cell.evidence.steps.length} real actions; qualification=false`);
+          console.log(`${app} ${profile.key}: ${cell.outcome}; ${cell.evidence.steps.length} real actions; qualification=${cell.qualificationPassed}`);
         } catch (e) { summary.cells[app][index] = { case: profile.key, outcome: "failed", reason: e.message, qualificationPassed: false, evidence: null }; }
         finally {
           if (id) try { await owned.remove(id); } catch (e) { summary.cleanupFailures.push(e.message); }

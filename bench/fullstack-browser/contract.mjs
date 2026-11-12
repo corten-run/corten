@@ -11,7 +11,7 @@ export const settings = {
     mobile: { viewport: { width: 390, height: 844 }, cpu: 4,
       network: { offline: false, latency: 150, downloadThroughput: 1.6 * 1024 * 1024 / 8, uploadThroughput: 750 * 1024 / 8 }, cache: "cold", serviceWorker: "blocked" },
   },
-  actionTimeoutMs: 15000, startupTimeoutMs: 60000, observationMs: 250,
+  actionTimeoutMs: 15000, startupTimeoutMs: 60000, observationMs: 250, maxCleanupMs: 15000,
 };
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 // This native build fixes SvelteKit's request/CSRF origin to localhost:8080.
@@ -76,6 +76,8 @@ export function transportOf(request) {
   if (h["x-livewire"] !== undefined) return "livewire";
   if (h["x-turbo-request-id"] || h.accept?.includes("turbo-stream")) return "turbo";
   if (request.isNavigationRequest()) return "document";
+  if (request.method() === "GET" && request.resourceType() === "fetch"
+    && /^\/marketplace\/(?:en-US|fr-FR|de-DE)\/item_[1-9]\d*\/__data\.json$/.test(new URL(request.url()).pathname)) return "router";
   if (/\/_next\/data\//.test(request.url()) || h["x-react-router-request"] || h["x-sveltekit-action"]) return "router";
   return "fetch";
 }

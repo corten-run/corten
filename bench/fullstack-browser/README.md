@@ -126,14 +126,14 @@ The path is not invented by the runner, may not be the form response, and is rea
 before the journey and after every accepted/rejected write through the browser context's
 `context.request`, sharing its cookie jar but not its DOM/POST response. Fresh case stores must start
 empty, contain exactly one accepted alert afterwards and remain unchanged by rejections.
-With `--build` and no custom manifest, Corten uses the separately owned `/api/alerts` native
-port; a missing port is a captured HTTP readback failure. No handler is modified here.
-At the base commit, Corten, Next Pages,
-Rails and Laravel marketplace handlers format success text without a persistent alert store;
-these cells fail write/readback qualification until native stores and independent reads exist.
+Every target defaults to `/api/alerts`; a manifest can select a different independent native
+path. A missing port is a captured HTTP readback failure, never an empty store. No handler is
+modified here. The separate native dependency commits now supply session stores for Corten,
+Next Pages, Nuxt, React Router, SvelteKit, Astro, TanStack Start, Rails and Laravel. Leptos still
+needs that port. Native dependencies are retained as separate commits, not copied into this
+directory or included in its owned patches.
 
-Laravel's current marketplace is Blade, not a Livewire component. Loading Livewire in its
-layout does not qualify it. Qualification needs actual `wire:id`/`wire:submit` bindings and
+Loading Livewire in a Laravel layout does not qualify it. Qualification needs actual `wire:id`/`wire:submit` bindings and
 observed component update POSTs. Rails needs real Turbo presence and Turbo navigation/form
 requests; a plain controller document is not substituted for Hotwire. Architecture disclosure
 uses observed page/runtime markers and requests, not the inventory's historical labels.
@@ -141,35 +141,44 @@ The independent SSR parse also retains native markers, including bootstrap scrip
 hydration may remove; Astro's emitted ClientRouter module is an observed native marker.
 Unrecognized markers stay explicitly unverified.
 
-Adapter work to dispatch after the runner is integrated:
+`mutationProbes` captures separate real HTTP POSTs through the same cookie jar after the
+journey: a foreign Origin, cross-site Fetch Metadata, and a missing record. It discovers the
+ordinary native form action and preserves its native hidden fields/CSRF in memory. Every
+attempt is followed by independent store readback, even when the rejection status is wrong.
+A separate browser context must still read an empty store. These protocol probes do not
+claim to test browser SameSite-cookie enforcement or substitute for enhanced native forms.
 
-1. Corten's `/api/alerts` array/session persistence port is owned by a separate lane. Rebuild
-   its exact merged image and exercise the same-context independent read; do not borrow another
-   checkout's successful capture.
-2. Next Pages, Nuxt, React Router, SvelteKit, Astro, TanStack Start and Leptos need native
-   session-isolated alert persistence and an independent read. Current handlers/actions pass
-   form values into message formatting, not a durable/native alert state. Implement validation
-   and mutation in each native server action/handler, not a shared renderer or client success flag.
-3. Rails needs its marketplace `data-turbo="false"` opt-out removed and real Turbo-compatible
-   forms/navigation (including success redirect/stream and validation handling), plus its native
-   store/readback. The sampled image also returns an empty missing-item page, not a visible error.
-4. Laravel needs a real marketplace Livewire component and update bindings, preserving the native
-   no-JS form fallback and CSRF, plus a native store/readback. Its layout's Livewire script alone
-   is insufficient.
-5. Every candidate needs trustworthy retired-page resource ownership and a bounded event probe;
-   destroying a whole browser context is not proof that native page replacement cleaned itself up.
-6. SvelteKit's observed native `.../item_2/__data.json` GET changes the correct visible route,
-   but the shared oracle currently recognizes alternate data destinations only for Next Pages.
-   This remains a failed navigation-request check, not a silent document fallback or a changed gate.
+`navigation.mjs` recognizes SvelteKit's physical `.../item_N/__data.json` only for a successful
+JS-enabled native router fetch with an observed JSON `type:data`/data-node envelope and the
+matching architecture. Wrong locale/item/transport/content/status/payload remains wrong.
+The physical path and body hash remain in the raw ledger. Its exported
+`normalizeSvelteKitCase` is the shared oracle's clone-only normalization hook, not a changed
+gate or document fallback. No shared workload file is edited.
+
+`resources.mjs` installs observers before native scripts and records native add/remove/once/
+abort listener lifetimes, timeouts/intervals/animation/idle callbacks, native DOM observers,
+fetch/XHR/microtask work and EventSource/WebSocket/worker connections. DOM roots receive
+observer-owned identities; callback-created work inherits the observed target's scope.
+Global resources without provable ownership remain explicitly unattributed and prevent
+qualification. Native framework subscription internals and arbitrary Promise continuations
+are not claimed to be enumerated. Known Playwright hit-target/removal-detection registrations
+are retained separately with their observed `InjectedScript` call stacks, not charged to apps.
+
+Cleanup clicks the app's real header link away, without forcing unmount, deleting native DOM,
+clearing timers/listeners, or closing connections. For a same-realm retired root it dispatches
+the actual registered event types (default action prevented) plus a retired-page event, then
+observes resource counts, real DOM hashes, requests and errors for the bounded interval.
+Native document-realm replacement is also captured through CDP. A destroyed realm cannot
+supply a fresh retired-DOM read/probe, so those counts stay null and the profile remains
+unsupported under the current strict oracle. There is no automatic platform-destruction
+waiver. Opaque global ownership similarly needs native lifecycle attribution before full
+qualification; a browser context closing is not that proof.
 
 Owned contexts are closed and closure is observed; owned Docker containers, anonymous volumes
 and networks are removed with ownership checks in `finally`, including interruption/failure.
-Native retired-page listener/timer/subscription ownership and retired-event probes are **not**
-available in the current adapters. Those counts are null with a reason, never fabricated zeroes.
-Consequently this runner currently cannot produce a fully qualified shared
-`browser-journey-capture/v1`: `qualificationPassed` and `readyForLoad` remain false. A separate
-raw schema preserves real partial evidence rather than laundering it through the offline
-oracle. Native page-scope instrumentation and its bounded probe remain integration work.
+The raw schema preserves partial evidence. Full `browser-journey-capture/v1` qualification
+still needs complete native dependencies, attributable retirement/probe evidence and the
+complete matrix. `readyForLoad` remains false; this workstation run never certifies load.
 
 Other limits: Chromium only; no repeated/rotated timing passes, changed-input output-cache
 probes, load or production-HTTP qualification. React Router's intermittent historical native

@@ -12,10 +12,31 @@ import { observeNetwork, architecture, classifyDisabledPreloads } from "./observ
 import { readStore, waitForSemanticChange } from "./journey.mjs";
 import { imageEvidence } from "./run.mjs";
 import { nativeBuildArgs } from "./build.mjs";
+import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
+import { missingAction } from "./probes.mjs";
 
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
+test("SvelteKit native data normalization requires successful physical framework payload and transport", () => {
+  const request = { id: "observed", method: "GET", path: "/marketplace/fr-FR/item_2/__data.json", status: 200, transport: "router", input: null, components: [],
+    resource: "fetch", type: "application/json", nativeData: { framework: "sveltekit", type: "data", nodes: [null, "data"] } };
+  const env = { app: "sveltekit", architecture: "sveltekit", js: true };
+  assert.equal(navigationDestination(request, env), "/marketplace/fr-FR/item_2");
+  for (const change of [{ status: 404 }, { failure: "aborted" }, { transport: "document" }, { resource: "script" }, { type: "text/html" }, { nativeData: null }, { nativeData: { framework: "sveltekit", type: "redirect", nodes: ["data"] } }]) {
+    assert.equal(navigationDestination({ ...request, ...change }, env), request.path);
+  }
+  assert.equal(navigationDestination(request, { ...env, js: false }), request.path);
+  assert.equal(navigationDestination(request, { ...env, app: "nextjs" }), request.path);
+  const raw = { architecture: "sveltekit", environment: { js: true }, steps: [{ requests: [request] }] };
+  const normalized = normalizeSvelteKitCase(structuredClone(raw));
+  assert.equal(normalized.steps[0].requests[0].path, "/marketplace/fr-FR/item_2");
+  assert.equal(raw.steps[0].requests[0].path, "/marketplace/fr-FR/item_2/__data.json");
+  assert.deepEqual(Object.keys(normalized.steps[0].requests[0]).sort(), ["id", "method", "path", "status", "transport", "input", "components"].sort());
+  assert.equal(missingAction("/api/marketplace/item_2", "item_2"), "/api/marketplace/item_missing");
+  assert.equal(missingAction("/marketplace/fr-FR/item_1", "item_1"), "/marketplace/fr-FR/item_missing");
+  assert.throws(() => missingAction("/unrelated/item_2", "item_2"));
+});
 test("semantic observer preserves document replacement and does not swallow other errors", async () => {
   const transitions = []; let samples = 0;
   await waitForSemanticChange({ evaluate: async () => {
