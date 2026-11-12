@@ -84,13 +84,68 @@ public sealed class MarketplaceTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
-            return Task.FromResult(new HttpResponseMessage(Status) { Content = new StringContent(JsonSerializer.Serialize(Record, MarketplaceSource.Json)) });
+            var json = request.RequestUri!.AbsolutePath.StartsWith("/catalog/")
+                ? JsonSerializer.Serialize(new CatalogRecord("record_1", "Title", "Subtitle", "Description", [], [], []), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                : JsonSerializer.Serialize(Record, MarketplaceSource.Json);
+            return Task.FromResult(new HttpResponseMessage(Status) { Content = new StringContent(json) });
         }
     }
     sealed class App(Upstream upstream) : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder) => builder.UseContentRoot(Directory.GetCurrentDirectory())
-            .ConfigureTestServices(services => services.AddHttpClient(nameof(MarketplaceSource)).ConfigurePrimaryHttpMessageHandler(() => upstream));
+            .ConfigureTestServices(services =>
+            {
+                services.AddHttpClient(nameof(MarketplaceSource)).ConfigurePrimaryHttpMessageHandler(() => upstream);
+                services.AddHttpClient(nameof(CatalogSource)).ConfigurePrimaryHttpMessageHandler(() => upstream);
+            });
+    }
+
+    [Theory]
+    [InlineData("/api/catalog/record_1")]
+    [InlineData("/api/marketplace/item_1")]
+    public async Task JsonErrorsAndHeadDoNotDependOnMatchedProfile(string path)
+    {
+        var upstream = new Upstream();
+        using var app = new App(upstream);
+        using var client = app.CreateClient(new() { AllowAutoRedirect = false });
+        using var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, path));
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+        Assert.Equal("application/json", head.Content.Headers.ContentType?.MediaType);
+        using var wrongMethod = await client.PostAsync(path, new StringContent(""));
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, wrongMethod.StatusCode);
+        Assert.Contains("HEAD", wrongMethod.Content.Headers.Allow);
+        Assert.Equal("application/problem+json", wrongMethod.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(405, JsonDocument.Parse(await wrongMethod.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+        upstream.Status = HttpStatusCode.NotFound;
+        using var missing = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal("application/problem+json", missing.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(404, JsonDocument.Parse(await missing.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+        upstream.Status = HttpStatusCode.ServiceUnavailable;
+        using var failed = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal("application/problem+json", failed.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(500, JsonDocument.Parse(await failed.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("/api/catalog/missing", "application/json", "application/problem+json")]
+    [InlineData("/api/catalog/missing", "application/problem+json", "application/problem+json")]
+    [InlineData("/api/catalog/missing", "text/html", "text/plain")]
+    [InlineData("/api/marketplace/missing", "application/json", "application/problem+json")]
+    [InlineData("/api/marketplace/missing", "application/problem+json", "application/problem+json")]
+    [InlineData("/api/marketplace/missing", "text/html", "text/plain")]
+    public async Task JsonErrorsRetainNativeContentNegotiation(string path, string accept, string mediaType)
+    {
+        using var app = new App(new Upstream { Status = HttpStatusCode.NotFound });
+        using var client = app.CreateClient(new() { AllowAutoRedirect = false });
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Accept.ParseAdd(accept);
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(mediaType, response.Content.Headers.ContentType?.MediaType);
+        if (mediaType == "application/problem+json")
+            Assert.Equal(404, JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
     }
 
     [Fact]

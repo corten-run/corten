@@ -14,6 +14,8 @@ builder.Services.AddRazorPages();
 // still encoded.
 builder.Services.Configure<WebEncoderOptions>(o => o.TextEncoderSettings = new TextEncoderSettings(UnicodeRanges.All));
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
+// Both record JSON routes need JSON errors in the default profile too.
+builder.Services.AddProblemDetails();
 // The item API's client. In the profile a read gives up after 10 seconds, card-market's deadline,
 // and the exception handler answers 500: ASP.NET Core's request timeout (UseRequestTimeouts) only
 // cancels code that reads the request's token, which the app's reads do not take.
@@ -45,8 +47,6 @@ if (matched)
     // any of the app's middleware. Corten also answers to any IP address.
     var hosts = (Environment.GetEnvironmentVariable("HOSTS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.SelectMany(h => h.StartsWith('.') ? new[] { h[1..], "*" + h } : new[] { h })]);
-    // The JSON's failures as application/problem+json (RFC 9457).
-    builder.Services.AddProblemDetails();
     // Brotli and gzip at their fastest when the client asks.
     builder.Services.AddResponseCompression();
     builder.Services.AddHealthChecks();
@@ -68,16 +68,18 @@ if (matched)
         await next();
     });
     app.UseResponseCompression();
-    // The JSON: a private Cache-Control the same way, and its failures as problem+json (a missing
-    // item, a wrong method, a failed read). Not on every answer: the static files append their own,
-    // and a page with a form gets its antiforgery token's no-cache, no-store. A page's failed read
-    // gets the template's error page.
+    // A private Cache-Control on matched API answers; static files and forms keep their policies.
     app.UseWhen(c => c.Request.Path.StartsWithSegments("/api"), api => api.Use(async (context, next) =>
     {
         context.Response.Headers.Append("Cache-Control", "private, no-cache");
         await next();
-    }).UseExceptionHandler().UseStatusCodePages());
+    }));
     app.UseWhen(c => !c.Request.Path.StartsWithSegments("/api"), pages => pages.UseExceptionHandler("/Error"));
+}
+app.UseWhen(c => c.Request.Path.StartsWithSegments("/api/catalog") || c.Request.Path.StartsWithSegments("/api/marketplace")
+    || (matched && c.Request.Path.StartsWithSegments("/api")), api => api.UseExceptionHandler().UseStatusCodePages());
+if (matched)
+{
     // Routing after the exception handler, as the template places it: the handler clears the failed
     // request's endpoint and runs it again as /Error, which routing before it would not match again.
     app.UseRouting();
@@ -90,8 +92,8 @@ app.MapRazorPages().WithStaticAssets();
 // HEAD, as Corten's get routes (Kestrel leaves out HEAD's body).
 string[] get = matched ? ["GET", "HEAD"] : ["GET"];
 app.MapMethods("/api/items/{id}", get, async (string id, ItemSource items) => await items.Get(id) is { } item ? Results.Ok(item) : Results.NotFound());
-app.MapMethods("/api/catalog/{id}", get, async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
-app.MapMethods("/api/marketplace/{id}", get, async (string id, MarketplaceSource source) => await source.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
+app.MapMethods("/api/catalog/{id}", ["GET", "HEAD"], async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
+app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source) => await source.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
 // The live benchmark (bench/live): server-sent events, and the publisher that feeds them.
 app.MapGet("/live/prices", (LivePrices live, CancellationToken cancel) => TypedResults.ServerSentEvents(live.Subscribe(cancel)));
 app.MapPost("/live/publish", async (HttpRequest request, LivePrices live) =>

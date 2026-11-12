@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Ordinary ASP.NET Core's catalog and marketplace JSON routes support native `HEAD`
+  and Problem Details for JSON-compatible clients in both profiles. Page/form error
+  handling stays separate; these functional checks are not production qualification
+  or performance results.
+
 - The separate ASP.NET Core Native AOT JSON adapter now supports complete catalog and numeric
   marketplace records through native source-generated serialization, with fixture-at-startup
   or uncached request-time HTTP sources. Focused source and native executable checks cover
