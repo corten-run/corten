@@ -1374,6 +1374,8 @@ three runs:
    and the droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's, r12's, r13's, r14's, r15's and r16's were a Platinum 8168, r2's, r3's,
    r6's, r7's, r10's and r11's a Platinum 8280), so times are compared within a round, never across rounds.
+   A round split across droplets compares each app with Corten on its own droplet
+   ([A round split across droplets](#a-round-split-across-droplets)).
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,
    the load generator (k6) to cores 4-7, the system and Docker on core 0. One app runs at a time.
    From r7, with items in memory, k6 also gets cores 2-3, which the item API does not use then.
@@ -2009,6 +2011,54 @@ with the production profile. It reaches each app directly, with no edge, on the 
 c-8 and cores, so it measures the bare app: a deployment's proxy in front of it may absorb some of
 these clients first.
 
+### A round split across droplets
+
+A round measures one app at a time, so its wall time is the sum over its apps: r13 took 5 h 29
+min for 18 apps, 82% of it in load phases (measured,
+[#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
+`droplet.mjs <round> --droplets <n>` splits a full-stack round across n droplets started together
+(`split.mjs`). No round has run this way yet, so the times it saves are not measured.
+
+1. Each droplet runs a full round of its own, `<round>-d1` to `<round>-d<n>`, each with its own
+   folder in `results/`, collected, packed and summarized like any round. Every droplet runs Corten,
+   axum-maud (the anchor: the bare stack Corten is built on) and a share of the other apps. Those
+   apps are the ones `--apps` names, which must then include axum-maud, or every app of the tier,
+   dealt one to each droplet in turn in catalog order. The plan goes to
+   `results/<round>/droplets.json` before any droplet is created. `--plan` prints each droplet's
+   apps, its `droplet.mjs` command, what its unit runs and the time estimate, and creates nothing.
+2. `droplet.mjs` starts, waits for (`--attach`) or collects (`--collect`) every droplet at once,
+   each as a `droplet.mjs` run of its own whose output lines carry its round's name. Each one
+   destroys its own droplet, as in a round of one droplet. A droplet already collected is not
+   looked at again. The round has finished only when every droplet has, each with its
+   `summary.json` and `all done` in its `run.log`. Until then `--collect` exits 3 while a droplet
+   is still running, and 1 when one stopped short, printing the command that runs that droplet's
+   round again; `summarize.mjs <round>` refuses to merge.
+3. Then `summarize.mjs <round>` merges the droplets into `results/<round>/summary.json`. It also
+   writes a merged `conformance.json`, whose `imagesFrom` gives `trend.mjs` the round's commit; the
+   droplets' images must come from one tree. Each app's numbers are from its own droplet, and
+   Corten's and axum-maud's rows are the first droplet's. Every SSR row of another app has
+   `toCorten`, printed beside the raw numbers: its requests per CPU-second in every phase, and its
+   rate at 64 and 256 users, as a ratio to Corten's on the same droplet. Raw numbers from two
+   droplets compare two machines; the ratios do not. Every row names its droplet, and `droplets`
+   in the summary records each droplet's CPU model (from its `host.txt`) and apps.
+4. `betweenDroplets` gives Corten's and axum-maud's numbers on every droplet, with their spread
+   (the range over the median, as caveat 1 measures noise). A droplet is flagged on a number when
+   it differs from every other droplet by more than the noise of
+   [#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/corten-run/corten/issues/811):
+   ranges that do not overlap when both ran two or more passes (`--passes`), or more than 10%
+   apart in one pass (caveat 1). The summary lists it in `flagged`, and the output prints a
+   `FLAGGED:` line. When two droplets differ, both are flagged, since nothing says which one is
+   off. The tables for a split round come from its merged summary, and its Corten and anchor rows
+   give that spread.
+5. The browser step (parity, look, bytes and browser timing) starts every page app at once on one
+   machine. It runs on each droplet, against that droplet's own Corten, as in any `--apps` round:
+   parity and look compare every app with Corten, which every droplet runs. Running the step on
+   one droplet for every app instead would need every app's image on that droplet, and so its
+   builds, which is the work the split spreads. Bytes do not depend on the machine. Browser timing
+   does, so it is compared within a droplet, like the other tables.
+
+A round of one droplet runs as before: no plan, no ratios, and the same summary and output.
+
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
@@ -2226,6 +2276,11 @@ node bench/fullstack/droplet.mjs legacy1 --collect                        # then
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Each load phase three times, the apps taking turns, for medians and ranges:
 node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
+# A round split across four droplets started together, each with corten and axum-maud: its plan
+# first (no droplet), then the round, then its collect, which merges it once every droplet finished:
+node bench/fullstack/droplet.mjs split1 --droplets 4 --plan
+node bench/fullstack/droplet.mjs split1 --ssh-key <id> --droplets 4 --detach
+node bench/fullstack/droplet.mjs split1 --collect
 # The hardening step alone (slow clients, oversized requests, floods), every app or --apps:
 node bench/fullstack/droplet.mjs h1 --ssh-key <id> --suite harden --detach
 # A round of the matched tier (named m<n>; its apps with the production profile), and its collect:
@@ -2283,8 +2338,9 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in
-   a round committed before this, `raw.txt` (below). Its raw output
+   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json`, in a
+   round split across droplets `droplets.json` (its plan; each droplet's round is a folder of its
+   own) and, in a round committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back

@@ -250,6 +250,11 @@ test("a matched-tier round is m<n>, and m<n> is the matched tier's alone, so the
   assert.equal(roundNameError("conform-matched1", "matched"), null);
   assert.match(String(roundNameError("r16", "matched")), /is named m<n>/);
   assert.match(String(roundNameError("m3", "defaults")), /BENCH_TIER=matched/);
+  // A droplet of a split round (droplet.mjs --droplets) is its round's, in its round's tier.
+  assert.equal(roundNameError("m3-d2", "matched", { full: true }), null);
+  assert.match(String(roundNameError("m3-d2", "defaults", { full: true })), /BENCH_TIER=matched/);
+  assert.equal(roundNameError("r17-d2", "defaults", { full: true }), null);
+  assert.match(String(roundNameError("r17-d2", "matched")), /is named m<n>/);
 });
 
 /** apps.mjs's exports under an environment, from a fresh process. @param {Record<string, string>} env */

@@ -17,6 +17,15 @@
 //   --passes <n>: each load phase n times (BENCH_PASSES on the droplet), the apps taking turns, so
 //     the tables give each number's median and range and say which differences are within noise
 //     (passes.mjs); about n times the load phases' hours, so mostly with --apps. One unless set.
+//   --droplets <n>: a full-stack round split across n droplets started together (split.mjs). Each
+//     droplet runs a full round of its own, <round>-d1 to <round>-d<n>: corten and axum-maud, the
+//     anchor, plus its share of the other apps (those --apps names, or every app of the tier). The
+//     plan goes to results/<round>/droplets.json. This run starts, waits for or detaches from all
+//     of them at once, each as a droplet.mjs run of its own whose lines carry its name. --collect
+//     and --attach on <round> then work on every droplet the plan names. The round has finished only
+//     when all of its droplets have; then summarize.mjs merges them into results/<round>.
+//   --plan: print what a launch would create and run (each droplet's apps, its droplet.mjs command
+//     and the round's command on the droplet), then stop, with no doctl or ssh call.
 //   --tier matched: a full-stack round of the matched tier (BENCH_TIER on the droplet): its apps,
 //     each with the production profile (README, "The matched tier"), reached through the edge
 //     (edge.mjs) on cores 4-9 of its own, so on a c-16 or larger (a round on fewer than 16 vCPUs
@@ -42,8 +51,8 @@
 // marked skipped (in the build step, it goes on with the app after the one that was building). A
 // droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
 // which does the same.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, buildArgs } from "./apps.mjs";
@@ -51,6 +60,7 @@ import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
 import { browserSuite, fixtureError, hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
+import { anchors, finished, isPart, PLAN, planOf, readPlan, split } from "./split.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -61,8 +71,9 @@ if (!round || round.startsWith("--")) throw new Error("usage: node droplet.mjs <
 // The round goes into droplet and unit names, paths and shell commands unquoted.
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("the round is letters, digits, - and _ (r10)");
 const suite = flag("suite", "fullstack") ?? "fullstack";
-// An m<n> round is the matched tier's, so --collect and --attach need no --tier for it.
-const tier = flag("tier") ?? (/^m\d+$/.test(round) ? "matched" : "defaults");
+// An m<n> round is the matched tier's, and so is each of its droplets' (m<n>-d<k>), so --collect
+// and --attach need no --tier for it.
+const tier = flag("tier") ?? (/^m\d+(-d\d+)?$/.test(round) ? "matched" : "defaults");
 if (tier !== "defaults" && tier !== "matched") throw new Error("--tier is defaults or matched");
 const edgeOff = flag("edge") === "off";
 if (flag("edge") !== undefined && !edgeOff) throw new Error("--edge is off or not given");
@@ -95,6 +106,26 @@ const collect = args.includes("--collect");
 const attach = args.includes("--attach");
 const detach = args.includes("--detach");
 const keep = args.includes("--keep") || Boolean(flag("host"));
+const preview = args.includes("--plan");
+if (preview && (collect || attach)) throw new Error("--plan shows what a launch would do; it is not for --collect or --attach");
+if (args.includes("--droplets") && !/^\d+$/.test(flag("droplets") ?? "")) throw new Error("--droplets takes a count: 2 or more droplets started together");
+const dropletCount = Number(flag("droplets") ?? 1);
+if (dropletCount < 1) throw new Error("--droplets takes a count: 2 or more droplets started together");
+if (dropletCount > 1) {
+  if (suite !== "fullstack") throw new Error("--droplets is for a full-stack round");
+  if (collect || attach) throw new Error(`--collect and --attach read the droplets from results/${round}/${PLAN}: leave out --droplets`);
+  if (flag("host")) throw new Error("--droplets creates its droplets: --host is one droplet's");
+  if (flag("from")) throw new Error("--from goes on with one droplet's round: run it on that droplet's round, <round>-d<k>");
+  if (isPart(round)) throw new Error(`${round} is a name a split round gives its droplets (<round>-d<k>): name the round without -d<k>`);
+}
+// The round's apps, in the catalog's order: those --apps names, or every app of the tier.
+const names = Object.keys(apps).filter((n) => !only || only.includes(n));
+// A split round (split.mjs): a new one from --droplets, or the plan of one already started, which
+// --collect and --attach go on with. A round of one droplet has none.
+const roundPlan = dropletCount > 1 ? planOf(round, tier, passes, split(names, dropletCount)) : collect || attach ? readPlan(join(here, "results", round)) : null;
+// Its droplets' runs are under way, so Ctrl-C leaves them to stop themselves (each destroys its own
+// droplet as it would) rather than exiting under them.
+let partsRunning = false;
 // The last line of a finished run: bench/browser's run-all.mjs prints its own after fullstack's.
 const doneMarker = suite === "browser" ? /browser suite (done|finished)/ : /all done/;
 const minute = 60_000;
@@ -162,6 +193,10 @@ const destroy = () => {
 };
 const leftRunning = () => host && console.log(`droplet ${host} is left as it is (a round there goes on by itself): collect it with node bench/fullstack/droplet.mjs ${round} --collect${suite === "fullstack" ? "" : ` --suite ${suite}`}${flag("host") ? ` --host ${host}` : ""}`);
 process.on("SIGINT", () => {
+  if (partsRunning) {
+    console.log("waiting for each droplet's run to stop");
+    return;
+  }
   if (!mayDestroy) leftRunning();
   destroy();
   process.exit(130);
@@ -179,9 +214,31 @@ process.on("SIGINT", () => {
 const treeCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout?.trim() || "unknown";
 const treeDirty = (spawnSync("git", ["status", "--porcelain", "--", ".", ":!bench/fullstack/results"], { cwd: repo, encoding: "utf8" }).stdout ?? "").trim() !== "";
 const imagesFrom = treeCommit + (treeDirty ? "-dirty" : "");
-const envFor = (/** @type {number} */ passes) => suite === "live"
+/** @param {number} passes @param {string[] | undefined} [names] the apps (BENCH_APPS), --apps by default */
+const envFor = (passes, names = only) => suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_BUILD_SCALE=1-2,0-$(($(nproc)-1)) BENCH_API_CONTAINER=item-api ${edged ? "BENCH_EDGE_CPUS=4-9 BENCH_LOAD_CPUS=10-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-3,10-$(($(nproc)-1))" : "BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))"} CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}${tier === "matched" ? " BENCH_TIER=matched" : ""}${edgeOff ? " BENCH_EDGE=off" : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_BUILD_SCALE=1-2,0-$(($(nproc)-1)) BENCH_API_CONTAINER=item-api ${edged ? "BENCH_EDGE_CPUS=4-9 BENCH_LOAD_CPUS=10-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-3,10-$(($(nproc)-1))" : "BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))"} CONFORM_IMAGES_FROM=${imagesFrom}${names ? ` BENCH_APPS=${names.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}${tier === "matched" ? " BENCH_TIER=matched" : ""}${edgeOff ? " BENCH_EDGE=off" : ""}`;
+/**
+ * What the round's unit runs on the droplet, in its suite's folder.
+ * @param {string} round this round, or one of a split round's droplets
+ * @param {string[] | undefined} [names] the apps, --apps by default
+ */
+const commandFor = (round, names = only) => ({
+  live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
+  // The browser step alone, not the builds after it (browserSuite in round.mjs says why).
+  browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 ${browserSuite.from} ${browserSuite.until}; cd /bench/bench/browser && node run-all.mjs ${round}`,
+  fullstack: `exec node run-all.mjs ${round} 10 ${flag("from") ?? steps[0]} --unattended`,
+  // Each app's phases run against a freshly started app; the step needs no load generator.
+  harden: `node harden.mjs ${names ? names.join(",") : "all"} ${round} && echo all done`,
+}[suite]);
+/** The estimate a full-stack round's start gives, per app: about twenty-five minutes for the first pass, its build included, and sixteen for each pass after. */
+const minutesPerApp = (/** @type {number} */ passes) => 25 + 16 * (passes - 1);
+// A round without its items would fail every page (browser-4 started an item API that exited
+// at once, and each app waited out its start); refusing before a droplet exists costs none.
+const fixtureProblem = () => {
+  const fixture = join(here, "fixtures", "items.json");
+  return fixtureError(suite, suite === "live" ? null : existsSync(fixture) ? readFileSync(fixture, "utf8") : null);
+};
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -209,10 +266,12 @@ const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --
 const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label) => {
   const local = join(here, "..", localName, "results");
   mkdirSync(local, { recursive: true });
+  // Named for the round, as a split round's droplets download beside each other.
+  const archive = join(local, `.results-${round}.tgz`);
   await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
-  await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, join(local, ".results.tgz")));
-  run("tar", ["-xzf", join(local, ".results.tgz"), "-C", local], { timeout: 5 * minute });
-  remove(join(local, ".results.tgz"));
+  await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, archive));
+  run("tar", ["-xzf", archive, "-C", local], { timeout: 5 * minute });
+  remove(archive);
   console.log(`${label} in ${join(local, round)}`);
 };
 const downloadAll = async (/** @type {string} */ label) => {
@@ -223,11 +282,11 @@ const downloadAll = async (/** @type {string} */ label) => {
 // Creates the droplet, provisions it, uploads this working tree, builds the images and starts the
 // round under its unit.
 const launch = async () => {
-  // A round without its items would fail every page (browser-4 started an item API that exited
-  // at once, and each app waited out its start); refusing here costs no droplet.
-  const fixture = join(here, "fixtures", "items.json");
-  const noFixture = fixtureError(suite, suite === "live" ? null : existsSync(fixture) ? readFileSync(fixture, "utf8") : null);
+  const noFixture = fixtureProblem();
   if (noFixture) throw new Error(noFixture);
+  // A split round's plan names its droplets' rounds; a round of one droplet under that name would
+  // be mistaken for it.
+  if (existsSync(join(here, "results", round, PLAN))) throw new Error(`results/${round}/${PLAN} says ${round} is a round split across droplets: collect it with --collect, or name this round otherwise`);
   if (!host) {
     const key = flag("ssh-key");
     if (!key) throw new Error("--ssh-key <DigitalOcean key id> is required to create a droplet");
@@ -288,7 +347,8 @@ const launch = async () => {
   ].join(" && "), 30));
 
   console.log("uploading the working tree");
-  const tarball = join(here, "results", ".upload.tgz");
+  // Named for the round, as a split round's droplets upload beside each other.
+  const tarball = join(here, "results", `.upload-${round}.tgz`);
   mkdirSync(dirname(tarball), { recursive: true });
   run("tar", ["-czf", tarball, "--exclude=target", "--exclude=node_modules", "--exclude=./bench/fullstack/results", "--exclude=./bench/live/results", "--exclude=./bench/browser/results", "--exclude=./bench/browser/out", "--exclude=./.git", "-C", repo, "."], { timeout: 5 * minute });
   const from = flag("from");
@@ -327,14 +387,7 @@ const launch = async () => {
     ].join(" && "), 90));
 
   // The round, as a script its unit runs. Only a full-stack round starts again at boot.
-  const command = {
-    live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
-    // The browser step alone, not the builds after it (browserSuite in round.mjs says why).
-    browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 ${browserSuite.from} ${browserSuite.until}; cd /bench/bench/browser && node run-all.mjs ${round}`,
-    fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
-    // Each app's phases run against a freshly started app; the step needs no load generator.
-    harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,
-  }[suite];
+  const command = commandFor(round);
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
     // The matched tier's edge has cores 4-9, so its round needs 16 vCPUs, or k6 gets too few.
@@ -351,7 +404,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", harden: `about eight minutes an app, for ${(only ?? Object.keys(apps)).length} (estimated: six phases of 45 to 90 seconds each and each app's start, from two apps locally)`, fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only || tier === "matched" ? `about twenty-five minutes an app, its build included, for ${(only ?? Object.keys(apps)).length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", harden: `about eight minutes an app, for ${(only ?? Object.keys(apps)).length} (estimated: six phases of 45 to 90 seconds each and each app's start, from two apps locally)`, fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * minutesPerApp(passes)) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only || tier === "matched" ? `about twenty-five minutes an app, its build included, for ${(only ?? Object.keys(apps)).length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
@@ -421,6 +474,119 @@ const watch = async (/** @type {boolean} */ once) => {
     if (once && (await answers(60))) return "running";
   }
 };
+
+/**
+ * One droplet's droplet.mjs run in a split round: its round and apps, and the flags given here that
+ * apply to it. A launch without --ssh-key (--plan's) shows `<id>` for the key.
+ * @param {{ round: string, apps: string[] }} d @param {"launch" | "collect" | "attach"} mode
+ * @param {import("./split.mjs").Plan} plan
+ */
+const partArgs = (d, mode, plan) => {
+  const given = (/** @type {string[]} */ ...flags) => flags.flatMap((f) => (flag(f) === undefined ? [] : [`--${f}`, String(flag(f))]));
+  const shared = [...given("stall"), ...(plan.tier === "matched" ? ["--tier", "matched"] : []), ...(args.includes("--keep") ? ["--keep"] : [])];
+  if (mode !== "launch") return [d.round, `--${mode}`, ...shared];
+  return [d.round, "--ssh-key", flag("ssh-key") ?? "<id>", ...given("size", "region"), ...shared, "--apps", d.apps.join(","), ...(plan.passes > 1 ? ["--passes", String(plan.passes)] : []), ...(edgeOff ? ["--edge", "off"] : []), ...(detach ? ["--detach"] : [])];
+};
+
+/**
+ * A split round's droplets, each one that has not finished here run as a droplet.mjs run of its
+ * own (partArgs), all at once, its lines marked with its round. Once every droplet has finished,
+ * summarize.mjs merges them into results/<round> and, for an r<n> round, trend.mjs reads it. The
+ * exit code is as a round of one droplet's: 0 finished (with --detach, started), 1 stopped short or
+ * could not start, 3 still running.
+ * @param {import("./split.mjs").Plan} plan @param {"launch" | "collect" | "attach"} mode
+ */
+const runParts = async (plan, mode) => {
+  const results = join(here, "results");
+  // A droplet already collected has had its droplet destroyed: there is nothing more to collect.
+  const todo = mode === "launch" ? plan.droplets : plan.droplets.filter((d) => !finished(join(results, d.round)));
+  for (const d of plan.droplets) if (!todo.includes(d)) console.log(`${d.round} has finished and its results are here`);
+  partsRunning = true;
+  const codes = await Promise.all(todo.map((d) => /** @type {Promise<number>} */ (new Promise((done) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...partArgs(d, mode, plan)], { cwd: here, stdio: ["ignore", "pipe", "pipe"] });
+    for (const stream of [child.stdout, child.stderr]) {
+      let rest = "";
+      stream.setEncoding("utf8");
+      stream.on("data", (/** @type {string} */ chunk) => {
+        const lines = (rest + chunk).split(/\r?\n/);
+        rest = lines.pop() ?? "";
+        for (const l of lines) console.log(`[${d.round}] ${l}`);
+      });
+      stream.on("end", () => { if (rest) console.log(`[${d.round}] ${rest}`); });
+    }
+    child.on("error", (e) => { console.log(`[${d.round}] could not start: ${e.message}`); done(1); });
+    child.on("close", (code) => done(code ?? 1));
+  }))));
+  partsRunning = false;
+  const again = (/** @type {{ round: string, apps: string[] }} */ d) => `node bench/fullstack/droplet.mjs ${partArgs(d, "launch", plan).filter((a) => a !== "--detach").join(" ")} --detach`;
+  if (mode === "launch" && detach) {
+    const failed = todo.filter((_, i) => codes[i] !== 0);
+    for (const d of failed) console.log(`${d.round} did not start: start it again with ${again(d)}`);
+    if (failed.length) process.exitCode = 1;
+    else console.log(`round ${round} runs on its ${plan.droplets.length} droplets by itself: collect it with node bench/fullstack/droplet.mjs ${round} --collect`);
+    return;
+  }
+  const waiting = plan.droplets.filter((d) => !finished(join(results, d.round)));
+  if (!waiting.length) {
+    console.log(`every droplet of round ${round} has finished: merging them`);
+    if (run("node", [join(here, "summarize.mjs"), round], { allowFail: true, timeout: 10 * minute, env: { ...process.env, BENCH_TIER: plan.tier } }).status !== 0) {
+      console.log(`could not merge the droplets: BENCH_TIER=${plan.tier} node bench/fullstack/summarize.mjs ${round}`);
+      process.exitCode = 1;
+    } else if (/^r\d+$/.test(round) && run("node", [join(here, "trend.mjs"), round], { allowFail: true, timeout: minute }).status !== 0) {
+      // As for a round of one droplet: a trend that could not be made fails the collect.
+      console.log(`could not write the trend: node bench/fullstack/trend.mjs ${round}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+  const running = waiting.filter((d) => codes[todo.indexOf(d)] === 3);
+  const stopped = waiting.filter((d) => !running.includes(d));
+  if (stopped.length) {
+    for (const d of stopped) console.log(`${d.round} did not finish: run its round again with ${again(d)}, then collect ${round}`);
+    console.log(`round ${round} has not finished: it is merged once every droplet has (the others' results are kept)`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`round ${round} is still running on ${running.map((d) => d.round).join(", ")}`);
+  process.exitCode = 3;
+};
+
+if (preview) {
+  const slug = flag("size", size) ?? size;
+  const droplets = roundPlan?.droplets ?? [{ round, apps: names }];
+  const hours = (/** @type {number} */ count) => Math.round((count * minutesPerApp(passes)) / 6) / 10;
+  console.log(`round ${round}: ${roundPlan ? `${droplets.length} droplets started together, each with ${anchors.join(" and ")}` : "one droplet"} (${slug} in ${flag("region", "sfo2")}, the ${tier} tier${passes > 1 ? `, ${passes} passes` : ""})`);
+  for (const d of droplets) {
+    console.log(`${d.round}: ${d.apps.join(", ")}${suite === "fullstack" ? ` (${d.apps.length} apps, about ${hours(d.apps.length)} hours, estimated at ${minutesPerApp(passes)} minutes an app)` : ""}`);
+    if (roundPlan) console.log(`  node bench/fullstack/droplet.mjs ${partArgs(d, "launch", roundPlan).join(" ")}`);
+    const share = roundPlan ? d.apps : only;
+    console.log(`  on droplet ${roundPlan ? `corten-bench-${d.round}` : name}: cd ${suiteDir} && export ${envFor(passes, share)} && ${commandFor(d.round, share)}`);
+  }
+  if (roundPlan) {
+    const each = droplets.map((d) => hours(d.apps.length));
+    console.log(`about ${Math.max(...each)} hours of wall time and ${Math.round(10 * each.reduce((a, b) => a + b, 0)) / 10} droplet-hours (estimated)`);
+    console.log(`then node bench/fullstack/droplet.mjs ${round} --collect collects every droplet and, once all have finished, merges them (summarize.mjs ${round})`);
+  }
+  const stop = fixtureProblem() ?? (existsSync(join(here, "results", round, PLAN)) ? `results/${round}/${PLAN} exists: ${round} has been started as a split round` : null);
+  if (stop) console.log(`a launch would stop before creating a droplet: ${stop}`);
+  console.log("--plan: no droplet was created and nothing was run (no doctl or ssh call)");
+  process.exit(0);
+}
+
+if (roundPlan) {
+  if (dropletCount > 1) {
+    // Every droplet would refuse alone; refusing once, before the plan is written, costs none.
+    if (!flag("ssh-key")) throw new Error("--ssh-key <DigitalOcean key id> is required to create the droplets");
+    const noFixture = fixtureProblem();
+    if (noFixture) throw new Error(noFixture);
+    const dir = join(here, "results", round);
+    if (existsSync(join(dir, PLAN)) || existsSync(join(dir, "summary.json"))) throw new Error(`results/${round} has a round already: collect it, or name this one otherwise`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, PLAN), JSON.stringify(roundPlan, null, 1) + "\n");
+  }
+  await runParts(roundPlan, collect ? "collect" : attach ? "attach" : "launch");
+  process.exit();
+}
 
 try {
   if (collect || attach) {

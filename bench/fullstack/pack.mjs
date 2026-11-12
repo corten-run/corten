@@ -14,11 +14,12 @@ import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** What stays a file: what summarize.mjs writes, what the README and tests read, the log, and a
- * committed round's note of where its raw output is. */
+ * committed round's note of where its raw output is, and a split round's plan of its droplets. */
 export const KEPT = new Set([
   "summary.json",
   "run.log",
   "raw.txt",
+  "droplets.json",
   "commit.txt",
   "host.txt",
   "skipped.txt",

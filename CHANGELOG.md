@@ -35,6 +35,16 @@ Corten is pre-1.0, so any minor version may change the API.
   `Cache-Control` as Helmet's documentation sets a header, and Node's 30 s header timeout and
   connection cap; it meets 17 of 24. Without the profile both apps answer as before
   ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+- `bench/fullstack/droplet.mjs --droplets <n>` splits a round across n droplets started together.
+  Each droplet runs a round of its own: Corten, axum-maud (the anchor) and a share of the other
+  apps. `summarize.mjs` merges the rounds once every droplet has finished. Each app's row names its
+  droplet and gives a ratio to Corten on that droplet beside the raw numbers. The summary records
+  each droplet's CPU model and flags a droplet whose Corten or anchor numbers are outside the noise
+  of every other droplet's (ranges that do not overlap, or more than 10% in one pass). The browser
+  step runs on each droplet against its own Corten. `--plan` prints a launch's droplets, apps and
+  commands without creating anything. A round of one droplet runs and summarizes as before. No
+  split round has run yet
+  ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
 
 ### Changed
 
