@@ -80,6 +80,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
       startedAtMs: rows.map((r) => r.startedAtMs), latency: times.length ? { p50Ms: percentile(times, 0.5), p99Ms: percentile(times, 0.99), maxMs: times.at(-1) } : unavailable("no successful legitimate requests"), evidence: `raw.jsonl#legitimate/${window}` };
     const samples = raw.filter((r) => r.type === "resources" && r.window === window); assert.equal(samples.length, 1);
     const sample = samples[0];
+    if (sample.collectedAtMs !== undefined) assert.ok(sample.atMs >= startMs && sample.collectedAtMs >= sample.atMs && sample.collectedAtMs <= endMs, "resource collection escaped observation window");
     assert.deepEqual(Object.keys(sample.samples).sort(), settings.deployment.processes.map((p) => p.id).sort());
     resources[window] = settings.deployment.processes.map((p) => {
       const s = sample.samples[p.id], state = lifecycle[p.id]; assert.ok(state, "missing lifecycle evidence");
@@ -90,6 +91,11 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
       if (s.unavailable) assert.ok(state.after.State.Running === false && Date.parse(state.after.State.FinishedAt) <= sampleWall, "unexplained missing resource evidence");
       const running = s.unavailable ? false : s.running;
       if (!s.unavailable) {
+        if (s.startedNs !== undefined) {
+          const began = Number(BigInt(s.startedNs) - BigInt(clock.monotonicNs)) / 1e6, ended = Number(BigInt(s.endedNs) - BigInt(clock.monotonicNs)) / 1e6;
+          assert.ok(began >= sample.atMs && ended >= began && ended <= sample.collectedAtMs, "resource counter timestamp differs from collection interval");
+          assert.ok(s.procs.every((pid) => /^[1-9]\d*$/.test(pid)), "native PID inventory hidden by observer namespace");
+        }
         assert.equal(s.cpuSeconds, Number(/^usage_usec (\d+)$/m.exec(s.cpu)?.[1]) / 1e6, "CPU differs from raw cgroup counter");
         assert.equal(s.memoryBytes, Number(s.memory), "memory differs from raw cgroup counter");
         assert.equal(s.running, s.procs.length > 0, "running differs from process inventory");
@@ -100,7 +106,6 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
         cpuSeconds: s.cpuSeconds ?? unavailable(s.unavailable), memoryBytes: s.memoryBytes ?? unavailable(s.unavailable), evidence: `raw.jsonl#resources/${window}/${p.id}` };
     });
   }
-  assert.ok(legitimate.before.counts.ok > 0, "no observed baseline service");
   const established = attack.filter((r) => r.established), closed = established.filter((r) => r.targetClosedAtMs !== null);
   const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
   const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
@@ -123,4 +128,11 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     defense: { protection, reason: rejected.length ? "native HTTP rejection observed; see exact statuses and incomplete sends" : missing ? "connections retained to the declared release; no closure protection observed within this profile" : "bounded observations do not identify a protection mechanism",
       attribution: [{ layer: "unknown", mechanism: "raw closure/rejection/unread-queue evidence only; no inferred server/proxy mechanism", evidence: "raw.jsonl#attack" }] } };
   return validateHardeningOutcome(capture, settings);
+}
+
+export function targetOutcome(capture, assessment) {
+  const service = Object.fromEntries(Object.entries(capture.legitimate).map(([key, value]) => [key, value.counts]));
+  return { classification: Object.values(service).some((counts) => counts.errors > 0) || capture.recovery.disposition !== "recovered"
+    ? "target-capacity-failure" : "service-preserved", service, recovery: capture.recovery.disposition,
+    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && assessment?.productionQualified === true };
 }
