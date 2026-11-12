@@ -147,6 +147,28 @@ export async function navigationFinished(page) {
   // Await the platform lifecycle rather than disabling framework enhancement.
   await page.evaluate(() => globalThis.navigation?.transition?.finished);
 }
+
+export async function submitAlert(page, form, javaScriptEnabled) {
+  const fields = await form.evaluate((f) => {
+    const data = new FormData(f);
+    return { email: data.get("email"), target_price: data.get("target_price") };
+  });
+  const [response] = await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/marketplace/")),
+    form.locator('[type="submit"]').click(),
+  ]);
+  try {
+    await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
+    await page.waitForLoadState("networkidle");
+  } catch (error) {
+    let timer;
+    const diagnostic = await Promise.race([
+      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response.text().catch(() => "unavailable")]),
+      new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
+    ]).finally(() => clearTimeout(timer));
+    throw new Error(`Alert POST ${response.status()} ${response.url()}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response.request().isNavigationRequest()}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
+  }
+}
 async function control(upstream, value) {
   const response = await fetch(`${upstream}/__marketplace/control`, { method: "POST", body: JSON.stringify(value), signal: AbortSignal.timeout(5000) });
   assert.equal(response.status, 200); await response.text();
@@ -222,9 +244,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         await form.locator('[name="email"]').fill(email); await form.locator('[name="target_price"]').fill(price);
         // HTML email validation would otherwise prevent the invalid-email server case.
         await form.evaluate((f) => { f.noValidate = true; });
-        await Promise.all([page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/marketplace/")), form.locator('[type="submit"]').click()]);
-        await page.waitForFunction((text) => document.querySelector(".marketplace__message")?.textContent.trim().length > 0, message);
-        await page.waitForLoadState("networkidle");
+        await submitAlert(page, form, javaScriptEnabled);
         comparePage(await page.evaluate(snapshotPage), catalog.item_1, locale, { message }); result.pages++;
       }
       assert.deepEqual(errors, [], "browser runtime errors");

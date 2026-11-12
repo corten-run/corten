@@ -7,6 +7,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- The marketplace alert-form check saves the exact submitted case, POST status and response,
+  current message and original timeout when the result message does not arrive. The
+  React Router timeout from r19 remains unconfirmed as an adapter defect
+  ([#1251 Benchmark r19: React Router fixture correctness times out waiting for an alert-form message](https://github.com/corten-run/corten/issues/1251)).
+
 - `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
   (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
   the scheme in any case, one or more spaces, the token trimmed, and `None` for no
