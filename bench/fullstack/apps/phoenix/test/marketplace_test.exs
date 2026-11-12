@@ -201,4 +201,106 @@ defmodule ItemPage.MarketplaceTest do
     assert_raise RuntimeError, "marketplace API returned 503", fn -> Marketplace.get("item_1") end
     assert length(Agent.get(agent, & &1.requests)) == 4
   end
+
+  test "ordered alert readback is independent, session isolated and never reset by GET" do
+    initial = build_conn() |> get("/marketplace/fr-FR/item_1")
+
+    [token] =
+      initial
+      |> html_response(200)
+      |> LazyHTML.from_document()
+      |> LazyHTML.query("input[name=_csrf_token]")
+      |> LazyHTML.attribute("value")
+
+    assert initial |> recycle() |> get("/api/alerts") |> json_response(200) == []
+
+    posted =
+      initial
+      |> recycle()
+      |> post("/marketplace/fr-FR/item_1", %{
+        "_csrf_token" => token,
+        "email" => "first@example.test",
+        "target_price" => "12,50"
+      })
+
+    assert html_response(posted, 200) =~ "first@example.test"
+
+    posted =
+      posted
+      |> recycle()
+      |> post("/marketplace/fr-FR/item_1", %{
+        "_csrf_token" => token,
+        "email" => "second@example.test",
+        "target_price" => "0,105"
+      })
+
+    assert html_response(posted, 200) =~ "second@example.test"
+
+    expected = [
+      %{"item_id" => "item_1", "email" => "first@example.test", "target_minor" => 1250},
+      %{"item_id" => "item_1", "email" => "second@example.test", "target_minor" => 11}
+    ]
+
+    for {email, target} <- [{"bad", "12,50"}, {"a@b", "NaN"}, {"a@b", "0"}, {"a@b", ""}] do
+      assert posted
+             |> recycle()
+             |> post("/marketplace/fr-FR/item_1", %{
+               "_csrf_token" => token,
+               "email" => email,
+               "target_price" => target
+             })
+             |> html_response(200)
+    end
+
+    for _ <- 1..2 do
+      assert posted
+             |> recycle()
+             |> get("/api/alerts?email=fake&target_minor=999")
+             |> json_response(200) == expected
+    end
+
+    assert build_conn() |> get("/api/alerts") |> json_response(200) == []
+
+    assert posted
+           |> recycle()
+           |> Plug.Conn.put_req_header("sec-fetch-site", "cross-site")
+           |> post("/marketplace/fr-FR/item_1", %{
+             "_csrf_token" => token,
+             "email" => "a@b",
+             "target_price" => "12,50"
+           })
+           |> response(403)
+
+    assert posted
+           |> recycle()
+           |> Plug.Conn.put_req_header("origin", "https://other.test")
+           |> post("/marketplace/fr-FR/item_1", %{
+             "_csrf_token" => token,
+             "email" => "a@b",
+             "target_price" => "12,50"
+           })
+           |> response(403)
+
+    assert posted |> recycle() |> get("/api/alerts") |> json_response(200) == expected
+  end
+
+  test "native agent serializes concurrent appends without losing alerts" do
+    session_id = Base.encode64(:crypto.strong_rand_bytes(32))
+
+    1..80
+    |> Task.async_stream(
+      fn n ->
+        ItemPage.MarketplaceAlerts.append(session_id, %{
+          item_id: "item_1",
+          email: "#{n}@test",
+          target_minor: n
+        })
+      end, max_concurrency: 8)
+    |> Enum.each(fn result -> assert {:ok, :ok} = result end)
+
+    alerts = ItemPage.MarketplaceAlerts.list(session_id)
+    assert length(alerts) == 80
+    assert length(Enum.uniq_by(alerts, & &1.email)) == 80
+    assert ItemPage.MarketplaceAlerts.list(nil) == []
+  end
 end
