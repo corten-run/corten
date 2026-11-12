@@ -61,6 +61,14 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+- Locale negotiation follows RFC 4647 Lookup, then Corten's same-language step: an
+  `Accept-Language` tag loses its last subtag (and a single-character one before it) until it
+  names a listed locale, and only then is the first locale of its language taken
+  ([design Choice 42](docs/design.md#choice-locale-same-language)), so `zh-Hant-TW` gets `zh-Hant`
+  and `sr-Latn-RS` gets `sr-Latn` in an app that lists `zh` or `sr` first, and
+  `fr-CA-u-ca-gregory` gets a listed `fr-CA`. Before, a tag that was not listed went straight to
+  the first locale of its language, so those readers got the other script
+  ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
 
 ### Documentation
 

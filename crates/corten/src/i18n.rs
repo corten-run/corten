@@ -463,9 +463,16 @@ impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
     }
 }
 
-/// The index in `locales` that best matches an `Accept-Language` header: highest `q` first, an
-/// exact tag before the primary language (`fr-CA` matches `fr`), then 0. Allocates nothing.
+/// The index in `locales` that best matches an `Accept-Language` header, else 0. Ranges are taken
+/// highest `q` first (in header order between equal ones), and each by RFC 4647 Lookup, then
+/// Corten's same-language step, before the next range is tried. Lookup tries the tag, then the tag
+/// without its last subtag (and a single-character subtag left before it) until one is listed
+/// (`zh-Hant-TW` matches `zh-Hant`, `fr-CA-u-ca-gregory` matches `fr-CA`, `fr-BE` matches `fr`).
+/// The same-language step, which Lookup does not have, takes the first listed locale of the
+/// range's primary language (`fr` matches `fr-CA`), which can be more specific than the range or
+/// another script (docs/design.md#choice-locale-same-language). Allocates nothing.
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
+    let listed = |tag: &str| locales.iter().position(|l| l.eq_ignore_ascii_case(tag));
     let mut best: Option<(f32, usize)> = None;
     for part in accept_language.unwrap_or("").split(',') {
         let mut pieces = part.trim().split(';');
@@ -480,11 +487,20 @@ pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
         if tag.is_empty() || tag == "*" || q <= 0.0 || best.is_some_and(|(b, _)| q <= b) {
             continue;
         }
-        let primary = tag.split('-').next().unwrap_or(tag);
-        let found = locales
-            .iter()
-            .position(|l| l.eq_ignore_ascii_case(tag))
-            .or_else(|| locales.iter().position(|l| l.split('-').next().unwrap_or("").eq_ignore_ascii_case(primary)));
+        let mut candidate = tag;
+        let mut found = listed(candidate);
+        while found.is_none() {
+            let Some(dash) = candidate.rfind('-') else { break };
+            candidate = &candidate[..dash];
+            // A single-letter or digit subtag (`x`, an extension's) goes with the one after it.
+            if let Some(dash) = candidate.rfind('-').filter(|&dash| candidate.len() - dash == 2) {
+                candidate = &candidate[..dash];
+            }
+            found = listed(candidate);
+        }
+        // Unmatched, `candidate` is down to the primary language: the same-language step.
+        let found =
+            found.or_else(|| locales.iter().position(|l| l.split('-').next().unwrap_or("").eq_ignore_ascii_case(candidate)));
         if let Some(index) = found {
             best = Some((q, index));
         }
@@ -1963,5 +1979,47 @@ mod tests {
         assert_eq!(pick(Some("fr;q=0")), "en", "q=0 means not acceptable");
         assert_eq!(pick(Some("fr;q=x, pt")), "pt-BR", "a bad q skips that tag only");
         assert_eq!(pick(None), "en");
+    }
+
+    /// RFC 4647 Lookup: a range loses its last subtag (a single-character one with the subtag
+    /// after it) until it names a locale, before any locale of the same primary language is taken,
+    /// and ranges are taken in `q` order, so a shorter form of a higher one beats a lower one.
+    #[test]
+    fn negotiation_truncates_a_tag_before_the_primary_language() {
+        let pick = |locales: &[&'static str], header| locales[negotiate(locales, Some(header))];
+        let zh = ["en", "zh", "zh-Hant"];
+        assert_eq!(pick(&zh, "zh-Hant-TW,zh;q=0.9"), "zh-Hant");
+        assert_eq!(pick(&zh, "ZH-hant-TW"), "zh-Hant", "subtags compare without case");
+        assert_eq!(pick(&zh, "zh-TW, zh-Hant;q=0.9"), "zh", "zh-TW is zh by Lookup, before a lower range");
+        assert_eq!(pick(&zh, "zh-Hant-TW;q=0, zh"), "zh", "a range that is not acceptable is not shortened");
+        assert_eq!(pick(&["en", "zh", "zh-TW"], "zh-Hant-TW,zh;q=0.9"), "zh");
+        assert_eq!(pick(&["en", "zh-Hans", "zh-Hant"], "zh-Hant-TW"), "zh-Hant");
+        assert_eq!(pick(&["en", "zh", "zh-Hant-CN"], "zh-Hant-CN-x-private1-private2"), "zh-Hant-CN");
+        // `en-x` is never tried: a single-character subtag goes with the one after it.
+        assert_eq!(pick(&["fr", "en", "en-x"], "en-x-foo"), "en");
+        let sr = ["en", "sr", "sr-Latn"];
+        assert_eq!(pick(&sr, "sr-Latn-RS,sr;q=0.9"), "sr-Latn");
+        assert_eq!(pick(&sr, "sr-Latn"), "sr-Latn");
+        assert_eq!(pick(&sr, "sr-Cyrl-RS"), "sr");
+        let fr = ["en", "fr", "fr-CA"];
+        assert_eq!(pick(&fr, "fr-CA-u-ca-gregory"), "fr-CA");
+        assert_eq!(pick(&fr, "fr-BE, en;q=0.5"), "fr");
+        // `*` is skipped, as Lookup skips it, rather than taking the first locale at its `q`.
+        assert_eq!(pick(&fr, "*"), "en");
+        assert_eq!(pick(&fr, "*, fr-CA;q=0.5"), "fr-CA");
+    }
+
+    /// Corten's same-language step, which Lookup does not have
+    /// (docs/design.md#choice-locale-same-language): a range Lookup matches to nothing takes the
+    /// first listed locale of its primary language before a lower range is tried, even one more
+    /// specific than the range or of another script.
+    #[test]
+    fn negotiation_takes_the_same_language_before_a_lower_range() {
+        let pick = |locales: &[&'static str], header| locales[negotiate(locales, Some(header))];
+        assert_eq!(pick(&["en", "fr-CA"], "fr"), "fr-CA");
+        assert_eq!(pick(&["en", "fr-CA"], "fr-FR-u-ca-gregory, en;q=0.5"), "fr-CA");
+        let zh = ["en", "zh-Hans", "zh-Hant"];
+        assert_eq!(pick(&zh, "zh-TW, zh-Hant;q=0.9"), "zh-Hans", "the step does not read the script");
+        assert_eq!(pick(&["en", "zh-Hans", "zh-Hant", "zh-TW"], "zh-TW, zh-Hant;q=0.9"), "zh-TW");
     }
 }
