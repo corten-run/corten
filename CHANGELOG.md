@@ -19,7 +19,8 @@ Corten is pre-1.0, so any minor version may change the API.
   SSH and switched to, and the release before is put back when the new one does not answer as its
   commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
   Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
-  behind the page (one fragment shader, drawn after weathering steel) in Chromium.
+  behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
+  reads that the plate is no brighter under the steel's type than the type can stand.
 
 - Feature-qualified marketplace comparison groups: popular and performance-oriented
   candidate pools share one deduplicated production run instead of timing the full inventory

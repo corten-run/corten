@@ -1,7 +1,7 @@
 // Browser smoke test for Corten's own site, in Chromium, Firefox and WebKit: the page with its
 // scripts, with them blocked by the page's own switch, and with scripting off in the browser; and
 // on a touch screen, in Chromium, whose touches the test can send one at a time; and the plate
-// behind the page, built and drawn by Chromium's software renderer. The server says
+// behind the page, built and drawn by Chromium's software renderer, and read. The server says
 // how much CPU and memory is in use: its machine's, or, with SITE_HELD=1, of the limits the
 // container under test is held to on both (docker run --cpus 1 --memory 512m).
 // Usage: node examples/corten-site/smoke.mjs http://localhost:18488 [chromium|firefox|webkit ...]
@@ -291,29 +291,72 @@ for (engine of engines) {
   // The plate. A browser under test has no GPU, and the page then keeps its flat layers by its
   // own choice (it asks for a context that fails where drawing would be slow), so nothing above
   // runs the shader. Here that choice is taken away, in Chromium, whose software renderer can
-  // build it: the program builds, and a frame is drawn.
+  // build it (Playwright starts Chromium with the switch that allows that renderer): the
+  // program builds, a frame is drawn, and what is drawn under the steel section's type is no
+  // brighter than that type can stand. The drawing is kept after each frame so it can be read.
   if (engine === "chromium") {
-    const context = await browser.newContext({ viewport: { width: 480, height: 360 }, reducedMotion: "reduce" });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 360 }, reducedMotion: "reduce" });
     const page = await context.newPage();
     /** @type {string[]} */
     const said = [];
     page.on("console", (m) => ["error", "warning"].includes(m.type()) && said.push(m.text()));
-    page.on("pageerror", (e) => said.push(e.message));
+    page.on("pageerror", (e) => said.push(`thrown: ${e.message}`));
     await page.addInitScript(() => {
       const ask = HTMLCanvasElement.prototype.getContext;
-      // @ts-expect-error one signature stands in for the overloads
       HTMLCanvasElement.prototype.getContext = function (kind, options) {
-        return ask.call(this, kind, kind === "webgl2" ? { ...options, failIfMajorPerformanceCaveat: false } : options);
+        return ask.call(this, kind, kind === "webgl2" ? { ...options, failIfMajorPerformanceCaveat: false, preserveDrawingBuffer: true } : options);
       };
     });
     await page.goto(`${base}/`, { waitUntil: "load" });
-    const forged = await page.waitForSelector("[data-forged]", { state: "attached", timeout: 45_000 }).then(
-      () => true,
-      () => false,
+    const state = await page.waitForSelector("[data-forged], [data-flat]", { state: "attached", timeout: 45_000 }).then(
+      (world) => world.evaluate((el) => ("forged" in /** @type {HTMLElement} */ (el).dataset ? "forged" : "flat")),
+      () => "neither forged nor flat in 45 s",
     );
-    // The software renderer has warnings of its own (a stall on a read, say): only the page's count.
-    const wrong = said.filter((text) => text.startsWith("corten.run:"));
-    check("the plate's shader builds and a frame is drawn", forged && wrong.length === 0, wrong.join(" | ").slice(0, 400));
+    const able = await page.evaluate(() => document.createElement("canvas").getContext("webgl2") !== null);
+    // The software renderer has warnings of its own (a stall on a read, say). The page's own, a
+    // call WebGL refused and anything thrown all count.
+    const wrong = () => said.filter((text) => /^corten\.run:|^thrown:|INVALID_|GL ERROR/.test(text));
+    check(
+      "the plate's shader builds and a frame is drawn",
+      state === "forged" && wrong().length === 0,
+      [state === "forged" ? "" : `${state}; ${able ? "the browser has" : "this browser gave no"} WebGL 2 context`, ...wrong()].filter(Boolean).join(" | ").slice(0, 400),
+    );
+    if (state === "forged") {
+      // With reduced motion the light stays where it starts, 68% across the window and 30% down.
+      // The section's two ends are read, from where its type may begin: a window's height from
+      // 48px inside each, where another layer's rust reaches in.
+      /** @type {{ most: number, mean: number, error: number }[]} */
+      const read = [];
+      for (const end of ["top", "end"]) {
+        read.push(
+          await page.evaluate(async (end) => {
+            const steel = /** @type {HTMLElement} */ (document.getElementById("steel"));
+            const box = steel.getBoundingClientRect();
+            const top = box.top + window.scrollY;
+            window.scrollTo(0, end === "top" ? top + 48 : top + box.height - 48 - window.innerHeight);
+            for (let n = 0; n < 3; n++) await new Promise((next) => requestAnimationFrame(next));
+            const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("canvas"));
+            const gl = /** @type {WebGL2RenderingContext} */ (canvas.getContext("webgl2"));
+            const px = new Uint8Array(canvas.width * canvas.height * 4);
+            gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            const linear = (/** @type {number} */ v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+            let [most, sum] = [0, 0];
+            for (let n = 0; n < px.length; n += 4) {
+              const light = 0.2126 * linear(px[n] / 255) + 0.7152 * linear(px[n + 1] / 255) + 0.0722 * linear(px[n + 2] / 255);
+              most = Math.max(most, light);
+              sum += light;
+            }
+            return { most, mean: sum / (px.length / 4), error: gl.getError() };
+          }, end),
+        );
+      }
+      // The amber of the page's code (#f2a44b, luminance 0.459) keeps 4.5 to 1 over 0.0632 or less.
+      check(
+        "what is drawn under the steel's type is lit, and no brighter than its dimmest type can stand",
+        read.every(({ most, mean, error }) => error === 0 && mean > 0.01 && most <= 0.0632) && wrong().length === 0,
+        [...read.map(({ most, mean, error }) => `brightest ${most.toFixed(4)}, mean ${mean.toFixed(4)}${error ? `, error ${error}` : ""}`), ...wrong()].join(" | ").slice(0, 400),
+      );
+    }
     await context.close();
   }
 

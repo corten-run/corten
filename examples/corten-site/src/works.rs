@@ -739,7 +739,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("the directory removed");
         assert_eq!(allowed_one.cpu_limit, Some(1.0), "{allowed_one:?}");
         // On a machine of one CPU that holds with the allowed count ignored: the rule itself is
-        // held where the counts are given by hand (`within`, in the test of what the system says).
+        // held where the counts are given by hand (`within`, in the test of which group is read).
         let limit = machine.cpu_limit.expect("the limit the group sets");
         // Only a system that counts its CPUs has a count to hold the limit to.
         if machine.stat_cpus > 0 {

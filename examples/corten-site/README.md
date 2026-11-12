@@ -40,16 +40,19 @@ page, since what it shows working is the browser's and HTTP's own, with Corten's
 ## The plate
 
 The plate behind the page is one fragment shader on a fixed canvas (`src/world.js`): weathered
-patina, the oxide under it, bare steel with the temper colors heat leaves next to a rusting
-layer, and patina again on the far side, with the tagline stamped into the surface. The patina
+patina, the oxide under it, bare steel stained next to a rusting layer and tempered past that,
+and patina again on the far side, with the tagline stamped into the surface. No line is drawn
+between two layers: over a stretch of the plate the rustier one thins to patches and then to
+specks along the runs rain takes, as the whole plate does in time when the page opens. The patina
 is drawn after photographs of weathering steel: a fine grain of newer rust on an orange-brown
 ground, in bands down the plate. When the page opens the plate weathers as such a plate does
 over a few years, in five and a half seconds: grey mill scale, rust in specks along the runs
 rain takes, the whole plate bright and uneven, then deeper and more even. The bare steel is
 ground across the plate, and throws the pointer's light out in a bar across its hairlines. That
-light is held under a ceiling of luminance, so the dimmest small type set straight on the
-steel, the amber of its code, keeps 4.5 to 1 over every pixel where the plate is steel alone;
-a strike's glow is not held to it, and is over in four and a half seconds. The plate is drawn
+light is held under a ceiling of luminance over the steel's section, rust that reaches into it
+included, so the dimmest small type set straight on the plate there, the amber of its code,
+keeps 4.5 to 1 over every pixel under it; a strike's glow is not held to it, and is over in
+four and a half seconds. The plate is drawn
 again only when the page scrolls, the pointer moves, a plate is struck or the window changes,
 and it moves by whole pixels of its canvas, so its grain does not shimmer as the page scrolls.
 
@@ -93,7 +96,10 @@ with the one line broken as shown: `cargo build -p corten-site` from the reposit
 Linux. An edit that moves a cited line fails the test there until the answer is captured again.
 
 `smoke.mjs` runs the page in Chromium, Firefox and WebKit: with its scripts, with them blocked
-by the page's own switch, and with scripting off; and on a touch screen in Chromium.
+by the page's own switch, and with scripting off; and on a touch screen in Chromium. A browser
+under test has no GPU and keeps the flat layers, so in Chromium the test also has its software
+renderer build the plate's shader and draw it, and reads what is drawn under the steel
+section's type: it fails if that is brighter than the type's contrast allows.
 
 ## Serving it
 
