@@ -1,7 +1,12 @@
 # Marketplace v2: equivalent localization work
 
 **A separate application workload, with twenty native adapters and a pre-load conformance
-gate.** Every selected app must pass the Docker/browser checks before any load test starts.
+gate.** Nightly uses feature-qualified popular and performance-oriented cohorts, deduplicated
+into one production run. Candidates lacking the production contract are explicitly excluded
+before timing; every admitted app must then pass both Docker/browser gates before any load.
+No framework, including axum or Corten, gets unconditional admission. See
+[framework groups](nightly.md#framework-groups) for requirements, candidate pools and limits.
+An omitted adapter was not tested; an excluded candidate has capability evidence, not timing.
 No v2 performance baseline is published here. Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 
@@ -97,15 +102,19 @@ For local development, `wN` remains the development identity:
 npm ci
 node bench/marketplace/fixtures.mjs
 npm run check:marketplace
-node bench/marketplace/run.mjs w1 --build --check-only
+node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
-node bench/marketplace/run.mjs w2 --build --passes 3
+node bench/marketplace/run.mjs w2 --group production --build --passes 3
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
 
 Use a fresh `wN` each time: an existing result directory is never overwritten. `--apps` may
-select individual apps for development checks. A full publishable baseline needs all twenty
-apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
+select individual apps for development checks. A publishable group baseline needs raw
+qualification for every candidate, the full gate and three passes for every admitted app,
+and a qualified Corten plus at least one peer. `--group production-qualify` explicitly audits
+the full inventory. ETag and downstream readiness are disclosed exceptions to the reused
+production checklist; this uncached workload does not claim all enterprise features match.
+The read-only reporter rejects arbitrary subsets, check-only runs, dirty commits,
 missing profiles or passes, failed cleanup and aggregates that disagree with saved passes. A
 phase in which an app answered requests with anything but a 200 or timed out on them, or could
 not keep the fixed rate, is the app's result, not a failed run: it is saved with its failure
@@ -125,9 +134,9 @@ Still failures: a phase with no k6 summary or in which no request succeeded, a 2
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
 from the upstream to a record read. Results written
-this way are schema `marketplace-results/v4`. The reporter and `compare.mjs` also read a
-`marketplace-results/v3` summary, as v4 with no stop records (under v3 an app that stopped
-failed the round), so a v3 round compares with v4 rounds; any other schema is rejected.
+this way are schema `marketplace-results/v5`, with raw feature qualification for named groups.
+The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
+failed the round). Historical full-inventory results do not compare with qualified groups.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace
@@ -146,7 +155,7 @@ The gate checks all 500 JSON records and 264 page/interaction observations in tw
 responsive application, visible row counts, exact formatted text, escaped content, native
 forms, navigation, missing IDs and unsupported locales. HTTP probes change the record between
 requests and verify one upstream read, reserialization rather than forwarding, and errors.
-Every selected app must pass both sources before *any* app is timed. CI runs both the legacy
+Every admitted app must pass both sources before *any* app is timed. CI runs both the legacy
 catalog gate and this gate for each of the twenty apps.
 
 Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.
