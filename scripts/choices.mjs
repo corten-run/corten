@@ -14,10 +14,12 @@ const FEWEST = 20;
 // "Revisit when:" names a condition, not a word: the shortest written is about 60 characters.
 // Length is all a script can see; whether the condition can be checked is the review's.
 const SHORTEST_CONDITION = 30;
-// What dates a "Last checked:" entry: the commit a number ran on or was recorded in, or the
-// versions probed: an engine and its version (`WebKit 27.2`), or a name and a three-part version
-// (`hyper 1.12.0`), so a measured number (`57.5 to 53.8`) is not taken for one.
-const COMMIT = /`[0-9a-f]{7,40}`/;
+// What dates a "Last checked:" entry: the commit a number ran on or was recorded in (another
+// repository's written as GitHub writes it, `owner/repo@sha`; scripts/design-refs.mjs checks that
+// each of Corten's is on main's history or under an evidence tag), or the versions probed: an
+// engine and its version (`WebKit 27.2`), or a name and a three-part version (`hyper 1.12.0`), so
+// a measured number (`57.5 to 53.8`) is not taken for one.
+const COMMIT = /`(?:[\w.-]+\/[\w.-]+@)?[0-9a-f]{7,40}`/;
 const VERSION = /\b(?:Chromium|Firefox|WebKit) \d+|\b[A-Za-z][\w-]* \d+\.\d+\.\d+\b/;
 const PARAGRAPHS = ["Stands on: ", "Revisit when: ", "Last checked: "];
 

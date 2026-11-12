@@ -5,6 +5,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Added
+
+- The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
+  prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
+  has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
+  body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
+  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
+  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error` with status 0; the form is left not busy each time. Another file of the same
+  name, chosen while a write sending the first is out, is sent after it, whether its size or only
+  its time differs, where the same file pressed again is not. Each check failed against a runtime
+  with the line it covers taken out
+  ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+
 ### Fixed
 
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
@@ -15,6 +29,15 @@ Corten is pre-1.0, so any minor version may change the API.
   connection idle at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s
   under the default 30 s
   ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
+- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
+  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
+  a feed's patches or a live element's fragments made one after another are no longer held for
+  the acknowledgement of the last one. Through nginx with the app in a container of its own, the
+  second of ten small events made back to back on a reused connection came 42.5 and 43.0 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.1 ms,
+  and a request costs the same instructions; a listener of the app's own keeps its choice (design
+  Choice 41, `bench/nodelay`)
+  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 - Locale negotiation follows RFC 4647 Lookup: an `Accept-Language` tag loses its last subtag (and
   a single-character one before it) until it names a listed locale, before the first locale of
   its language is taken, so `zh-Hant-TW` gets `zh-Hant` and `sr-Latn-RS` gets `sr-Latn` in an app
@@ -22,6 +45,19 @@ Corten is pre-1.0, so any minor version may change the API.
   that was not listed went straight to the first locale of its language, so those readers got
   the other script
   ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
+
+### Documentation
+
+- `npm run check` fails on a commit cited in backticks in the repository's Markdown that is not
+  on the checkout's history or under `refs/tags/evidence/` (which keeps cited commits no branch
+  has), naming its file, line and commit and the fetch from corten-run/corten that brings the
+  evidence tags; a shallow clone fails once, saying to fetch the whole history. CI's `npm-check`
+  group checks out the whole history, and with it every tag. Another repository's commit is
+  written `owner/repo@sha`, as GitHub writes one, and `scripts/choices.mjs` takes that form as a
+  Last checked commit; Corten's own is written alone. Thirteen citations of five commits written
+  without backticks in `docs/`, `bench/browser/README.md` and `bench/fullstack/README.md` now
+  have them, so they are checked
+  ([#1219 Twelve commits design.md cites as evidence for Choices 25, 26 and 38 and Limit 21 are not on GitHub, so their numbers cannot be taken again](https://github.com/corten-run/corten/issues/1219)).
 
 ## 0.2.0 (2026-11-11)
 

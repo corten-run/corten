@@ -1,0 +1,633 @@
+{
+ "name": "before-a",
+ "image": "corten-nodelay:before",
+ "taken": "2026-11-11T22:41:26.496Z",
+ "nginx": "nginx version: nginx/1.29.8",
+ "kernel": "6.18.58.1-microsoft-standard-WSL2",
+ "rounds": 20,
+ "repeat": 5,
+ "summary": {
+  "default gap=0us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 15.6
+   },
+   "firstAfterHeadMs": {
+    "median": 0.09,
+    "min": 0.05,
+    "max": 0.38
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 42.47,
+    "min": -0.07,
+    "max": 62.12
+   },
+   "worstLateMs": {
+    "median": 42.47,
+    "min": -0.07,
+    "max": 62.12
+   },
+   "over20ms": 78,
+   "held": 78,
+   "heldEventsWithSecond": {
+    "9": 78
+   }
+  },
+  "default gap=0us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 1095.3,
+    "min": 554,
+    "max": 1701.8
+   },
+   "firstAfterHeadMs": {
+    "median": 0.13,
+    "min": 0.05,
+    "max": 8.12
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.08,
+    "min": -0.21,
+    "max": 0.76
+   },
+   "worstLateMs": {
+    "median": -0.07,
+    "min": -0.21,
+    "max": 4.04
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "on gap=0us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.3,
+    "min": 0.1,
+    "max": 6.3
+   },
+   "firstAfterHeadMs": {
+    "median": 0.13,
+    "min": 0.06,
+    "max": 3.14
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.06,
+    "min": -1.36,
+    "max": 0.51
+   },
+   "worstLateMs": {
+    "median": -0.06,
+    "min": -1.36,
+    "max": 3.74
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
+  },
+  "on gap=0us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 732.9,
+    "min": 209.9,
+    "max": 1566.3
+   },
+   "firstAfterHeadMs": {
+    "median": 0.12,
+    "min": 0.07,
+    "max": 0.33
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.08,
+    "min": -0.16,
+    "max": 0.18
+   },
+   "worstLateMs": {
+    "median": -0.07,
+    "min": -0.16,
+    "max": 13.83
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "off gap=0us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.3,
+    "min": 0.1,
+    "max": 4
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.06,
+    "max": 2.14
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 42.9,
+    "min": 32.74,
+    "max": 59.9
+   },
+   "worstLateMs": {
+    "median": 42.9,
+    "min": 32.74,
+    "max": 59.9
+   },
+   "over20ms": 80,
+   "held": 80,
+   "heldEventsWithSecond": {
+    "9": 80
+   }
+  },
+  "off gap=0us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 218.2,
+    "min": 28.7,
+    "max": 1447.4
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.06,
+    "max": 1.24
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.08,
+    "min": -0.26,
+    "max": 41.55
+   },
+   "worstLateMs": {
+    "median": -0.06,
+    "min": -0.26,
+    "max": 41.55
+   },
+   "over20ms": 1,
+   "held": 1,
+   "heldEventsWithSecond": {
+    "9": 1
+   },
+   "idleUnder150ms": {
+    "runs": 4,
+    "over20ms": 1
+   },
+   "idle150msOrMore": {
+    "runs": 16,
+    "over20ms": 0
+   },
+   "over20": [
+    {
+     "idleMs": 28.7,
+     "lateMs": 41.5
+    }
+   ]
+  },
+  "default gap=1000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 4.4
+   },
+   "firstAfterHeadMs": {
+    "median": 0.09,
+    "min": 0.05,
+    "max": 0.43
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 40.92,
+    "min": -1.19,
+    "max": 64.91
+   },
+   "worstLateMs": {
+    "median": 40.92,
+    "min": 2.07,
+    "max": 64.91
+   },
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "6": 2,
+    "7": 1,
+    "8": 1,
+    "9": 75
+   }
+  },
+  "default gap=1000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 244.45,
+    "min": 23.3,
+    "max": 1560.6
+   },
+   "firstAfterHeadMs": {
+    "median": 0.11,
+    "min": 0.07,
+    "max": 0.5
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.09,
+    "min": -5.72,
+    "max": 38.63
+   },
+   "worstLateMs": {
+    "median": 0.47,
+    "min": -4.08,
+    "max": 38.63
+   },
+   "over20ms": 2,
+   "held": 2,
+   "heldEventsWithSecond": {
+    "9": 2
+   },
+   "idleUnder150ms": {
+    "runs": 2,
+    "over20ms": 2
+   },
+   "idle150msOrMore": {
+    "runs": 18,
+    "over20ms": 0
+   },
+   "over20": [
+    {
+     "idleMs": 23.3,
+     "lateMs": 38.6
+    },
+    {
+     "idleMs": 24.3,
+     "lateMs": 38.4
+    }
+   ]
+  },
+  "on gap=1000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 1
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.05,
+    "max": 0.77
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.06,
+    "min": -7,
+    "max": 3.45
+   },
+   "worstLateMs": {
+    "median": 0.26,
+    "min": -5.25,
+    "max": 11
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
+  },
+  "on gap=1000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 435.4,
+    "min": 192.7,
+    "max": 1385.4
+   },
+   "firstAfterHeadMs": {
+    "median": 0.08,
+    "min": 0.05,
+    "max": 0.16
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 0.01,
+    "min": -0.32,
+    "max": 9.41
+   },
+   "worstLateMs": {
+    "median": 0.52,
+    "min": -0.11,
+    "max": 9.41
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "off gap=1000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 2.4
+   },
+   "firstAfterHeadMs": {
+    "median": 0.09,
+    "min": 0.05,
+    "max": 0.39
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 40.83,
+    "min": -1.22,
+    "max": 56.62
+   },
+   "worstLateMs": {
+    "median": 40.83,
+    "min": -1.22,
+    "max": 56.62
+   },
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "9": 79
+   }
+  },
+  "off gap=1000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 367.05,
+    "min": 139.6,
+    "max": 613.2
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.06,
+    "max": 0.58
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.12,
+    "min": -2.26,
+    "max": 1.64
+   },
+   "worstLateMs": {
+    "median": 0.44,
+    "min": -2.22,
+    "max": 7.2
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "default gap=10000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 6
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.05,
+    "max": 1.12
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 31.83,
+    "min": 12.67,
+    "max": 54.54
+   },
+   "worstLateMs": {
+    "median": 31.83,
+    "min": 12.67,
+    "max": 54.54
+   },
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "2": 2,
+    "3": 51,
+    "4": 26
+   }
+  },
+  "default gap=10000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 366.35,
+    "min": 120.1,
+    "max": 628.5
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.06,
+    "max": 0.18
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.01,
+    "min": -1.13,
+    "max": 2.46
+   },
+   "worstLateMs": {
+    "median": 1.86,
+    "min": -0.44,
+    "max": 11.54
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "on gap=10000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.3,
+    "min": 0.1,
+    "max": 8.2
+   },
+   "firstAfterHeadMs": {
+    "median": 0.09,
+    "min": 0.05,
+    "max": 17.67
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.02,
+    "min": -14.16,
+    "max": 12.64
+   },
+   "worstLateMs": {
+    "median": 0.53,
+    "min": -14.16,
+    "max": 16.1
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
+  },
+  "on gap=10000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 804.6,
+    "min": 212.1,
+    "max": 1363.6
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.05,
+    "max": 0.25
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.04,
+    "min": -1.51,
+    "max": 8.89
+   },
+   "worstLateMs": {
+    "median": 1.65,
+    "min": -1.2,
+    "max": 15.83
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
+  },
+  "off gap=10000us busy": {
+   "runs": 80,
+   "events": 10,
+   "idleMs": {
+    "median": 0.2,
+    "min": 0.1,
+    "max": 4.9
+   },
+   "firstAfterHeadMs": {
+    "median": 0.09,
+    "min": 0.05,
+    "max": 3.55
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": 31.42,
+    "min": -0.47,
+    "max": 55.2
+   },
+   "worstLateMs": {
+    "median": 31.42,
+    "min": -0.23,
+    "max": 55.2
+   },
+   "over20ms": 78,
+   "held": 78,
+   "heldEventsWithSecond": {
+    "2": 4,
+    "3": 58,
+    "4": 16
+   }
+  },
+  "off gap=10000us after idle": {
+   "runs": 20,
+   "events": 10,
+   "idleMs": {
+    "median": 1120,
+    "min": 535.1,
+    "max": 1919.2
+   },
+   "firstAfterHeadMs": {
+    "median": 0.1,
+    "min": 0.06,
+    "max": 0.26
+   },
+   "firstOver20ms": 0,
+   "secondLateMs": {
+    "median": -0.02,
+    "min": -9.23,
+    "max": 10.42
+   },
+   "worstLateMs": {
+    "median": 0.67,
+    "min": -0.11,
+    "max": 10.42
+   },
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
+  }
+ }
+}
