@@ -151,4 +151,60 @@ class MarketplaceTest < ActionDispatch::IntegrationTest
       end
     end
   end
+
+  def test_alerts_are_independent_ordered_session_state
+    ActionController::Base.allow_forgery_protection = true
+    get "/api/alerts"
+    assert_equal [], response.parsed_body
+    assert_includes response.headers["Cache-Control"], "no-store"
+    get "/marketplace/fr-FR/item_1"
+    token = css_select("input[name=authenticity_token]").first["value"]
+    expected = []
+    [["first@example.test", "12,50", 1250], ["second@example.test", "0,105", 11]].each do |email, target, minor|
+      post "/marketplace/fr-FR/item_1", params: { authenticity_token: token, email: email, target_price: target }
+      assert_response :success
+      expected << { "item_id" => "item_1", "email" => email, "target_minor" => minor }
+    end
+    [["bad", "12,50"], ["a@b", "NaN"], ["a@b", "0"], ["a@b", ""]].each do |email, target|
+      post "/marketplace/fr-FR/item_1", params: { authenticity_token: token, email: email, target_price: target }
+      assert_response :success
+    end
+    post "/marketplace/fr-FR/item_1", params: { authenticity_token: token, email: ["a@b"], target_price: "12,50" }
+    assert_response :bad_request
+    post "/marketplace/fr-FR/item_1", params: { email: "a@b", target_price: "12,50" }
+    assert_response 422
+    post "/marketplace/fr-FR/item_1", params: { authenticity_token: token, email: "a@b", target_price: "12,50" }, headers: { "Origin" => "https://other.test" }
+    assert_response 422
+    post "/marketplace/fr-FR/item_1", params: { authenticity_token: token, email: "a@b", target_price: "12,50" }, headers: { "Sec-Fetch-Site" => "cross-site" }
+    assert_response :forbidden
+    post "/marketplace/fr-FR/missing", params: { authenticity_token: token, email: "a@b", target_price: "12,50" }
+    # Rails' per-form token is bound to the original path, so it rejects this first.
+    assert_response 422
+    2.times do
+      get "/api/alerts", params: { email: "not-an-alert", target_minor: 999 }
+      assert_equal expected, response.parsed_body
+    end
+    other = open_session
+    other.get "/api/alerts"
+    assert_equal [], other.response.parsed_body
+    get "/marketplace/en-US/item_2"
+    get "/api/alerts"
+    assert_equal expected, response.parsed_body
+  end
+
+  def test_concurrent_native_alert_store_appends_do_not_lose_rows
+    session_id = SecureRandom.hex(32)
+    threads = 8.times.map do |worker|
+      Thread.new do
+        10.times { |index| MarketplaceAlerts.append(session_id, { item_id: "item_1", email: "#{worker}-#{index}@test", target_minor: index }) }
+      end
+    end
+    threads.each(&:value)
+    alerts = MarketplaceAlerts.list(session_id)
+    assert_equal 80, alerts.length
+    assert_equal 80, alerts.map { |alert| alert[:email] }.uniq.length
+    assert_equal [], MarketplaceAlerts.list(SecureRandom.hex(32))
+    alerts.clear
+    assert_equal 80, MarketplaceAlerts.list(session_id).length
+  end
 end

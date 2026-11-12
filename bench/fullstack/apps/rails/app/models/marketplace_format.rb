@@ -36,13 +36,18 @@ class MarketplaceFormat
   end
 
   def alert(email, target, title)
-    return @labels.fetch("invalid_email") unless email.include?("@")
+    alert_result(email, target, title).first
+  end
+
+  def alert_result(email, target, title)
+    return [@labels.fetch("invalid_email"), nil] unless email.include?("@")
     # Read the decimal separator from CLDR; grouping is optional in the contract.
     decimal = @symbols.fetch(:decimal)
-    return @labels.fetch("invalid_price") unless /\A[+-]?[0-9]+(?:#{Regexp.escape(decimal)}[0-9]+)?\z/.match?(target)
+    return [@labels.fetch("invalid_price"), nil] unless /\A[+-]?[0-9]+(?:#{Regexp.escape(decimal)}[0-9]+)?\z/.match?(target)
     value = BigDecimal(target.sub(decimal, "."))
-    return @labels.fetch("invalid_price") unless value.finite? && value.positive?
-    @labels.fetch("alert_set").gsub(/\{email\}|\{title\}|\{price\}/,
+    return [@labels.fetch("invalid_price"), nil] unless value.finite? && value.positive?
+    message = @labels.fetch("alert_set").gsub(/\{email\}|\{title\}|\{price\}/,
       "{email}" => email, "{title}" => title, "{price}" => amount(value))
+    [message, (value * 100).round(0, BigDecimal::ROUND_HALF_UP).to_i]
   end
 end
