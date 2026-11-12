@@ -48,6 +48,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
+  (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
+  kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file
+  cites and skips none
+  ([#1260 bench/fullstack/README.md cites three commits GitHub does not have (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check](https://github.com/corten-run/corten/issues/1260)).
 - `npm run check` fails on a commit cited in backticks in the repository's Markdown that is not
   on the checkout's history or under `refs/tags/evidence/` (which keeps cited commits no branch
   has), naming its file, line and commit and the fetch from corten-run/corten that brings the
