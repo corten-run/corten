@@ -499,7 +499,7 @@ pub(crate) mod tests {
     fn a_pager_puts_its_link_handler_on_every_link_it_draws() {
         use corten::view::Render;
         let html = OrderedPagers {}.to_html();
-        let on = r#"data-on="connect:ui.ordered.link($t,[&quot;paged&quot;],$s)""#;
+        let on = r#"data-on='connect:ui.ordered.link($t,["paged"],$s)'"#;
         // Pagination: Previous, pages 1 to 3, and none on its disabled Next; PreviousNext: Older.
         assert_eq!(html.matches(on).count(), 5, "{html}");
         assert!(html.contains(&format!(r#"href="/orders?page=2" rel="prev" {on}>Previous</a>"#)), "{html}");
@@ -675,7 +675,7 @@ pub(crate) mod tests {
         let html = SortedTotals {}.to_html();
         // On the link, not the header: the click the script takes is the link's.
         assert!(
-            html.contains(r#"href="/orders?sort=total_down" data-ascending="/orders?sort=total_up" data-descending="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;Total&quot;)">"#),
+            html.contains(r#"href="/orders?sort=total_down" data-ascending="/orders?sort=total_up" data-descending="/orders?sort=total_down" data-on='click:sorted_totals.sortBy($e,"Total")'>"#),
             "{html}"
         );
         // A header the server sorts writes no handler.
@@ -693,7 +693,7 @@ pub(crate) mod tests {
         // A column read newest first: its first click sorts it descending, and without the
         // script its link is the descending page.
         assert!(
-            html.contains(r#"href="/orders?page=2" data-ascending="/orders?page=1" data-descending="/orders?page=2" data-first="descending" data-on="click:sorted_totals.sortBy($e,&quot;Placed&quot;)""#),
+            html.contains(r#"href="/orders?page=2" data-ascending="/orders?page=1" data-descending="/orders?page=2" data-first="descending" data-on='click:sorted_totals.sortBy($e,"Placed")'"#),
             "{html}"
         );
     }

@@ -53,3 +53,8 @@ export function tally(out, counted) {
 export function priced(out, count, price, when) {
   out.textContent = `${count(1234)} at ${price(123450)}, ${when(0)}`;
 }
+
+/** @param {HTMLElement} el @param {unknown} listing */
+export function listed(el, listing) {
+  el.title = Array.isArray(listing) ? String(listing.length) : "";
+}

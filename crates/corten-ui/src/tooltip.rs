@@ -40,7 +40,7 @@ use corten::{prelude::*, view::Id};
 /// }
 /// .to_html();
 /// assert!(html.contains(r#"<button type="button" interestfor="ui-save-tip" aria-describedby="ui-save-tip">Save</button>"#), "{html}");
-/// assert!(html.contains(r#"<span id="ui-save-tip" popover="hint" role="tooltip" data-on="connect:ui.tooltip.connect($t,$s)">Saves the draft; Ctrl+S</span>"#), "{html}");
+/// assert!(html.contains(r#"<span id="ui-save-tip" popover="hint" role="tooltip" data-on='connect:ui.tooltip.connect($t,$s)'>Saves the draft; Ctrl+S</span>"#), "{html}");
 /// ```
 ///
 /// Its id is a `#[derive(Id)]` type, the one the control names, so text does not compile:
