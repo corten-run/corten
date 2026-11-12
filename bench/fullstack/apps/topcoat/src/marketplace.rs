@@ -207,12 +207,22 @@ impl Locale {
         }
         input.replace(decimal, ".").parse().ok()
     }
+    #[cfg(test)]
     pub fn alert(self, record: &Record, form: &AlertForm) -> String {
+        self.alert_result(record, form).0
+    }
+    pub fn alert_result(self, record: &Record, form: &AlertForm) -> (String, Option<i64>) {
         if !form.email.contains('@') {
-            return self.text("invalid_email").into();
+            return (self.text("invalid_email").into(), None);
         }
         let Some(value) = self.target(&form.target_price) else {
-            return self.text("invalid_price").into();
+            return (self.text("invalid_price").into(), None);
+        };
+        let mut cents = value.clone();
+        cents.multiply_pow10(2);
+        cents.round(0);
+        let Ok(minor) = cents.to_string().parse::<i64>() else {
+            return (self.text("invalid_price").into(), None);
         };
         // Substitute once, so data resembling another placeholder stays data.
         let mut out = String::new();
@@ -232,7 +242,7 @@ impl Locale {
             remaining = &remaining[start + end + 1..];
         }
         out.push_str(remaining);
-        out
+        (out, Some(minor))
     }
 }
 

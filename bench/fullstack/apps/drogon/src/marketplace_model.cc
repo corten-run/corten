@@ -117,7 +117,8 @@ std::string Format::listings(const Json::Value &value, const Json::Value &words)
  auto key = "listing_" + utf8(plurals_->select(static_cast<double>(value.asInt64())));
  return count(value) + " " + (words.isMember(key) ? words[key] : words["listing_other"]).asString();
 }
-std::string Format::alert(const std::string &title, const std::string &email, const std::string &target, const Json::Value &words) const {
+std::string Format::alert(const std::string &title, const std::string &email, const std::string &target, const Json::Value &words, std::optional<int64_t> *minor) const {
+ if (minor) minor->reset();
  if (email.find('@') == std::string::npos) return words["invalid_email"].asString();
  UErrorCode status = U_ZERO_ERROR;
  icu::DecimalFormatSymbols symbols(locale_, status);
@@ -132,6 +133,22 @@ std::string Format::alert(const std::string &title, const std::string &email, co
  double number = value.getDouble(status);
  if (U_FAILURE(status) || position.getIndex() != text.length() || !std::isfinite(number) || number <= 0)
   return words["invalid_price"].asString();
+ // Read integral cents from the validated decimal, without float-to-integer overflow.
+ auto dotAt = input.find_first_of(".,");
+ auto whole = input.substr(0, dotAt);
+ auto fraction = dotAt == std::string::npos ? std::string() : input.substr(dotAt + 1);
+ whole.erase(0, whole.find_first_not_of('0'));
+ fraction += "00";
+ int64_t cents;
+ try {
+  auto digits = whole + fraction.substr(0, 2);
+  cents = std::stoll(digits);
+  if (fraction.size() > 2 && fraction[2] >= '5') {
+   if (cents == std::numeric_limits<int64_t>::max()) return words["invalid_price"].asString();
+   ++cents;
+  }
+ } catch (const std::exception &) { return words["invalid_price"].asString(); }
+ if (minor) *minor = cents;
  return interpolate(words["alert_set"].asString(), email, title, amount(number));
 }
 View::View(RecordPtr r, const std::string &l, const Json::Value &w, const std::string &s, const std::string &order, bool allOffers)

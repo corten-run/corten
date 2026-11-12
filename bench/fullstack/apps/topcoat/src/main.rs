@@ -2,6 +2,7 @@
 //! same markup and stylesheets, and the item as JSON. The listings' sort and the offers' "show
 //! all" are shards (rendered again on the server when their signal changes), the price alert a
 //! procedure, and links between pages Topcoat's client navigation.
+mod alerts;
 mod catalog;
 mod catalog_view;
 mod items;
@@ -62,6 +63,7 @@ fn router() -> Router {
         .route(item_json)
         .route(catalog_view::catalog_json)
         .route(marketplace_view::marketplace_json)
+        .route(alerts::read)
         .route(listings)
         .route(offers)
         .route(create_alert)

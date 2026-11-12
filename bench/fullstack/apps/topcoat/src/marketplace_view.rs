@@ -22,7 +22,15 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
     let locale = PageLocale::parse(path_param::<Locale>(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
     let query = Form::<Query>::from_bytes(request::uri(cx).query().unwrap_or_default().as_bytes())?.0;
     let record = marketplace::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
-    let message = if request::method(cx).as_str() == "POST" { locale.alert(&record, &form) } else { String::new() };
+    let message = if request::method(cx).as_str() == "POST" {
+        let (message, minor) = locale.alert_result(&record, &form);
+        if let Some(target_minor) = minor {
+            crate::alerts::append(cx, crate::alerts::Alert { item_id: record.id.clone(), email: form.email.clone(), target_minor })?;
+        }
+        message
+    } else {
+        String::new()
+    };
     Ok(view! {
         <!DOCTYPE html>
         <html lang=(locale.tag())>

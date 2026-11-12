@@ -1,5 +1,6 @@
 #include "marketplace.h"
 #include "record_http.h"
+#include "alerts.h"
 #include <drogon/drogon.h>
 #include <drogon/HttpMiddleware.h>
 #include <drogon/utils/Utilities.h>
@@ -15,6 +16,7 @@ namespace {
 bool fromFixture = false;
 std::unordered_map<std::string, RecordPtr> fixture;
 Json::Value labels;
+Alerts alerts;
 thread_local std::vector<drogon::HttpClientPtr> idleClients;
 std::string env(const char *name, const char *fallback) {
  const char *value = std::getenv(name); return value && *value ? value : fallback;
@@ -72,6 +74,10 @@ void get(const std::string &id, std::function<void(RecordPtr, bool)> done) {
  });
 }
 void routes() {
+ drogon::app().registerHandler("/api/alerts", [](const drogon::HttpRequestPtr &request, Callback &&callback) {
+  auto response = drogon::HttpResponse::newHttpJsonResponse(alerts.read(request));
+  response->addHeader("Cache-Control", "no-store"); callback(response);
+ }, {drogon::Get});
  drogon::app().registerHandler("/api/marketplace/{id}",
   [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &id) {
    if (request->method() != drogon::Get && request->method() != drogon::Head)
@@ -109,8 +115,11 @@ void routes() {
    if (request->method() == drogon::Post) {
     const auto &origin = request->getHeader("origin");
     const std::string scheme = request->isOnSecureConnection() ? "https://" : "http://";
-    if (request->getHeader("sec-fetch-site") == "cross-site" || (!origin.empty() && origin != scheme + request->getHeader("host")))
+    const auto &site = request->getHeader("sec-fetch-site");
+    if ((!site.empty() && site != "same-origin" && site != "none") || (!origin.empty() && origin != scheme + request->getHeader("host")))
      return error(callback, drogon::k403Forbidden);
+    if (request->getHeader("content-type").find("application/x-www-form-urlencoded") != 0)
+     return error(callback, drogon::k415UnsupportedMediaType);
    }
    get(id, [request, locale, callback = std::move(callback)](RecordPtr record, bool failed) mutable {
     if (failed) return error(callback, drogon::k502BadGateway);
@@ -119,10 +128,23 @@ void routes() {
     view->path = url(locale, (*record)["id"].asString());
     if (view->offersShown < (*record)["offers"].size())
      view->more = view->path + "?seller=" + drogon::utils::urlEncodeComponent(view->seller) + "&sort=" + view->sort + "&offers=all";
-    if (request->method() == drogon::Post)
-     view->message = view->format.alert((*record)["title"].asString(), request->getParameter("email"), request->getParameter("target_price"), view->words);
+    std::optional<int64_t> minor;
+    std::string email;
+    if (request->method() == drogon::Post) {
+     // A separate native request parser keeps query fields out of the submitted form.
+     auto form = drogon::HttpRequest::newHttpRequest();
+     form->setMethod(drogon::Post); form->addHeader("content-type", "application/x-www-form-urlencoded");
+     form->setBody(std::string(request->body()));
+     email = form->getParameter("email");
+     view->message = view->format.alert((*record)["title"].asString(), email, form->getParameter("target_price"), view->words, &minor);
+    }
     drogon::HttpViewData data; data.insert("marketplace", view);
     auto response = drogon::HttpResponse::newHttpViewResponse("MarketplacePage", data);
+    if (minor) {
+     Json::Value row(Json::objectValue);
+     row["item_id"] = (*record)["id"]; row["email"] = email; row["target_minor"] = Json::Int64(*minor);
+     if (!alerts.append(request, response, std::move(row))) return error(callback, drogon::k503ServiceUnavailable);
+    }
     response->addHeader("Cache-Control", "no-store"); callback(response);
    });
   }, {drogon::Get, drogon::Post});
