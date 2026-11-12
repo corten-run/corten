@@ -36,7 +36,7 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
-| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process; under the matched tier's profile, uvicorn run directly), htmx | [apps/fastapi](apps/fastapi) | not yet |
 | express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
@@ -1870,8 +1870,10 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    form (FastAPI has no CSRF protection; the app's own check is the marketplace page's, which the
    adapter contract asks for), a head size limit and a header timeout (uvicorn's httptools parser has
    neither, and its keep-alive timeout starts after an answer, so an unfinished first head is held;
-   `--h11-max-incomplete-event-size` bounds a head only with the h11 parser, which the tier does not
-   switch to), liveness and readiness; its failed reads stay the app's 502 `text/plain`. One
+   `--h11-max-incomplete-event-size` bounds a head only with the h11 parser, and the tier does not
+   switch to it: `--http h11` changes the parser every request goes through, from the one
+   `uvicorn[standard]` installs and uvicorn picks to its pure-Python one, which is a choice of speed
+   rather than a setting for this part), liveness and readiness; its failed reads stay the app's 502 `text/plain`. One
    `style-src` violation, htmx's indicator styles, as aspnet's.
 8. `express`: Helmet, which Express's security guide gives, sets axum-maud's CSP, referrer and frame
    policies (its options) and its other headers as it sends them by default (among them
@@ -1881,7 +1883,13 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    to the pages and the JSON (it runs after `express.static`, so not the static files). Express's own
    middleware adds compression (`compression`: Brotli or gzip; its `filter` option leaves out the live
    stream, which it would hold back to fill its window) and a deadline (`connect-timeout`: a 503 past
-   10 s through Express's error handler; an answer whose headers are sent is no longer timed).
+   10 s through Express's error handler; an answer whose headers are sent is no longer timed). The
+   deadline needs the checks its documentation gives: `haltOnTimedout` after each body parser and
+   `if (req.timedout) return;` after each `await` in a handler. Without them the handler answers a
+   timed-out request a second time when its read comes back, which throws: from a page's render that
+   ended the process, and from the JSON's `res.json` Express's error handler closed the connection,
+   with a second request on it unanswered (both seen with an item API that answered in 12 s). The
+   three packages are loaded only under the profile.
    `app.listen` makes a Node server;
    under the profile the app makes it as Express's documentation does (`http.createServer(app)`) with
    Node's settings: `headersTimeout` 30 s (Node's default is 60 s), checked every second
@@ -1891,9 +1899,16 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    past Node's 16 KiB of headers (or a reset while the probe is still sending them), `HEAD` on a `GET`
    route, and an HTML 500 from Express's error handler for a page's failed read. Left out: a host
    list and a cross-site check (Express has neither; `vhost` routes by name and refuses nothing),
+   with `host-validation` too: Helmet's "See also" lists it among modules its maintainers "have not
+   heavily audited", Express's documentation does not name it, and its last release is from 2018,
+   so it is not the framework's own,
    liveness and readiness (Express's health-check guide describes them and names no middleware), and
    JSON errors: its 404 is the app's `sendStatus` (`text/plain`), a wrong method falls through to
-   Express's HTML 404 (it has no 405), and its error handler answers HTML. One `style-src` violation,
+   Express's HTML 404 (it has no 405), and its error handler answers HTML. The answers Express's
+   error handler (finalhandler) makes, the 413, the deadline's 503, the 500s and the HTML 404 for a
+   path or method no route has, keep Helmet's other headers and `Permissions-Policy` but carry
+   finalhandler's own CSP, `default-src 'none'`, in place of the profile's (stricter: its error page
+   loads nothing); the item page's 404 is the app's view, with the profile's. One `style-src` violation,
    htmx's indicator styles, as FastAPI's. Its image grows by 1.5 MB (241,478,946 bytes against
    239,983,013 built at `31e0443a`, the commit before), FastAPI's by 3 KB (236,298,472 against
    236,295,182).

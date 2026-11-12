@@ -3,10 +3,7 @@
 // navigation (hx-boost), as in the other htmx apps.
 // With PROFILE=matched it adds the matched tier's production profile (bench/fullstack/README.md,
 // "The matched tier") from the middleware Express's documentation names and Node's server settings.
-import compression from "compression";
-import timeout from "connect-timeout";
 import express from "express";
-import helmet from "helmet";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { alertMessage, fetchItem, shelf } from "./lib/view-model.mjs";
@@ -19,9 +16,13 @@ app.disable("x-powered-by");
 app.set("view engine", "ejs");
 app.set("views", fileURLToPath(new URL("./views", import.meta.url)));
 if (profile) {
+  // The profile's middleware, loaded only under it.
+  const [{ default: timeout }, { default: compression }, { default: helmet }] = await Promise.all([import("connect-timeout"), import("compression"), import("helmet")]);
   app.use(
     // A 503 past 10 s (card-market's deadline), from Express's timeout middleware; a response whose
-    // headers are sent (the live stream) is no longer timed.
+    // headers are sent (the live stream) is no longer timed. As its documentation says, a request
+    // that has timed out must go no further (haltOnTimedout and the req.timedout checks below): a
+    // second answer throws, which ends the process from a render and closes the connection otherwise.
     timeout("10s"),
     // Brotli or gzip when asked, from Express's compression middleware; not the live stream, which
     // it would hold back to fill its window.
@@ -55,6 +56,11 @@ if (profile) {
   });
 }
 const form = express.urlencoded({ extended: false });
+// After a body parser, connect-timeout's documentation stops a request that has timed out from going on.
+function haltOnTimedout(req, res, next) {
+  if (!req.timedout) next();
+}
+const parsed = (parser) => (profile ? [parser, haltOnTimedout] : [parser]);
 const field = (body, name) => (typeof body?.[name] === "string" ? body[name] : "");
 const counts = new Intl.NumberFormat("en-US");
 app.locals.grouped = (n) => counts.format(n);
@@ -67,6 +73,7 @@ app.get("/", (req, res) => {
 
 async function item(req, res) {
   const view = await fetchItem(req.params.id);
+  if (req.timedout) return;
   if (!view) return res.status(404).render("not-found");
   let message = "";
   if (req.method === "POST") {
@@ -84,10 +91,11 @@ async function item(req, res) {
   });
 }
 app.get("/items/:id", item);
-app.post("/items/:id", form, item);
+app.post("/items/:id", ...parsed(form), item);
 
 app.get("/api/items/:id", async (req, res) => {
   const view = await fetchItem(req.params.id);
+  if (req.timedout) return;
   if (!view) return res.sendStatus(404);
   res.json(view);
 });
@@ -104,21 +112,24 @@ async function marketplace(req, res) {
   if (!isLocale(locale)) return res.status(400).type("text").send("Unsupported locale");
   if (req.method === "POST" && crossSite(req)) return res.status(403).type("text").send("Forbidden");
   const record = await fetchMarketplaceRecord(id);
+  if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   const posted = req.method === "POST" ? { email: field(req.body, "email"), target: field(req.body, "target_price") } : null;
   res.render("marketplace", pageModel(locale, record, readQuery(req.query), posted));
 }
 app.get("/marketplace/:locale/:id", marketplace);
-app.post("/marketplace/:locale/:id", form, marketplace);
+app.post("/marketplace/:locale/:id", ...parsed(form), marketplace);
 
 app.get("/api/marketplace/:id", async (req, res) => {
   const record = await fetchMarketplaceRecord(req.params.id);
+  if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   res.json(record);
 });
 
 app.get("/catalog/:id", async (req, res) => {
   const record = await fetchCatalogRecord(req.params.id);
+  if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   const prefix = typeof req.query.field === "string" ? req.query.field : "";
   res.render("catalog", { record, prefix, fields: record.fields.filter((f) => f.name.startsWith(prefix)) });
@@ -126,6 +137,7 @@ app.get("/catalog/:id", async (req, res) => {
 
 app.get("/api/catalog/:id", async (req, res) => {
   const record = await fetchCatalogRecord(req.params.id);
+  if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   res.json(record);
 });
@@ -139,7 +151,7 @@ app.get("/live/prices", (req, res) => {
   streams.add(res);
   req.on("close", () => streams.delete(res));
 });
-app.post("/live/publish", express.text({ type: () => true }), (req, res) => {
+app.post("/live/publish", ...parsed(express.text({ type: () => true })), (req, res) => {
   // One data line per line of the body, as an event stream requires.
   const body = typeof req.body === "string" ? req.body : "";
   const event = `${body.split(/\r\n|\r|\n/).map((line) => `data: ${line}`).join("\n")}\n\n`;
