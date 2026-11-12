@@ -146,16 +146,24 @@ export async function run(args) {
     browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "Bounded local verification on an uncontrolled host; no throughput or ranking claim. No OS CPU or memory isolation." };
   const output = { schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
     selectedApps: selectedApps("client-heavy"), definition: definition("client-heavy"), builds: null, cells: {}, passed: false, readyForLoad: false };
-  let server, browser;
+  let server, browser, interrupted = false, interruptCleanup;
+  const interrupt = () => {
+    interrupted = true;
+    interruptCleanup ??= browser?.close().catch(() => {});
+  };
+  process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   try {
     const nativeDirectory = join(config.out, "native");
     // Receipts and self-consistent hashes cannot prove which framework produced a
     // bundle. Compile the native sources in this invocation, including the Rust generator.
     output.builds = await buildApps(config.workload, nativeDirectory, config.cargo);
+    assert.ok(!interrupted, "native-runner-interrupted");
     server = await serve(nativeDirectory);
     browser = await chromium.launch({ headless: true, args: ["--renderer-process-limit=1"] });
+    assert.ok(!interrupted, "native-runner-interrupted");
     provenance.browser = browser.version();
     for (const app of output.selectedApps) {
+      assert.ok(!interrupted, "native-runner-interrupted");
       if (output.builds[app].outcome !== "built") {
         output.cells[app] = { outcome: "failed", reason: "native-build-failed", qualification: null, measurement: null, readyForMeasurement: false };
       } else {
@@ -167,11 +175,15 @@ export async function run(args) {
     }
     output.passed = output.selectedApps.every((app) => output.cells[app].outcome === "passed");
   } catch (error) {
-    output.failure = { reason: "runner-failed", name: error.name, diagnosticSha256: sha256(String(error)) };
+    output.failure = { reason: interrupted ? "native-runner-interrupted" : "runner-failed", name: error.name, diagnosticSha256: sha256(String(error)) };
   } finally {
-    await browser?.close(); await server?.close();
-    for (const app of output.selectedApps) output.cells[app] ??= { outcome: "not-run", reason: "runner-failed-before-adapter", qualification: null, measurement: null, readyForMeasurement: false };
-    await writeFile(join(config.out, "result.json"), JSON.stringify(output, null, 2) + "\n");
+    try {
+      await interruptCleanup;
+      await browser?.close(); await server?.close();
+      if (interrupted) output.passed = false;
+      for (const app of output.selectedApps) output.cells[app] ??= { outcome: "not-run", reason: interrupted ? "native-runner-interrupted" : "runner-failed-before-adapter", qualification: null, measurement: null, readyForMeasurement: false };
+      await writeFile(join(config.out, "result.json"), JSON.stringify(output, null, 2) + "\n");
+    } finally { process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt); }
   }
   return output;
 }
