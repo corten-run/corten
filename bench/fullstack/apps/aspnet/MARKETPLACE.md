@@ -38,6 +38,9 @@ independently reads the process-local store as an insertion-ordered JSON array
 `Cache-Control: no-store`. No/unknown cookie and fresh browser contexts read `[]`.
 GET never creates, resets or clears a store. Validation, missing records,
 unsupported locales, antiforgery rejection and cross-site rejection do not append.
+Accepted POSTs stage the native Razor page and layout before appending, then send
+the rendered response. Upstream errors, render failures and cancellation before
+commit never append. GETs and invalid forms retain the normal unbuffered path.
 The Razor antiforgery token remains required even for direct HTTP test clients.
 CultureInfo still parses the price and supplies localized validation. Stored minor
 units use the displayed currency's half-away-from-zero rounding and native `Int128`

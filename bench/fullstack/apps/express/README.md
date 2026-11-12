@@ -44,7 +44,10 @@ store. `GET /api/alerts` independently reads it as an insertion-ordered JSON arr
 `Cache-Control: no-store`. Missing/unknown cookies and fresh browser contexts read
 `[]`; GET never initializes, clears or resets a store. Invalid forms, missing
 records, unsupported locales and cross-site rejections do not append. Native Intl
-price parsing, localized messages and form APIs remain in place. Legacy item
+price parsing, localized messages and form APIs remain in place. Decimal target
+digits convert directly to an integer number of cents, bounded by
+`Number.MAX_SAFE_INTEGER`, without a floating-point multiplication. Intl formats
+the exact decimal string in the accepted message, including at that boundary. Legacy item
 forms are not part of this store. No parity flag or new dependency is needed.
 
 The first accepted POST issues `marketplace-alerts`, a server-generated 256-bit

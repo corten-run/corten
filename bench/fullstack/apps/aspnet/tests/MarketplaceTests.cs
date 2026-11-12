@@ -222,6 +222,55 @@ public sealed class MarketplaceTests
         Assert.Equal(1, (await Read(other)).GetArrayLength());
     }
 
+    [Fact]
+    public async Task FailedRenderingAndUpstreamErrorsDoNotAppendAcceptedForms()
+    {
+        var upstream = new Upstream();
+        using var app = new App(upstream);
+        using var client = app.CreateClient(new() { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        var document = new HtmlParser().ParseDocument(await client.GetStringAsync("/marketplace/en-US/item_1"));
+        var token = document.QuerySelector("input[name=__RequestVerificationToken]")!.GetAttribute("value")!;
+        Task<HttpResponseMessage> Post() => client.PostAsync("/marketplace/en-US/item_1", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = token, ["email"] = "render@example.test", ["target_price"] = "12.50"
+        }));
+        using var accepted = await Post();
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var before = await client.GetStringAsync("/api/alerts");
+        Assert.Equal(1, JsonDocument.Parse(before).RootElement.GetArrayLength());
+        foreach (var broken in new[]
+        {
+            Sample() with { Fields = [null!] },
+            Sample() with { Fields = null! },
+            Sample() with { Listings = [null!] },
+            Sample() with { Categories = [null!] }
+        })
+        {
+            upstream.Record = broken;
+            try
+            {
+                using var failed = await Post();
+                Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+            }
+            // The default profile has no page exception handler; TestServer propagates it.
+            catch (NullReferenceException) { }
+            Assert.Equal(before, await client.GetStringAsync("/api/alerts"));
+        }
+        upstream.Record = Sample();
+        upstream.Status = HttpStatusCode.ServiceUnavailable;
+        try
+        {
+            using var failed = await Post();
+            Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        }
+        catch (HttpRequestException) { }
+        Assert.Equal(before, await client.GetStringAsync("/api/alerts"));
+        upstream.Status = HttpStatusCode.OK;
+        using var recovered = await Post();
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        Assert.Equal(2, JsonDocument.Parse(await client.GetStringAsync("/api/alerts")).RootElement.GetArrayLength());
+    }
+
     [Theory]
     [InlineData("/api/catalog/record_1")]
     [InlineData("/api/marketplace/item_1")]
