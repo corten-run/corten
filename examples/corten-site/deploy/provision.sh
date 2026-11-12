@@ -6,7 +6,7 @@
 # Safe to run again: each step leaves what is already in place.
 set -eu
 
-if [ $# -lt 3 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+if [ $# -lt 3 ] || [ $# -gt 4 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
     echo "usage: sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>']" >&2
     exit 1
 fi
@@ -24,7 +24,9 @@ esac
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends nginx certbot ufw
+# sudo and sshd are on a cloud image already; the deploy's one sudo rule and the firewall's
+# OpenSSH profile need them wherever this runs.
+apt-get install -y --no-install-recommends nginx certbot ufw sudo openssh-server
 
 # Each deploy's release lands in a directory of its own under /opt/corten-site/releases, and
 # `current` points at the one served.
@@ -78,7 +80,8 @@ sed "s/SITE_DOMAIN/$domain/g" "$here/nginx.conf" > /etc/nginx/sites-available/co
 ln -sf /etc/nginx/sites-available/corten-site /etc/nginx/sites-enabled/corten-site
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
-systemctl enable nginx
+# Started here too: on a run that finds its certificate in place nothing above has started it.
+systemctl enable --now nginx
 systemctl reload nginx
 
 echo "Ready. The first deploy starts the service: run the Site workflow, or push to main."
