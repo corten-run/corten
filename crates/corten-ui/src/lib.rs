@@ -284,7 +284,11 @@ script!(pub mod ordered = "ordered.js");
 /// #[derive(Id)]
 /// struct SupplyId;
 ///
-/// let html = html! { <a href="/" on:click={ordered::send(event, target, [sorted(&SupplyId)])}></a> };
+/// #[derive(Route)]
+/// #[route("/supply")]
+/// struct Supply;
+///
+/// let html = html! { <a href={Supply} on:click={ordered::send(event, target, [sorted(&SupplyId)])}></a> };
 /// ```
 ///
 /// It goes beside a form's own `on:submit` handler: an element takes several handlers for one
