@@ -87,6 +87,16 @@ Corten is pre-1.0, so any minor version may change the API.
   with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
   say where the check holds
   ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
+- `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
+  after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
+  socket hyper hands to the route. Before, it was given back at the switch, so a client that
+  opened connections and switched them was not bounded by the cap. This breaks an app that sets
+  the cap and keeps sockets open: its WebSockets and tunnels now count against the cap, and once
+  they fill it, new connections wait until one closes. To migrate, raise the cap by the most
+  sockets the app keeps open, with room left for health probes, which wait behind a full cap like
+  any other connection, and end idle ones in the route (a deadline from the last frame heard, with
+  pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
+  ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 
 ### Fixed
 
@@ -171,6 +181,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
+  publishes no npm initializer that creates an app (`npm create corten`): the app would still
+  build with Cargo and its other commands are installed by Cargo, so it would replace only
+  `corten new`, at the cost of a second way to start an app and a second release channel. It also
+  records that `create-corten` is held by a placeholder, published once by hand, that prints the
+  Cargo steps, so the npm convention cannot run a stranger's code
+  ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
 - `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
   (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
   kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file
