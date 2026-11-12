@@ -40,6 +40,18 @@ test("raw probe inventory and health cannot be omitted or converted to an exclus
 });
 
 test("inconclusive or contradictory transport probes cannot become capability results", () => {
+  for (const key of ["page", "json", "page404", "json404", "json405", "head", "badHost", "bigHead", "ownPost", "crossSite", "bigBody", "page500", "json500", "slow"]) {
+    const p = qualificationProbes(); p[key] = { error: "ECONNREFUSED", ms: 20 };
+    assert.throws(() => validateQualification(qualification(p)), /inconclusive HTTP transport failure/, key);
+  }
+  const negative = qualificationProbes(); negative.head.status = 405;
+  assert.ok(validateQualification(qualification(negative)).missing.includes("head"), "an observed HTTP refusal establishes missing HEAD support");
+  for (const key of ["bigHead", "bigBody"]) {
+    const p = qualificationProbes(); p[key] = { error: "ECONNRESET", ms: 20 };
+    assert.equal(validateQualification(qualification(p)).eligible, true, "intentional oversized request closure remains valid protection evidence");
+  }
+  const slow = qualificationProbes(); slow.slow = { timedOut: true, ms: 40000 };
+  assert.ok(validateQualification(qualification(slow)).missing.includes("deadline"));
   for (const h of [{ error: "could not connect" }, { closedMs: "0", timedOutMs: 40000 }, { closedMs: "0" }, { closedMs: 0, timedOutMs: 40000 }, { timedOutMs: -1 }]) {
     const p = qualificationProbes(); p.unfinishedHead = h;
     assert.throws(() => validateQualification(qualification(p)));

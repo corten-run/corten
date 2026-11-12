@@ -36,7 +36,7 @@ export function validateQualification(q) {
   assert.deepEqual(q, expected, "feature qualification must match the saved raw probes");
   return q;
 }
-const httpProbe = (p) => {
+const httpProbe = (p, { close = false, timeout = false } = {}) => {
   assert.ok(p && Number.isFinite(p.ms) && p.ms >= 0, "missing raw HTTP probe");
   if (p.status !== undefined) {
     assert.equal(p.timedOut, undefined); assert.equal(p.error, undefined);
@@ -46,11 +46,13 @@ const httpProbe = (p) => {
   } else {
     assert.equal(Number(p.timedOut === true) + Number(typeof p.error === "string" && p.error.length > 0), 1, "probe needs exactly one response/failure variant");
     assert.equal(p.headers, undefined); assert.equal(p.bodyLength, undefined);
+    assert.ok(timeout && p.timedOut === true || close && ["EPIPE", "ECONNRESET"].includes(p.error), "inconclusive HTTP transport failure; no capability result");
   }
 };
 export function validateProbes(p, source) {
   sourceFeatures(source);
-  for (const key of ["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost", "bigHead", "afterConnections"]) httpProbe(p[key]);
+  for (const key of ["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost", "afterConnections"]) httpProbe(p[key]);
+  httpProbe(p.bigHead, { close: true });
   for (const key of ["page", "json", "pageBr", "jsonBr", "jsonGzip", "afterConnections"]) assert.equal(p[key].status, 200, `${key}: unhealthy qualification`);
   assert.ok(typeof p.page.body === "string" && p.page.body.length > 0, "missing page/form evidence");
   const bytes = Buffer.from(p.page.body, "base64");
@@ -59,7 +61,8 @@ export function validateProbes(p, source) {
   if (!form || form.script) assert.equal(p.form, "no native POST form");
   else {
     assert.equal(p.form, undefined);
-    for (const key of ["ownPost", "crossSite", "bigBody", "afterBig"]) httpProbe(p[key]);
+    for (const key of ["ownPost", "crossSite", "afterBig"]) httpProbe(p[key]);
+    httpProbe(p.bigBody, { close: true });
     assert.ok(p.ownPost.status >= 200 && p.ownPost.status < 400 && p.ownPost.headers.serverfnerror === undefined, "native same-origin form failed");
     assert.equal(p.afterBig.status, 200);
   }
@@ -78,7 +81,8 @@ export function validateProbes(p, source) {
     ["belowHeld", "whileHeld", "afterwards"].every((k) => c[k] === null || Number.isInteger(c[k]) && c[k] >= 100 && c[k] <= 599) &&
     (c.afterRelease === null || ["refused", "closed"].includes(c.afterRelease) || Number.isInteger(c.afterRelease) && c.afterRelease >= 100 && c.afterRelease <= 599), "missing/invalid connection-cap probe");
   if (source === "api") {
-    for (const key of ["page500", "json500", "slow", "afterUpstream"]) httpProbe(p[key]);
+    for (const key of ["page500", "json500", "afterUpstream"]) httpProbe(p[key]);
+    httpProbe(p.slow, { timeout: true });
     assert.equal(p.afterUpstream.status, 200);
   }
 }
