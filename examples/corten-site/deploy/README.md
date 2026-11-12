@@ -210,9 +210,9 @@ own, or by the first version of control groups, is not looked for: the gauges ar
 machine's, and read low with the server at that limit. Of such a limit the page says only what
 the standard library counts: where that is fewer CPUs than the machine has, that the server is
 held to them (a quota's whole CPUs, rounded down and never fewer than one), and no limit of
-memory. It has not run under the service file's
-sandbox on a real machine: if the two gauges are missing there, the unit is keeping the server
-from `/proc/stat` or `/proc/meminfo`.
+memory. Under the service file's sandbox, in the container with systemd described below, both
+gauges are there, so the unit does not keep the server from `/proc/stat` or `/proc/meminfo`; it
+has not run on a real machine.
 
 The workflow's ship step was rehearsed against a container running sshd, with the `deploy` user
 made by `provision.sh`'s own lines and a stand-in for `systemctl`: a first deploy, a second of
@@ -226,6 +226,15 @@ container: with the workflow's options as of `d916a1b61`, `ssh` gave up 17 secon
 freeze mid-session, and a new connection after 10 (one run). The ship step was not run against a
 machine that freezes.
 
-The rest of `provision.sh` (packages, the firewall, the certificate), the service under a real
-systemd and the workflow on GitHub have not been run from this repository yet: the first deploy
-is their test.
+`provision.sh` was then run whole, as it is at `98ddffbcc`, in an Ubuntu 24.04 container with
+systemd as its first process and a self-signed certificate already where certbot would put
+one, since Let's Encrypt cannot reach a container. It installed its packages, made the `deploy`
+user, enabled the firewall and the service, and left nginx answering 308 on port 80 and 502 on
+443. The workflow's ship step, as written, then shipped a release there over SSH with the
+deploy key: the service started under systemd with the unit's sandbox, and the page, its JSON
+and its live stream answered through nginx as the commit. Linting the script before that run
+found that it never read its second argument (in `sh` the apostrophes in two of its messages
+paired across the lines between them), which `98ddffbcc` fixes.
+
+certbot's request for a certificate and the workflow on GitHub have not been run from this
+repository yet: the first deploy is their test.
