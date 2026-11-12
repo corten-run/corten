@@ -380,8 +380,9 @@ which a browser resolves away before it asks (`/items/..` opens `/`, and `%2e` i
 too), a `{*rest}` value with such a segment (`public/../private/x`), and an empty value first or
 last in the path, before text in its segment, or as a whole `{*rest}` value, where the router has
 no segment for it (`/{user}/posts` would be `//posts`, another host). A debug build panics when
-such a link is written, naming the route and the field; a release build logs that as an error and
-writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400. A value that
+such a link is written, naming the route and the field; a release build writes `%FF` after the
+value (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for
+each route and field. A value that
 only contains dots (`a.b`, `.hidden`) is written as it is, as is an empty one between two
 segments (`/shelves//` for `/shelves/{id}/`), which reads back. Refuse these values where the app
 stores them (a slug, a user name, a file key), so no link reaches the check. A route's own path

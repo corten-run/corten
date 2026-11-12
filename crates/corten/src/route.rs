@@ -4729,23 +4729,38 @@ pub mod __private {
     }
 
     /// A value the path cannot carry: a debug build panics, naming the route and the field; a
-    /// release build logs that as an error and writes `%FF` after the value ([`unreadable`]), so
-    /// the link opens no other page. It takes the parameter by reference, a constant the derive
-    /// writes, so a link's call to it is three arguments and the link stays small enough to be
-    /// inlined where it is written.
+    /// release build writes `%FF` after the value ([`unreadable`]), so the link opens no other
+    /// page, and logs that as an error the first time for each route and field, so a list that
+    /// links a stored value on every row and every render is one line, not one per link. It takes
+    /// the parameter by reference, a constant the derive writes, so a link's call to it is three
+    /// arguments and the link stays small enough to be inlined where it is written.
     #[cold]
     #[inline(never)]
     fn refuse<const PLACE: u8>(param: &Param<PLACE>, out: &mut String, start: usize) {
-        let message = format!(
-            "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
-            param.route,
-            param.field,
-            &out[start..]
-        );
+        // One list for every place: a static in a generic function is not one per instance.
+        static LOGGED: std::sync::Mutex<Vec<(&str, &str)>> = std::sync::Mutex::new(Vec::new());
+        let message = || {
+            format!(
+                "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+                param.route,
+                param.field,
+                &out[start..]
+            )
+        };
         if cfg!(debug_assertions) {
-            panic!("{message}");
+            panic!("{}", message());
         }
-        tracing::error!("{message}");
+        let first = {
+            let mut logged = LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let first = !logged.contains(&(param.route, param.field));
+            if first {
+                logged.push((param.route, param.field));
+            }
+            first
+        };
+        if first {
+            tracing::error!("{} (logged once for this route and field)", message());
+        }
         unreadable(out, start);
     }
 
@@ -4834,9 +4849,10 @@ pub mod __private {
 
     /// A text value, encoded and held to its place by its text. A whole-segment value is refused
     /// only when it is empty or dots, which are written as they are, so where it starts is found
-    /// from its length then, and an id or a slug pays a comparison of the length it already has:
-    /// one of two bytes or fewer is looked at out of line ([`short`]), which keeps the link small
-    /// enough to be inlined where it is written.
+    /// from its length then, and an id or a slug pays a comparison of the length it already has
+    /// (and one of two bytes or fewer, of its first byte): one that is empty or starts with a dot
+    /// there is looked at out of line ([`short`]), which keeps the link small enough to be inlined
+    /// where it is written.
     #[inline(always)]
     fn text<const PLACE: u8>(value: &str, param: &Param<PLACE>, out: &mut String) {
         if PLACE == place::REST {
@@ -4847,7 +4863,7 @@ pub mod __private {
             }
         } else {
             Encode { out: &mut *out, keep: SEGMENT }.push(value);
-            if value.len() <= 2 {
+            if value.len() <= 2 && value.as_bytes().first().is_none_or(|&b| b == b'.') {
                 short(value.as_bytes(), param, out);
             }
         }
@@ -5271,6 +5287,9 @@ mod tests {
             (Box::new(|| File { path: String::new() }.href()), "/files/%FF", "File cannot carry path"),
             (Box::new(|| Page { page: "" }.href()), "/%FF", "Page cannot carry page"),
             (Box::new(|| Page { page: ".." }.href()), "/..%FF", "Page cannot carry page"),
+            // Refused though `one_slash` would write `/%2F..`, one segment no browser resolves:
+            // a dot segment after the empty one a leading `/` starts is refused as any other is
+            // (docs/design.md#limit-path-values).
             (Box::new(|| Page { page: "/.." }.href()), "/%2F..%FF", "Page cannot carry page"),
             (Box::new(|| Page { page: "//../x" }.href()), "/%2F/..%FF/x", "Page cannot carry page"),
         ];
@@ -5301,6 +5320,9 @@ mod tests {
             (Item { id: "..." }.href(), "/items/..."),
             (Item { id: ".hidden" }.href(), "/items/.hidden"),
             (Item { id: "a.." }.href(), "/items/a.."),
+            (Item { id: "en" }.href(), "/items/en"),
+            (Item { id: "a." }.href(), "/items/a."),
+            (Posts { user: "x" }.href(), "/x/posts"),
             (Item { id: "%2e" }.href(), "/items/%252e"),
             (Item { id: "./" }.href(), "/items/.%2F"),
             (Offers { id: "", page: None, sort: "new" }.href(), "/items//offers?sort=new"),
@@ -5320,11 +5342,21 @@ mod tests {
         }
     }
 
+    /// Refused only by `a_link_a_release_build_refuses_is_logged_once`, which needs the first
+    /// refusal of its field in the process.
+    #[cfg(not(debug_assertions))]
+    #[derive(corten::Route)]
+    #[route("/logged/{*path}")]
+    struct Logged {
+        path: String,
+    }
+
     /// A release build does not panic on a value its path cannot carry, so it logs the refusal as
-    /// an error, naming the route and the field, beside the `%FF` it writes.
+    /// an error, naming the route and the field, beside the `%FF` it writes: once for the route
+    /// and field, though each link it refuses has its `%FF`.
     #[cfg(not(debug_assertions))]
     #[test]
-    fn a_link_a_release_build_refuses_is_logged() {
+    fn a_link_a_release_build_refuses_is_logged_once() {
         use std::sync::{Arc, Mutex};
         #[derive(Clone)]
         struct Lines(Arc<Mutex<Vec<u8>>>);
@@ -5340,14 +5372,22 @@ mod tests {
         let lines = Lines(Arc::default());
         let writer = lines.clone();
         let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-        let (refused, kept) = tracing::subscriber::with_default(subscriber, || {
-            (File { path: "public/../private/x".into() }.href(), Item { id: "a.b" }.href())
+        let (refused, again, kept) = tracing::subscriber::with_default(subscriber, || {
+            (
+                Logged { path: "public/../private/x".into() }.href(),
+                Logged { path: "a/..".into() }.href(),
+                Item { id: "a.b" }.href(),
+            )
         });
-        assert_eq!((refused.as_str(), kept.as_str()), ("/files/public/..%FF/private/x", "/items/a.b"));
+        assert_eq!(
+            (refused.as_str(), again.as_str(), kept.as_str()),
+            ("/logged/public/..%FF/private/x", "/logged/a/..%FF", "/items/a.b")
+        );
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
         assert_eq!(logged.lines().count(), 1, "{logged}");
         assert!(logged.contains("ERROR"), "{logged}");
-        assert!(logged.contains("a link to File cannot carry path = \"public/../private/x\""), "{logged}");
+        assert!(logged.contains("a link to Logged cannot carry path = \"public/../private/x\""), "{logged}");
+        assert!(logged.contains("logged once for this route and field"), "{logged}");
         assert!(logged.contains("docs/design.md#limit-path-values"), "{logged}");
     }
 }

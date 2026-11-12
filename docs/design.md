@@ -2908,16 +2908,23 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
     `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
     written as they are by a `#[derive(Route)]` link: a debug build panics when the link is
-    written, naming the route and the field, and a release build logs that as an error and writes
-    `%FF` after the value (`/items/..%FF`, `/files/public/..%FF/private/x`, `/%FF/posts`), which
-    no browser resolves and the route answers with a 400, since no parameter reads a value that is
-    not UTF-8. The link opens no other page or file either way. A value that only contains dots
+    written, naming the route and the field, and a release build writes `%FF` after the value
+    (`/items/..%FF`, `/files/public/..%FF/private/x`, `/%FF/posts`), which no browser resolves
+    and the route answers with a 400, since no parameter reads a value that is not UTF-8, and logs
+    that as an error the first time for each route and field in the process, so a list that links
+    a stored value on every row is one line, not one per link and render. The link opens no other
+    page or file either way. A route that starts with a `{*rest}` refuses a dot segment after the
+    value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
+    browser resolves: the refusal is kept, since it costs nothing where no value has such a
+    segment and the value means a path above the route's. A value that only contains dots
     (`a.b`, `...`, `.hidden`) is written as it is, and so is an empty one between two segments
     (`/notes//edit`, or `/shelves//` for `/shelves/{id}/`), which reads back. A route's own path
     cannot have a `.` or `..` segment, or that text after a parameter: with `#[derive(Route)]`
-    neither compiles, and a `Route` written by hand does not build with either in its `WRITTEN`
-    path, or with a dot segment in its `PATH` where an area or an API adds it. The values a
-    hand-written `write_href` writes are its own, and nothing checks them. The check is where a
+    neither compiles, and a `Route` written by hand does not build with that text after a
+    parameter in its `WRITTEN` path, or with a dot segment in its `PATH` where an area or an API
+    adds it. A hand-written `Route` the app adds at its top level is not checked for a dot segment
+    in its `PATH`, and the values a hand-written `write_href` writes are its own, which nothing
+    checks. The check is where a
     link is written, not where a request is read: no browser sends such a segment, so a check on
     every request with parameters would cost them all to stop what no link sends, and a value
     decoded from a segment can hold `../` anyway (`..%2F`), so it would not make a parameter safe
