@@ -2461,6 +2461,46 @@ rules something out.
     (nginx.org, for 1.29.8) and Go's `net` package documentation and source on its master branch
     (`TCPConn.SetNoDelay`, "The default is true"; `newTCPConn` sets it).
 
+42. <a id="choice-locale-same-language"></a>**A negotiated locale is RFC 4647 Lookup, then a step of
+    Corten's own: a range Lookup matches to nothing takes the first listed locale of its
+    language.** `negotiate` takes the `Accept-Language` ranges highest `q` first and runs each
+    through Lookup (RFC 4647, 3.4): the range, then the range without its last subtag (and a
+    single-character subtag before it) until a listed locale is named. Where none is, it takes the
+    first listed locale whose primary language is the range's before the next range is tried.
+    Lookup has no such step. It never returns a tag more specific than the range ("de-ch" can give
+    `de` or `de-CH`, never `de-CH-1996`), and it processes every range before the default (3.4.1),
+    so the step departs from it twice. First, `fr` gets a listed `fr-CA` where Lookup would give
+    the default. Second, the step runs before a lower range, so with `en, fr-CA` listed,
+    `fr-FR, en;q=0.5` gets `fr-CA` where Lookup would give `en`. An app that lists a regional form
+    without the bare language (`fr-CA`, or `pt-BR` alone) gets those readers to their language,
+    which was what `negotiate` did before Lookup was added
+    ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
+    The cost: the step does not read the script, so with `en, zh-Hans, zh-Hant` listed and no
+    `zh`, `zh-TW, zh-Hant;q=0.9` gets `zh-Hans`, the first `zh` locale, before `zh-Hant` is tried
+    (`negotiation_takes_the_same_language_before_a_lower_range`); the views guide tells an app
+    with Traditional Chinese readers to list `zh-TW` and `zh-HK`, which Lookup then matches.
+    Not chosen: Lookup alone (a reader of `fr` gets the first locale, often English, from an app
+    that has French); the step after every range, as a computed default (3.4.1 allows the default
+    to search further), which would send `fr-FR, en;q=0.5` to `en`; filling in a range's likely
+    script before Lookup (CLDR's likely subtags, `zh-TW` to `zh-Hant-TW`), which fixes the `zh`
+    case but is a table Corten does not carry.
+
+    Stands on: bet (an app lists a regional form of a language without the bare one more often
+    than it lists two scripts of one language without either's region, and a reader would rather
+    have a listed form of their language than the app's first locale); platform (RFC 4647, 3.4,
+    Lookup never returns a tag more specific than the range, and 3.4.1 processes every range
+    before the default and lets the default search further); reasoned (the step runs only when
+    Lookup names nothing for a range, so an app that lists each tag its readers send gets Lookup's
+    answer); value (a reader gets a page in their language without the app listing each region,
+    Values 7, at the cost of a departure from the standard that this Choice records, Values 2).
+
+    Revisit when: an app reports readers given another script or region they did not ask for by
+    the step (the `zh-TW` case above), or Corten takes CLDR's likely subtags for another reason,
+    when the step can match a range's script before taking the first locale of its language.
+
+    Last checked: 2026-11-11, RFC 4647 sections 3.4 and 3.4.1 read against `negotiate` as at
+    `09a9cd5d6`, and the step's cases run in its tests.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
