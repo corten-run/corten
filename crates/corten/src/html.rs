@@ -275,6 +275,10 @@ mod tests {
                 ("b".to_string(), vec![]),
             ]
         );
+        let names = |html: &str| super::start_tags(html).map(|tag| tag.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"<<b id="x">"#), ["b"], "one byte on from a lone <, the next < starts the tag");
+        assert_eq!(names("<p>x<"), ["p"], "a < that ends the input is text");
+        assert_eq!(names("<p><\u{e9} <b>"), ["p", "b"], "a < before a letter past ASCII is text");
     }
 
     #[test]

@@ -2688,8 +2688,10 @@ rules something out.
     Chromium 0.80 to 0.92 ms, Firefox 0.76 to 0.94 and WebKit 1.08 to 1.34, against 2.01 to 2.28,
     1.97 to 2.18 and 3.34 to 4.35 double-quoted. The parse alone took Chromium 235 to 323 µs
     against 1,401 to 1,616, Firefox 120 to 130 against 1,240 to 1,390 and WebKit 390 to 480 against
-    2,620 to 3,500: 9 to 20% of the time, five to eleven times faster. The value back took about
-    the same either way.
+    2,620 to 3,500, measured. Pairing the ends of each engine's two ranges (its fastest
+    single-quoted run with its slowest double-quoted one, and the reverse), that is 8.6% (Firefox,
+    120 against 1,390) to 23% (Chromium, 323 against 1,401) of the time, about four to twelve
+    times faster (4.3 to 11.6). The value back took about the same either way.
 
     Not chosen here, and left open: the issue's `<script type="application/json">` block with an
     id that a handler argument would name. On Value 1 it wins for the pages it serves. End to end
@@ -2711,7 +2713,7 @@ rules something out.
     a script large data and the cost to everyone who loads the runtime, so on Value 1 the block is
     not earned until an app's pages carry data large enough that its gain outweighs what every user
     downloads. The single-quoted attribute adds nothing to the runtime and gives those pages most of
-    their gain (the parse five to eleven times faster), so it is taken now. The block is also a
+    their gain (the parse four to twelve times faster), so it is taken now. The block is also a
     second way for data to reach a script beside its arguments (Values 5 and 6), which ranks below
     performance at the user's end, so that would not decide against it once Value 1 is met. The two
     changes do not exclude each other: a block would carry the large values and `data-on`
@@ -2719,7 +2721,7 @@ rules something out.
     either way, so this Choice is taken on its own and the issue stays open for the block. Also not
     chosen: a block the app writes itself (a way around the typed call, and markup a view would
     have to keep in step with the script); leaving the attribute double-quoted (88% more bytes for a
-    large argument, and a parse five to eleven times slower).
+    large argument, and a parse four to twelve times slower).
 
     Stands on: measured (`json_argument_cost` in `crates/corten/src/script/tests.rs`, five runs of
     2,000 renders of each form, once; `bench/browser/data-on-cost.mjs` on the pages that test
@@ -2741,11 +2743,14 @@ rules something out.
     block's speed for those pages would outrank its second way, Values 5, so this Choice does not
     decide the issue).
 
-    Revisit when: an app's pages hand a script enough data that the block's gain (0.06 to 0.34 ms
-    end to end for 300 products, growing with the data) outweighs the 41 bytes with gzip every user
-    downloads a release. That opens a new Choice for the block, not this one, since `data-on` stays
-    single-quoted for every other argument either way. This Choice reopens when something outside
-    Corten has to read `data-on`, which [Rule 10](#rule-standard-formats) keeps internal.
+    Revisit when: an app or example hands a script a JSON argument over 170 KB on a page most of
+    its users load at least once a release. The reader's 41 bytes with gzip are 328 bits, about
+    0.2 ms at 1.6 Mbit/s, paid once a release; the block's least measured gain, 0.06 ms a load
+    for 51 KB of JSON, reaches 0.2 ms at 51 KB times 0.2 / 0.06, about 170 KB, taking the gain to
+    grow in proportion to the data (reasoned; measured only at 300 products). That opens a new
+    Choice for the block, not this one, since `data-on` stays single-quoted for every other
+    argument either way. This Choice reopens when something outside Corten has to read `data-on`,
+    which [Rule 10](#rule-standard-formats) keeps internal.
 
     Last checked: 2026-11-12, `json_argument_cost` and the three engines' parse and value back on
     `7564cdc4` (Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, Playwright 1.64.1), and the
