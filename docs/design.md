@@ -1506,7 +1506,9 @@ rules something out.
     or with whitespace, `Basic`, a value outside visible ASCII), at `751e26bb`, the commit that
     adds it; 2026-11-11, the reader's test of two `Authorization` lines, the MCP endpoint's test
     that a token outside visible ASCII is named invalid (`crates/corten/src/agent.rs`), and the
-    callgrind count of the reader, at `de945242`, the commit that adds them.
+    callgrind count of the reader, at `de945242`, the commit that adds them; 2026-11-11, the MCP
+    endpoint's test that a bearer token on either of two `Authorization` lines is named invalid, at
+    `e4d024b0`, the commit that adds it.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
