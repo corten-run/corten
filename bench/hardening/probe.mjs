@@ -1,7 +1,7 @@
 // Native sockets only. This process never renders a target page or implements a defense.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { request as httpRequest } from "node:http";
@@ -232,13 +232,19 @@ export async function runProbe(config, emit, sample) {
   const { budget: b, phase, target, form, expected } = config; validateBudget(b);
   const controlBefore = await controls(phase); emit({ type: "control-before", ...controlBefore });
   const pool = new Connections(), delay = monitorEventLoopDelay({ resolution: 10 }); delay.enable();
-  const start = performance.now(), now = () => performance.now() - start;
-  emit({ type: "clock", wallAtStart: new Date().toISOString(), monotonic: start });
+  const start = process.hrtime.bigint(), now = () => Number(process.hrtime.bigint() - start) / 1e6;
+  emit({ type: "clock", wallAtStart: new Date().toISOString(), monotonicNs: String(start), bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() });
   const tasks = [], attacks = [], good = [], failures = [];
   const at = async (ms, work) => { while (now() < ms) await sleep(ms - now()); return work(); };
   try {
+    const boundaries = new Map();
+    for (const [window, w] of Object.entries(b.legitimate)) for (const boundary of ["startMs", "endMs"]) {
+      const sameTime = boundaries.get(w[boundary]) ?? []; sameTime.push({ window, boundary }); boundaries.set(w[boundary], sameTime);
+    }
+    // One clock sample for a shared boundary prevents timer wakeup order from
+    // creating fictitious overlap between adjacent observation windows.
+    for (const [ms, events] of boundaries) tasks.push(at(ms, () => { const atMs = now(); for (const event of events) emit({ type: "window", ...event, atMs }); }));
     for (const [window, w] of Object.entries(b.legitimate)) {
-      for (const boundary of ["startMs", "endMs"]) tasks.push(at(w[boundary], () => emit({ type: "window", window, boundary, atMs: now() })));
       for (const [index, ms] of w.scheduledAtMs.entries()) tasks.push(at(ms, async () => {
         const paths = ["/marketplace/en-US/item_1", "/marketplace/fr-FR/item_1", "/marketplace/de-DE/item_1", "/api/marketplace/item_1"];
         good.push(await legitimate({ target, path: paths[index % paths.length], expected, timeoutMs: b.recovery.requestTimeoutMs, pool, now, emit, index, window }));
@@ -264,6 +270,10 @@ export async function runProbe(config, emit, sample) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [configFile, output] = process.argv.slice(2), config = JSON.parse(readFileSync(configFile, "utf8"));
   const paths = Object.fromEntries(config.processes.map((p) => [p.id, cgroupDirectory(p.containerId)]));
-  await runProbe(config, (row) => appendFileSync(output, JSON.stringify(row) + "\n"), async () =>
-    Object.fromEntries(config.processes.map((p) => [p.id, resource(paths[p.id])])));
+  const journal = []; let bytes = 0;
+  try {
+    await runProbe(config, (row) => {
+      const line = JSON.stringify(row) + "\n"; bytes += Buffer.byteLength(line); assert.ok(bytes <= 64 * 2 ** 20, "raw recorder memory budget exhausted"); journal.push(line);
+    }, async () => Object.fromEntries(config.processes.map((p) => [p.id, resource(paths[p.id])])));
+  } finally { writeFileSync(output, journal.join("")); }
 }

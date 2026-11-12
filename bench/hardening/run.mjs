@@ -194,10 +194,19 @@ export async function run(args) {
       for (const name of [...active]) { try { await remove(name); } catch (e) { failures.push(e.message); } }
       // Private ephemeral TLS/form material has no evidentiary role after its digests are saved.
       for (const file of [join(out, "cert/key.pem"), join(out, "form.json"), join(out, "probe.json")]) if (existsSync(file)) rmSync(file);
+      let nativeClock = null;
+      if (raw) {
+        const name = `${prefix}-cleanup-clock`;
+        try {
+          await owned(name, ["create", "--network", "none", ...limits(budget.resources.apparatus), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
+          nativeClock = JSON.parse(await docker(["start", "-a", name], { cleanup: true }));
+        } catch (e) { failures.push(e.message); }
+        finally { try { await remove(name); } catch (e) { failures.push(e.message); } }
+      }
       const containers = (await docker(["ps", "-aq", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
       const volumes = (await docker(["volume", "ls", "-q", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
       const cleanup = { complete: failures.length === 0 && containers.length === 0 && volumes.length === 0 && children.size === 0,
-        containers, volumes, commandClients: children.size, failures, elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
+        containers, volumes, commandClients: children.size, failures, nativeClock, elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
       json(join(out, "cleanup.json"), cleanup);
       if (!cleanup.complete) { summary.cleanupFailures.push({ key: cell.key, cleanup }); error ??= new Error("owned cleanup failed"); }
       if (!error) {
