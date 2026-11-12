@@ -166,8 +166,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `nginx.conf` and the service file as it starts, waits until the site's name reaches it and
   sets itself up, so nobody signs in; a change to anything it is handed makes a new droplet,
   and the workflow then starts the `Site` workflow to ship it a release. The `Site` workflow
-  no longer runs for a change to those files and the deploy guide alone, and `provision.sh` asks for the package
-  lists again when another update holds their lock. `bootstrap.sh` gives
+  no longer runs for a change to those files and the deploy guide alone, and `provision.sh`
+  asks for the package lists again when another update holds their lock. `bootstrap.sh` gives
   the repository the two environments, the keys and the variables this needs, once. The
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
