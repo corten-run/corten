@@ -39,3 +39,32 @@ On native Linux it adds Docker's `host-gateway` mapping for the host upstream;
 Windows and macOS retain Docker Desktop's built-in host resolution.
 The native Java tests separately cover `GET`, `HEAD`, methods and malformed JSON.
 These checks establish functional JSON behavior, not load or production readiness.
+
+## Native alert sessions
+
+Accepted marketplace POSTs append one alert to the native servlet session. Spring
+MVC/Jackson serves `GET /api/alerts` as `[{item_id,email,target_minor}]` in insertion
+order, without creating a session for a new reader. Servlet session IDs are not
+adopted from unknown caller cookies. Cookies are HttpOnly, SameSite=Lax, cookie-only
+(no URL session IDs), and Secure on HTTPS under the servlet container's defaults.
+Servlet session expiry applies; restarts lose these synthetic in-memory alerts.
+
+The session mutex protects appends and snapshot reads, including concurrent requests
+that add the first alert to an existing session. ICU validation returns both its
+localized message and half-up rounded minor units from one parse. Targets beyond
+signed 64-bit minor units are rejected. Missing/invalid inputs and missing records
+do not append. Marketplace POST rejects cross-site Fetch Metadata or a different
+Origin using the servlet request's scheme and Host. This app has no Spring Security
+dependency; none is added or disabled. POST responses and readbacks are no-store.
+The existing read-only pages, record JSON, full-page marketplace forms and legacy
+htmx enhancement remain unchanged.
+
+`mvn -B test` includes native validation/concurrent-session tests. Real HTTP,
+isolation, concurrent writes, and JS/no-JS browser checks for the built image are
+documented in `../fastapi/README.md`. They retain the same browser/request cookie
+jar between each POST and its separate readback, with no reset/oracle endpoint.
+
+## Unreleased
+
+- Persist native servlet-session marketplace alerts with independent JSON readback,
+  atomic appends and cross-site write rejection.

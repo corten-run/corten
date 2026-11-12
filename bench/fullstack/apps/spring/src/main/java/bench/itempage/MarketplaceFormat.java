@@ -58,16 +58,24 @@ public final class MarketplaceFormat {
     public String listings(long value) { return count(value) + " " + text.get("listing_" + plurals.select(value)); }
 
     public String alert(String email, String target, String title) {
-        if (!email.contains("@")) return text.get("invalid_email");
+        return validateAlert(email, target, title).message();
+    }
+
+    public record AlertResult(String message, Long targetMinor) {}
+
+    public AlertResult validateAlert(String email, String target, String title) {
+        if (!email.contains("@")) return new AlertResult(text.get("invalid_email"), null);
         var input = target.strip();
         var position = new ParsePosition(0);
         var parsed = parser.parse(input, position);
-        if (parsed == null || position.getIndex() != input.length()) return text.get("invalid_price");
+        if (parsed == null || position.getIndex() != input.length()) return new AlertResult(text.get("invalid_price"), null);
         BigDecimal price;
         try { price = new BigDecimal(parsed.toString()); }
-        catch (NumberFormatException e) { return text.get("invalid_price"); }
-        if (price.signum() <= 0) return text.get("invalid_price");
-        return alert.format(Map.of("email", email, "title", title, "price", amount(price)));
+        catch (NumberFormatException e) { return new AlertResult(text.get("invalid_price"), null); }
+        if (price.signum() <= 0 || price.compareTo(new BigDecimal("92233720368547758.07")) > 0)
+            return new AlertResult(text.get("invalid_price"), null);
+        long minor = price.setScale(2, RoundingMode.HALF_UP).movePointRight(2).longValueExact();
+        return new AlertResult(alert.format(Map.of("email", email, "title", title, "price", amount(price))), minor);
     }
 
     public static List<MarketplaceRecord.Listing> listings(MarketplaceRecord record, String prefix, String sort) {

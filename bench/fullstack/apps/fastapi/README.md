@@ -88,3 +88,37 @@ profiles without changing those production profiles.
 `node bench/fullstack/apps/fastapi/check-trace.mjs record-fastapi after --regressions-only`
 runs just the native invalid-Unicode probes and healthy recovery, and asserts the
 catalog serialization exception trace, correlation and cleanup in both profiles.
+## Native alert sessions
+
+An accepted marketplace form POST appends one alert; `GET /api/alerts` independently
+serializes that session's alerts as `[{item_id,email,target_minor}]`, in insertion
+order. The native FastAPI request/form APIs, Pydantic response serialization,
+Jinja templates and existing scripts remain in use. The localized validation
+returns both its message and rounded minor units from one parse. Targets beyond
+signed 64-bit minor units are rejected rather than failing during persistence.
+
+The single-process deployment keeps alerts in memory behind a lock. A new accepted
+write issues a 256-bit random session token, never adopting an unknown caller token.
+Cookies are HttpOnly, SameSite=Lax, path `/`, Secure on HTTPS, and expire after
+30 minutes. Expired tokens cannot read or append to their old lists. A restart loses
+sessions; this is synthetic benchmark state, not a durable notification service.
+The existing cross-site write check remains; reads and form answers are no-store.
+Ordinary read-only page and record-JSON routes do not establish sessions.
+
+`python -m unittest app.test_marketplace app.test_record_json app.test_alerts`
+runs native tests. Run in both default and matched profiles (`HOSTS=testserver`
+for matched). `native-alerts.test.mjs` also checks each of FastAPI, Django and Spring
+over real HTTP and Chromium, using the same cookie jar for POST and readback.
+It checks accepted/rejected/missing/cross-site writes, ordering, isolated clients,
+eight concurrent writes, JS/no-JS marketplace forms and the unchanged legacy htmx
+form. It requires the repository's Playwright installation, `ALERT_BASE_URL` and
+`ALERT_FRAMEWORK=fastapi|django|spring`; run with `node --test native-alerts.test.mjs`.
+Start the app with `MARKETPLACE_SOURCE=fixture` pointing `MARKETPLACE_FIXTURE_PATH`
+at Django's `itempage/marketplace_test_fixture.json`, and `ITEM_SOURCE=fixture`
+pointing `FIXTURE_PATH` at this directory's `alert-items-fixture.json`.
+These checks are functional evidence only, not throughput qualification.
+
+### Unreleased
+
+- Persist native session-isolated marketplace alerts and expose independent JSON
+  readback without changing the unresolved FastAPI load behavior or server settings.

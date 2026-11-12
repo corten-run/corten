@@ -12,11 +12,11 @@ EXPOSE 8080
 FROM base AS defaults
 # Gunicorn's documented worker count, (2 x CPUs) + 1, for one CPU. --preload loads the items once
 # before the workers fork.
-CMD ["gunicorn", "itempage.wsgi", "--bind", "0.0.0.0:8080", "--workers", "3", "--preload"]
+CMD ["sh", "-c", "python -m django migrate --noinput && exec gunicorn itempage.wsgi --bind 0.0.0.0:8080 --workers 3 --preload"]
 
 FROM base AS matched
 RUN pip install --no-cache-dir -r requirements-matched.txt
 ENV PROFILE=matched
-CMD ["python", "start_matched.py"]
+CMD ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"]
 
 FROM ${PROFILE} AS runtime

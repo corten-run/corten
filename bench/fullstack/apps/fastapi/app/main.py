@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from .catalog import CatalogRecord, source as catalog_source
+from .alerts import Alert, COOKIE, LIFETIME, store as alerts
 from .items import ItemView, alert_message, fetch_item, shelf
 from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, source as marketplace_source
 from .record_json import RecordJsonRoute, read_record
@@ -111,7 +112,8 @@ async def marketplace(request: Request, locale: str, record_id: str):
     summary = record.summary
     form = await request.form() if request.method == "POST" else {}
     email, target = str(form.get("email", "")), str(form.get("target_price", ""))
-    return templates.TemplateResponse(request, "marketplace.html", {
+    message, minor = fmt.validate_alert(email, target, record.title) if request.method == "POST" else ("", None)
+    response = templates.TemplateResponse(request, "marketplace.html", {
         "locale": locale, "record": record, "labels": fmt.labels, "prefix": prefix, "order": order,
         "show_all": show_all, "path": path, "item_path": lambda item_id: marketplace_path(locale, item_id),
         "more": path + "?" + urlencode({"seller": prefix, "sort": order, "offers": "all"}),
@@ -124,8 +126,21 @@ async def marketplace(request: Request, locale: str, record_id: str):
         "contents": [{**dict(row), "quantity_text": fmt.number(row.quantity)} for row in record.contents],
         "included": [{**dict(row), "quantity_text": fmt.number(row.quantity)} for row in record.included_in],
         "email": email, "target": target,
-        "message": fmt.alert(email, target, record.title) if request.method == "POST" else "",
+        "message": message,
     })
+    if request.method == "POST":
+        response.headers["Cache-Control"] = "private, no-store"
+    if minor is not None:
+        token, created = alerts.append(request.cookies.get(COOKIE), Alert(item_id=record_id, email=email, target_minor=minor))
+        if created:
+            response.set_cookie(COOKIE, token, max_age=LIFETIME, httponly=True, samesite="lax", secure=request.url.scheme == "https")
+    return response
+
+
+@app.get("/api/alerts")
+async def alert_list(request: Request, response: Response) -> list[Alert]:
+    response.headers["Cache-Control"] = "private, no-store"
+    return alerts.read(request.cookies.get(COOKIE))
 
 
 @record_routes.api_route("/api/marketplace/{record_id}", methods=GET)
