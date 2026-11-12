@@ -155,6 +155,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
+  publishes no npm initializer that creates an app (`npm create corten`): the app would still
+  build with Cargo and its other commands are installed by Cargo, so it would replace only
+  `corten new`, at the cost of a second way to start an app and a second release channel. It also
+  records that `create-corten` is held by a placeholder, published once by hand, that prints the
+  Cargo steps, so the npm convention cannot run a stranger's code
+  ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
 - `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
   (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
   kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file
