@@ -43,7 +43,8 @@ const SYNTAXES: &[(&str, &str)] = &[
 
 /// Prefixes every class in `src` with `{prefix}__`. A rule outside any at-rule (or in `@media`,
 /// `@supports`, `@container`, `@layer`) must name one of the file's classes, so a component's
-/// styles cannot reach elements it does not render.
+/// styles cannot reach elements it does not render; so must each rule in an `@scope` there unless
+/// the scope's root names one.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     if let Some(line) = conflict_marker(src) {
         return Err(format!(
@@ -59,6 +60,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         properties: Vec::new(),
         media: Vec::new(),
         prefix,
+        scope_root: None,
     };
     s.block(Ctx::Top, true)?;
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
@@ -484,10 +486,15 @@ fn important(rest: &str) -> bool {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Ctx {
-    /// Rules, which must be scoped.
+    /// Rules, which must be scoped: at the top of the file, or in an `@scope` there whose root
+    /// is not the component's.
     Top,
-    /// Inside a style rule: declarations and nested rules.
+    /// Inside a style rule, or an `@scope` rule nested in one: declarations and nested rules.
     Style,
+    /// Inside an `@scope` rule at the top of the file whose root names one of its classes: as in a
+    /// style rule, since its rules match only under the root, but name-defining at-rules such as
+    /// `@property` are valid there and not scoped (CSS Cascade 6).
+    Scope,
     /// `@keyframes`, `@font-face` and the like: copied as written.
     Raw,
 }
@@ -502,6 +509,9 @@ struct Scoper<'a> {
     /// The breakpoints its `@media` rules name, without the `--`.
     media: Vec<String>,
     prefix: &'a str,
+    /// The root of the `@scope` rule being read when it is at the top of the file and not the
+    /// component's, whose rules are checked as the file's are.
+    scope_root: Option<String>,
 }
 
 impl Scoper<'_> {
@@ -535,6 +545,8 @@ impl Scoper<'_> {
             let text = squash(&self.text[start..self.i]);
             if end == Some(b'{') {
                 self.i += 1;
+                let mut scope_rule = None;
+                let mut unowned_root = None;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
                     let name =
@@ -550,7 +562,22 @@ impl Scoper<'_> {
                         (Ctx::Style, "property") => {
                             return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
                         }
-                        (_, "media" | "supports" | "container" | "layer" | "scope" | "starting-style") => ctx,
+                        (_, "scope") => {
+                            let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], ctx == Ctx::Top, start)?;
+                            scope_rule = Some(prelude);
+                            // A root the component owns lets its rules start anywhere; any other
+                            // root at the top of the file matches elements outside it, so its
+                            // rules must each start at one of the file's classes.
+                            match (ctx, unowned) {
+                                (Ctx::Top, Some(root)) => {
+                                    unowned_root = Some(root);
+                                    Ctx::Top
+                                }
+                                (Ctx::Top, None) => Ctx::Scope,
+                                _ => ctx,
+                            }
+                        }
+                        (_, "media" | "supports" | "container" | "layer" | "starting-style") => ctx,
                         (
                             _,
                             "keyframes"
@@ -567,7 +594,9 @@ impl Scoper<'_> {
                     Ctx::Style
                 };
                 let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
-                if media {
+                if let Some(prelude) = scope_rule {
+                    self.out.push_str(&prelude);
+                } else if media {
                     let prelude = self.custom_media(&text, start)?;
                     self.out.push_str(&prelude);
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
@@ -578,7 +607,11 @@ impl Scoper<'_> {
                 }
                 self.out.push('{');
                 let body = self.out.len();
+                let outer_root = unowned_root.map(|root| self.scope_root.replace(root));
                 self.block(inner, false)?;
+                if let Some(outer) = outer_root {
+                    self.scope_root = outer;
+                }
                 if ctx != Ctx::Raw && text.get(..9).is_some_and(|at| at.eq_ignore_ascii_case("@property")) {
                     self.property(&text["@property".len()..], body, start)?;
                 }
@@ -616,6 +649,12 @@ impl Scoper<'_> {
                 continue;
             }
             if ctx == Ctx::Top {
+                if let Some(root) = &self.scope_root {
+                    return Err(self.error(
+                        start,
+                        format!("`{text}` styles the root of `@scope ({root})`, which can be outside the component: put it in a rule that starts at one of the stylesheet's classes"),
+                    ));
+                }
                 return Err(self.error(start, format!("`{text}` is outside any rule")));
             }
             let Some((name, value)) = split_declaration(&text) else {
@@ -671,6 +710,60 @@ impl Scoper<'_> {
         }
         out.push_str(rest);
         Ok(out)
+    }
+
+    /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
+    /// (<scope-end>)`, each a selector list), with the classes of its root and limit prefixed and
+    /// recorded, and with `top`, the root as written when a selector in it names none of the
+    /// file's classes. Nested in a rule or another `@scope`, the root is relative to that one's
+    /// elements. With no root, the scope is the parent of the stylesheet's owner node, the element
+    /// around the page's stylesheet link, which no component owns.
+    fn scope_prelude(&mut self, prelude: &str, top: bool, at: usize) -> Result<(String, Option<String>), String> {
+        let prelude = prelude.trim();
+        let usage = format!(
+            "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
+        );
+        let (root, rest) = match parenthesized(prelude) {
+            Some((root, rest)) => (Some(root), rest.trim_start()),
+            None => (None, prelude),
+        };
+        let limit = if rest.is_empty() {
+            None
+        } else {
+            // `to` and a parenthesized list; `to(` would be a function, which is no limit.
+            let to = rest.get(..3).is_some_and(|to| to.as_bytes()[..2].eq_ignore_ascii_case(b"to") && to.ends_with(' '));
+            match parenthesized(if to { &rest[3..] } else { "" }) {
+                Some((limit, after)) if after.trim().is_empty() => Some(limit),
+                _ => return Err(self.error(at, usage)),
+            }
+        };
+        let Some(root) = root else {
+            return Err(self.error(
+                at,
+                "@scope with no root scopes its rules to the element around the page's stylesheet link, which no component owns: start it at one of the stylesheet's classes, `@scope (.list)`",
+            ));
+        };
+        for selector in [Some(root), limit].into_iter().flatten() {
+            if selector.trim().is_empty() {
+                return Err(self.error(at, usage));
+            }
+            if pseudo_element(selector) {
+                return Err(self.error(
+                    at,
+                    format!(
+                        "`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit, and the browser drops the rule"
+                    ),
+                ));
+            }
+        }
+        let (start, unowned) = self.prefixed(root.trim(), at)?;
+        let mut out = format!("@scope ({start})");
+        if let Some(limit) = limit {
+            out.push_str(" to (");
+            out.push_str(&self.selector(limit.trim(), false, at)?);
+            out.push(')');
+        }
+        Ok((out, (top && unowned.is_some()).then(|| root.trim().to_string())))
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
@@ -839,12 +932,22 @@ impl Scoper<'_> {
     /// The selector with its classes prefixed. With `check`, every selector in the list must
     /// name a class of the file.
     fn selector(&mut self, text: &str, check: bool, at: usize) -> Result<String, String> {
+        match self.prefixed(text, at)? {
+            (_, Some(part)) if check => Err(self.unowned(&part, at)),
+            (out, _) => Ok(out),
+        }
+    }
+
+    /// The selector with its classes prefixed, and the first selector in the list that names no
+    /// class of the file.
+    fn prefixed(&mut self, text: &str, at: usize) -> Result<(String, Option<String>), String> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len() + 16);
         let (mut i, mut brackets, mut parens) = (0, 0usize, 0usize);
         let mut quote = None;
         let mut part_start = 0;
         let mut part_scoped = false;
+        let mut unowned = None;
         while i < chars.len() {
             let c = chars[i];
             if let Some(q) = quote {
@@ -865,8 +968,8 @@ impl Scoper<'_> {
                 '(' => parens += 1,
                 ')' => parens = parens.saturating_sub(1),
                 ',' if brackets == 0 && parens == 0 => {
-                    if check {
-                        self.owned(&chars[part_start..i], part_scoped, at)?;
+                    if !part_scoped && unowned.is_none() {
+                        unowned = Some(chars[part_start..i].iter().collect::<String>().trim().to_string());
                     }
                     part_start = i + 1;
                     part_scoped = false;
@@ -903,23 +1006,24 @@ impl Scoper<'_> {
             out.push(c);
             i += 1;
         }
-        if check {
-            self.owned(&chars[part_start..], part_scoped, at)?;
+        if !part_scoped && unowned.is_none() {
+            unowned = Some(chars[part_start..].iter().collect::<String>().trim().to_string());
         }
-        Ok(out)
+        Ok((out, unowned))
     }
 
-    /// An error unless the selector names a class of the file.
-    fn owned(&self, part: &[char], scoped: bool, at: usize) -> Result<(), String> {
-        let part: String = part.iter().collect();
-        let part = part.trim();
-        if scoped {
-            return Ok(());
+    /// The error for a selector that names no class of the file.
+    fn unowned(&self, part: &str, at: usize) -> String {
+        match &self.scope_root {
+            Some(root) => self.error(
+                at,
+                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component, so start each rule in it with one of the stylesheet's classes, like `.list p`, or start the scope at one, `@scope (.list)`"),
+            ),
+            None => self.error(
+                at,
+                format!("`{part}` styles elements this component does not own: start the rule with one of the stylesheet's classes, like `.list {part}`"),
+            ),
         }
-        Err(self.error(
-            at,
-            format!("`{part}` styles elements this component does not own: start the rule with one of the stylesheet's classes, like `.list {part}`"),
-        ))
     }
 }
 
@@ -929,6 +1033,69 @@ fn ident_start(rest: &[char]) -> bool {
         ['-', c, ..] => c.is_ascii_alphabetic() || *c == '_',
         _ => false,
     }
+}
+
+/// The text inside the parentheses `text` starts with, and the text after them, outside strings
+/// and brackets: `(.a) to (.b)` is `.a` and ` to (.b)`.
+fn parenthesized(text: &str) -> Option<(&str, &str)> {
+    if !text.starts_with('(') {
+        return None;
+    }
+    let b = text.as_bytes();
+    let (mut i, mut depth) = (0, 0usize);
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\\' => i += 1,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return (b[i] == b')').then(|| (&text[1..i], &text[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether a selector names a pseudo-element (`::before`, or one of the four CSS 2 wrote with
+/// one colon, `:before`), outside strings and brackets.
+fn pseudo_element(selector: &str) -> bool {
+    let b = selector.as_bytes();
+    let (mut i, mut brackets) = (0, 0usize);
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\\' => i += 1,
+            b'[' => brackets += 1,
+            b']' => brackets = brackets.saturating_sub(1),
+            b':' if brackets == 0 => {
+                if b.get(i + 1) == Some(&b':') {
+                    return true;
+                }
+                let name: String = selector[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                if ["before", "after", "first-line", "first-letter"].iter().any(|n| name.eq_ignore_ascii_case(n)) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Comments removed and whitespace collapsed, outside strings.
@@ -1405,6 +1572,120 @@ mod tests {
         assert!(scope("\n\n@import \"x.css\";", "x").unwrap_err().starts_with("line 3: @import"));
         assert!(scope(".a { color: red", "x").unwrap_err().contains("never closed"));
         assert!(scope(".a__b { color: red }", "x").is_err());
+    }
+
+    #[test]
+    fn a_scope_rule_s_root_and_limit_are_the_component_s_classes() {
+        // CSS Cascade 6: `@scope (<scope-start>) to (<scope-end>)`, each a selector list.
+        let sheet = scope("@scope (.list) to (.slot) { .title { color: red } }", "t").unwrap();
+        assert_eq!(sheet.css, "@scope (.t__list) to (.t__slot){.t__title{color:red}}");
+        assert_eq!(sheet.classes, ["list", "slot", "title"]);
+        // Its rules match only under the root, so they start anywhere: `:scope`, `&`, an element,
+        // a combinator, or declarations, which apply to the root.
+        let sheet = scope(
+            "@SCOPE ( .card ) TO ( :scope > .body > * ) {\n  gap: 1px;\n  :scope { padding: 0 }\n  & > img { width: 100% }\n  p { margin: 0 }\n  > .body { gap: 2px }\n}",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            "@scope (.t__card) to (:scope > .t__body > *){gap:1px;:scope{padding:0}& > img{width:100%}p{margin:0}> .t__body{gap:2px}}"
+        );
+        assert_eq!(sheet.classes, ["card", "body"]);
+        // Nested in a style rule, `&` in the root is the rule's elements; nested in another
+        // `@scope`, the root is relative to the outer one.
+        assert_eq!(
+            scope(".card { @scope (& > .body) to (.slot) { p { margin: 0 } } }", "t").unwrap().css,
+            ".t__card{@scope (& > .t__body) to (.t__slot){p{margin:0}}}"
+        );
+        assert_eq!(
+            scope("@scope (.a) { @scope (:scope > .b) to (:scope .c) { :scope .d { color: red } } }", "t").unwrap().css,
+            "@scope (.t__a){@scope (:scope > .t__b) to (:scope .t__c){:scope .t__d{color:red}}}"
+        );
+        assert_eq!(
+            scope("@media print { @scope (.a) { p { margin: 0 } } }", "t").unwrap().css,
+            "@media print{@scope (.t__a){p{margin:0}}}"
+        );
+        let error = |css: &str| scope(css, "t").unwrap_err();
+        // A root at the top of the file that names none of its classes matches elements outside
+        // the component, so each rule inside starts at one of them, as at the top of the file.
+        assert_eq!(
+            scope("@scope ([data-theme=\"dark\"]) { .title { color: plum } }", "t").unwrap().css,
+            "@scope ([data-theme=\"dark\"]){.t__title{color:plum}}"
+        );
+        assert_eq!(
+            scope("@scope (main) to (.slot) { .list p { margin: 0 } @scope (.card) { p { margin: 0 } } }", "t").unwrap().css,
+            "@scope (main) to (.t__slot){.t__list p{margin:0}@scope (.t__card){p{margin:0}}}"
+        );
+        let outside = "`@scope ([data-theme=\"dark\"])` can start outside the component";
+        for (css, part) in [
+            (":scope { color: plum }", ":scope"),
+            ("& > p { margin: 0 }", "& > p"),
+            ("> p { margin: 0 }", "> p"),
+            ("p { margin: 0 }", "p"),
+            ("@media print { p { margin: 0 } }", "p"),
+            ("@scope (div) { :scope { margin: 0 } }", ":scope"),
+        ] {
+            let message = error(&format!("@scope ([data-theme=\"dark\"]) {{ {css} }}"));
+            assert!(message.contains(&format!("`{part}` styles elements this component does not own")), "{message}");
+            if !css.starts_with("@scope") {
+                assert!(message.contains(outside), "{message}");
+            }
+        }
+        assert!(error("@scope (div) { color: plum }")
+            .contains("styles the root of `@scope (div)`, which can be outside the component"));
+        assert!(error("@scope (.a, main) to (.b) { p { margin: 0 } }").contains("`@scope (.a, main)` can start outside"));
+        assert!(error("@media print { @scope (main) { p { margin: 0 } } }").contains("`@scope (main)` can start outside"));
+        assert!(!error("@scope (main) { } p { margin: 0 }").contains("can start outside"), "the root's rules end with it");
+        // Name-defining at-rules in an `@scope` are valid and not scoped (CSS Cascade 6); in a
+        // style rule the browser ignores an `@property`.
+        for root in [".a", "main"] {
+            let sheet = scope(
+                &format!("@scope ({root}) {{ @property --fill {{ syntax: '*'; inherits: false }} .b {{ width: var(--fill) }} }}"),
+                "t",
+            )
+            .unwrap();
+            let root = if root == ".a" { ".t__a" } else { root };
+            assert_eq!(
+                sheet.css,
+                format!("@scope ({root}){{@property --t__fill{{syntax:'*';inherits:false}}.t__b{{width:var(--t__fill)}}}}")
+            );
+            assert_eq!(sheet.properties, [("fill".to_string(), None)]);
+        }
+        assert!(error(".a { @scope (.b) { @property --fill { syntax: '*'; inherits: false } } }").contains("outside any rule"));
+        // With no root, the scope is the element around the stylesheet's link, in a style rule too.
+        for css in ["@scope { p { margin: 0 } }", "@scope to (.b) { p { margin: 0 } }", ".a { @scope { p { margin: 0 } } }"] {
+            assert!(error(css).contains("@scope with no root"), "{css}");
+        }
+        // A prelude the browser does not read drops the rule.
+        for css in [
+            "@scope () { p { margin: 0 } }",
+            "@scope (.a) to () { p { margin: 0 } }",
+            "@scope (.a) to(.b) { p { margin: 0 } }",
+            "@scope (.a) (.b) { p { margin: 0 } }",
+            "@scope .a { p { margin: 0 } }",
+        ] {
+            assert!(error(css).contains("write `@scope (.list)` or `@scope (.list) to (.slot)`"), "{css}");
+        }
+        for css in ["@scope (.a::before) { p { margin: 0 } }", "@scope (.a) to (.b:after) { p { margin: 0 } }"] {
+            assert!(error(css).contains("a pseudo-element cannot be"), "{css}");
+        }
+        assert!(scope("@scope (.a[title=\"x::y\"]) { p { margin: 0 } }", "t").is_ok(), "an attribute's value is text");
+    }
+
+    #[test]
+    fn the_compile_fail_scope_examples_fail_for_their_reasons() {
+        for (file, reason) in [
+            (
+                "leaky_scope.css",
+                "`li` styles elements this component does not own: `@scope (main)` can start outside the component",
+            ),
+            ("rootless_scope.css", "@scope with no root"),
+        ] {
+            let text = std::fs::read_to_string(Path::new("../corten/src").join(file)).expect("the example's stylesheet");
+            let error = scope(&text, "x").expect_err("an error");
+            assert!(error.contains(reason), "{file}: {error}");
+        }
     }
 
     #[test]
