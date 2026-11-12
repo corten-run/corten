@@ -218,7 +218,9 @@ pub(crate) fn bounded<F: Future>(watch: Option<&Watch>, step: Pin<&mut F>, cx: &
 pub(crate) struct Watched<I> {
     pub io: I,
     pub watch: Option<Arc<Watch>>,
-    /// Never read: held for its drop.
+    /// Never read: held for its drop. Declared after `io` because fields drop in the order they
+    /// are declared: the socket closes before its place under the cap is given back, so the cap
+    /// never admits a connection while the one it replaces still holds its socket.
     pub _open: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 

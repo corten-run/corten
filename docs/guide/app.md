@@ -45,8 +45,7 @@ neither side sends stays open until the route ends it, and idle limits there are
 while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
 for a set time, and pinging one that only listens so its pongs count) and bounds how many it
 keeps, or idle sockets take the cap from every other request. A refused `CONNECT` is an answer
-like any
-other. A clock of the server's own checks the header timeout a few times a
+like any other. A clock of the server's own checks the header timeout a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
@@ -114,7 +113,9 @@ room to spare, sized from the peak repeated floods reach rather than the first: 
 4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
 flood's hold ended). An app with WebSockets or tunnels counts the ones it keeps open within the
 same cap, each holding what its route keeps for it (a WebSocket library's read and write
-buffers, which these floods did not measure), so it sizes the cap from that too. Past the cap,
+buffers, which these floods did not measure), so it sizes the cap from that too, with room left
+for the platform's health probes: they wait behind a full cap like any other connection, and a
+platform restarts an app whose liveness probe keeps timing out. Past the cap,
 connections wait in each listener's queue (up to 511 from `corten::listeners` on Linux). By how
 Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
 receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
@@ -1816,7 +1817,9 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
         let mut socket = WebSocketStream::from_raw_socket(stream, Role::Server, Some(config)).await;
         // A client is pinged every PING (30 s, say) and closed once it has sent nothing, not even
         // a pong, for IDLE (a minute): a deadline from the last frame heard, which a send arm
-        // added to this `select!` does not restart.
+        // added to this `select!` does not restart. A ping or the idle close that waits past SLOW
+        // (10 s, say) for the client to take it ends the socket; the other sends here wait up to
+        // `App::send_timeout`, where the watchlist bounds every send by SLOW.
         let mut heard = tokio::time::Instant::now();
         let mut ping = tokio::time::interval_at(heard + PING, PING);
         loop {
@@ -1826,13 +1829,16 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
                     message
                 }
                 _ = ping.tick() => {
-                    if socket.send(Message::Ping(Default::default())).await.is_err() {
+                    let sent = tokio::time::timeout(SLOW, socket.send(Message::Ping(Default::default())));
+                    if !matches!(sent.await, Ok(Ok(()))) {
                         break;
                     }
                     continue;
                 }
                 () = tokio::time::sleep_until(heard + IDLE) => {
-                    let _ = socket.close(None).await; // idle: say goodbye
+                    // Idle: say goodbye as going away (1001), with the reason.
+                    let idle = CloseFrame { code: CloseCode::Away, reason: "no answer to pings".into() };
+                    let _ = tokio::time::timeout(SLOW, socket.close(Some(idle))).await;
                     break;
                 }
                 _ = signal.aborted() => {

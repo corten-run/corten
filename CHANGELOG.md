@@ -70,8 +70,9 @@ Corten is pre-1.0, so any minor version may change the API.
   opened connections and switched them was not bounded by the cap. This breaks an app that sets
   the cap and keeps sockets open: its WebSockets and tunnels now count against the cap, and once
   they fill it, new connections wait until one closes. To migrate, raise the cap by the most
-  sockets the app keeps open, and end idle ones in the route (a deadline from the last frame
-  heard, with pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
+  sockets the app keeps open, with room left for health probes, which wait behind a full cap like
+  any other connection, and end idle ones in the route (a deadline from the last frame heard, with
+  pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 
 ### Fixed
