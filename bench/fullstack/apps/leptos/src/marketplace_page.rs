@@ -1,6 +1,7 @@
 #[cfg(feature = "ssr")]
 use crate::marketplace::AlertForm;
 use crate::marketplace::{Locale, Query, Record};
+use leptos::form::FromFormData;
 use leptos::prelude::*;
 use leptos_meta::{Html, Stylesheet, Title};
 use leptos_router::hooks::{use_params_map, use_query_map};
@@ -11,19 +12,53 @@ pub enum Loaded {
     Page { record: Arc<Record>, message: String },
     Error(u16),
 }
+#[cfg(feature = "ssr")]
+#[derive(Clone)]
+struct PostedMarketplace {
+    tag: String,
+    id: String,
+    loaded: Loaded,
+}
+
 #[server]
 pub async fn load_marketplace(tag: String, id: String) -> Result<Loaded, ServerFnError> {
-    let Some(locale) = Locale::parse(&tag) else {
+    if let Some(posted) = use_context::<PostedMarketplace>().filter(|posted| posted.tag == tag && posted.id == id) {
+        return Ok(posted.loaded);
+    }
+    let Some(_locale) = Locale::parse(&tag) else {
         return Ok(Loaded::Error(400));
     };
     Ok(match crate::marketplace::source::get(&id).await {
-        Ok(Some(record)) => {
-            let message = use_context::<AlertForm>().map(|form| locale.alert(&record, &form)).unwrap_or_default();
-            Loaded::Page { record, message }
-        }
+        Ok(Some(record)) => Loaded::Page { record, message: String::new() },
         Ok(None) => Loaded::Error(404),
         Err(_) => Loaded::Error(502),
     })
+}
+
+#[server(prefix = "/api", endpoint = "marketplace-alert")]
+pub async fn create_marketplace_alert(
+    tag: String,
+    item_id: String,
+    email: String,
+    target_price: String,
+) -> Result<String, ServerFnError> {
+    let locale = Locale::parse(&tag).ok_or_else(|| ServerFnError::new("Unsupported locale"))?;
+    let record = crate::marketplace::source::get(&item_id)
+        .await
+        .map_err(|_| ServerFnError::new("Marketplace API did not answer"))?
+        .ok_or_else(|| ServerFnError::new("Not found"))?;
+    let (message, minor) = locale.alert_result(&record, &AlertForm { email: email.clone(), target_price });
+    if let Some(target_minor) = minor {
+        let headers: axum::http::HeaderMap = leptos_axum::extract().await?;
+        let cookie = crate::alerts::append(&headers, crate::alerts::Alert { item_id: record.id.clone(), email, target_minor })
+            .map_err(|_| ServerFnError::new("Alert storage unavailable"))?;
+        let response = expect_context::<leptos_axum::ResponseOptions>();
+        response.insert_header(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+        if let Some(cookie) = cookie {
+            response.append_header(axum::http::header::SET_COOKIE, cookie);
+        }
+    }
+    Ok(message)
 }
 #[cfg(feature = "ssr")]
 pub async fn marketplace_json(axum::extract::Path(id): axum::extract::Path<String>) -> axum::response::Response {
@@ -49,11 +84,68 @@ pub async fn marketplace_post(
 ) -> axum::response::Response {
     use axum::{
         body::Body,
-        extract::FromRequest,
-        http::{header, uri::Authority, StatusCode},
+        extract::{FromRequest, FromRequestParts},
+        http::{header, StatusCode},
         response::IntoResponse,
     };
-    let headers = request.headers();
+    if !marketplace_origin_allowed(request.headers()) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (mut parts, body) = request.into_parts();
+    let axum::extract::Path((tag, id)) = match axum::extract::Path::<(String, String)>::from_request_parts(&mut parts, &()).await
+    {
+        Ok(path) => path,
+        Err(error) => return error.into_response(),
+    };
+    let Some(locale) = Locale::parse(&tag) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let input = match axum::Form::<AlertForm>::from_request(axum::http::Request::from_parts(parts.clone(), body), &()).await {
+        Ok(axum::Form(input)) => input,
+        Err(error) => return error.into_response(),
+    };
+    let record = match crate::marketplace::source::get(&id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+    let (message, minor) = locale.alert_result(&record, &input);
+    let cookie = if let Some(target_minor) = minor {
+        match crate::alerts::append(
+            &parts.headers,
+            crate::alerts::Alert { item_id: record.id.clone(), email: input.email, target_minor },
+        ) {
+            Ok(cookie) => cookie,
+            Err(status) => return status.into_response(),
+        }
+    } else {
+        None
+    };
+    let posted = PostedMarketplace { tag, id, loaded: Loaded::Page { record, message } };
+    let mut response = leptos_axum::render_app_async_with_context(
+        move || provide_context(posted.clone()),
+        move || crate::app::shell(options.clone()),
+    )(axum::http::Request::from_parts(parts, Body::empty()))
+    .await;
+    response.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+    if let Some(cookie) = cookie {
+        response.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+    response
+}
+
+#[cfg(feature = "ssr")]
+pub async fn marketplace_action_guard(request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::{http::StatusCode, response::IntoResponse};
+    if request.uri().path() == "/api/marketplace-alert" && !marketplace_origin_allowed(request.headers()) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
+
+#[cfg(feature = "ssr")]
+fn marketplace_origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    use axum::http::{header, uri::Authority};
     let site_allowed = headers.get("sec-fetch-site").is_none_or(|site| matches!(site.to_str(), Ok("same-origin" | "none")));
     let origin_allowed = headers.get(header::ORIGIN).is_none_or(|value| {
         let Ok(origin) = value.to_str().unwrap_or_default().parse::<url::Url>() else {
@@ -91,17 +183,9 @@ pub async fn marketplace_post(
         || headers.get_all(header::ORIGIN).iter().count() > 1
         || headers.get_all(header::HOST).iter().count() > 1
     {
-        return StatusCode::FORBIDDEN.into_response();
+        return false;
     }
-    let (parts, body) = request.into_parts();
-    let input = match axum::Form::<AlertForm>::from_request(axum::http::Request::from_parts(parts.clone(), body), &()).await {
-        Ok(axum::Form(input)) => input,
-        Err(error) => return error.into_response(),
-    };
-    leptos_axum::render_app_async_with_context(
-        move || provide_context(input.clone()),
-        move || crate::app::shell(options.clone()),
-    )(axum::http::Request::from_parts(parts, Body::empty())).await
+    true
 }
 
 #[component]
@@ -144,6 +228,15 @@ pub fn MarketplacePage() -> impl IntoView {
 }
 #[component]
 fn MarketplaceDetail(record: Arc<Record>, locale: Locale, query: Query, message: String) -> impl IntoView {
+    let action = ServerAction::<CreateMarketplaceAlert>::new();
+    let fallback_message = message;
+    let message = move || {
+        action
+            .value()
+            .get()
+            .map(|value| value.unwrap_or_else(|error| error.to_string()))
+            .unwrap_or_else(|| fallback_message.clone())
+    };
     let title = record.title.clone();
     let listings = record.listings(&query).into_iter().map(|row| {
         let seller = match row.rating_hundredths {
@@ -230,7 +323,12 @@ fn MarketplaceDetail(record: Arc<Record>, locale: Locale, query: Query, message:
             </section>
             <section class="marketplace__alert">
                 <h2>{locale.text("alert")}</h2>
-                <form method="post" action=query_href(locale, &record.id, &query)>
+                <form method="post" action=query_href(locale, &record.id, &query) on:submit=move |event| {
+                    event.prevent_default();
+                    if let Ok(input) = CreateMarketplaceAlert::from_event(&event) { action.dispatch(input); }
+                }>
+                    <input type="hidden" name="tag" value=locale.tag()/>
+                    <input type="hidden" name="item_id" value=record.id.clone()/>
                     <label>{locale.text("email")}<input type="email" name="email" required/></label>
                     <label>{locale.text("target")}<input type="text" name="target_price" inputmode="decimal" required/></label>
                     <button type="submit">{locale.text("submit")}</button>

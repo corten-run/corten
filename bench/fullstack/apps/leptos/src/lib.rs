@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 pub mod app;
+#[cfg(feature = "ssr")]
+pub mod alerts;
 pub mod catalog;
 pub mod catalog_page;
 pub mod marketplace;
