@@ -1,17 +1,32 @@
 ---
 import Base from "../../../layouts/Base.astro";
 import { fetchMarketplaceRecord } from "../../../lib/marketplace";
-import { isLocale, marketplaceView, marketplacePath, alertMessage } from "../../../lib/marketplace-view";
+import { isLocale, marketplaceView, marketplacePath, alertMessage, targetAmount } from "../../../lib/marketplace-view";
+import { alertCookie, alertLifetime, appendAlert } from "../../../lib/alerts.server";
 export const prerender = false;
 const locale = Astro.params.locale ?? "";
 if (!isLocale(locale)) return new Response("Unsupported locale", { status: 400 });
+if (Astro.request.method === "POST") {
+  const origin = Astro.request.headers.get("origin");
+  if (Astro.request.headers.get("sec-fetch-site") === "cross-site" || (origin && origin !== Astro.url.origin))
+    return new Response("Forbidden", { status: 403 });
+}
 const record = await fetchMarketplaceRecord(Astro.params.id ?? "");
 if (!record) return new Response("Not found", { status: 404 });
 const view = marketplaceView(record, locale, Astro.url.searchParams);
 let message = "";
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
-  message = alertMessage(locale, record.title, String(form.get("email") ?? ""), String(form.get("target_price") ?? ""));
+  const email = String(form.get("email") ?? ""), target = String(form.get("target_price") ?? "");
+  const amount = targetAmount(locale, target);
+  if (email.includes("@") && amount !== null) {
+    const previous = Astro.cookies.get(alertCookie)?.value;
+    const token = appendAlert(previous, { item_id: record.id, email, target_minor: Math.round(amount * 100) });
+    if (token !== previous) Astro.cookies.set(alertCookie, token, {
+      path: "/", httpOnly: true, sameSite: "lax", secure: Astro.url.protocol === "https:", maxAge: alertLifetime,
+    });
+  }
+  message = alertMessage(locale, record.title, email, target);
 }
 Astro.response.headers.set("Cache-Control", "no-store");
 ---
@@ -51,7 +66,7 @@ Astro.response.headers.set("Cache-Control", "no-store");
     </section>
     <section class="marketplace__alert">
       <h2>{view.words.alert}</h2>
-      <form method="post" action={view.path} data-astro-reload>
+      <form method="post" action={view.path} enctype="application/x-www-form-urlencoded">
         <label>{view.words.email} <input type="email" name="email" /></label>
         <label>{view.words.target} <input type="text" inputmode="decimal" name="target_price" /></label>
         <button type="submit">{view.words.submit}</button>

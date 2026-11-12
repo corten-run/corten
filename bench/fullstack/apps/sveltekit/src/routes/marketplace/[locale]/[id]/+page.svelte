@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { enhance } from "$app/forms";
   import type { PageData, ActionData } from "./$types";
-  import { marketplaceView, marketplacePath, alertMessage } from "#lib/marketplace";
+  import { marketplaceView, marketplacePath } from "#lib/marketplace";
   let { data, form }: { data: PageData; form: ActionData } = $props();
   const view = $derived(marketplaceView(data.record, data.locale, new URLSearchParams(data.query)));
-  const message = $derived(form?.alert ? alertMessage(data.locale, data.record.title, form.alert.email, form.alert.target) : "");
+  const message = $derived(form?.message ?? "");
   $effect(() => {
     document.documentElement.lang = data.locale;
     return () => { document.documentElement.lang = "en"; };
@@ -44,7 +45,7 @@
   </section>
   <section class="marketplace__alert">
     <h2>{view.words.alert}</h2>
-    <form method="post" action={view.path}>
+    <form method="post" action={view.path} use:enhance>
       <label>{view.words.email} <input type="email" name="email" /></label>
       <label>{view.words.target} <input type="text" inputmode="decimal" name="target_price" /></label>
       <button type="submit">{view.words.submit}</button>

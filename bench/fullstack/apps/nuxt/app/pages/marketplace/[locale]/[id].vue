@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MarketplaceRecord } from "~~/shared/marketplace";
-import { isLocale, marketplacePath, marketplaceView, alertMessage } from "~~/shared/marketplace";
+import { isLocale, marketplacePath, marketplaceView } from "~~/shared/marketplace";
 
 definePageMeta({ key: (route) => route.fullPath });
 const route = useRoute();
@@ -8,11 +8,11 @@ const locale = String(route.params.locale);
 if (!isLocale(locale)) throw createError({ statusCode: 400, statusMessage: "Unsupported locale", fatal: true });
 const event = useRequestEvent();
 const { data, error } = await useAsyncData(`marketplace:${route.fullPath}`, async () => {
-  const record = await $fetch<MarketplaceRecord>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
+  const alert = event?.context.marketplaceAlert;
+  const record = alert?.record ?? await $fetch<MarketplaceRecord>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
     cache: "no-store", retry: 0,
   });
-  const alert = event?.context.marketplaceAlert;
-  return { record, message: alert ? alertMessage(locale, record.title, alert.email, alert.target) : "" };
+  return { record, message: alert?.message ?? "" };
 }, {
   getCachedData: (key, app) => app.isHydrating ? app.payload.data[key] : undefined,
 });
@@ -23,6 +23,14 @@ if (error.value) throw createError({
 });
 if (!data.value) throw createError({ statusCode: 500, statusMessage: "Missing marketplace record", fatal: true });
 const view = computed(() => marketplaceView(data.value!.record, locale, new URLSearchParams(route.fullPath.split("?")[1] ?? "")));
+async function submitAlert(event: Event) {
+  const form = new FormData(event.currentTarget as HTMLFormElement);
+  form.set("locale", locale);
+  const result = await $fetch<{ message: string }>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
+    method: "POST", body: form, retry: 0,
+  });
+  data.value = { ...data.value!, message: result.message };
+}
 useHead({ title: "Marketplace | Card Market", htmlAttrs: { lang: locale },
   link: [{ rel: "stylesheet", href: "/marketplace.css" }] });
 </script>
@@ -63,7 +71,7 @@ useHead({ title: "Marketplace | Card Market", htmlAttrs: { lang: locale },
     </section>
     <section class="marketplace__alert">
       <h2>{{ view.words.alert }}</h2>
-      <form method="post" :action="view.path">
+      <form method="post" :action="view.path" @submit.prevent="submitAlert">
         <label>{{ view.words.email }} <input type="email" name="email" /></label>
         <label>{{ view.words.target }} <input type="text" inputmode="decimal" name="target_price" /></label>
         <button type="submit">{{ view.words.submit }}</button>
