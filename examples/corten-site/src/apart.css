@@ -7,7 +7,6 @@
   --named: var(--ember);
   --called: #8fc1d6;
   --classed: #a9cf9a;
-  --loose: #cfc6b8;
 
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -164,12 +163,6 @@
   --kind: var(--classed);
 }
 
-.loose {
-  --kind: var(--loose);
-
-  text-decoration-style: wavy;
-}
-
 .tied[data-lit] {
   background: var(--kind);
   box-shadow: 0 0 0 2px var(--kind);
@@ -257,11 +250,6 @@
   color: color-mix(in srgb, var(--bone) 82%, transparent);
   font-size: 0.875rem;
   line-height: 1.5;
-}
-
-.rest code {
-  font-family: var(--mono);
-  font-size: 0.8125rem;
 }
 
 /* The whole files: the markup tall on the left, the two files it names beside it. */

@@ -62,12 +62,12 @@ error: could not compile `corten-site` (lib) due to 1 previous error; 1 warning 
     Cut {
         label: "Hand a handler the wrong element",
         file: "src/surface.rs",
-        broken: r#"on:click={js::order(event, readout, grid, ordered, number)}
+        broken: r#"on:click={js::order(event, readout, grid, tiles, ordered, number)}
 "#,
         verdict: r#"error[E0277]: the handler takes an HTMLDivElement, and this is an HTMLOutputElement
     --> examples/corten-site/src/surface.rs:183:48
      |
- 183 |                     on:click={js::order(event, readout, grid, ordered, number)}
+ 183 |                     on:click={js::order(event, readout, grid, tiles, ordered, number)}
      |                               ---------        ^^^^^^^ an HTMLOutputElement, from the tag its ref is on
      |                               |
      |                               required by a bound introduced by this call
@@ -109,7 +109,7 @@ mod tests {
         ("pub mod url {\n", "pub mod url {\n    #[route(\"/certificate\", get = certificate)]\n    pub struct Certificate;\n"),
         ("name={f.name}", "name={f.nmae}"),
         ("<div class={Press}>", "<div class=\"press\">"),
-        ("js::order(event, grid, readout, ordered, number)", "js::order(event, readout, grid, ordered, number)"),
+        ("js::order(event, grid, readout, tiles, ordered, number)", "js::order(event, readout, grid, tiles, ordered, number)"),
         ("<div id={NameplateId} class={Nameplate}>", "<div class={Nameplate}>"),
     ];
 

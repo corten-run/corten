@@ -170,7 +170,7 @@ pub struct WallId;
 /// are `data-reload`, so the runtime does not fetch their pages ahead of a click.
 #[component(css, js)]
 pub(crate) fn Wall<'a>(here: Here<'a>, t: Msg) -> impl Render {
-    let (grid, readout) = refs();
+    let (grid, readout, tiles) = refs();
     let (ordered, scattered, number) = (t.js().wall_ordered(), t.js().wall_scattered(), t.js().number());
     let readings: &[u16] = if here.sorted { &SORTED } else { &READINGS };
     html! {
@@ -180,7 +180,7 @@ pub(crate) fn Wall<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     href={here.wall(true).at(WallId)}
                     data-reload
                     class={Press}
-                    on:click={js::order(event, grid, readout, ordered, number)}
+                    on:click={js::order(event, grid, readout, tiles, ordered, number)}
                 >
                     "Put them in order"
                 </a>
@@ -188,7 +188,7 @@ pub(crate) fn Wall<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     href={here.wall(false).at(WallId)}
                     data-reload
                     class={Press}
-                    on:click={js::scatter(event, grid, readout, scattered, number)}
+                    on:click={js::scatter(event, grid, readout, tiles, scattered, number)}
                 >
                     "Scatter them"
                 </a>
@@ -218,7 +218,8 @@ pub(crate) fn Wall<'a>(here: Here<'a>, t: Msg) -> impl Render {
                                 _ => Heat11,
                             },
                         )}
-                        data-reading={*reading}
+                        ref={tiles}
+                        key={*reading}
                     ></i>
                 }
             </div>

@@ -72,7 +72,6 @@ for (engine of engines) {
       )
     );
     check("every marked name in the cuts is in two files", seams.length >= 4 && seams.every(([, files]) => files >= 2), JSON.stringify(seams));
-    check("the cuts mark no unchecked name", seams.every(([seam]) => !seam.startsWith("data:")));
     for (const [label, seam] of [
       ["ref={grid}", "ref:grid"],
       ["class={Grid}", "class:grid"],
@@ -95,7 +94,7 @@ for (engine of engines) {
     const whole = page.locator("summary", { hasText: "in full" });
     await whole.click();
     check("the whole files open at their tops", (await page.evaluate(() => [...document.querySelectorAll("details pre")].every((pane) => pane.scrollTop === 0 && pane.scrollLeft === 0))) === true);
-    check("the unchecked name is marked in the whole files", (await page.locator("details pre [data-seam='data:reading']").count()) >= 2);
+    check("a class the cuts leave out is marked in the whole files", (await page.locator("details pre [data-seam='class:heat0']").count()) >= 2);
     await whole.click();
 
     // The wall: 1,000 samples the browser puts in order with no request.
@@ -106,10 +105,31 @@ for (engine of engines) {
     await order.scrollIntoViewIfNeeded();
     await order.click();
     await page.waitForFunction(() => {
-      const readings = [...document.querySelectorAll("[data-reading]")].map((tile) => Number(tile.getAttribute("data-reading")));
+      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key")));
       return readings.length === 1000 && readings.every((reading, at) => at === 0 || /** @type {number} */ (readings[at - 1]) <= reading);
     });
     check("the wall sorts in the browser with no request", requests === 0, `${requests} requests`);
+    // The readout says what that took.
+    const readout = page.locator("output", { hasText: "samples put in order" });
+    await readout.waitFor();
+    const took = /^1,000 samples put in order: ([\d.,]+) ms of script, ([\d.,]+) ms from the click to the next frame drawn\. Requests sent: 0\.$/.exec(await readout.innerText());
+    check("the readout says what the sort took", took !== null, await readout.innerText());
+    // A second and a third click are handed every tile too.
+    const keys = () => page.evaluate(() => [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key"))));
+    await page.getByRole("link", { name: "Scatter them" }).click();
+    await page.locator("output", { hasText: "samples scattered" }).waitFor();
+    const scattered = await keys();
+    check("scattering keeps every tile and puts them out of order", new Set(scattered).size === 1000 && scattered.some((key, at) => key !== at), `${new Set(scattered).size} tiles`);
+    const pressed = Date.now();
+    await order.click();
+    await page.locator("output", { hasText: "samples put in order" }).waitFor();
+    const waited = Date.now() - pressed;
+    const again = await keys();
+    check("and they are put in order again", again.length === 1000 && again.every((key, at) => key === at), `${again.length} tiles`);
+    // The frame's time counts from the click: it cannot be longer than this test waited for it.
+    const frame = Number(/, ([\d,]+) ms from the click/.exec(await readout.innerText())?.[1]?.replace(/,/g, ""));
+    check("the time it gives from the click is no longer than the click took", frame >= 0 && frame <= waited + 50, `${frame} ms said, ${waited} ms waited`);
+    check("all of it with no request", requests === 0, `${requests} requests`);
     page.off("request", count);
 
     // The seam's breaks need no script: a radio button picks the compiler's answer.
@@ -407,7 +427,7 @@ for (engine of engines) {
     await page.getByRole("link", { name: "Put them in order" }).click();
     await page.waitForURL(/wall=sorted/);
     const sorted = await page.evaluate(() => {
-      const readings = [...document.querySelectorAll("[data-reading]")].map((tile) => Number(tile.getAttribute("data-reading")));
+      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key")));
       return readings.length === 1000 && readings.every((reading, at) => at === 0 || /** @type {number} */ (readings[at - 1]) <= reading);
     });
     check("blocked: the server sorts the wall", sorted && new URL(page.url()).searchParams.get("scripts") === "off");

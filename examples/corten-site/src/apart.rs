@@ -3,9 +3,8 @@
 //! and classes one file gives another are checked when the crate compiles. The page shows each
 //! file cut to the lines where the three meet, with those names marked, so a reader sees what
 //! holds the files together before the next exhibit breaks it. The whole files are behind a
-//! disclosure, every shared name marked, the one nothing checks among them (a data attribute
-//! the script reads back). The files are the ones the page runs, read at compile time: nothing
-//! here is a sample.
+//! disclosure, every shared name marked. The files are the ones the page runs, read at compile
+//! time: nothing here is a sample.
 use std::sync::LazyLock;
 
 use corten::prelude::*;
@@ -16,17 +15,15 @@ use crate::{
     looks::{Built, Slab},
 };
 
-/// The elements the wall's markup names for its script.
-const REFS: [&str; 2] = ["grid", "readout"];
+/// The elements the wall's markup names for its script: the tiles are many, each with its
+/// reading as its key, so no file reads a name back as text.
+const REFS: [&str; 3] = ["grid", "readout", "tiles"];
 
 /// The functions its markup calls.
 const CALLS: [&str; 2] = ["order", "scatter"];
 
 /// The classes its stylesheet has, besides one for each of the twelve heats.
 const CLASSES: [&str; 6] = ["wall", "controls", "press", "readout", "grid", "tile"];
-
-/// The data attribute the markup writes and the script reads: a string, which nothing checks.
-const DATA: &str = "reading";
 
 /// The name marked when the page is drawn, so one tie is seen without pointing at any: the
 /// function the wall's first link calls.
@@ -48,8 +45,6 @@ enum Mark {
     Call,
     /// A class the markup writes and the stylesheet has.
     Class,
-    /// A data attribute the markup writes and the script reads.
-    Data,
     /// Lines of the file not shown here.
     Gap,
 }
@@ -118,10 +113,7 @@ fn class(name: &str) -> bool {
 /// around it in its run.
 fn tie(lang: Lang, kind: Kind, word: &str, before: &str, after: &str) -> Option<(Mark, String)> {
     let named = REFS.contains(&word).then(|| (Mark::Ref, format!("ref:{word}")));
-    let data = || Some((Mark::Data, format!("data:{word}")));
     match (lang, kind) {
-        (Lang::Rust, Kind::Plain) if word == DATA && before.ends_with("data-") => data(),
-        (Lang::Js, Kind::Plain) if word == DATA && before.ends_with("dataset.") => data(),
         (Lang::Rust, Kind::Plain) if CALLS.contains(&word) && before.ends_with("js::") => {
             Some((Mark::Call, format!("call:{word}")))
         }
@@ -182,8 +174,10 @@ fn pieces(lang: Lang, source: &'static str) -> Vec<Piece> {
 type Cut = (&'static str, usize);
 
 /// The lines of the wall's function that carry a tie: where its refs are made, the link that
-/// calls the script, and the two elements the script is handed.
-const MARKUP_CUTS: [Cut; 4] = [("#[component(css, js)]", 3), ("<a\n", 8), ("<output ref={readout}", 1), ("<div ref={grid}", 1)];
+/// calls the script, and the elements the script is handed: the grid with the loop that fills
+/// it, and each tile's ref and key past its classes.
+const MARKUP_CUTS: [Cut; 5] =
+    [("#[component(css, js)]", 3), ("<a\n", 8), ("<output ref={readout}", 1), ("<div ref={grid}", 3), ("ref={tiles}", 2)];
 
 /// The function that link calls, with the JSDoc its arguments are checked against.
 const SCRIPT_CUTS: [Cut; 1] = [("/**\n * @param {MouseEvent} event", 13)];
@@ -313,8 +307,8 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
     let kind = |mark: Mark| match mark {
         Mark::Ref => Named,
         Mark::Call => Called,
-        Mark::Class => Classed,
-        _ => Loose,
+        // A tie is one of three kinds, and the third is a class.
+        _ => Classed,
     };
     let all: usize = FILES.iter().map(|file| file.lines).sum();
     html! {
@@ -398,9 +392,7 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
             <details ref={whole} class={Whole}>
                 <summary class={All}>"Read the Wall function and its two files in full: " {all} " lines"</summary>
                 <p class={Rest}>
-                    "Every name the files share is marked here: the twelve heat classes too, and the one name nothing checks, "
-                    <code class={(Tied, Loose)}>"data-reading"</code>
-                    ". The markup writes it and the script reads it back as text, so a misspelling in either file still compiles, and the wall stops sorting."
+                    "Every name the files share is marked here, the twelve heat classes too. No file reads a name back as text: each tile's reading is its key, and the script is handed the tiles by key."
                 </p>
                 <div class={Files}>
                     for file in FILES.iter() {
@@ -514,13 +506,11 @@ mod tests {
             }
             assert!(markup.iter().any(|end| end == LIT));
         }
-        // The name nothing checks is in the whole files alone, where the page says so.
-        assert!(ends(&FILES[0].whole).iter().any(|end| end == "data:reading"));
-        assert!(FILES.iter().all(|file| ends(&file.cut).iter().all(|end| !end.starts_with("data:"))));
     }
 
-    /// The lists at the top are every such name in the files, so a ref, a call, a class or a
-    /// data attribute added to the wall is marked, or this fails and the page is not wrong.
+    /// The lists at the top are every such name in the files, so a ref, a call or a class added
+    /// to the wall is marked, and a data attribute a script would read back as text fails this:
+    /// the page says the wall has none.
     #[test]
     fn the_names_marked_are_all_there_are() {
         let [markup, script, styles] = sources();
@@ -540,9 +530,14 @@ mod tests {
             names.dedup();
             names
         };
-        // `data-reload` is the runtime's, said to the browser alone; the script reads one.
-        assert_eq!(after(markup, "data-"), ["reading", "reload"]);
-        assert_eq!(after(script, "dataset."), [DATA]);
+        // `data-reload` is the runtime's, said to the browser alone; the script reads none.
+        assert_eq!(after(markup, "data-"), ["reload"]);
+        assert!(!script.contains("dataset") && !script.contains("getAttribute"), "the script reads an attribute as text");
+        // No selector, class or attribute name either: the one text its code holds is the kind of
+        // timing entry it counts.
+        let texts: Vec<&str> =
+            runs(Lang::Js, script).into_iter().filter(|(kind, _)| *kind == Kind::Text).map(|(_, text)| text).collect();
+        assert_eq!(texts, [r#""resource""#]);
         for (kind, text) in runs(Lang::Css, styles) {
             if kind != Kind::Plain {
                 continue;

@@ -372,8 +372,8 @@ mod tests {
             assert!(html.contains(part), "the page lacks {part}");
         }
         assert!(html.contains(r#"id="nameplate""#) && html.contains("A blank plate."), "{html}");
-        // The tiles' own attribute: the wall's source, shown on the page, names it too.
-        assert_eq!(html.matches(r#"data-reading=""#).count(), 1000);
+        // The tiles, each named for the wall's script and keyed by its reading.
+        assert_eq!(html.matches(r#"data-ref="tiles" data-key=""#).count(), 1000);
         // One banner, one main and one footer, the bar and the footer outside the page's content.
         let (bar, main, foot) = (html.find("<header").unwrap(), html.find("<main").unwrap(), html.rfind("<footer").unwrap());
         assert!(bar < main && html.find("</main>").unwrap() < foot, "the bar and the footer are outside <main>");
@@ -540,8 +540,8 @@ mod tests {
     async fn the_server_sorts_the_wall_where_no_script_does() {
         let sorted = app().test().get(&Here { sorted: true, ..Here::default() }.wall(true)).await;
         let html = sorted.text();
-        let readings: Vec<u16> =
-            html.split(r#"data-reading=""#).skip(1).filter_map(|rest| rest.split('"').next()?.parse().ok()).collect();
+        let keyed = r#"data-ref="tiles" data-key=""#;
+        let readings: Vec<u16> = html.split(keyed).skip(1).filter_map(|rest| rest.split('"').next()?.parse().ok()).collect();
         assert_eq!(readings, (0..1000).collect::<Vec<u16>>());
     }
 

@@ -787,8 +787,12 @@ change, each filled from the collection row of the same card. Rows a script only
 order, and never writes or makes, need no view: the server writes the value each sorts by as a
 `data-` attribute (the number its own sort uses, such as a price in cents, never a cell's text),
 and the script compares those. `examples/card-market`'s listings sort this way, which keeps the
-views module off a page that needs nothing else from it. A table that only sorts by the header
-clicked needs no script of its own: corten-ui's `rows::sort` is that handler ([UI](ui.md)).
+views module off a page that needs nothing else from it. Where no two rows share the value, it can
+be each row's key instead (`ref={tiles} key={reading}`, and a `Map<string, HTMLElement>`
+parameter), so the script names no attribute: the compiler checks the ref as it does any other,
+but not that each row has a key. `examples/corten-site`'s wall sorts this way. A table that only
+sorts by the header clicked needs no script of its own: corten-ui's `rows::sort` is that handler
+([UI](ui.md)).
 
 The parameter's type says whose rows it holds: `Holds<Row, HTMLTableSectionElement>` (or
 `Holds<Row, HTMLTemplateElement>` for the template). `tsc` then rejects `rows(body, Card)` and
