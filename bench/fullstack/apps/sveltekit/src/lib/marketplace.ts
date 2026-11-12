@@ -27,16 +27,21 @@ const formatters = new Map(locales.map((locale) => [locale, {
 export function marketplacePath(locale: Locale, id: string) {
   return `/marketplace/${locale}/${encodeURIComponent(id)}`;
 }
-export function alertMessage(locale: Locale, title: string, email: string, target: string): string {
-  const words = labels[locale];
-  if (!email.includes("@")) return words.invalid_email;
+export function targetAmount(locale: Locale, target: string): number | null {
   // Discover the decimal separator through Intl; grouping is deliberately not accepted.
   const decimal = formatters.get(locale)!.money.formatToParts(1.1).find((part) => part.type === "decimal")!.value;
   const text = target.trim();
   const pattern = decimal === "." ? /^\d+(?:\.\d+)?$/ : /^\d+(?:,\d+)?$/;
-  if (!pattern.test(text)) return words.invalid_price;
+  if (!pattern.test(text)) return null;
   const amount = Number(text.replace(decimal, "."));
-  if (!Number.isFinite(amount) || amount <= 0) return words.invalid_price;
+  const minor = Math.round(amount * 100);
+  return Number.isFinite(amount) && amount > 0 && Number.isSafeInteger(minor) && minor > 0 ? amount : null;
+}
+export function alertMessage(locale: Locale, title: string, email: string, target: string): string {
+  const words = labels[locale];
+  if (!email.includes("@")) return words.invalid_email;
+  const amount = targetAmount(locale, target);
+  if (amount === null) return words.invalid_price;
   const values: Record<string, string> = { email, title, price: formatters.get(locale)!.money.format(amount) };
   return words.alert_set.replace(/\{(email|title|price)\}/g, (_, key: string) => values[key]!);
 }
