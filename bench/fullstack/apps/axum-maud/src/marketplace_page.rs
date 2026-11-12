@@ -1,7 +1,7 @@
 use crate::marketplace::{self, AlertForm, Locale, Query, Record};
 use axum::{
     Form, Json,
-    extract::{Path, Query as QueryParam},
+    extract::{Path, Query as QueryParam, rejection::PathRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -30,11 +30,12 @@ async fn page(tag: &str, id: &str, query: Query, form: Option<AlertForm>) -> Res
         Err(_) => StatusCode::BAD_GATEWAY.into_response(),
     }
 }
-pub async fn json(Path(id): Path<String>) -> Response {
+pub async fn json(id: Result<Path<String>, PathRejection>) -> Response {
+    let Ok(Path(id)) = id else { return crate::record_http::problem(StatusCode::BAD_REQUEST) };
     match marketplace::source::get(&id).await {
         Ok(Some(record)) => Json(record).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+        Ok(None) => crate::record_http::problem(StatusCode::NOT_FOUND),
+        Err(_) => crate::record_http::problem(StatusCode::BAD_GATEWAY),
     }
 }
 pub fn render(record: &Record, locale: Locale, query: &Query, message: &str) -> Markup {

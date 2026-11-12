@@ -191,16 +191,34 @@ const parts = (/** @type {string} */ command) => command.replace(/\s+/g, " ").sp
   // A rebuild replaces the release the clean build made rather than asking.
   .map((c) => c.replace(/ --overwrite$/, ""));
 
+// Production dependency pruning packages an already built artifact, never a timed rebuild.
+const productionPrune = (/** @type {string} */ command) => /^npm prune --omit=dev(?: --no-audit --no-fund)?$/.test(command);
+const postBuildPrune = (/** @type {string[]} */ commands, /** @type {number} */ index, /** @type {string | undefined} */ build) =>
+  !!build && productionPrune(commands[index]) && commands.slice(0, index).includes(parts(build).at(-1) ?? "");
+
+test("only exact production pruning after a build is packaging, never a recipe step", () => {
+  for (const command of ["npm prune --omit=dev", "npm prune --omit=dev --no-audit --no-fund"]) {
+    assert.equal(postBuildPrune(["npm run build", command], 1, "npm run build"), true);
+    assert.equal(postBuildPrune([command, "npm run build"], 0, "npm run build"), false);
+    assert.equal(postBuildPrune(["npm install", command], 1, undefined), false);
+  }
+  for (const command of ["npm prune", "npm prune --omit=optional", "npm prune --omit=dev --force", "npm prune --omit=dev --no-audit --no-fund && npm run build"]) {
+    assert.equal(postBuildPrune(["npm run build", command], 1, "npm run build"), false, command);
+  }
+  assert.ok(Object.values(recipes).every((r) => ![...parts(r.deps), ...parts(r.build ?? "")].some((command) => /^npm prune(?:\s|$)/.test(command))), "pruning must not enter timed dependencies or rebuilds");
+});
+
 test("each recipe runs its Dockerfile's commands, from its image, in its directory", () => {
   for (const [name, r] of Object.entries(recipes)) {
     const stages = stagesOf(name);
     // Packaging after the build (copying the output aside) and the shared cache's touch, which this
     // benchmark has no use for; every other command of the deps and build stages is the recipe's.
-    const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
+    const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/];
     const mine = [...parts(r.deps), ...(r.build ? parts(r.build) : [])];
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
-      for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {
-        assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
+      const commands = stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()));
+      for (const [index, command] of commands.entries()) {
+        assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
       }
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }

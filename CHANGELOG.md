@@ -33,6 +33,13 @@ Corten is pre-1.0, so any minor version may change the API.
   handling stays separate; these functional checks are not production qualification
   or performance results.
 
+- Native parity groundwork for Next.js and Django adds opt-in production transport
+  and security settings without replacing their renderers. Next builds bind their
+  profile and scope nonce-dependent rendering to that profile. Leptos's plain form
+  fallback rejects cross-site posts before body/source work; axum retains native
+  typed JSON with bounded source reads. Qualification limits remain explicit, not
+  hidden as missing rows or claimed performance results.
+
 - The separate ASP.NET Core Native AOT JSON adapter now supports complete catalog and numeric
   marketplace records through native source-generated serialization, with fixture-at-startup
   or uncached request-time HTTP sources. Focused source and native executable checks cover
