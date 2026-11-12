@@ -41,13 +41,7 @@ import { fileURLToPath } from "node:url";
 /** A commit cited in Markdown: a code span of 7 to 40 lower-case hex digits alone, or one written
  * as a repository named corten's (`corten-run/corten@sha`, in any case), which is refused. */
 const COMMIT = /`(?:([\w.-]+\/corten)@)?([0-9a-f]{7,40})`/gi;
-// Commits cited but not checked, by file. bench/fullstack/README.md cites three GitHub does not
-// have, issue #1260 ("bench/fullstack/README.md cites three commits GitHub does not have
-// (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check"), and round r13's `7f0b81f`,
-// which GitHub keeps only on the branch bench/r13-tree, not on main or an evidence tag; its other
-// citations are checked. CHANGELOG.md is not read at all.
-/** @type {Record<string, string[]>} */
-const UNCHECKED = { "bench/fullstack/README.md": ["2fa883a6", "1e1fb7be", "eedbcc2a", "7f0b81f"] };
+// CHANGELOG.md is not read at all.
 /** Fetches the evidence tags from corten-run/corten itself, which a fork's origin may lack. */
 const FETCH = 'https://github.com/corten-run/corten.git "+refs/tags/evidence/*:refs/tags/evidence/*"';
 
@@ -205,7 +199,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     /** @type {string | null} */
     let fence = null;
     const source = readFileSync(join(root, file), "utf8");
-    if (markdown) commits.push(...cited(source).filter((c) => !UNCHECKED[file]?.includes(c.sha)).map((c) => ({ ...c, at: `${file}:${c.line}` })));
+    if (markdown) commits.push(...cited(source).map((c) => ({ ...c, at: `${file}:${c.line}` })));
     const lines = source.split(/\r?\n/);
     /** Each line with its citations taken out, or null when it is not read. @type {(string | null)[]} */
     const rests = lines.map((line, i) => {
