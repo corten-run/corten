@@ -219,8 +219,7 @@ pub(crate) struct Watched<I> {
     pub io: I,
     pub watch: Option<Arc<Watch>>,
     /// Never read: held for its drop.
-    #[allow(dead_code)]
-    pub open: Option<tokio::sync::OwnedSemaphorePermit>,
+    pub _open: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 fn timed_out() -> io::Error {
@@ -385,7 +384,7 @@ mod tests {
         use tokio::io::AsyncWriteExt;
         let clock = Clock::start(None, Some(Duration::from_millis(40))).unwrap();
         for step in ["write", "flush", "shutdown"] {
-            let mut io = Watched { io: Stuck, watch: Some(clock.watch()), open: None };
+            let mut io = Watched { io: Stuck, watch: Some(clock.watch()), _open: None };
             let done = tokio::time::timeout(Duration::from_secs(2), async {
                 match step {
                     "write" => io.write(b"x").await.map(drop),

@@ -1830,7 +1830,7 @@ where
                     _ => return,
                 }
             };
-            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, open: permit });
+            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
                 _ = conn.as_mut() => return,

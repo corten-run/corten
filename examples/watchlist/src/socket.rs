@@ -64,6 +64,8 @@ where
     // Each stock followed, with the price last sent for it.
     let mut followed: Vec<(&'static str, u32)> = Vec::new();
     let mut stop = std::pin::pin!(stop);
+    // When the client last sent a frame (a pong included); it is closed `IDLE` after that, a
+    // deadline counted from `heard` rather than restarted on each pass of the loop.
     let mut heard = tokio::time::Instant::now();
     let mut beat = tokio::time::interval_at(heard + PING, PING);
     loop {
@@ -100,15 +102,15 @@ where
                 Some(Ok(_)) => Ok(()),
             },
             _ = beat.tick() => {
-                if heard.elapsed() >= IDLE {
-                    let idle = CloseFrame { code: CloseCode::Away, reason: "no answer to pings".into() };
-                    goodbye(&mut socket, Some(idle)).await;
-                    break;
-                }
                 match tokio::time::timeout(SLOW, socket.send(Message::Ping(Default::default()))).await {
                     Ok(Ok(())) => Ok(()),
                     _ => Err(()),
                 }
+            }
+            () = tokio::time::sleep_until(heard + IDLE) => {
+                let idle = CloseFrame { code: CloseCode::Away, reason: "no answer to pings".into() };
+                goodbye(&mut socket, Some(idle)).await;
+                break;
             }
             changed = trades.changed() => {
                 if changed.is_err() {
@@ -164,18 +166,19 @@ async fn goodbye<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut WebSocketStream
 mod tests {
     use super::*;
 
-    /// A client on the other end of an in-memory connection; the server stops when `stop` does.
+    /// A client on the other end of an in-memory connection, and the server's task, which ends
+    /// when `stop` resolves.
     async fn connect(
         market: &Market,
         stop: impl Future<Output = ()> + Send + 'static,
-    ) -> WebSocketStream<tokio::io::DuplexStream> {
+    ) -> (WebSocketStream<tokio::io::DuplexStream>, tokio::task::JoinHandle<()>) {
         let (client, server) = tokio::io::duplex(4096);
         let market = market.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let socket = WebSocketStream::from_raw_socket(server, Role::Server, Some(config())).await;
             follow(socket, market, stop).await;
         });
-        WebSocketStream::from_raw_socket(client, Role::Client, None).await
+        (WebSocketStream::from_raw_socket(client, Role::Client, None).await, task)
     }
 
     async fn next(client: &mut WebSocketStream<tokio::io::DuplexStream>) -> String {
@@ -188,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn a_followed_stock_is_sent_at_once_and_again_when_it_trades() {
         let market = Market::new();
-        let mut client = connect(&market, std::future::pending()).await;
+        let (mut client, _) = connect(&market, std::future::pending()).await;
         client.send(Message::text("acme")).await.unwrap();
         let first = next(&mut client).await;
         assert!(first.contains(r#""id":"ACME""#) && first.contains(r#""price":"$129.99""#), "{first}");
@@ -203,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn a_trade_of_a_stock_not_followed_sends_nothing() {
         let market = Market::new();
-        let mut client = connect(&market, std::future::pending()).await;
+        let (mut client, _) = connect(&market, std::future::pending()).await;
         client.send(Message::text("GLBX")).await.unwrap();
         next(&mut client).await;
         // Acme's trade, then Halcyon Health's: neither is followed. Then Globex's, down 45 basis
@@ -218,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn a_message_longer_than_a_ticker_closes_the_socket_as_too_big() {
         let market = Market::new();
-        let mut client = connect(&market, std::future::pending()).await;
+        let (mut client, _) = connect(&market, std::future::pending()).await;
         client.send(Message::text("A".repeat(LONGEST + 1))).await.unwrap();
         match client.next().await {
             Some(Ok(Message::Close(Some(frame)))) => assert_eq!(frame.code, CloseCode::Size),
@@ -227,49 +230,58 @@ mod tests {
     }
 
     /// A client that answers nothing, not even the server's pings, is closed once it has been
-    /// quiet for `IDLE`; one that reads (and so answers each ping) stays open.
+    /// quiet for `IDLE`, with a close frame that says so; one that reads (and so answers each
+    /// ping) stays open.
     #[tokio::test(start_paused = true)]
     async fn a_client_that_answers_no_ping_is_closed_once_idle() {
+        use tokio::io::AsyncReadExt;
         let market = Market::new();
-        let mut quiet = connect(&market, std::future::pending()).await;
+        let (mut quiet, quiet_server) = connect(&market, std::future::pending()).await;
         quiet.send(Message::text("ACME")).await.unwrap();
         next(&mut quiet).await;
-        let mut listening = connect(&market, std::future::pending()).await;
+        // The clock is paused, so the server heard the quiet client at `start`.
+        let start = tokio::time::Instant::now();
+        let (mut listening, listening_server) = connect(&market, std::future::pending()).await;
         listening.send(Message::text("ACME")).await.unwrap();
         next(&mut listening).await;
-        // The listening client reads (and answers pings) for three times IDLE.
-        let heard = tokio::time::timeout(IDLE * 3, async {
+        // The listening client reads, and so answers each ping, all along.
+        let listening = tokio::spawn(async move {
             loop {
                 match listening.next().await {
                     Some(Ok(Message::Ping(_))) => {}
                     other => return other,
                 }
             }
-        })
-        .await;
-        assert!(heard.is_err(), "a client that answers pings stays open: {heard:?}");
-        // The quiet one, reading only now, finds pings and then the close; or, since reading a
-        // ping makes it send its pong first, finds the server already gone.
-        let started = tokio::time::Instant::now();
-        let closed = loop {
-            match quiet.next().await {
-                Some(Ok(Message::Ping(_))) => {}
-                other => break other,
-            }
-        };
-        match closed {
-            Some(Ok(Message::Close(Some(frame)))) => assert_eq!(frame.code, CloseCode::Away),
-            Some(Err(Error::Io(error))) => assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe),
-            other => panic!("expected the socket closed, got {other:?}"),
+        });
+        tokio::time::sleep_until(start + IDLE - Duration::from_millis(1)).await;
+        assert!(!quiet_server.is_finished(), "the quiet client is not closed before IDLE");
+        tokio::time::sleep_until(start + IDLE + Duration::from_millis(1)).await;
+        assert!(quiet_server.is_finished(), "the quiet client is closed at IDLE");
+        // What the quiet client was sent, read as bytes: reading it with tungstenite would answer
+        // the pings, and the pong would fail on the closed connection. The server's frames are
+        // unmasked: a ping with no payload is `0x89 0x00`, then the close, `0x88`, its length,
+        // code 1001 (`0x03 0xE9`) and the reason.
+        let mut sent = Vec::new();
+        quiet.get_mut().read_to_end(&mut sent).await.unwrap();
+        let mut rest = &sent[..];
+        let mut pings = 0;
+        while let [0x89, 0x00, after @ ..] = rest {
+            pings += 1;
+            rest = after;
         }
-        assert_eq!(started.elapsed(), Duration::ZERO, "closed while the other client was heard");
+        assert!(pings > 0, "the quiet client was pinged first: {sent:x?}");
+        let reason = b"no answer to pings";
+        let close = [&[0x88, 2 + reason.len() as u8, 0x03, 0xE9][..], reason].concat();
+        assert_eq!(rest, close, "then closed as going away: {sent:x?}");
+        tokio::time::sleep_until(start + IDLE * 3).await;
+        assert!(!listening.is_finished() && !listening_server.is_finished(), "a client that answers pings stays open");
     }
 
     #[tokio::test]
     async fn the_server_says_goodbye_when_it_stops_and_answers_the_clients() {
         let market = Market::new();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let mut client = connect(&market, async move {
+        let (mut client, _) = connect(&market, async move {
             let _ = stopped.await;
         })
         .await;
@@ -278,7 +290,7 @@ mod tests {
         stop.send(()).unwrap();
         assert!(matches!(client.next().await, Some(Ok(Message::Close(_)))), "shutting down closes the socket");
 
-        let mut client = connect(&market, std::future::pending()).await;
+        let (mut client, _) = connect(&market, std::future::pending()).await;
         client.close(None).await.unwrap();
         let answer = client.next().await;
         assert!(matches!(answer, Some(Ok(Message::Close(_)))), "the client's close is answered: {answer:?}");

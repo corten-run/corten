@@ -2703,10 +2703,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `App::max_connections` until then: the cap's permit is held by the socket hyper hands over,
     not by hyper's connection, which ends at the switch (fixed by
     [#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
-    So a route that accepts switched connections must end idle ones (a timeout on its reads, or
-    pings the client must answer) and should bound how many it keeps: otherwise sockets no one
-    uses take the cap from every other request. The work on a switched connection is told when
-    shutdown begins and is not waited for.
+    So a route that accepts switched connections must end idle ones (a deadline from the last
+    frame the client sent, with pings so one that only listens answers) and should bound how
+    many it keeps: otherwise sockets no one uses take the cap from every other request. The work
+    on a switched connection is told when shutdown begins and is not waited for.
 14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
     `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make

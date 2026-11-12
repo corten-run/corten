@@ -49,16 +49,18 @@ Corten is pre-1.0, so any minor version may change the API.
   with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
   say where the check holds
   ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
-
-### Fixed
-
 - `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
   after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
   socket hyper hands to the route. Before, it was given back at the switch, so a client that
-  opened connections and switched them was not bounded by the cap. An app with long-lived
-  WebSockets or tunnels that sets the cap now needs room in it for them, and its routes end idle
-  ones
+  opened connections and switched them was not bounded by the cap. This breaks an app that sets
+  the cap and keeps sockets open: its WebSockets and tunnels now count against the cap, and once
+  they fill it, new connections wait until one closes. To migrate, raise the cap by the most
+  sockets the app keeps open, and end idle ones in the route (a deadline from the last frame
+  heard, with pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+
+### Fixed
+
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so

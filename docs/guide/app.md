@@ -42,9 +42,10 @@ WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the route's from then on: the 
 no longer applies and `App::send_timeout` bounds only its writes that wait, so one on which
 neither side sends stays open until the route ends it, and idle limits there are the route's
 ([design Limit 13](../design.md#limit-protocol-switch)). It counts against `App::max_connections`
-while it is open, so a route that accepts them ends idle ones (a timeout on its reads, or pings
-the client must answer) and bounds how many it keeps, or idle sockets take the cap from every
-other request. A refused `CONNECT` is an answer like any
+while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
+for a set time, and pinging one that only listens so its pongs count) and bounds how many it
+keeps, or idle sockets take the cap from every other request. A refused `CONNECT` is an answer
+like any
 other. A clock of the server's own checks the header timeout a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
@@ -82,9 +83,9 @@ still sending the rest may see it reset instead). With the limit raised above 64
 set, [design Choice 19](../design.md#choice-head-size)). A switched connection, a WebSocket after
 its `101` or a tunnel after a `2xx` to `CONNECT`, counts until its route drops the socket
 ([design Limit 13](../design.md#limit-protocol-switch)), so every connection the app accepted
-counts until it closes. A relayed switch's connection to its upstream rides on the permit of the
-client's connection it serves; other connections the app opens itself (to a database, an API)
-are not counted.
+counts until it closes. A relayed switch's connection to its upstream is not counted itself;
+there is at most one per client connection, which is. Other connections the app opens itself (to
+a database, an API) are not counted.
 Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
@@ -1813,17 +1814,27 @@ library's (`examples/watchlist`'s `/quotes` uses tokio-tungstenite):
 async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Switch> {
     upgrade.websocket(move |stream, signal| async move {
         let mut socket = WebSocketStream::from_raw_socket(stream, Role::Server, Some(config)).await;
+        // A client is pinged every PING (30 s, say) and closed once it has sent nothing, not even
+        // a pong, for IDLE (a minute): a deadline from the last frame heard, which a send arm
+        // added to this `select!` does not restart.
+        let mut heard = tokio::time::Instant::now();
+        let mut ping = tokio::time::interval_at(heard + PING, PING);
         loop {
             let message = tokio::select! {
-                // A client that sends nothing for IDLE (a minute, say) is ended, so an idle socket
-                // does not hold a connection; one that only listens is sent pings to answer.
-                message = tokio::time::timeout(IDLE, socket.next()) => match message {
-                    Ok(message) => message,
-                    Err(_) => {
-                        let _ = socket.close(None).await;
+                message = socket.next() => {
+                    heard = tokio::time::Instant::now();
+                    message
+                }
+                _ = ping.tick() => {
+                    if socket.send(Message::Ping(Default::default())).await.is_err() {
                         break;
                     }
-                },
+                    continue;
+                }
+                () = tokio::time::sleep_until(heard + IDLE) => {
+                    let _ = socket.close(None).await; // idle: say goodbye
+                    break;
+                }
                 _ = signal.aborted() => {
                     let _ = socket.close(None).await; // shutting down: say goodbye
                     break;
@@ -1871,9 +1882,10 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    `App::send_timeout` still holds on the switched connection: a write the client has made no
    room for in 60 seconds fails with `TimedOut`, and the socket should end there. The
    connection counts against `App::max_connections` until the work drops the stream, and
-   nothing of Corten's ends one where neither side sends: the work ends idle sockets (a timeout
-   on its reads, as above, or pings the client must answer) and should bound how many it keeps,
-   or they take the cap from every other request.
+   nothing of Corten's ends one where neither side sends: the work ends idle sockets (a deadline
+   from the last frame heard, with pings for a client that only listens, as above and in
+   `examples/watchlist`'s `socket.rs`) and should bound how many it keeps, or they take the cap
+   from every other request.
 4. Message size, compression, what may wait to be sent and per-message checks are the
    WebSocket library's settings and the route's code: Corten does not read frames.
 5. `upgrade.switch(headers, run)` answers with an upstream's 101 and its headers instead, for a
