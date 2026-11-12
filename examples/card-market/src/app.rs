@@ -18,7 +18,8 @@ use corten::{
     ClientIp, Error, ForAll, HtmlResponse,
     agent::{ToolError, Tools},
     answer::XRobotsTag,
-    http::{HeaderMap, HeaderValue, IntoResponse, Method, Request, Response, StatusCode, header, request::Parts},
+    caller,
+    http::{HeaderMap, HeaderValue, IntoResponse, Method, Request, Response, StatusCode, request::Parts},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::{Policy, Violations},
@@ -154,18 +155,8 @@ impl Partners {
 
     /// The partner whose key the request sends.
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(bearer_token(headers)?)
+        self.0.get(caller::bearer(headers)?)
     }
-}
-
-/// The bearer token the request sends (`Authorization: Bearer <token>`, RFC 6750), a partner's key
-/// or an agent's token, whose scheme is matched in any case (RFC 9110 11.1); an empty one is none.
-/// A value that is not ASCII is none here too, where the MCP endpoint, which reads bytes, counts it
-/// as a token sent: RFC 6750's token is ASCII, so either answer is a refusal.
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let (scheme, token) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
-    let token = token.trim();
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 /// A service that sets alerts for its users, known by the API key it sends as a bearer token. A
@@ -185,7 +176,7 @@ impl corten::openapi::Argument for Partner {
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        let refused = match (state.partners.named(&parts.headers), bearer_token(&parts.headers)) {
+        let refused = match (state.partners.named(&parts.headers), caller::bearer(&parts.headers)) {
             (Some(name), _) => return Ok(Partner { name: name.clone() }),
             (None, None) => Refused::unauthorized(Challenge::bearer("partners")),
             (None, Some(_)) => Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token")),
@@ -569,7 +560,7 @@ fn rpc_failure(status: StatusCode, message: &str) -> RpcFailure {
 fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
     let read_source = source.clone();
     Tools::new("card-market-item-page", env!("CARGO_PKG_VERSION"))
-        .auth(move |headers| match bearer_token(headers) {
+        .auth(move |headers| match caller::bearer(headers) {
             Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
             _ => Err(ToolError::Unauthorized),
         })
