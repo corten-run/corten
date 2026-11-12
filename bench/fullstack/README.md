@@ -1889,6 +1889,9 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    timed-out request a second time when its read comes back, which throws: from a page's render that
    ended the process, and from the JSON's `res.json` Express's error handler closed the connection,
    with a second request on it unanswered (both seen with an item API that answered in 12 s). The
+   checks stop a late success from writing; a read that fails after the deadline (the item API's 5xx
+   past 10 s, or Node's fetch giving up on a hung API) still rejects the `await`, and Express's error
+   handler, finding the 503 sent, closes the connection, as Express's documented pattern does. The
    three packages are loaded only under the profile.
    `app.listen` makes a Node server;
    under the profile the app makes it as Express's documentation does (`http.createServer(app)`) with
