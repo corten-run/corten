@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestAlertDoesNotCommitBeforeNativeTemplateRenders(t *testing.T) {
+	router := gin.New()
+	(&marketplaceSource{fixture: map[string]*marketplaceRecord{"item_1": sampleMarketplace()}}).routes(router)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest("POST", "/marketplace/en-US/item_1", strings.NewReader("email=render%40example.test&target_price=12.34")).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if len(response.Result().Cookies()) != 0 {
+		t.Fatal("native template rejected canceled context, but a session was committed")
+	}
+	if response.Code != http.StatusInternalServerError {
+		t.Fatal("render failure must return an error", response.Code)
+	}
+}
 
 func TestNativeAlertHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -148,6 +166,29 @@ func TestAlertMinor(t *testing.T) {
 		got, ok := alertMinor(tc.input)
 		if got != tc.want || ok != tc.ok {
 			t.Fatal(tc, got, ok)
+		}
+	}
+}
+
+func TestAcceptedNativeAlertMinorBounds(t *testing.T) {
+	for _, tag := range []string{"en-US", "fr-FR", "de-DE"} {
+		for _, tc := range []struct {
+			input    string
+			minor    int64
+			accepted bool
+		}{
+			{"12.34", 1234, true}, {"90071992547409.93", 9007199254740993, true},
+			{"92233720368547758.07", 9223372036854775807, true}, {"92233720368547758.08", 0, false},
+			{"9223372036854775807", 0, false},
+		} {
+			input := tc.input
+			if tag != "en-US" {
+				input = strings.ReplaceAll(input, ".", ",")
+			}
+			_, minor := newMarketplaceFormat(tag).alert("T", "x@y", input)
+			if (minor != nil) != tc.accepted || (minor != nil && *minor != tc.minor) {
+				t.Fatal(tag, tc, minor)
+			}
 		}
 	}
 }

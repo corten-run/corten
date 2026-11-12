@@ -59,3 +59,11 @@ It starts and removes its own resource-limited containers and synthetic fixture/
 source. JS and no-JS contexts use their own browser cookie jars for real readback,
 including locale validation, isolation, cross-site rejection and concurrent writes.
 This driver is test code only; no adapter imports it or uses a common alert store.
+
+Alert POSTs require one complete upstream JSON document and the requested record
+identity. The native templ response is fully rendered into a buffer before a write;
+a render error cannot commit a session. The commit is not tied to client receipt:
+a later socket/write failure does not roll back an already committed alert. No new
+upstream cancellation or disconnect guarantee is claimed. Read-only handlers are
+unchanged. Minor-unit tests cover exact integers above 2^53, signed-64-bit maximum,
+and rejection beyond that bound.

@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -154,6 +155,10 @@ func newMarketplaceSource() (*marketplaceSource, error) {
 	return s, nil
 }
 func (s *marketplaceSource) get(ctx context.Context, id string) (*marketplaceRecord, error) {
+	return s.load(ctx, id, false)
+}
+
+func (s *marketplaceSource) load(ctx context.Context, id string, completeDocument bool) (*marketplaceRecord, error) {
 	if s.fixture != nil {
 		return s.fixture[id], nil
 	}
@@ -173,8 +178,15 @@ func (s *marketplaceSource) get(ctx context.Context, id string) (*marketplaceRec
 		return nil, fmt.Errorf("marketplace API: %s", res.Status)
 	}
 	var record marketplaceRecord
-	if err := json.NewDecoder(res.Body).Decode(&record); err != nil {
+	decoder := json.NewDecoder(res.Body)
+	if err := decoder.Decode(&record); err != nil {
 		return nil, err
+	}
+	if completeDocument {
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, fmt.Errorf("marketplace API: expected one JSON document")
+		}
 	}
 	if err := record.validate(); err != nil {
 		return nil, err
@@ -335,13 +347,17 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 				return
 			}
 		}
-		record, err := s.get(c.Request.Context(), c.Param("id"))
+		record, err := s.load(c.Request.Context(), c.Param("id"), c.Request.Method == http.MethodPost)
 		if err != nil {
 			_ = c.AbortWithError(http.StatusBadGateway, err)
 			return
 		}
 		if record == nil {
 			render(c, http.StatusNotFound, notFoundPage())
+			return
+		}
+		if c.Request.Method == http.MethodPost && record.ID != c.Param("id") {
+			c.Status(http.StatusBadGateway)
 			return
 		}
 		view := newMarketplaceView(record, locale, c.Request.URL.Query())
@@ -357,12 +373,12 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 			}
 			message, minor := view.Format.alert(record.Title, form.Email, form.Target)
 			view.Message = message
+			var row *storedAlert
 			if minor != nil {
-				if err := alerts.append(c, storedAlert{record.ID, form.Email, *minor}); err != nil {
-					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "alert storage unavailable"})
-					return
-				}
+				row = &storedAlert{record.ID, form.Email, *minor}
 			}
+			alerts.renderPost(c, marketplacePage(view), row)
+			return
 		}
 		c.Header("Cache-Control", "no-store")
 		render(c, http.StatusOK, marketplacePage(view))

@@ -47,6 +47,9 @@ pub async fn create_marketplace_alert(
         .await
         .map_err(|_| ServerFnError::new("Marketplace API did not answer"))?
         .ok_or_else(|| ServerFnError::new("Not found"))?;
+    if !record.valid_for_alert(&item_id) {
+        return Err(ServerFnError::new("Malformed marketplace record"));
+    }
     let (message, minor) = locale.alert_result(&record, &AlertForm { email: email.clone(), target_price });
     if let Some(target_minor) = minor {
         let headers: axum::http::HeaderMap = leptos_axum::extract().await?;
@@ -109,24 +112,31 @@ pub async fn marketplace_post(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
     };
+    if !record.valid_for_alert(&id) {
+        return StatusCode::BAD_GATEWAY.into_response();
+    }
     let (message, minor) = locale.alert_result(&record, &input);
-    let cookie = if let Some(target_minor) = minor {
-        match crate::alerts::append(
-            &parts.headers,
-            crate::alerts::Alert { item_id: record.id.clone(), email: input.email, target_minor },
-        ) {
-            Ok(cookie) => cookie,
-            Err(status) => return status.into_response(),
-        }
-    } else {
-        None
-    };
+    let row = minor.map(|target_minor| crate::alerts::Alert { item_id: record.id.clone(), email: input.email, target_minor });
+    let headers = parts.headers.clone();
     let posted = PostedMarketplace { tag, id, loaded: Loaded::Page { record, message } };
-    let mut response = leptos_axum::render_app_async_with_context(
+    let response = leptos_axum::render_app_async_with_context(
         move || provide_context(posted.clone()),
         move || crate::app::shell(options.clone()),
     )(axum::http::Request::from_parts(parts, Body::empty()))
     .await;
+    if !response.status().is_success() {
+        return response;
+    }
+    let (response_parts, body) = response.into_parts();
+    let body = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut response = axum::response::Response::from_parts(response_parts, Body::from(body));
+    let cookie = match row.map(|row| crate::alerts::append(&headers, row)).transpose() {
+        Ok(cookie) => cookie.flatten(),
+        Err(status) => return status.into_response(),
+    };
     response.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
     if let Some(cookie) = cookie {
         response.headers_mut().append(header::SET_COOKIE, cookie);
