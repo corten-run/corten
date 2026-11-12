@@ -45,6 +45,8 @@ test("each Last checked entry starts with a real date no later than today and na
   const last = (/** @type {string} */ line) => found(head + choice(1, "measured (a count).", later, line) + tail);
   assert.equal(last("Last checked: 2026-11-06, Firefox 157 and WebKit 27.2; 2026-11-04, hyper 1.12.0."), "");
   assert.equal(last("Last checked: 2026-11-05, round r15 (median of 10) on `ec10c8fb1f2d`."), "");
+  assert.equal(last("Last checked: 2026-11-01, as the pilot reported (`chase-sets/chase-sets@162ed0c298`)."), "");
+  assert.match(last("Last checked: 2026-11-01, at `chase-sets@162ed0c298`."), /no commit/);
   assert.match(last("Last checked: recently, at `e8bc9236`."), /does not start with a date/);
   assert.match(last("Last checked: 2026-02-30, at `e8bc9236`."), /does not exist/);
   assert.match(last("Last checked: 2026-11-07, at `e8bc9236`."), /after today/);
