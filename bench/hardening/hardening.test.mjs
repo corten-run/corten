@@ -6,8 +6,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { budgets, validateBudget, matrix, apps, phases, cases, sources, parseArgs, selected, groupReady } from "./plan.mjs";
-import { Connections, controls, validateControl, inject, legitimate, payload } from "./probe.mjs";
-import { artifacts, verifyArtifacts, verifyParity } from "./evidence.mjs";
+import { Connections, controls, validateControl, inject, legitimate, payload, tcpQueues } from "./probe.mjs";
+import { artifacts, verifyArtifacts, verifyParity, defensiveRejection } from "./evidence.mjs";
 
 test("all selected native candidates, sources, deployments and phases remain visible", () => {
   const cells = matrix(); assert.equal(cells.length, apps.length * sources.length * cases.length * phases.length);
@@ -81,10 +81,25 @@ test("attack payloads bind real form metadata and preserve incomplete heads/bodi
   assert.ok(!payload("slow-headers", 0, target, b.attack, form).first.includes("\r\n\r\n"));
   const body = payload("slow-bodies", 0, target, b.attack, form).first;
   assert.ok(body.includes("POST /native-action ") && body.includes("Cookie: native-cookie") && body.endsWith(form.prefix));
+  assert.ok(body.includes("Content-Length: 4096\r\n\r\n"), "slow bodies must not accidentally exercise an oversized-body defense");
   assert.equal(payload("slow-readers", 0, target, b.attack, form).paused, true);
   assert.equal(payload("idle-connections", 0, target, b.attack, form).first, "");
   assert.ok(payload("connection-pressure", 0, target, b.attack, form).first.includes("Connection: close"));
   assert.deepEqual([0, 1, 2].map((i) => payload("oversized-requests", i, target, b.attack, form).variant), ["header-count", "header-size", "body-size"]);
+});
+
+test("generic errors and unavailable service are not attributed as protective rejections", () => {
+  for (const phase of phases) for (const status of [200, 400, 403, 404, 500, 502, 503])
+    assert.equal(defensiveRejection(phase, { responsePrefix: `HTTP/1.1 ${status} unknown\r\n`, variant: "body-size" }), false);
+  assert.equal(defensiveRejection("oversized-requests", { responsePrefix: "HTTP/1.1 413 Content Too Large\r\n", variant: "body-size" }), true);
+  assert.equal(defensiveRejection("oversized-requests", { responsePrefix: "HTTP/1.1 431 Too Large\r\n", variant: "header-count" }), true);
+  assert.equal(defensiveRejection("slow-bodies", { responsePrefix: "HTTP/1.1 408 Request Timeout\r\n" }), true);
+  assert.equal(defensiveRejection("connection-pressure", { responsePrefix: "HTTP/1.1 429 Too Many Requests\r\n" }), true);
+});
+
+test("native TCP queue parser keeps port-specific observed bytes for IPv4 and IPv6", () => {
+  const parsed = tcpQueues("header\n 0: 0100007F:1234 0100007F:1F90 01 00000000:00000100 extra\n 1: 00000000000000000000000001000000:1235 00000000000000000000000001000000:1F90 01 00000000:0000002A extra\n");
+  assert.equal(parsed.get(0x1234), 256); assert.equal(parsed.get(0x1235), 42); assert.equal(parsed.has(0x9999), false);
 });
 
 test("raw evidence cannot escape the result directory, mutate or disappear after sealing", () => {

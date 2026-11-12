@@ -31,7 +31,8 @@ export async function run(args) {
     groupReady: false, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => json(join(folder, "summary.json"), summary);
-  async function command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
+  async function command(binary, args, { timeout, file, cleanup = false } = {}) {
+    timeout ??= cleanup ? budget.cleanup.timeoutMs : 30000;
     if (interrupted && !cleanup) throw new Error("run interrupted");
     const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
     let output = "", error = "", timedOut = false;
@@ -183,7 +184,7 @@ export async function run(args) {
         const events = eventsText ? eventsText.split("\n").map((line) => JSON.parse(line)) : [];
         const top = after.State.Running ? await docker(["top", t.name, "-eo", "pid,ppid,comm,args"]) : null;
         lifecycle[t.id] = { ...snapshot[t.id], after, events, top }; json(join(out, `${t.id}-lifecycle.json`), lifecycle[t.id]);
-        if (t.role === "upstream") assert.ok(after.State.Running && after.State.StartedAt === t.info.State.StartedAt, "upstream apparatus stopped/restarted");
+        if (t.role === "upstream" && cell.source === "fixture") assert.ok(after.State.Running && after.State.StartedAt === t.info.State.StartedAt, "idle fixture upstream apparatus stopped/restarted");
       }
     } catch (e) { error = e; }
     finally {

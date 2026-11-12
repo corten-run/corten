@@ -41,6 +41,13 @@ export function verifyParity(parity, source) {
   if (source === "api") assert.deepEqual(parity.upstream, { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true });
 }
 
+export function defensiveRejection(phase, row) {
+  const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(row.responsePrefix)?.[1]);
+  if (phase === "oversized-requests") return row.variant === "body-size" ? status === 413 : [414, 431].includes(status);
+  if (["slow-headers", "slow-bodies", "idle-connections"].includes(phase)) return status === 408 || phase === "slow-bodies" && status === 413;
+  return phase === "connection-pressure" && status === 429;
+}
+
 export function assemble({ settings, raw, parity, source, cleanup, provenance, lifecycle }) {
   const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
   const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
@@ -98,7 +105,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
   const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
   const runningApps = resources.after.filter((s) => settings.deployment.processes.find((p) => p.id === s.id).role === "application").every((s) => s.running);
-  const rejected = established.filter((r) => /^HTTP\/1\.[01] (4\d\d|5\d\d)/.test(r.responsePrefix));
+  const rejected = established.filter((r) => defensiveRejection(settings.phase, r));
   const missing = ["slow-headers", "slow-bodies", "idle-connections"].includes(settings.phase) && established.length > 0 && closed.length === 0;
   // Closing a slow reader is not proof it reached write backpressure. No generic cap/timeout attribution.
   const protection = rejected.length ? "observed" : missing ? "missing" : "inconclusive";
