@@ -419,7 +419,7 @@ try {
     const form = new URLSearchParams(route.request().postData() ?? "");
     form.set("submit", crypto.randomUUID());
     const answer = await route.fetch({ postData: form.toString() });
-    const body = (await answer.text()).replace(/(&quot;stale&quot;,\d+,\d+,)false\)/, "$1true)");
+    const body = (await answer.text()).replace(/("stale",\d+,\d+,)false\)/, "$1true)");
     await route.fulfill({ response: answer, body });
   });
   await fourth.click("button:has-text('Try again')");

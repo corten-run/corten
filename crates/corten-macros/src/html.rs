@@ -650,7 +650,7 @@ enum Attr {
     /// with a wider one (`ref={trigger as HTMLElement}`) when the ref is on several kinds.
     Ref(TokenStream, Option<Ident>),
     /// `on:click={js::show(rows)}`: the event (with its span) and the handler. All of an
-    /// element's print as one `data-on="click:module.show(@rows)"`.
+    /// element's print as one `data-on='click:module.show(@rows)'`.
     On(String, Span, TokenStream),
     /// `page`: an element of a document's layout around `<main>` that is the page's (a section's
     /// nav). Printed `data-corten-page`; a navigation's answer has it, and the runtime puts it in

@@ -90,7 +90,7 @@
 //!     <dialog id={RenameId} open={refused} on:connect={dialog::modal(target)}>".."</dialog>
 //! }
 //! .to_html();
-//! assert!(html.contains(r#"<dialog id="ui-rename" open data-on="connect:ui.dialog.modal($t)">"#), "{html}");
+//! assert!(html.contains(r#"<dialog id="ui-rename" open data-on='connect:ui.dialog.modal($t)'>"#), "{html}");
 //! ```
 //!
 //! It takes the dialog itself, so on any other element it does not compile:
@@ -177,7 +177,7 @@
 //! }
 //!
 //! let html = ItemSheet { name: "Lamp" }.to_html();
-//! assert!(html.contains(r#"data-on="connect:ui.dialog.modalClosedBy($t,@close,$s)""#), "{html}");
+//! assert!(html.contains(r#"data-on='connect:ui.dialog.modalClosedBy($t,@close,$s)'"#), "{html}");
 //! ```
 //!
 //! The close is a link, put there by a ref, so a button (which changes no address) does not
@@ -259,13 +259,13 @@ script!(pub mod ordered = "ordered.js");
 ///     </form>
 /// }
 /// .to_html();
-/// assert!(html.contains("send($e,$t,[&quot;ui-supply&quot;,&quot;ui-listings&quot;])"), "{html}");
+/// assert!(html.contains(r#"send($e,$t,["ui-supply","ui-listings"])"#), "{html}");
 ///
 /// let back = html! {
 ///     <a href={Refresh} on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}>"Previous page"</a>
 /// }
 /// .to_html();
-/// assert!(back.contains("connect:ui.ordered.link($t,[&quot;ui-supply&quot;],$s)"), "{back}");
+/// assert!(back.contains(r#"connect:ui.ordered.link($t,["ui-supply"],$s)"#), "{back}");
 /// ```
 ///
 /// A string is not an id, and `send` is a form's handler:
@@ -301,7 +301,7 @@ script!(pub mod ordered = "ordered.js");
 ///     <form on:submit={ordered::send(event, target, [sorted(&SupplyId)])} on:submit={ordered::send(event, target, [sorted(&ListingsId)])}></form>
 /// }
 /// .to_html();
-/// assert!(two.contains("submit:ui.ordered.send($e,$t,[&quot;ui-supply&quot;]) submit:ui.ordered.send($e,$t,[&quot;ui-listings&quot;])"), "{two}");
+/// assert!(two.contains(r#"submit:ui.ordered.send($e,$t,["ui-supply"]) submit:ui.ordered.send($e,$t,["ui-listings"])"#), "{two}");
 /// ```
 pub fn sorted(table: &impl corten::view::Id) -> corten::script::ElementId {
     corten::script::ElementId::of(table)

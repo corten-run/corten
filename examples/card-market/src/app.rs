@@ -807,7 +807,7 @@ mod tests {
         assert!(html.contains(r#"<html lang="fr">"#) && html.contains("Voir les 7 offres") && html.contains("<h2>Annonces</h2>"));
         assert!(html.contains(r#"<form method="post" action="/items/item_9" data-patch>"#));
         assert!(html.contains(
-            r#"<div data-scope="listing-sort"><h2>Annonces</h2><button type="button" data-on="click:listing_sort.toggle(@rows,@ascending,@descending)">"#
+            r#"<div data-scope="listing-sort"><h2>Annonces</h2><button type="button" data-on='click:listing_sort.toggle(@rows,@ascending,@descending)'>"#
         ));
         let res = app.get(&routes::Category { slug: "promo" }).await;
         let (status, _, body) = read(&res);

@@ -487,6 +487,17 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // `data-on` is single-quoted, so the JSON of a handler's arguments (here the feed's address and
+  // the formats) goes in with its quotes as they are, and the watch above read them as written.
+  {
+    const served = await (await page.request.get(base)).text();
+    const watched = /data-on='connect:live_prices\.watch\(([^']*)\)'/.exec(served)?.[1] ?? "";
+    check(
+      "data-on is single-quoted, its JSON's quotes as they are",
+      watched.includes('"/feed/stocks"') && watched.includes('%{"z":') && !served.includes('data-on="') && !/data-on='[^']*&quot;/.test(served),
+      watched.slice(0, 120),
+    );
+  }
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:

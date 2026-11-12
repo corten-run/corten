@@ -991,13 +991,14 @@ pub fn parse_message(message: &str) -> Result<Vec<Part>, String> {
     Ok(parts)
 }
 
-/// A message as a handler argument, as it goes in `data-on` (HTML-escaped): text and argument
-/// names alternating, text first and last: %["","count"," selected"].
+/// A message as a handler argument, as it goes in `data-on` (escaped for its single-quoted
+/// attribute): text and argument names alternating, text first and last: %["","count"," selected"].
 fn wire(parts: &[Part]) -> String {
     format!("%{}", wire_json(parts))
 }
 
-/// A message's text and argument names alternating, as an HTML-escaped JSON array.
+/// A message's text and argument names alternating, as a JSON array escaped for `data-on`, a
+/// single-quoted attribute: its quotes as they are, and `&`, `'`, `<` and `>` as entities.
 fn wire_json(parts: &[Part]) -> String {
     let mut pieces = vec![String::new()];
     for part in parts {
@@ -1026,7 +1027,17 @@ fn wire_json(parts: &[Part]) -> String {
         json.push('"');
     }
     json.push(']');
-    escape(&json)
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '\'' => out.push_str("&#39;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The arguments in order of first use.
@@ -1173,10 +1184,10 @@ mod tests {
 
     #[test]
     fn a_message_for_a_script_alternates_text_and_names() {
-        assert_eq!(wire(&parse_message("{n} selected").unwrap()), "%[&quot;&quot;,&quot;n&quot;,&quot; selected&quot;]");
+        assert_eq!(wire(&parse_message("{n} selected").unwrap()), r#"%["","n"," selected"]"#);
         assert_eq!(
-            wire(&parse_message("\"{a}{b}\" & <\u{2028}>").unwrap()),
-            r#"%[&quot;\&quot;&quot;,&quot;a&quot;,&quot;&quot;,&quot;b&quot;,&quot;\&quot; &amp; &lt;\u2028&gt;&quot;]"#
+            wire(&parse_message("\"{a}{b}\" & <\u{2028}>'").unwrap()),
+            r#"%["\"","a","","b","\" &amp; &lt;\u2028&gt;&#39;"]"#
         );
     }
 

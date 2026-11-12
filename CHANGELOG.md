@@ -27,6 +27,18 @@ Corten is pre-1.0, so any minor version may change the API.
   with the line it covers taken out
   ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
 
+### Changed
+
+- `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
+  only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
+  searches or sorts in the browser, stays a typed handler argument and costs about its JSON's
+  size: 300 products (51,073 bytes of JSON) went from an attribute of 96,130 bytes to one of
+  51,130, 5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page
+  in 10 to 23% of the time. Formats and messages a page passes to a script shrink the same way.
+  The `data-on` format, the runtime and the typing are unchanged; a test or tool that matched
+  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now
+  ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+
 ### Fixed
 
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no

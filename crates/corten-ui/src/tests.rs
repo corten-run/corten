@@ -104,12 +104,12 @@ fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
     let html = ComboBox { field: &field }.to_html();
     assert!(
         html.starts_with(
-            r#"<div data-scope="ui-combo-box" data-on="connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty)">"#
+            r#"<div data-scope="ui-combo-box" data-on='connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty)'>"#
         ),
         "{html}"
     );
     assert!(
-        html.contains(r#"<select data-ref="select" id="ui-pick" name="pick" required data-on="invalid:ui.combo_box.invalid($e,$c)"><option value="">Choose</option>"#),
+        html.contains(r#"<select data-ref="select" id="ui-pick" name="pick" required data-on='invalid:ui.combo_box.invalid($e,$c)'><option value="">Choose</option>"#),
         "{html}"
     );
     assert!(html.contains(r#"<option value="b">Beta &lt;b&gt;</option>"#), "labels are escaped: {html}");
@@ -117,7 +117,7 @@ fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
     let vectors = include_str!("../../corten/src/script/wire.json");
     assert!(vectors.contains(r#""attr": "invalid:ui.combo_box.invalid($e,$c)""#), "wire.json lists the library case");
     assert!(
-        html.contains(r#" hidden data-on="input:ui.combo_box.filter($c) keydown:ui.combo_box.key($e,$c)"#),
+        html.contains(r#" hidden data-on='input:ui.combo_box.filter($c) keydown:ui.combo_box.key($e,$c)"#),
         "the text input shows only with the script: {html}"
     );
     assert!(!html.contains(r#"value="Alpha""#), "no value, no text");
@@ -138,7 +138,7 @@ fn tabs_without_links_are_buttons_and_hide_the_other_panels() {
     );
     assert!(html.contains(r#"<a data-ref="tab" role="tab" id="ui-t-tab-1" href="/items/x?tab=two""#), "{html}");
     assert!(
-        html.contains(r#"data-on="click:ui.tab_group.choose($e,$t,*tab,*panel) keydown:ui.tab_group.step($e,$t,*tab,*panel)""#),
+        html.contains(r#"data-on='click:ui.tab_group.choose($e,$t,*tab,*panel) keydown:ui.tab_group.step($e,$t,*tab,*panel)'"#),
         "{html}"
     );
     assert!(
@@ -155,9 +155,9 @@ fn tabs_without_links_are_buttons_and_hide_the_other_panels() {
 fn a_number_field_disables_the_button_at_each_bound() {
     let at_max = Number { value: 5.0.into(), ..Number::new(NId, Form::FIELDS.n, Bounds::new(0.0, 5.0), "Less", "More") };
     let html = NumberField { field: &at_max }.to_html();
-    assert!(html.contains(r#"aria-label="Less" tabindex="-1" data-on="pointerdown:ui.number_field.press($e,$t,@input,-1) click:ui.number_field.click($e,$t,@input,-1)">"#), "{html}");
+    assert!(html.contains(r#"aria-label="Less" tabindex="-1" data-on='pointerdown:ui.number_field.press($e,$t,@input,-1) click:ui.number_field.click($e,$t,@input,-1)'>"#), "{html}");
     assert!(
-        html.contains(r#"aria-label="More" tabindex="-1" disabled data-on="pointerdown:ui.number_field.press($e,$t,@input,1)"#),
+        html.contains(r#"aria-label="More" tabindex="-1" disabled data-on='pointerdown:ui.number_field.press($e,$t,@input,1)"#),
         "{html}"
     );
     let off = Number { disabled: true, ..Number::new(NId, Form::FIELDS.n, Bounds::new(0.0, 5.0), "Less", "More") };
@@ -176,7 +176,7 @@ fn a_menu_button_holds_the_apps_items() {
     }
     .to_html();
     assert!(
-        html.starts_with(r#"<div data-scope="ui-menu-button" data-on="connect:ui.menu_button.connect(@trigger,@menu)">"#),
+        html.starts_with(r#"<div data-scope="ui-menu-button" data-on='connect:ui.menu_button.connect(@trigger,@menu)'>"#),
         "{html}"
     );
     // A keyed id, escaped once, on the menu, its trigger and the name between them.
@@ -189,7 +189,7 @@ fn a_menu_button_holds_the_apps_items() {
         "{html}"
     );
     assert!(
-        html.contains(r#"data-on="keydown:ui.menu_button.step($e,@menu) click:ui.menu_button.used($e,@trigger,@menu)"#),
+        html.contains(r#"data-on='keydown:ui.menu_button.step($e,@menu) click:ui.menu_button.used($e,@trigger,@menu)"#),
         "{html}"
     );
     assert!(

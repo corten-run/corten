@@ -130,7 +130,12 @@ TypeScript writes `value as T`, and a type argument goes on the declaration
 this is revisited.
 
 **What the browser gets.** Plain HTML: `data-ref="rows"` and
-`data-on="click:offer_list.showAll(@rows,@rest,$t)"`. One listener per event type on the
+`data-on='click:offer_list.showAll(@rows,@rest,$t)'`. `data-on` is single-quoted, so the JSON of
+its values goes in with its quotes as they are and only `&`, `'`, `<` and `>` in it are written as
+entities. Data a script searches or sorts in the browser (a set's few hundred products) is one
+such value, a `ToJson` struct holding the list and typed by its generated declaration, and costs
+the page about its JSON's size; double-quoted, each `&quot;` added 88% to 300 products
+([design Choice 43](../design.md#choice-data-on-single-quoted)). One listener per event type on the
 document runs the handlers, innermost element first, and `event.stopPropagation()` stops the
 walk as it would stop bubbling. Nothing runs per element until an event reaches it. Script
 modules are compiled into the binary, served at versioned URLs, loaded as module scripts by the
@@ -261,7 +266,7 @@ fn CartLine<'a>(item: &'a Item) -> impl Render {
 ```
 
 The handler keeps the parent's refs and scope wherever the child renders it:
-`data-on="click:cart_line.submit(@cart-line/form)"`. `None::<Handler>` leaves the `on:` out.
+`data-on='click:cart_line.submit(@cart-line/form)'`. `None::<Handler>` leaves the `on:` out.
 A handler passed as a prop is typed by the prop, not by the element the child puts it on: its
 `event` is an `Event` and its `target` an `HTMLElement`, whatever the `on:` name, so its JSDoc
 takes those (`@param {Event} event`) and narrows inside where it needs more

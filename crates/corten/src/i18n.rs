@@ -1845,28 +1845,16 @@ mod tests {
                 ["relative", _] => continue,
                 _ => panic!("{line}"),
             };
-            let json = out[1..]
-                .replace("&quot;", "\"")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&#39;", "'")
-                .replace("&amp;", "&");
+            let json = out[1..].replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&amp;", "&");
             specs.insert((tag, key), json);
         }
         // Each locale's plural table, as a plural message carries it, with every category's form
         // its own name, so format.mjs sees which one the browser picks.
-        let names = [
-            "[&quot;zero&quot;]",
-            "[&quot;one&quot;]",
-            "[&quot;two&quot;]",
-            "[&quot;few&quot;]",
-            "[&quot;many&quot;]",
-            "[&quot;other&quot;]",
-        ];
+        let names = ["[\"zero\"]", "[\"one\"]", "[\"two\"]", "[\"few\"]", "[\"many\"]", "[\"other\"]"];
         for (tag, data) in locales {
             let mut out = String::new();
             format::plural_wire(data, &names, &mut out);
-            let json = out[1..].replace("&quot;", "\"").replace("&amp;", "&");
+            let json = out[1..].replace("&amp;", "&");
             specs.insert((tag, "plural".to_string()), json);
         }
         let mut file =
