@@ -765,9 +765,29 @@ async function run(browser) {
   await us.uncheck();
   await page.getByRole("checkbox", { name: "Canada" }).uncheck();
   const unchecked = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
+  // The reset also puts the quantity back to its minimum and empties the condition, sending no
+  // `input`: the number field's decrease is disabled again and no option is marked as the value.
+  const resetWidgets = async () => ({
+    qty: await qty.inputValue(),
+    fewer: await qtyButtons.nth(0).isDisabled(),
+    condition: await page.locator("[data-scope=ui-combo-box] select").inputValue(),
+    marked: await page.locator('[data-scope=ui-combo-box] [role="option"][aria-selected="true"]').allTextContents(),
+  });
+  const beforeReset = await resetWidgets();
   await page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).reset());
   await page.waitForTimeout(100);
   check("a form reset checks the group again", unchecked === "Choose where you ship." && (await us.isChecked()) && (await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage)) === "" && (await shipsValid()), unchecked);
+  const afterReset = await resetWidgets();
+  check(
+    "NumberField: a form reset that puts the minimum back disables decrease again",
+    beforeReset.qty === "2" && !beforeReset.fewer && afterReset.qty === "1" && afterReset.fewer,
+    JSON.stringify({ beforeReset, afterReset }),
+  );
+  check(
+    "ComboBox: a form reset that empties the select leaves no option marked as the value",
+    beforeReset.condition === "nm" && beforeReset.marked.join() === "Near Mint" && afterReset.condition === "" && afterReset.marked.length === 0,
+    JSON.stringify({ beforeReset, afterReset }),
+  );
 
   // TabGroup
   const tab = (name) => page.getByRole("tab", { name });

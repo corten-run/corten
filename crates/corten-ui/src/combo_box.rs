@@ -223,7 +223,7 @@ pub fn ComboBox<'a, I: Id, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str
     let (select, input, popup, list, empty) = refs();
     let shown = f.value.and_then(|v| f.options.iter().find(|o| o.value == v)).map(|o| o.label);
     html! {
-        <div on:connect={js::connect(scope, select, input, popup, list, empty)}>
+        <div on:connect={js::connect(scope, select, input, popup, list, empty, signal)}>
             <select
                 ref={select}
                 id={&f.id}

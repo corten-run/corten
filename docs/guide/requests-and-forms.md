@@ -687,7 +687,8 @@ while it is pending sends nothing (a double click). A newer submit of a read (a 
 filter) aborts the older one, whose answer is worth nothing now. While a write is pending, any
 newer submit of the form waits instead: the server may already have applied the write, and its
 answer is the page's next state. Once the runtime has drawn the write's answer (a patch or a
-page) and it took the write (2xx) or refused only its input (422), it sends the latest of the submits that waited, from the form as it is then,
+page) and it took the write (2xx) or refused only its input (422), or the write was done with
+nothing to draw (a bare `204` or `205`, below), it sends the latest of the submits that waited, from the form as it is then,
 so the version or count the answer wrote goes out with it, under the form's new key. Its
 `on:submit` handlers ran at the press and do not run again, and the browser does not check the
 form's constraints again (the server checks what it gets). Several presses while the write is
@@ -698,13 +699,38 @@ The waiting submit is dropped, and the user sends it again, when the write gets 
 network failed, or the browser is leaving the page) or one the runtime does not draw (a proxy's
 502), which `corten:error` reports; when the write is refused for the state it was made against
 (`Errors::refuse`, a 409 or 410), which the user reads before anything else goes; or a 5xx,
-after which the server may or may not have applied the write; when the answer sends the browser elsewhere (a redirect,
-a reload), or removed the form or the pressed button; and a navigation aborts everything, so a
+after which the server may or may not have applied the write; when the answer sends the browser
+elsewhere (Corten's own redirect, `corten-location`, or a reload), or removed the form or the
+pressed button; and a navigation aborts everything, so a
 late answer never patches a page it was not meant for. A screen whose every press is a step of
 its own (a count's + and -, each a delta the server adds) keeps its own ordered queue in its
 script: the form sends where the user ended up, not each step.
 
-When a `data-patch` submit gets no answer the runtime can draw, it dispatches `corten:error` on
+A `204 No Content` or `205 Reset Content` that is not Corten's redirect (`corten-location`), a
+patch or a page (`StatusCode::NO_CONTENT`, the answer for a write with nothing to say) is the
+submit done with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): the page stays as it is, the form
+gets a new key as after any whole answer below 500, a submit that waited goes, and nothing says it
+failed. `fetch` follows a `Location` redirect itself, so a write redirected to an address that
+answers a bare `204` or `205` counts as that answer. A `205`
+asks the client to put the form back as it came, so the runtime resets it, a GET's form too,
+unless the user changed a field after it was sent or pressed again with other values while it
+was out: their work is kept, as against a patch. A change is a control whose state is not the
+one it was sent with: a `<select>`'s chosen options, a `<textarea>`'s text, a checkbox's or
+radio's checkedness, a file input's files by each one's name, size and last-modified time (so
+another file of the same name is a change), and any other input's value (a hidden input, a button
+and an image input have none here); a number or date input holding text the browser cannot read
+(`validity.badInput`, whose value is `""` as an empty one's is) is a change too. So is a control
+added to the form since it was sent, a hidden input among them. A control removed since is not
+counted, and a form-associated custom element's state or an `<output>` that changed is reset
+without being noticed. The reset is the browser's `form.reset()`, which fires
+`reset` on the form and no `input` or `change`, so a script that mirrors a field's value from its
+input events listens for `reset` too. A browser without JavaScript stays on the page for either
+and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`. It also
+keeps the submit key it sent, so its next submit is the same submission and gets the first one's
+outcome: a write with a `SubmitKey` that must also work without JavaScript answers with a page or
+a redirect, not a bare `204` or `205`.
+
+When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
 one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
@@ -730,8 +756,8 @@ message. A row with an id is found by it, so focus lands on its list, not on ano
 then goes on from the start of the list. A file input keeps the files the user chose, which markup cannot
 give back, so a refusal can redraw the input with `aria-invalid` and its message and the files
 are still there to send again; only a successful answer to the form that sent them takes them
-(found by first file name, so files chosen again under the same name while it was on its way go
-too). What the user opened stays open: a `<dialog>` (modal again if it
+(found by each file's name, size and last-modified time, so another file of the same name chosen
+while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
 the server sent open and now sends closed closes. A dialog the server draws `open` is open but not

@@ -2,7 +2,7 @@
 // NumberField (number_field.rs). The input is a native number input, whose stepUp and stepDown
 // already keep min, max and step; this adds the buttons, press and hold, Page Up and Page Down,
 // Home and End, and the step's decimals. A step sends `input` and `change` like typing does, and
-// the input's own on:input (`sync`) then disables a button at its bound.
+// the input's own on:input (`sync`) then disables a button at its bound, as a form reset does.
 
 import { keep } from "corten";
 
@@ -14,13 +14,15 @@ const REPEAT = 60;
 const held = () => keep(() => ({ timer: 0, pressed: /** @type {Map<number, HTMLButtonElement>} */ (new Map()) }));
 
 /**
- * When the field joins the page: the buttons match the value, and a hold ends wherever the
- * pointer is released.
+ * When the field joins the page: the buttons match the value, after a form reset too (which
+ * sends no `input`), and a hold ends wherever the pointer is released.
  * @param {HTMLButtonElement} decrease @param {HTMLInputElement} input @param {HTMLButtonElement} increase
  * @param {AbortSignal} signal
  */
 export function connect(decrease, input, increase, signal) {
   sync(decrease, input, increase);
+  // `reset` comes before the form puts its values back.
+  input.form?.addEventListener("reset", () => setTimeout(() => sync(decrease, input, increase)), { signal });
   const s = held();
   /** @param {Event} event */
   const release = (event) => {
