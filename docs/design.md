@@ -2911,5 +2911,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     what its `Display` wrote) 525 against 506, and `/files/{*path}` with a 29-byte value 178
     against 170 without a dot and 270 against 170 with one (`sum.md`): whether a dot starts a
     segment depends on the bytes beside it, which that pass does not keep, so a `{*rest}` value
-    with a dot is read again, eight bytes at a time. An app whose slugs, names or file keys come
+    with a dot is read again, eight bytes at a time. Where a page writes a link into an attribute,
+    the check made the link too large to be inlined there at `9aee73ad`, which cost the item
+    page's `render_cost` run about 27M instructions of 28,365M; at `ce50dab8`, which checks a
+    value of two bytes or fewer out of line, it is inlined again and the run counts 28,367.6M
+    against 28,362.6M to 28,366.9M over four runs at `194f5179`. An app whose slugs, names or file keys come
     from people refuses these values where it stores them, so its links never reach the check.
