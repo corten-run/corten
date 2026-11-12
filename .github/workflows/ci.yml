@@ -124,8 +124,8 @@ jobs:
   smoke:
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    # A passing group takes about 7 minutes (estimated); a hung one would hold the runner for six
-    # hours (#317).
+    # A passing group takes 7 to 8.5 minutes (measured, one run of the three); a hung one would
+    # hold the runner for six hours (#317).
     timeout-minutes: 30
     strategy:
       # Every group reports, so one failure does not hide another.
@@ -140,7 +140,7 @@ jobs:
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
           - group: webkit-gallery
-            parts: watchlist-webkit watchlist-dev ui-gallery
+            parts: watchlist-webkit watchlist-dev ui-gallery corten-site
     env:
       PARTS: " ${{ matrix.parts }} "
     steps:
@@ -210,6 +210,21 @@ jobs:
           $PLAYWRIGHT node examples/ui-gallery/smoke.mjs http://localhost:18482
           docker rm -f corten-ui-gallery
           echo ui-gallery >> "$RUNNER_TEMP/ran"
+      - name: corten-site
+        if: contains(env.PARTS, ' corten-site ')
+        run: |
+          docker build -f examples/corten-site/Dockerfile -t corten-site .
+          docker run -d --name corten-site -p 18488:8080 corten-site
+          timeout 120 sh -c 'until curl -so /dev/null http://localhost:18488/; do sleep 1; done'
+          $PLAYWRIGHT node examples/corten-site/smoke.mjs http://localhost:18488
+          docker rm -f corten-site
+          # Held to a limit, the server counts what its container uses, by other files of the
+          # system than it reads on a whole machine: the same checks in one browser, of that count.
+          docker run -d --name corten-site --cpus 1 --memory 512m -p 18488:8080 corten-site
+          timeout 120 sh -c 'until curl -so /dev/null http://localhost:18488/; do sleep 1; done'
+          $PLAYWRIGHT env SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+          docker rm -f corten-site
+          echo corten-site >> "$RUNNER_TEMP/ran"
       - name: seller-desk
         if: contains(env.PARTS, ' seller-desk ')
         run: |

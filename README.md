@@ -279,6 +279,9 @@ In the order to read them; each README says how to run it and where each piece i
 7. [listings-feed](examples/listings-feed): one live feed served by several instances through
    Postgres and NATS, for when one instance is not enough, with a failover benchmark that kills
    instances while browsers follow.
+8. [corten-site](examples/corten-site): Corten's own site, one page that demonstrates itself,
+   with the files that deploy it to one small machine. Read it for a page of content rather than
+   an app, and for a deploy without a container.
 
 ## Crates
 
