@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, terminalUnit, validateState } from "./droplet-contract.mjs";
 import { validateSummary } from "./report.mjs";
+import { groupApps, scheduledGroup } from "./groups.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -39,7 +40,8 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
       assert.equal(run("git", ["status", "--porcelain"]).stdout.trim(), "", "launch requires clean measured commit");
       assert.ok(!list().some((d) => d.tags?.some((t) => ["corten-bench", "corten-marketplace"].includes(t))), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
       state = { workload: "marketplace-v2", round: options.round, commit, status: "creating", name: `corten-marketplace-${options.round}`,
-        tag: `corten-marketplace-run-${randomBytes(8).toString("hex")}`, unit: `corten-marketplace-${options.round}.service`, startedAt: new Date().toISOString(), options: nightly };
+        tag: `corten-marketplace-run-${randomBytes(8).toString("hex")}`, unit: `corten-marketplace-${options.round}.service`, startedAt: new Date().toISOString(), options: nightly,
+        group: options.group ?? scheduledGroup(options.round), apps: groupApps(options.group ?? scheduledGroup(options.round)) };
       writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", { flag: "wx" });
       const created = run("doctl", ["compute", "droplet", "create", state.name, "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64", "--ssh-keys", options.sshKey,
         "--tag-names", `corten-bench,corten-marketplace,${state.tag}`, "--wait", "--output", "json"], 10 * 60000, true);
@@ -113,6 +115,8 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
             assert.equal(state.exitCode, 0, "remote job failed");
             const s = validateSummary(JSON.parse(readFileSync(join(source, "summary.json"), "utf8")));
             assert.equal(s.round, state.round); assert.equal(s.commit, state.commit);
+            assert.equal(s.options.group ?? "full", state.group ?? "full", "collected group differs from reservation");
+            assert.deepEqual(s.options.apps, state.apps ?? groupApps(), "collected adapters differ from reservation");
             for (const [key, value] of Object.entries(nightly)) assert.equal(s.options[key], value, `unexpected ${key}`);
             state.complete = true;
           } catch (e) { state.validationError = e.message; }
@@ -135,7 +139,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const options = parseDropletArgs(process.argv.slice(2));
     if (options.plan) {
-      const s = { workload: "marketplace-v2", round: options.round, name: `corten-marketplace-${options.round}`, unit: `corten-marketplace-${options.round}.service`, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: "0".repeat(40), options: nightly };
+      const s = { workload: "marketplace-v2", round: options.round, name: `corten-marketplace-${options.round}`, unit: `corten-marketplace-${options.round}.service`, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: "0".repeat(40), options: nightly, group: options.group, apps: groupApps(options.group) };
       console.log(JSON.stringify({ options, measurements: nightly, files: remoteFiles(s) }, null, 2));
     } else {
       const task = controller(options);

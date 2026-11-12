@@ -1,10 +1,74 @@
 # Nightly localized marketplace rounds
 
-The nightly benchmark is `marketplace-v2`, all twenty adapters, from official **r17**
+The nightly benchmark is `marketplace-v2`, from official **r17**
 onward (FastAPI and Express joined after r17, which had eighteen). A round whose app set differs
 from another's is not compared with it: `compare.mjs` gives no deltas across the two. `wN` remains for explicit development checks. Old fullstack r16 and catalog c1 are
 different workloads, not baselines for a new-workload speedup or regression. Do not also run
 the old suite or silently combine its tables with this one.
+
+## Framework Groups
+
+`groups.mjs` defines candidate cohorts, not language families or unconditional anchors.
+The default `production` run deduplicates the popular and performance-oriented shortlists,
+so overlapping peers are built and timed once. All candidates must qualify against
+`marketplace-production/v1` on the exact image and configuration used for timing:
+
+| Group | Adapters |
+|---|---|
+| production-popular | Corten, Next.js, ASP.NET, FastAPI, Express |
+| production-performant | Corten, ASP.NET, Topcoat, Leptos |
+| production | Deduplicated union of the two cohorts above (normal nightly) |
+| production-qualify | Full current inventory, only for an explicitly requested capability audit |
+
+The popular shortlist follows the survey cohort proposed in
+[#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817),
+updated for the added FastAPI and Express adapters. The performance-oriented candidates
+start with that proposal's ASP.NET/Topcoat/Leptos shortlist, not a claim that legacy results
+rank today's v2 implementations. Refresh candidate pools through reviewed changes, not
+post-hoc removal of a slow peer. A new adapter is not automatically admitted to a cohort.
+Axum is not an anchor: it may enter a capability audit, but without equivalent features it
+has no row in a production comparison. The same rule applies to Corten and every peer.
+
+Qualification reuses the existing production feature checklist: security headers and strict
+script CSP, private caching, page/JSON compression, native form cross-site and size defenses,
+404 handling, HTML/JSON upstream errors, HEAD, Host/header defenses, liveness, upstream failure/deadline handling,
+incomplete-head timeout and connection cap. Fixture mode omits only upstream-failure probes.
+Conditional GET/ETag and downstream readiness are disclosed exceptions: this workload times
+uncached identity responses, not conditional reads or readiness traffic. Request logging is
+not a scored feature. This is scoped production parity, not every enterprise capability.
+Native implementations need not use identical algorithms or middleware. No harness polyfill
+adds a missing application feature to make a candidate qualify. Qualification describes the
+measured adapter configuration, not what a framework could support in another application.
+Native request logging is retained and disclosed, not made artificially identical.
+Cross-site probes omit only known native hidden antiforgery tokens that an attacker cannot
+read; public routing fields remain. A legitimate same-origin POST must still succeed.
+Missing pages must return 404, but may use their native empty or HTML representation.
+
+The production profile uses native `PROFILE=matched` configuration and a connection cap.
+Probe both sources before timing; save raw probes, derived cells and every missing feature.
+Unsupported candidates are explicitly excluded, never assigned throughput. An unhealthy
+probe, failed build, harness error or failed browser/content gate still fails the round.
+Require a qualified Corten and at least one qualified peer, otherwise preserve the evidence
+as a failed round, not a comparison. Report excluded candidates alongside admitted ones.
+An eligibility loss after a prior qualified round is a suspected regression to triage
+(`compare.mjs` retains `qualificationLosses` even when it forbids performance deltas),
+not a reason to silently remove a framework from history or retest until it passes.
+
+All locales, sources, phases, passes and correctness gates remain identical within each
+group. The saved reservation records the group and exact candidate list before cloud creation;
+collection requires that same list and re-derives admission from raw qualification evidence.
+`--group production-qualify` requests an explicit inventory audit, while
+`--collect` always uses the reserved selection and refuses a new group argument.
+Never override the selection with `--apps` in an official round. A direct `run.mjs` command
+without `--group` retains the full inventory for compatibility with older reservations.
+Keep the last compatible baseline in operator state `groupBaselines[group]` (round and
+measuredCommit) separately for each group, updating it only after validated results merge;
+retain lastFullRound/measuredCommit as the latest merged run. Never compare a group with a
+different group or a different admitted set. Reports must name the feature profile, group,
+admitted, excluded and omitted adapters. Omitted apps were not tested; excluded candidates
+were probed but not timed. Grouping changes coverage and cost, not the required work.
+Record measured wall time from the first
+finished round of each group, not an estimated or promised budget.
 
 The operator's schedule supplies checkout, maintenance state/log directories and SSH key ID.
 The evening invocation decides and launches; the morning invocation collects and reports.
@@ -13,7 +77,7 @@ are not guaranteed to finish by the morning check.
 
 ## Contract
 
-1. Every selected app must pass the existing full browser/conformance gate for both sources
+1. Every feature-qualified app must pass the existing full browser/conformance gate for both sources
    before any app is timed. All three locales, desktop/phone, JS on/off, numeric cases,
    page sections, forms and uncached upstream probes remain required. Do not relax checks.
 2. Time pages in `en-US`, `fr-FR` and `de-DE`, doing equivalent request-time localization.
@@ -102,8 +166,9 @@ host and report the provisioning error rather than guessing deletion is safe.
 ## Finished Results
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
-   workload/round/commit match, clean before/after, all twenty apps, both gates, three full
-   passes of each intended profile (fewer only where the app's container stopped, below), no
+   workload/round/commit match, clean before/after, raw qualification for the complete reserved
+   candidate set, both browser gates and three full passes for every admitted app/profile
+   (fewer only where the app's container stopped, below), no
    harness, parity or cleanup failure, correct counted CPU and aggregates matching saved
    passes. Incomplete data is never a full baseline. Requests an
    app answered with anything but a 200 or timed out on, and fixed-rate iterations it could not
@@ -210,6 +275,6 @@ once only with logs proving an unrelated network/browser flake. Otherwise leave 
 report the failed condition. Never merge another PR. Confirm merge SHA, update lastFullRound,
 measuredCommit/workload/status done, fetch and detach the clean benchmark checkout at main.
 
-Report titled merged PR, measured commit/CPU/date/profile, twenty-app throughput table,
+Report titled merged PR, measured commit/CPU/date/profile/group, measured-group throughput table,
 Corten CPU/memory/latency/cold rows and pass ranges, compatible comparison or first-baseline
 notice, all warnings and titled regression links. Keep history and other authorized jobs intact.

@@ -13,6 +13,8 @@ export function marketplaceServer(marketplace) {
   let answers = {};
   let override = null;
   let status = 200;
+  let hang = false;
+  const held = new Set();
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, "http://marketplace").pathname;
     const send = (code, value) => { res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(value); };
@@ -27,6 +29,9 @@ export function marketplaceServer(marketplace) {
         }
         const control = JSON.parse(body);
         if (![200, 302, 503].includes(control.status ?? 200)) throw new Error("invalid control status");
+        if (control.hang !== undefined && typeof control.hang !== "boolean") throw new Error("invalid control hang");
+        hang = control.hang ?? false;
+        if (!hang) { for (const response of held) response.destroy(); held.clear(); }
         override = control.record ? { id: control.record.id, body: JSON.stringify(control.record, null, control.pretty ? 2 : undefined) } : null;
         status = control.status ?? 200;
         requests = {};
@@ -39,6 +44,11 @@ export function marketplaceServer(marketplace) {
     if (!match || req.method !== "GET") return send(404, '{}');
     const id = match[1];
     requests[id] = (requests[id] ?? 0) + 1;
+    if (hang) {
+      req.socket.setTimeout(0);
+      held.add(res); res.on("close", () => held.delete(res));
+      return;
+    }
     const code = status === 200 ? (override?.id === id || bodies.has(id) ? 200 : 404) : status;
     answers[code] = (answers[code] ?? 0) + 1;
     if (status === 302) {

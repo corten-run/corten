@@ -7,6 +7,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Feature-qualified marketplace comparison groups: popular and performance-oriented
+  candidate pools share one deduplicated production run instead of timing the full inventory
+  each night. Both sources must satisfy the same scoped production checklist, then the full
+  localized browser/content gate; unsupported candidates are listed with missing features,
+  not timed or silently dropped. No framework is an unconditional anchor. ETag and downstream
+  readiness are disclosed exceptions, not claims of complete enterprise equivalence.
+
 - The marketplace alert-form check saves the exact submitted case, POST status and response,
   current message and original timeout when the result message does not arrive. The
   React Router timeout from r19 remains unconfirmed as an adapter defect
