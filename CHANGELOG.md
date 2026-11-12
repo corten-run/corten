@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Catalog runners preserve full native application stdout and stderr in raw evidence,
+  rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
+  longer repeatedly copy growing log strings. Log-collection errors still fail the run;
+  application settings, load thresholds and measurement windows are unchanged.
+
 - FastAPI's native record JSON routes bound complete upstream reads, cancel them
   on caller disconnect and return generic JSON source/serialization errors.
   Opt-in request tracing spans native serialization without changing successful
