@@ -1,17 +1,59 @@
 // Express 5 with EJS views, as Express's guide sets one up, run as its production guide says
 // (NODE_ENV=production, which caches the compiled views). htmx does the form, "show all" and
 // navigation (hx-boost), as in the other htmx apps.
+// With PROFILE=matched it adds the matched tier's production profile (bench/fullstack/README.md,
+// "The matched tier") from the middleware Express's documentation names and Node's server settings.
+import compression from "compression";
+import timeout from "connect-timeout";
 import express from "express";
+import helmet from "helmet";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { alertMessage, fetchItem, shelf } from "./lib/view-model.mjs";
 import { fetchCatalogRecord } from "./lib/catalog.mjs";
 import { fetchMarketplaceRecord, isLocale, pageModel, readQuery } from "./lib/marketplace.mjs";
 
+const profile = process.env.PROFILE === "matched";
 const app = express();
 app.disable("x-powered-by");
 app.set("view engine", "ejs");
 app.set("views", fileURLToPath(new URL("./views", import.meta.url)));
+if (profile) {
+  app.use(
+    // A 503 past 10 s (card-market's deadline), from Express's timeout middleware; a response whose
+    // headers are sent (the live stream) is no longer timed.
+    timeout("10s"),
+    // Brotli or gzip when asked, from Express's compression middleware; not the live stream, which
+    // it would hold back to fill its window.
+    compression({ filter: (req, res) => !String(res.getHeader("Content-Type") ?? "").startsWith("text/event-stream") && compression.filter(req, res) }),
+    // The security headers on every answer, from Helmet (Express's security guide), with axum-maud's
+    // CSP, referrer and frame policies in place of Helmet's own; Helmet's other headers as it sets them.
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          "default-src": ["'self'"], "script-src": ["'self'"], "style-src": ["'self'"], "img-src": ["'self'", "data:", "https:"],
+          "object-src": ["'none'"], "base-uri": ["'self'"], "form-action": ["'self'"], "frame-ancestors": ["'none'"],
+        },
+      },
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+      xFrameOptions: { action: "deny" },
+    }),
+    // The header Helmet does not set, as Helmet's documentation sets one ("You might not need Helmet").
+    (req, res, next) => {
+      res.set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()");
+      next();
+    },
+  );
+}
 app.use("/static", express.static(fileURLToPath(new URL("./static", import.meta.url))));
+// The pages and the JSON (not the static files, served above) are kept from shared caches, the same way.
+if (profile) {
+  app.use((req, res, next) => {
+    res.set("Cache-Control", "private, no-cache");
+    next();
+  });
+}
 const form = express.urlencoded({ extended: false });
 const field = (body, name) => (typeof body?.[name] === "string" ? body[name] : "");
 const counts = new Intl.NumberFormat("en-US");
@@ -106,4 +148,14 @@ app.post("/live/publish", express.text({ type: () => true }), (req, res) => {
 });
 
 const port = Number(process.env.PORT ?? 8080);
-app.listen(port, "0.0.0.0", () => console.log(`express item page listening on ${port}`));
+const listening = () => console.log(`express item page listening on ${port}`);
+if (profile) {
+  // Node's server as app.listen makes it, given the profile's header timeout (30 s, as Corten's,
+  // checked every second where Node's default checks every 30) and connection cap (MAX_CONNECTIONS;
+  // Node closes a connection past it).
+  const server = createServer({ headersTimeout: 30_000, connectionsCheckingInterval: 1_000 }, app);
+  if (process.env.MAX_CONNECTIONS) server.maxConnections = Number(process.env.MAX_CONNECTIONS);
+  server.listen(port, "0.0.0.0", listening);
+} else {
+  app.listen(port, "0.0.0.0", listening);
+}
