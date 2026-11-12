@@ -12,3 +12,8 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 serde = { version = "1", features = ["derive"] }
 # The frames of the WebSocket at /quotes; Corten hands over the connection.
 tokio-tungstenite = { version = "0.30", default-features = false }
+
+[dev-dependencies]
+# No new crate: tokio's paused clock for the socket's idle test. Without it the test builds only
+# in the workspace, where corten's dev-dependencies turn the feature on, and not with -p watchlist.
+tokio = { version = "1", features = ["test-util"] }

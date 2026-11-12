@@ -1062,6 +1062,56 @@ async function run(browser) {
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  // A slow part sent once (the picks): its stream brings it when it is ready.
+  await page.waitForSelector("ul#picks", { state: "attached", timeout: 4000 }).catch(() => {});
+  check("a slow part a <corten-live> stream sends once arrives", (await page.$$("ul#picks li")).length === 2);
+  // While the stream may still bring it, its placeholder says it is on its way and hides the link
+  // to the page with it read in: in the page loaded, and in one a client navigation drew. Held, so
+  // the placeholder is what is drawn. A stream that gives up (a 204: `closed`) shows the link
+  // instead, and the page it opens has the part read in (#1264).
+  {
+    const held = await browser.newPage();
+    let answer = "hold";
+    await held.route("**/live/picks", (route) => (answer === "hold" ? new Promise(() => {}) : route.fulfill({ status: 204, body: "" })));
+    const picksLive = "corten-live[src='/live/picks']";
+    const placeholder = async () => ({
+      status: await held.getAttribute(picksLive, "status"),
+      line: await held.isVisible("#picks span"),
+      link: await held.isVisible("#picks a"),
+    });
+    await held.goto(`${base}/`);
+    await held.waitForSelector(`${picksLive}[status]`, { state: "attached", timeout: 5000 }).catch(() => {});
+    const loaded = await placeholder();
+    // `connecting`: the runtime ran and opened the stream, which the route holds unanswered.
+    check("with JavaScript a slow part's placeholder says it is on its way, with no link for it", loaded.line && !loaded.link && loaded.status === "connecting", JSON.stringify(loaded));
+    if (swaps) {
+      let documents = 0;
+      held.on("request", (r) => r.resourceType() === "document" && documents++);
+      await held.click('header nav a[href="/news"]');
+      await held.waitForFunction(() => document.title === "News | Watchlist");
+      await held.click('header nav a[href="/"]');
+      await held.waitForFunction((live) => location.pathname === "/" && !!document.querySelector(`${live}[status]`), picksLive, { timeout: 5000 }).catch(() => {});
+      const drawn = { ...(await placeholder()), documents };
+      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.status === "connecting" && documents === 0, JSON.stringify(drawn));
+    } else skip("and so does it in a page a client navigation drew", noSwaps);
+    answer = "none";
+    await held.goto(`${base}/`);
+    await held.waitForSelector(`${picksLive}[status="closed"]`, { state: "attached", timeout: 5000 }).catch(() => {});
+    const closed = await placeholder();
+    check("a slow part whose stream gave up links to the page with it read in, in place of its line", closed.status === "closed" && !closed.line && closed.link, JSON.stringify(closed));
+    // Followed only when shown, so a link that is not fails the checks, not the run.
+    if (closed.link) {
+      await held.click("#picks a", { timeout: 3000 }).catch(() => {});
+      await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    }
+    check(
+      "the page it links to has the slow part read in, with JavaScript too",
+      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$(picksLive)) === null,
+      held.url(),
+    );
+    await held.unrouteAll({ behavior: "ignoreErrors" });
+    await held.context().close();
+  }
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
   // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
   // arrives (#1131); its first event decodes while the stream is open.
@@ -5959,6 +6009,17 @@ async function run(browser) {
   check("without JavaScript the form posts and renders the page", ((await plain.textContent("#watch-message")) ?? "").startsWith("Watching Sunreach Solar"));
   check("without JavaScript the visitor's time zone is not known", !((await plain.textContent("#watch-message")) ?? "").includes("Alerts follow"));
   check("the page it renders has the stock on the list", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
+  // A slow part a <corten-live> stream sends once: no stream opens, so the line saying it is on
+  // its way is hidden under @media (scripting: none), and the link to the same page with it read
+  // in is not (#1264). Followed only when shown, so a link that is not fails the checks, not the run.
+  const plainLink = await plain.isVisible("#picks a");
+  check("without JavaScript a slow part's placeholder is a link, not a line that waits", !(await plain.isVisible("#picks span")) && plainLink);
+  if (plainLink) await Promise.all([plain.waitForNavigation({ timeout: 5000 }), plain.click("#picks a", { timeout: 3000 })]).catch(() => {});
+  check(
+    "the page it links to has the slow part read in",
+    new URL(plain.url()).search === "?picks=true" && (await plain.$$("ul#picks li")).length === 2 && (await plain.$("corten-live[src='/live/picks']")) === null,
+    plain.url(),
+  );
   await noJs.close();
 
   // Req::resend_to: a browser's first alert names it (a 307 that sets its cookie) and the same
