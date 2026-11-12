@@ -35,8 +35,27 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
             var email = form["email"].FirstOrDefault() ?? "";
             Message = Format.Alert(email, form["target_price"].FirstOrDefault() ?? "", record.Title, out var targetMinor);
             Response.Headers.CacheControl = "no-store";
-            if (targetMinor is { } minor) alerts.Append(HttpContext, new(id, email, minor));
+            if (targetMinor is { } minor) return new AcceptedAlertPageResult(alerts, new(id, email, minor));
         }
         return Page();
+    }
+
+    sealed class AcceptedAlertPageResult(AlertStore alerts, Alert alert) : PageResult
+    {
+        public override async Task ExecuteResultAsync(ActionContext context)
+        {
+            var response = context.HttpContext.Response;
+            var output = response.Body;
+            await using var rendered = new MemoryStream();
+            // Stage only accepted POSTs so a Razor/layout failure cannot commit an alert.
+            response.Body = rendered;
+            try { await base.ExecuteResultAsync(context); }
+            finally { response.Body = output; }
+            var cancellation = context.HttpContext.RequestAborted;
+            cancellation.ThrowIfCancellationRequested();
+            if (response.StatusCode is >= 200 and < 300) alerts.Append(context.HttpContext, alert);
+            rendered.Position = 0;
+            await rendered.CopyToAsync(output, cancellation);
+        }
     }
 }

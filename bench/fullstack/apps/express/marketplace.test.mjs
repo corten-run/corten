@@ -73,6 +73,25 @@ test("Intl formats signed money, half-up ratings, grouped counts and the listing
   for (const locale of ["en", "en-us", "__proto__", "toString"]) assert.equal(model.isLocale(locale), false);
 });
 
+test("accepted decimal targets retain exact minor units at the safe-integer boundary in every locale", async () => {
+  const { alertResult, formatters } = await import("./lib/marketplace.mjs");
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    const decimal = locale === "en-US" ? "." : ",";
+    for (const [digits, expected] of [["0.01", 1], ["1.1", 110], ["0001.01", 101],
+      ["90071992547409.89", 9007199254740989], ["90071992547409.90", 9007199254740990],
+      ["90071992547409.91", Number.MAX_SAFE_INTEGER]]) {
+      const result = alertResult(locale, "Title", "a@example.test", digits.replace(".", decimal));
+      assert.equal(result.targetMinor, expected, `${locale}: ${digits}`);
+      assert.ok(result.message.includes(formatters(locale).money.format(digits)), result.message);
+    }
+    for (const digits of ["0", "0.00", "0.001", "90071992547409.92", "90071992547410", "9999999999999999999999999999999"]) {
+      const result = alertResult(locale, "Title", "a@example.test", digits.replace(".", decimal));
+      assert.equal(result.targetMinor, null, `${locale}: ${digits}`);
+      assert.equal(result.message, formatters(locale).labels.invalid_price);
+    }
+  }
+});
+
 test("listings sort by price, stable, missing last, and filter by a case-sensitive prefix", async () => {
   const { readQuery, sortedListings } = await import("./lib/marketplace.mjs");
   const ids = (query) => sortedListings(record, readQuery(query)).map((row) => row.id);
@@ -127,6 +146,21 @@ test("accepted forms persist in a server-issued session, with independent readba
           assert.equal((await post(locale, fields, cookie)).status, 200);
           assert.deepEqual(await read(cookie), expected);
         }
+      }
+      for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+        for (const cents of ["89", "90", "91"]) {
+          const email = `${locale}-${cents}@example.test`;
+          const target = `90071992547409${locale === "en-US" ? "." : ","}${cents}`;
+          const response = await post(locale, { email, target_price: target }, cookie);
+          assert.equal(response.status, 200);
+          expected.push({ item_id: "item_1", email, target_minor: 9007199254740900 + Number(cents) });
+          assert.deepEqual(await read(cookie), expected);
+        }
+        const response = await post(locale, { email: "overflow@example.test", target_price: `90071992547409${locale === "en-US" ? "." : ","}92` }, cookie);
+        assert.equal(response.status, 200);
+        const { formatters } = await import("./lib/marketplace.mjs");
+        assert.ok((await response.text()).includes(formatters(locale).labels.invalid_price));
+        assert.deepEqual(await read(cookie), expected);
       }
       for (const headers of [{ origin: "https://attacker.test" }, { "sec-fetch-site": "cross-site" }]) {
         assert.equal((await post("en-US", { email: "evil@example.test", target_price: "1" }, cookie, headers)).status, 403);
