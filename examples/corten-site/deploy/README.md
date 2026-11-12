@@ -176,7 +176,9 @@ bytes in a zstd stream; the page went from 147,854 bytes to about 149,000 before
 (25,491 to 25,836 as zstd); and the server's own time for a page (`Server-Timing`, the median of
 500 pages asked for one at a time, three times over, each image twice in turn) was 384 to 415 µs
 before and 391 to 427 µs after, which these runs cannot tell apart. The page's prose has been
-cut since: at `ff2fca828` the page is 147,328 bytes (25,229 as zstd) and a reading 1,513.
+cut since: at `ff2fca828` the page is 147,328 bytes (25,229 as zstd) and a reading 1,513. Each
+tile of the wall then became a keyed ref, 13 bytes more a tile: at `783941a55` the page is
+162,531 bytes (25,565 as zstd).
 
 ## What has and has not been checked
 
