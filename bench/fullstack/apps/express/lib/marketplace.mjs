@@ -117,10 +117,13 @@ const fixture = process.env.MARKETPLACE_SOURCE === "fixture"
     .map(([id, value]) => [id, parseMarketplaceRecord(value)]))
   : null;
 
-export async function fetchMarketplaceRecord(id) {
+export async function fetchMarketplaceRecord(id, { signal } = {}) {
   if (fixture) return fixture.get(id) ?? null;
-  const response = await fetch(`${base}/marketplace/records/${encodeURIComponent(id)}`, { redirect: "manual" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`marketplace API returned ${response.status}`);
+  const response = await fetch(`${base}/marketplace/records/${encodeURIComponent(id)}`, { redirect: "manual", signal });
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 404) return null;
+    throw new Error(`marketplace API returned ${response.status}`);
+  }
   return parseMarketplaceRecord(await response.json());
 }

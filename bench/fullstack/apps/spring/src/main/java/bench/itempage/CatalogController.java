@@ -1,6 +1,7 @@
 package bench.itempage;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -8,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.server.ResponseStatusException;
 
 @Controller
 public class CatalogController {
@@ -30,6 +32,7 @@ public class CatalogController {
     @ResponseBody
     public ResponseEntity<CatalogRecord> json(@PathVariable String id) {
         var record = catalog.get(id);
-        return record == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(record);
+        if (record == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        return ResponseEntity.ok(record);
     }
 }

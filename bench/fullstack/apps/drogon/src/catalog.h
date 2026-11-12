@@ -1,6 +1,8 @@
 #pragma once
 
 #include <json/value.h>
+#include <drogon/HttpRequest.h>
+#include <drogon/HttpResponse.h>
 #include <functional>
 #include <memory>
 #include <string>
@@ -22,4 +24,5 @@ struct Record
 using RecordPtr = std::shared_ptr<const Record>;
 void load();
 void get(const std::string &id, std::function<void(RecordPtr record, bool failed)> done);
+void json(const drogon::HttpRequestPtr &request, std::function<void(const drogon::HttpResponsePtr &)> callback, const std::string &id);
 }  // namespace catalog
