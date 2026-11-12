@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/catalog.yml
       - bench/catalog/**
+      - bench/json-api/**
+      - bench/workloads/**
       - bench/marketplace/**
       - bench/fullstack/apps/**
       - bench/fullstack/apps.mjs
@@ -20,6 +22,8 @@ on:
     paths:
       - .github/workflows/catalog.yml
       - bench/catalog/**
+      - bench/json-api/**
+      - bench/workloads/**
       - bench/marketplace/**
       - bench/fullstack/apps/**
       - bench/fullstack/apps.mjs
@@ -92,6 +96,17 @@ jobs:
             bench/marketplace/results/w1/
           if-no-files-found: warn
           retention-days: 14
+
+  json-harness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check:json-api
 
   json-aot:
     needs: harness

@@ -46,6 +46,12 @@ Corten is pre-1.0, so any minor version may change the API.
   and JSON errors without imposing page features; native serialization still requires source
   verification. Neither integration establishes a new baseline or cloud-run readiness.
 
+- A separate native JSON API group runner retains both payloads and sources,
+  functional observations, independent source-audit requirements and replayed raw
+  timing/runtime evidence. An explicit-commit catalog-page droplet controller uses
+  independent durable reservations, verified archives and terminal-only cleanup.
+  Neither changes the nightly schedule or establishes a native group baseline.
+
 - Offline correctness contracts for the approved mixed-traffic, live-delivery,
   recoverable-live and hardening groups. They preserve native transport/form behavior,
   independent state readback, bounded-resource cleanup and explicit failure outcomes.

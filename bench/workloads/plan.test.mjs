@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { nightly } from "../marketplace/droplet-contract.mjs";
 import { groupDescriptor } from "../catalog/group.mjs";
+import { descriptor as jsonDescriptor } from "../json-api/contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { markdown, plan } from "./plan.mjs";
 
@@ -15,9 +16,16 @@ test("planning discovers current official options, but never fabricates ready ev
       assert.equal(p.execution.runner, "bench/catalog/run.mjs");
       assert.deepEqual(p.execution.descriptor, groupDescriptor(name));
       assert.equal(p.execution.status, "requires-exact-image-page-and-json-browser-gates");
-      assert.match(p.execution.cloud, /not-integrated/);
+      assert.equal(p.execution.cloud.runner, "bench/catalog/droplet.mjs");
+      assert.equal(p.execution.cloud.group, name);
+      assert.equal(p.execution.cloud.status, "explicit-merged-commit-independent-state-root-native-gates-required");
     }
-    else assert.equal(p.execution.status, "pending-group-runner-integration");
+    else if (name === "json-api") {
+      assert.equal(p.execution.runner, "bench/json-api/run.mjs");
+      assert.deepEqual(p.execution.descriptor, jsonDescriptor());
+      assert.equal(p.execution.status, "requires-exact-image-json-gates-and-independent-native-source-audits");
+      assert.match(p.execution.cloud, /not-integrated/);
+    } else assert.equal(p.execution.status, "pending-group-runner-integration");
   }
 });
 test("documented group matrix is generated from the registry", () => {

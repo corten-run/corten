@@ -145,6 +145,35 @@ only and disclose the stronger correctness gate. Ungrouped CLI defaults, summary
 historical full-baseline validation remain unchanged. This integration is not a claim that a
 native group run has passed or that a dedicated-host baseline exists.
 
+### Explicit catalog-page droplet
+
+The separate `droplet.mjs` controller launches only this group at an explicit full
+commit already merged into `origin/main`, from a clean checkout. It does not reuse
+the nightly marketplace state or the historical catalog c1 host. Choose an unused
+`cN` round above c1 and one durable state root outside the checkout for all these
+catalog launches. For example, with operator-supplied values:
+
+```sh
+node bench/catalog/droplet.mjs c2 --group catalog-page --commit "$MEASURED_SHA" --ssh-key "$SSH_KEY_ID" --state-dir "$STATE_ROOT" --detach
+node bench/catalog/droplet.mjs c2 --group catalog-page --state-dir "$STATE_ROOT" --collect
+```
+
+The controller discovers the registry selection and native runner defaults, reserves
+the round before creation, and runs on an independently tagged c-8 host without a
+persistent local connection. A shared launch lock serializes rounds in that state
+root; unresolved reservations block a second launch. Separate roots or machines are
+not a distributed lock and must not be used for concurrent launches.
+
+Collection returns 3 while running, 0 for validated complete evidence and confirmed
+deletion, 1 for preserved partial evidence and confirmed deletion, or 2 for an error
+with recovery state retained. It verifies host/unit ownership, hashes the saved
+archive and extracted evidence, and deletes only its terminal owned host after the
+durable collection receipt exists. Never clear a live lock or relaunch an ambiguous
+reservation. Inspect the exact owning process and retained state first. Interrupted
+downloads are preserved rather than overwritten. Evidence stays under the state
+root until explicitly reviewed/imported; the controller does not publish results,
+change schedules, or certify workload readiness from its fake-cloud tests.
+
 Every selected app must pass checks in both sources before **any** load runs. Checks compare
 all 500 JSON records with the fixture, representative pages and filter prefixes with the
 contract, and computed styles and element geometry with an independent static reference.
