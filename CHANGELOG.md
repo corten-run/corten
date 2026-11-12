@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native record JSON parity checks for Express, Spring and Drogon retain each
+  framework's parser and serializer, complete payloads and JSON error/method
+  behavior. Express and Drogon bound request-owned reads and cancellation; Spring
+  keeps its existing source timeout behavior. Native pages and forms remain in
+  place. These functional repairs are not source-audit receipts or load results.
+
 - Offline correctness contracts for the full-stack browser and client-heavy groups
   cover native navigation/forms, equivalent keyed state, operation-time HTTP and
   terminal resource cleanup. Reference helpers cannot supply native observations;
