@@ -2964,9 +2964,10 @@ async function send(form, submitter, sends) {
       signal.throwIfAborted();
       if (res.status === 204 || res.status === 205) {
         // Done, with nothing to draw (RFC 9110, 15.3.5): the page stays and a waiting submit goes.
-        // A 205 also asks for the form as it came (15.3.6), unless the user changed it since it was
-        // sent or pressed again: their work is kept, as against a patch.
-        if (res.status === 205 && pending.next === undefined && Array.from(sent).every(([f, state]) => stateOf(f) === state)) formCall(form, "reset");
+        // A 205 also asks for the form as it came (15.3.6), unless the user changed a field since
+        // it was sent (a control added since counts) or pressed again with other values: their
+        // work is kept, as against a patch.
+        if (res.status === 205 && pending.next === undefined && Array.from(formProperty(form, "elements")).every((f) => sent.has(f) && stateOf(f) === sent.get(f))) formCall(form, "reset");
         renew();
       } else {
         renew();

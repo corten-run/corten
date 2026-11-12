@@ -705,14 +705,19 @@ late answer never patches a page it was not meant for. A screen whose every pres
 its own (a count's + and -, each a delta the server adds) keeps its own ordered queue in its
 script: the form sends where the user ended up, not each step.
 
-A `204 No Content` or `205 Reset Content` with none of Corten's headers (`StatusCode::NO_CONTENT`,
-the answer for a write with nothing to say) is the submit done with nothing to draw (RFC 9110,
-15.3.5 and 15.3.6): the page stays as it is, the form gets a new key as after any whole answer
-below 500, a submit that waited goes, and nothing says it failed. A `205` asks the client to put
-the form back as it came, so the runtime resets it (the browser's `form.reset()`, which fires
-`reset`), unless the user changed the form after it was sent or pressed again while it was out:
-their work is kept, as against a patch. A browser without JavaScript stays on the page for
-either and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`.
+A `204 No Content` or `205 Reset Content` that is not a redirect, a patch or a page
+(`StatusCode::NO_CONTENT`, the answer for a write with nothing to say) is the submit done with
+nothing to draw (RFC 9110, 15.3.5 and 15.3.6): the page stays as it is, the form gets a new key as
+after any whole answer below 500, a submit that waited goes, and nothing says it failed. A `205`
+asks the client to put the form back as it came, so the runtime resets it, a GET's form too,
+unless the user changed a field after it was sent or pressed again with other values while it
+was out: their work is kept, as against a patch. The runtime sees a change only in what the
+browser reads as a field's value (an input, a `<select>`, a `<textarea>`) and in a control added
+to the form since it was sent; a form-associated custom element's state or an `<output>` that
+changed is reset without being noticed. The reset is the browser's `form.reset()`, which fires
+`reset` on the form and no `input` or `change`, so a script that mirrors a field's value from its
+input events listens for `reset` too. A browser without JavaScript stays on the page for either
+and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`.
 
 When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when

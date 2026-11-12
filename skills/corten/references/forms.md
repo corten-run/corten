@@ -257,8 +257,9 @@ the pool.
 A press while the form's write is pending waits for its answer, then goes out from the form as
 the answer left it (found by its `id`: give a form a patch redraws one), after a 2xx or a 422.
 A bare `204` (`StatusCode::NO_CONTENT`) or `205` is a write done with nothing to draw: no
-`corten:error`, the page stays, and the waiting press goes; a `205` also resets the form unless
-the user changed it after it was sent or pressed again.
+`corten:error`, the page stays, and the waiting press goes; a `205` also resets the form (firing
+`reset`, not `input`) unless the user changed a field after it was sent or pressed again with
+other values.
 A refusal (409, 410), a 5xx, an answer the runtime does not draw, a redirect or no answer drops
 it, and the user sends it again. Steps that
 each count (a count's + and -) keep their own ordered queue in the component's script.

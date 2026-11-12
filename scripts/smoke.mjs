@@ -1750,7 +1750,7 @@ async function run(browser) {
   await page.route("**/queue*", async (route) => {
     const request = route.request();
     const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
-    queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}`);
+    queueSent.push(`${request.method()} ${fields.get("n")}${fields.has("submit") ? ` ${fields.get("submit")}` : ""}${fields.has("b") ? ` ${fields.get("b")}` : ""}`);
     const answer = queueAnswer;
     // The first of two reads answers last, so a read that was not aborted would draw over the newer.
     const late = request.method() === "GET" && fields.get("n") === "1";
@@ -1887,7 +1887,8 @@ async function run(browser) {
   // A 204 or 205 with none of Corten's headers took the write and has nothing to draw (RFC 9110,
   // 15.3.5 and 15.3.6; #1258): no corten:error, and the submit that waited goes, under the key the
   // answer renewed. A 205 resets the form only when nothing waits: the second submit goes with the
-  // values it was pressed with, and its own 205 then resets the form, keeping the renewed key.
+  // values it was pressed with, and its own 205 then resets the form, which has a new key after.
+  // The placeholder key matches the UUID pattern, so each key is also held apart from it.
   const keyField = `<input type="hidden" name="submit" data-submit value="${zero}">`;
   const queueFields = () =>
     page.evaluate(() => ({
@@ -1911,17 +1912,21 @@ async function run(browser) {
         quiet.sent.includes(",POST 2 ") &&
         first === zero &&
         uuid.test(second ?? "") &&
+        second !== zero &&
         left.n === (status === 205 ? "1" : "2") &&
         uuid.test(left.key ?? "") &&
+        left.key !== zero &&
         left.key !== second,
       `${quiet.sent}; ended: ${quiet.ended}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
     );
   }
-  // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the key
-  // the answer renewed stays. A form the user changed after it was sent keeps their work, as it
-  // does against a patch. The form has a control named reset, so `form.reset` is that control and
+  // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the form
+  // has a new key after (the reset comes before the key is renewed, so this does not see the reset
+  // leave a key alone: a hidden input's value is its attribute, which a reset keeps). A form the
+  // user changed after it was sent keeps their work, as it does against a patch, and so does one a
+  // control was added to. The form has a control named reset, so `form.reset` is that control and
   // the form's own method has to be reached through its prototype.
-  for (const edited of [false, true]) {
+  for (const change of ["none", "edited", "added"]) {
     queueSent = [];
     queueAnswered = 0;
     queueAnswer = { status: 205, body: "" };
@@ -1939,7 +1944,8 @@ async function run(browser) {
     }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">`));
     await page.fill("#queue-box [name=n]", "5");
     await page.click("#queue-box button");
-    if (edited) await page.fill("#queue-box [name=n]", "6");
+    if (change === "edited") await page.fill("#queue-box [name=n]", "6");
+    if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
     pressed();
     const until = Date.now() + 6000;
     while (!(queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
@@ -1952,11 +1958,66 @@ async function run(browser) {
       return /** @type {number | null} */ (w.__queueError);
     });
     check(
-      edited
+      change === "edited"
         ? "a bare 205 keeps a form the user changed after it was sent, with no corten:error"
-        : "a bare 205 with nothing waiting resets the form that sent it, keeps the key it renewed, and dispatches no corten:error",
-      queueSent.length === 1 && queueSent[0].startsWith("POST 5 ") && error === null && reset.n === (edited ? "6" : "1") && uuid.test(reset.key ?? ""),
+        : change === "added"
+          ? "a bare 205 keeps a form a control was added to after it was sent, with no corten:error"
+          : "a bare 205 with nothing waiting resets the form that sent it, gives it a new key, and dispatches no corten:error",
+      queueSent.length === 1 &&
+        queueSent[0].startsWith("POST 5 ") &&
+        error === null &&
+        reset.n === (change === "none" ? "1" : change === "edited" ? "6" : "5") &&
+        uuid.test(reset.key ?? "") &&
+        reset.key !== zero,
       `${queueSent.join()}; error: ${error}; left ${JSON.stringify(reset)}`,
+    );
+  }
+  // A press with other values while a write is out waits, and the write's 205 does not reset the
+  // form under it: the waiting submit goes with what the user typed, and its own 205 then resets
+  // the form. The second press is the form's other button, so the values differ only by the button
+  // and nothing is typed between the presses: only the waiting submit keeps the first 205 from
+  // resetting the form.
+  {
+    queueSent = [];
+    queueAnswered = 0;
+    queueAnswer = { status: 205, body: "" };
+    /** @type {() => void} */
+    let pressed = () => {};
+    queuePressed = new Promise((resolve) => (pressed = resolve));
+    await page.evaluate((form) => {
+      document.getElementById("queue-box")?.remove();
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
+      const w = /** @type {any} */ (window);
+      w.__queueCase?.abort();
+      w.__queueCase = new AbortController();
+      w.__queueError = null;
+      document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
+    }, `<form id="queue" method="post" action="/queue" data-patch><input name="n" value="1">${keyField}<button name="b" value="save">Save</button><button name="b" value="other">Other</button></form>`);
+    await page.fill("#queue-box [name=n]", "5");
+    await page.click("#queue-box button[value=save]");
+    await page.click("#queue-box button[value=other]");
+    pressed();
+    const until = Date.now() + 6000;
+    while (!(queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
+    await page.waitForTimeout(300);
+    const after = await queueFields();
+    const error = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__queueCase.abort();
+      return /** @type {number | null} */ (w.__queueError);
+    });
+    const [one, two] = queueSent;
+    check(
+      "a 205 does not reset a form pressed again with other values while it was out: the waiting submit goes with the typed value, and its own 205 resets the form",
+      queueSent.length === 2 &&
+        (one ?? "").startsWith(`POST 5 ${zero} `) &&
+        (one ?? "").endsWith(" save") &&
+        (two ?? "").startsWith("POST 5 ") &&
+        (two ?? "").endsWith(" other") &&
+        !(two ?? "").includes(zero) &&
+        error === null &&
+        after.n === "1",
+      `${queueSent.join()}; error: ${error}; left ${JSON.stringify(after)}`,
     );
   }
   queuePressed = Promise.resolve();
