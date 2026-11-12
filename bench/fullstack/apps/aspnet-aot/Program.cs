@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
-// The item as JSON, and only that, on ASP.NET Core minimal APIs published with native AOT. It
+// JSON-only endpoints on ASP.NET Core minimal APIs published with native AOT. The legacy item
 // answers with what card-market's JSON route answers with (bench/fullstack/README.md, "aspnet-aot"):
 // each piece is ASP.NET Core's own middleware for it, as the webapiaot template would add it.
 var builder = WebApplication.CreateSlimBuilder(args);
@@ -22,6 +22,7 @@ builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.TypeInfoResolverChain.Insert(0, ViewJson.Default);
+    o.SerializerOptions.TypeInfoResolverChain.Insert(0, RecordJson.Default);
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
     // Text in other scripts as UTF-8, as Corten writes it; HTML's characters are still escaped.
     o.SerializerOptions.Encoder = JavaScriptEncoder.Create(UnicodeRanges.All);
@@ -40,11 +41,19 @@ builder.Services.AddResponseCompression();
 builder.Services.AddRequestTimeouts(o => o.DefaultPolicy = new RequestTimeoutPolicy { Timeout = TimeSpan.FromSeconds(10), TimeoutStatusCode = StatusCodes.Status503ServiceUnavailable });
 builder.Services.AddHttpClient(nameof(ItemSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"));
 builder.Services.AddSingleton(s => ItemSource.FromEnv(s.GetRequiredService<IHttpClientFactory>()));
+builder.Services.AddHttpClient(nameof(CatalogSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<CatalogSource>();
+builder.Services.AddHttpClient(nameof(MarketplaceSource), c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<MarketplaceSource>();
 builder.Services.AddHealthChecks().AddCheck<ItemsReachable>("items", tags: ["ready"]);
 
 var app = builder.Build();
 // Load the fixture before the first request.
 app.Services.GetRequiredService<ItemSource>();
+app.Services.GetRequiredService<CatalogSource>();
+app.Services.GetRequiredService<MarketplaceSource>();
 // The headers Corten puts on a JSON answer, as ASP.NET Core's documentation sets a header ("Control
 // headers in C# code": middleware that appends it, then calls the next). The exception handler and
 // the request timeout clear the answer before they write theirs, so the 500 and the deadline's 503
@@ -64,6 +73,10 @@ app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Con
 // GET and HEAD, as Corten's get routes (Kestrel leaves out HEAD's body).
 app.MapMethods("/api/items/{id}", ["GET", "HEAD"], async Task<Results<Ok<ItemView>, NotFound>> (string id, ItemSource items, CancellationToken cancel) =>
     await items.Get(id, cancel) is { } item ? TypedResults.Ok(item) : TypedResults.NotFound());
+app.MapMethods("/api/catalog/{id}", ["GET", "HEAD"], async Task<Results<Ok<CatalogRecord>, NotFound>> (string id, CatalogSource catalog, CancellationToken cancel) =>
+    await catalog.Get(id, cancel) is { } record ? TypedResults.Ok(record) : TypedResults.NotFound());
+app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async Task<Results<Ok<MarketplaceRecord>, NotFound>> (string id, MarketplaceSource marketplace, CancellationToken cancel) =>
+    await marketplace.Get(id, cancel) is { } record ? TypedResults.Ok(record) : TypedResults.NotFound());
 app.Run();
 
 static class Headers

@@ -72,7 +72,8 @@ node bench/catalog/report.mjs bench/catalog/results/c1/summary.json
 node bench/catalog/report.mjs bench/catalog/results/c1/summary.json --commit FULL_MEASURED_SHA --require-complete
 ```
 
-The second command exits unsuccessfully unless all twenty apps, all requested 64-user passes,
+For an ungrouped round, the second command exits unsuccessfully unless all twenty apps,
+all requested 64-user passes,
 the per-app correctness evidence, canonical fixture identity, measurement configuration,
 clean-tree provenance and cleanup succeeded. Supply the full measured
 commit, not a branch name. Reports include phase duration, warmup, fixed rate and CPU placement,
@@ -103,6 +104,46 @@ ASP.NET AOT app. `--apps corten,axum-maud` selects a subset for development. Eac
 in its existing production image, except Corten's standalone `corten/` app, which uses the
 local framework without the marketplace's localized model. Catalog image tags are
 `cb-catalog-<app>` so they do not replace the marketplace images.
+
+### Explicit catalog-page group
+
+```sh
+node bench/catalog/run.mjs c3 --group catalog-page --build --check-only
+node bench/catalog/run.mjs c4 --group catalog-page --build --passes 3
+node bench/catalog/report.mjs bench/catalog/results/c4/summary.json --commit FULL_MEASURED_SHA --require-complete
+node --test bench/catalog/group.test.mjs bench/catalog/runner.test.mjs bench/catalog/report.test.mjs bench/catalog/contract.test.mjs
+```
+
+`--group catalog-page` selects exactly the approved registry's seven apps: Corten, ASP.NET,
+Express, FastAPI, axum/Maud, Drogon and Gin. It cannot be combined with `--apps`; missing native
+inventory entries fail selection rather than shrinking the group. No group is selected by
+default, and this does not change the scheduled benchmark or historical twenty-app results.
+The `json-api` group is not implemented by this option.
+
+Both fixture and API sources retain the full native **page AND JSON correctness gate** below,
+including all eight browser profiles and upstream error/uncached-read checks. Only **page**
+responses are timed, including cold start, warmup, fixed-rate, 64-user and 256-user phases.
+There are no JSON timing runs. These stronger correctness gates are not a JSON-group result.
+
+Group summaries use `catalog-group-results/v1` and a `catalog-group/v1` descriptor from
+`group.mjs::groupDescriptor("catalog-page")`. It records the registry schema, exact contract
+SHA-256, ordered apps, cases, sources, timing targets and stronger correctness targets.
+Qualification captures (`<source>/<app>/qualification.json`) and per-pass timing evidence bind
+the app, source, payload and targets to the immutable image ID. Raw native `checks.json` and
+phase artifacts remain unchanged. After cleanup, group runs also capture `commitAfter` and
+`dirtyAfter`; a changed HEAD or dirty tree fails the run. Reports require the same HEAD and
+clean tree before and after the run, plus the canonical fixture hash. An image ID identifies
+the image used, not proof of its source revision when reusing an image without `--build`.
+
+The report accepts a complete group comparison only with all seven apps, both sources, exact
+qualification/timing identities, every requested pass, valid cold/warmup and all three load
+phases. Every saved phase aggregate must exactly match the native aggregation of its individual
+runs, including collected and requested pass counts; missing, altered or extra aggregate fields
+cannot establish a complete comparison. Missing evidence is incomplete; contradictory contracts,
+duplicate passes, unexpected apps/sources/targets or wrong identity bindings are rejected. Group reports have page columns
+only and disclose the stronger correctness gate. Ungrouped CLI defaults, summary shape and
+historical full-baseline validation remain unchanged. This integration is not a claim that a
+native group run has passed or that a dedicated-host baseline exists.
 
 Every selected app must pass checks in both sources before **any** load runs. Checks compare
 all 500 JSON records with the fixture, representative pages and filter prefixes with the
