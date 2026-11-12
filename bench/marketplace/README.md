@@ -96,6 +96,110 @@ passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstrea
 and load-generator CPUs 4-7. These are short measurement windows: publish medians and ranges,
 not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
+### Splitting a round across droplets
+
+A round's wall time grows with every candidate, so a named group's round can be split across
+droplets started together
+([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)):
+
+```sh
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --plan
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+```
+
+`--plan` prints the split, each droplet's remote files and every command, calling neither
+`git`, `doctl` nor `ssh`. A split splits the launch's group (`--group`, by default the
+scheduled one), never the whole inventory: every droplet runs Corten, the subject, beside its
+share of the group's other candidates, dealt round-robin in the group's order, so each candidate
+is on exactly one droplet and no other app is added (axum + Maud is no anchor; in a group that
+has it, it is one candidate like the rest). A group of n candidates besides Corten splits across
+at most n droplets. Each droplet is an ordinary c-8 round of its share (`run.mjs rN --group <g>
+--part k/n`, into `results/rN/d<k>`): it qualifies each of its candidates, Corten included,
+with the same feature contract as an unsplit round, keeps the raw qualification of each, and
+times only those it admits. Each droplet then gates its admitted candidates, both sources and all
+twelve browser profiles, before its own load; the gate checks each against the contract, not
+against Corten, so it needs no other droplet. A droplet must admit its Corten and at least one
+peer, as an unsplit round must: a droplet whose peers are all excluded compares nothing and
+fails its part, as does a droplet whose gate fails, so the round cannot merge, though other
+droplets may already have measured. The deal is by membership, the group's selected candidates
+as `groups.mjs` sets them, not by qualification status, what `admitted()` says of each on a
+given run: a candidate that lacks a feature stays selected, since missing support is
+implementation backlog, not a reason to drop it. So a split is worth launching only when the
+latest full round's Feature Qualification table (not a check-only run's, which has no report)
+admits at least one peer for every part of the `--plan` split, or the round fails only after the
+other droplets have spent their hours ([nightly.md](nightly.md#split-rounds) says where the
+default stands).
+
+The launcher checks the clean checkout, that no benchmark droplet exists and the account's
+droplet limit (`doctl account get`) once, then writes `split.json` (commit, group and each
+droplet's candidates) and refuses another launch from that state directory.
+It creates every droplet before starting any round, so the rounds start within minutes of each
+other; each droplet has its own `d<k>/` state, known_hosts and evidence. Ctrl-C, SIGTERM or
+Ctrl-Break stops the launch between steps, and the
+launcher then says what each droplet is left doing: a started round keeps running until stopped
+(it prints the `ssh` command), a droplet created but not started is billed until deleted (it
+prints the `doctl` command). It also saves that text as `launch-stopped.txt` in the state
+directory, so a closed stdout or stderr does not lose it. A hangup does not stop the launcher: Node resets
+an inherited SIGHUP ignore, so `nohup` alone would not keep it running, and the launcher ignores
+SIGHUP itself; closing its terminal lets the launch carry on. While it runs, the launch holds
+`launch.lock` (its pid) in the state directory and removes it when it ends, however it ends.
+`--collect` refuses while that pid runs, since a live launch may be seconds from
+`systemctl start`; if the pid is gone, the launch was killed, and collect removes the stale lock
+and collects the stopped launch. Each droplet's state says `starting` from just
+before `systemctl start` until the launch has seen the unit running; collect leaves it so, since
+a loaded unit does not prove the round ran, and collects it like any other.
+
+`--collect` collects each droplet on its own and deletes each one that finished, so a slow
+droplet does not keep a finished one billed. The round is finished only when every droplet has
+been: exit 3 while any runs, 2 for a collection error on any droplet (a failed delete
+included) or for a leftover droplet named `corten-marketplace-rN-d*` that no live part owns,
+which is reported with its delete command, never deleted. A droplet whose launch stopped before
+`systemctl start` (state `creating` or `preparing`) never ran its round: `starting` is saved
+just before that command and the unit has no `[Install]` section, so nothing else starts it.
+Collect finds it by id, or by name and run tag when its create returned no id (where the
+stopped launch said to look for a droplet with that name and tag), checks its name and ownership
+tags as for any delete, prints its `doctl` delete command and exits 2 until it is gone. A `starting` droplet is collected like any other, refusing a missing or unloaded unit;
+if its droplet is gone, it may have run and is missing. Whenever a droplet never started, is
+partial or is missing, the round cannot merge, so collect prints the `ssh` command that stops
+each droplet still running, whatever the exit code. Exit 1 means a droplet did not finish its
+part, or the parts do not merge; 0 means every droplet finished and was deleted, and the parts
+merged into `round/rN/` in the state directory (`summary.json`, `split.json` and each
+droplet's `d<k>/`). Exit 2 wins over 3: while one droplet runs, an error on another still exits
+2. Then fix what it names (delete a droplet that never started with the printed command, run a
+printed `ssh` stop command, or clear the reported error), and run `--collect` again until it
+exits 0 or 1; never relaunch the round.
+
+The merge accounts for every candidate of the group exactly once: Corten from each droplet, and
+each other candidate from the one droplet whose share it was, admitted and measured or excluded
+with its raw qualification and no runs. The parts must be exactly the group's split, so no
+subset of candidates can pass as a round. Each part must have finished, with its checks passed,
+no failures or cleanup failures and a clean tree at the plan's commit; the merge refuses any
+other part and keeps each part's outcome in `split`, where the reader checks it again. The parts
+must have run together, each starting before any finished, and each with its own run id. The merged summary is a v5 round of the group, with
+each droplet's candidates, CPU model, tools and Corten in `split`; the reader checks the split
+and each droplet's admission, and a whole round's check of the full group is unchanged. Its
+report's Feature Qualification table names each candidate's droplet, every table gets a Droplet
+column with Corten on every droplet, and each admitted candidate's req/s and CPU us/request is a
+ratio to the Corten on its own droplet beside the raw numbers. Ratios are to Corten only. A ratio
+is `-` where either stage stopped, the candidate's or its droplet's Corten's, since a stopped
+stage's number is not a median of three passes. Raw
+numbers across droplets carry any difference between their machines; compare candidates on
+different droplets by those ratios. A Between droplets section lists each droplet's CPU and
+candidates and Corten's own req/s and CPU us/request on each. A stage is flagged ("d1 and d2
+differ") when two droplets' Corten ranges do not overlap, that is when one droplet's lowest is
+above the other's highest: raw numbers on those droplets are then not like for like. With only
+Corten on every droplet, nothing checks that a ratio carries from one droplet's machine to
+another's. `compare.mjs` compares a split round only with one split the same way, each droplet's
+host and images equal to the baseline's same droplet, and Corten's rows are d1's. It says so in
+one warning, which adds that the cohort context mixes droplets when an unchanged reference
+adapter is on a droplet other than d1, and gives each row its droplet. A droplet's CPU
+model is not chosen at create, so droplets can land on a mix (Xeon Platinum 8168 on d1 and 8280
+on d2, say). The round still merges and its report reads each candidate by its ratio to its own
+droplet's Corten. But `compare.mjs` refuses it, with no deltas, against any baseline whose
+same-numbered droplet had another model, including the same two models swapped. It does not fall
+back to comparing ratios: compare rounds with mixed droplets by their ratio columns by hand.
+
 For local development, `wN` remains the development identity:
 
 ```sh
