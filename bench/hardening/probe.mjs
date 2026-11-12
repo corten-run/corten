@@ -72,7 +72,7 @@ export function unread(port, remotePort) {
   // A burst of paused readers must not scan the whole TCP table once per socket.
   // Preserve the sample age rather than presenting cached observations as fresh.
   const absent = { kernelBytes: { status: "unavailable", reason: "connection absent from TCP sample" } };
-  if (queuesCache?.remotePort === remotePort && at - queuesCache.at < 50_000_000n) return { ...(queuesCache.values.get(port) ?? absent), sampleAgeMs: Number(at - queuesCache.at) / 1e6, scanMs: queuesCache.scanMs };
+  if (queuesCache && queuesCache.remotePort === remotePort && at - queuesCache.at < 50_000_000n) return { ...(queuesCache.values.get(port) ?? absent), sampleAgeMs: Number(at - queuesCache.at) / 1e6, scanMs: queuesCache.scanMs };
   try {
     const values = new Map();
     for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) for (const [key, bytes] of tcpQueues(readFileSync(file, "utf8"), remotePort)) values.set(key, { kernelBytes: bytes });
