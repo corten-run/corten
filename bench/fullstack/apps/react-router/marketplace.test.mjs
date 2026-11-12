@@ -7,7 +7,12 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import ts from "typescript";
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
+import { createMemoryRouter, RouterProvider } from "react-router";
+
+const renderToStaticMarkup = (element) => renderMarkup(createElement(RouterProvider, {
+  router: createMemoryRouter([{ path: "*", element }]),
+}));
 
 const directory = new URL("./app/", import.meta.url);
 const model = await import(new URL("marketplace.ts", directory));

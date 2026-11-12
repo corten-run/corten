@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { Form } from "react-router";
 import { formatters, marketplacePath, sortedListings, type Locale, type MarketplaceQuery, type MarketplaceRecord } from "./marketplace";
 
 export type MarketplaceProps = { record: MarketplaceRecord; locale: Locale; query: MarketplaceQuery; message?: string };
@@ -55,12 +56,12 @@ export function Marketplace({ record, locale, query, message = "" }: Marketplace
     </section>
     <section className="marketplace__alert">
       <h2>{t.alert}</h2>
-      <form method="post" action={path + (query.seller || query.sort !== "asc" || query.allOffers
+      <Form method="post" action={path + (query.seller || query.sort !== "asc" || query.allOffers
         ? "?" + new URLSearchParams({ seller: query.seller, sort: query.sort, ...(query.allOffers ? { offers: "all" } : {}) }) : "")}>
         <label>{t.email}<input name="email" type="email" /></label>
         <label>{t.target}<input name="target_price" type="text" inputMode="decimal" /></label>
         <button type="submit">{t.submit}</button>
-      </form>
+      </Form>
       <p className="marketplace__message" aria-live="polite">{message}</p>
     </section>
     <section className="marketplace__details">
