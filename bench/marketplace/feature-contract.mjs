@@ -39,10 +39,14 @@ export function validateQualification(q) {
 const httpProbe = (p) => {
   assert.ok(p && Number.isFinite(p.ms) && p.ms >= 0, "missing raw HTTP probe");
   if (p.status !== undefined) {
+    assert.equal(p.timedOut, undefined); assert.equal(p.error, undefined);
     assert.ok(Number.isInteger(p.status) && p.status >= 100 && p.status <= 599);
     assert.ok(p.headers && typeof p.headers === "object" && !Array.isArray(p.headers));
     assert.ok(Number.isSafeInteger(p.bodyLength) && p.bodyLength >= 0);
-  } else assert.ok(p.timedOut === true || typeof p.error === "string" && p.error.length > 0, "probe has no response or failure");
+  } else {
+    assert.equal(Number(p.timedOut === true) + Number(typeof p.error === "string" && p.error.length > 0), 1, "probe needs exactly one response/failure variant");
+    assert.equal(p.headers, undefined); assert.equal(p.bodyLength, undefined);
+  }
 };
 export function validateProbes(p, source) {
   sourceFeatures(source);
@@ -65,10 +69,14 @@ export function validateProbes(p, source) {
   if (last.status === 200) assert.deepEqual(p.live, last);
   else { assert.equal(p.live, undefined); assert.equal(p.liveness.length, livePaths.length); }
   const h = p.unfinishedHead;
-  assert.ok(h && (typeof h.error === "string" && h.error.length > 0 || [h.closedMs, h.timedOutMs].some((n) => Number.isFinite(n) && n >= 0)), "missing unfinished-head probe");
+  assert.ok(h && h.error === undefined, "unfinished-head probe did not establish a connection; qualification is inconclusive");
+  assert.equal(Object.keys(h).length, 1, "unfinished-head probe needs one exclusive result variant");
+  const headKey = Object.keys(h)[0];
+  assert.ok(["closedMs", "timedOutMs"].includes(headKey) && Number.isSafeInteger(h[headKey]) && h[headKey] >= 0, "invalid unfinished-head result");
   const c = p.cap;
-  assert.ok(c && (typeof c.error === "string" && c.error.length > 0 ||
-    [c.below, c.held].every((n) => Number.isSafeInteger(n) && n >= 0) && ["belowHeld", "whileHeld", "afterwards"].every((k) => c[k] === null || Number.isInteger(c[k]) && c[k] >= 100 && c[k] <= 599) && Object.hasOwn(c, "afterRelease")), "missing connection-cap probe");
+  assert.ok(c && c.error === undefined && [c.below, c.held, c.releaseMs].every((n) => Number.isSafeInteger(n) && n >= 0) &&
+    ["belowHeld", "whileHeld", "afterwards"].every((k) => c[k] === null || Number.isInteger(c[k]) && c[k] >= 100 && c[k] <= 599) &&
+    (c.afterRelease === null || ["refused", "closed"].includes(c.afterRelease) || Number.isInteger(c.afterRelease) && c.afterRelease >= 100 && c.afterRelease <= 599), "missing/invalid connection-cap probe");
   if (source === "api") {
     for (const key of ["page500", "json500", "slow", "afterUpstream"]) httpProbe(p[key]);
     assert.equal(p.afterUpstream.status, 200);

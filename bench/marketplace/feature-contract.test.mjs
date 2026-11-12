@@ -38,3 +38,16 @@ test("raw probe inventory and health cannot be omitted or converted to an exclus
   const p = qualificationProbes(); p.page404 = { status: 404, ms: 1, headers: {}, bodyLength: 0 };
   assert.equal(validateQualification(qualification(p)).eligible, true, "native 404 representation need not imitate Corten's HTML");
 });
+
+test("inconclusive or contradictory transport probes cannot become capability results", () => {
+  for (const h of [{ error: "could not connect" }, { closedMs: "0", timedOutMs: 40000 }, { closedMs: "0" }, { closedMs: 0, timedOutMs: 40000 }, { timedOutMs: -1 }]) {
+    const p = qualificationProbes(); p.unfinishedHead = h;
+    assert.throws(() => validateQualification(qualification(p)));
+  }
+  for (const mutate of [(p) => { p.page.timedOut = true; }, (p) => { p.page.error = "ECONNRESET"; }, (p) => { p.cap.releaseMs = "1"; }, (p) => { p.cap.error = "could not connect"; }]) {
+    const p = qualificationProbes(); mutate(p);
+    assert.throws(() => validateQualification(qualification(p)));
+  }
+  const p = qualificationProbes(); p.unfinishedHead = { timedOutMs: 40000 };
+  assert.equal(validateQualification(qualification(p)).eligible, false, "an established connection held too long is an observed missing timeout");
+});

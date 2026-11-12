@@ -15,7 +15,7 @@ export function qualificationProbes() {
     json405: answer(405, "application/problem+json"), json500: answer(503, "application/problem+json"),
     head: answer(), badHost: answer(400), bigHead: answer(431), live: { ...answer(), path: "/health" },
     slow: { ...answer(503), ms: 10000 }, unfinishedHead: { closedMs: 30000 },
-    cap: { below: 950, belowHeld: 200, held: 1050, whileHeld: null, afterRelease: 200, afterwards: 200 },
+    cap: { below: 950, belowHeld: 200, held: 1050, whileHeld: null, afterRelease: 200, releaseMs: 1, afterwards: 200 },
   };
   const html = '<form method="post"><input name="email"><input name="target_price"></form>';
   probes.page.body = Buffer.from(html).toString("base64"); probes.page.bodyLength = Buffer.byteLength(html);
