@@ -1,4 +1,5 @@
 #include "catalog.h"
+#include "record_http.h"
 
 #include <drogon/HttpClient.h>
 #include <drogon/utils/Utilities.h>
@@ -40,6 +41,7 @@ namespace catalog
 {
 Record Record::fromJson(const Json::Value &a)
 {
+    if (!a.isObject()) throw std::runtime_error("catalog record must be an object");
     Record r;
     r.id = text(a["id"]);
     r.title = text(a["title"]);
@@ -88,11 +90,18 @@ void load()
         if (!file) throw std::runtime_error("cannot open catalog fixture");
         Json::Value all;
         Json::CharReaderBuilder reader;
+        Json::CharReaderBuilder::strictMode(&reader.settings_);
         std::string errors;
         if (!Json::parseFromStream(reader, file, &all, &errors) || !all.isObject())
             throw std::runtime_error("catalog fixture JSON: " + errors);
         for (const auto &id : all.getMemberNames())
-            fixture.emplace(id, std::make_shared<const Record>(Record::fromJson(all[id])));
+        {
+            auto record = std::make_shared<const Record>(Record::fromJson(all[id]));
+            if (record->id != id) throw std::runtime_error("catalog fixture id mismatch");
+            fixture.emplace(id, std::move(record));
+        }
+        for (const auto &entry : fixture) for (const auto &related : entry.second->related)
+            if (!fixture.count(related.id)) throw std::runtime_error("unknown catalog related record");
     }
     malloc_trim(0);
 }
@@ -131,5 +140,41 @@ void get(const std::string &id, std::function<void(RecordPtr record, bool failed
         catch (const std::exception &) { done(nullptr, true); return; }
         done(std::move(record), false);
     });
+}
+
+void json(const drogon::HttpRequestPtr &request, std::function<void(const drogon::HttpResponsePtr &)> callback, const std::string &id)
+{
+    if (request->method() != drogon::Get && request->method() != drogon::Head)
+        return callback(record_http::problem(drogon::k405MethodNotAllowed));
+    if (fromFixture)
+    {
+        auto found = fixture.find(id);
+        if (found == fixture.end()) return callback(record_http::problem(drogon::k404NotFound));
+        return callback(drogon::HttpResponse::newHttpJsonResponse(found->second->toJson()));
+    }
+    record_http::get(request, "/catalog/records/", id,
+        [id, callback = std::move(callback)](record_http::Result result, const drogon::HttpResponsePtr &response) {
+            if (result == record_http::Result::Aborted) return;
+            if (result == record_http::Result::Timeout) return callback(record_http::problem(drogon::k504GatewayTimeout));
+            if (result != record_http::Result::Ok) return callback(record_http::problem(drogon::k502BadGateway));
+            if (response->statusCode() == drogon::k404NotFound) return callback(record_http::problem(drogon::k404NotFound));
+            if (response->statusCode() != drogon::k200OK) return callback(record_http::problem(drogon::k502BadGateway));
+            drogon::HttpResponsePtr output;
+            try
+            {
+                Json::Value value;
+                Json::CharReaderBuilder builder;
+                Json::CharReaderBuilder::strictMode(&builder.settings_);
+                std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+                const auto body = response->body();
+                std::string errors;
+                if (!reader->parse(body.data(), body.data() + body.size(), &value, &errors)) throw std::runtime_error("invalid catalog JSON");
+                auto record = Record::fromJson(value);
+                if (record.id != id) throw std::runtime_error("catalog id mismatch");
+                output = drogon::HttpResponse::newHttpJsonResponse(record.toJson());
+            }
+            catch (const std::exception &) { output = record_http::problem(drogon::k502BadGateway); }
+            callback(output);
+        });
 }
 }  // namespace catalog

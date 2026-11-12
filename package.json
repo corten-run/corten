@@ -9,6 +9,7 @@
     "check:catalog": "node --test bench/catalog/fixtures.test.mjs bench/catalog/styles.test.mjs bench/catalog/contract.test.mjs bench/catalog/upstream.test.mjs bench/catalog/report.test.mjs bench/catalog/group.test.mjs",
     "check:marketplace": "node --test bench/marketplace/*.test.mjs",
     "check:workloads": "node --test bench/workloads/*.test.mjs",
+    "check:json-api": "node --test bench/json-api/*.test.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

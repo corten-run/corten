@@ -50,6 +50,136 @@ class MarketplaceTests(SimpleTestCase):
         self.assertContains(response, 'seller=+Alice&amp;sort=asc&amp;offers=all')
         self.assertContains(self.client.get('/marketplace/en-US/item_1', {'seller': 'alice'}), 'data-listing-id=', count=0)
 
+    def test_json_head_matches_get_headers_without_a_body(self):
+        path = '/api/marketplace/item_1'
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(response.json(), RECORDS['item_1'])
+        self.assertIn(b'\\"Dragon\\"', response.content)
+        self.assertIsInstance(response.json()['summary']['lowest_minor'], int)
+        self.assertIsInstance(response.json()['listings'][0]['rating_hundredths'], int)
+        head = self.client.head(path)
+        self.assertEqual(head.status_code, response.status_code)
+        self.assertEqual(dict(head.headers), dict(response.headers))
+        self.assertEqual(head.content, b'')
+        self.assertEqual(self.source.get.call_count, 2)
+
+    def test_missing_json_get_and_head_are_json_404(self):
+        path = '/api/marketplace/missing'
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(response.json(), {'error': 'Not Found'})
+        head = self.client.head(path)
+        self.assertEqual(head.status_code, 404)
+        self.assertEqual(dict(head.headers), dict(response.headers))
+        self.assertEqual(head.content, b'')
+
+    def test_json_wrong_methods_are_405_with_allow_without_fetching(self):
+        client = Client(enforce_csrf_checks=True)
+        for method in ('POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE'):
+            with self.subTest(method=method):
+                response = client.generic(method, '/api/marketplace/item_1')
+                self.assertEqual(response.status_code, 405)
+                self.assertEqual(response['Content-Type'], 'application/json')
+                self.assertEqual(response.json(), {'error': 'Method Not Allowed'})
+                self.assertEqual(response['Allow'], 'GET, HEAD')
+        self.source.get.assert_not_called()
+
+    def test_json_method_handling_preserves_csrf_protection(self):
+        client = Client(enforce_csrf_checks=True)
+        path = '/api/marketplace/item_1'
+        response = client.delete(path, HTTP_ORIGIN='https://other.example')
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json(), {'error': 'Method Not Allowed'})
+        self.source.get.assert_not_called()
+        self.assertEqual(client.post('/marketplace/en-US/item_1').status_code, 403)
+        client.get('/marketplace/en-US/item_1')
+        token = client.cookies['csrftoken'].value
+        cross_site = client.post('/marketplace/en-US/item_1', {'csrfmiddlewaretoken': token},
+            HTTP_ORIGIN='https://other.example')
+        self.assertEqual(cross_site.status_code, 403)
+        response = client.post(path, {'csrfmiddlewaretoken': client.cookies['csrftoken'].value})
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json(), {'error': 'Method Not Allowed'})
+        self.assertEqual(response['Allow'], 'GET, HEAD')
+        self.source.get.assert_called_once_with('item_1')
+
+    def test_upstream_errors_are_generic_json_500_for_get_and_head(self):
+        client = Client(raise_request_exception=False)
+        for error in (requests.HTTPError('private upstream detail'), requests.Timeout('private timeout'),
+                requests.ConnectionError('private address'), ValueError('private invalid JSON')):
+            with self.subTest(error=type(error).__name__):
+                self.source.get.side_effect = error
+                response = client.get('/api/marketplace/item_1')
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(response['Content-Type'], 'application/json')
+                self.assertEqual(response.json(), {'error': 'Internal Server Error'})
+                self.assertNotIn(b'private', response.content)
+                head = client.head('/api/marketplace/item_1')
+                self.assertEqual(head.status_code, 500)
+                self.assertEqual(dict(head.headers), dict(response.headers))
+                self.assertEqual(head.content, b'')
+
+    def test_json_api_fetches_parses_and_serializes_on_each_get_and_head(self):
+        with patch.dict(os.environ, MARKETPLACE_SOURCE='api', API_BASE='http://example.test/base'):
+            source = MarketplaceSource()
+        upstream = Mock(status_code=200)
+        changed = {**self.records['item_1'], 'title': 'Changed <title> & "quotes"'}
+        upstream.json.side_effect = [self.records['item_1'], changed, changed]
+        source.session.get = Mock(return_value=upstream)
+        with patch('itempage.marketplace_views.source', source):
+            first = self.client.get('/api/marketplace/item_1')
+            second = self.client.get('/api/marketplace/item_1')
+            head = self.client.head('/api/marketplace/item_1')
+        self.assertEqual(first.json(), self.records['item_1'])
+        self.assertEqual(second.json(), changed)
+        self.assertEqual(head.status_code, 200)
+        self.assertEqual(head.content, b'')
+        self.assertEqual(head['Content-Length'], second['Content-Length'])
+        self.assertEqual(source.session.get.call_count, 3)
+        self.assertEqual(upstream.json.call_count, 3)
+
+    def test_non_object_roots_are_generic_json_500_for_get_and_head(self):
+        client = Client(raise_request_exception=False)
+        for record in ([], 'bad', 7, False):
+            with self.subTest(record=record):
+                self.source.get.side_effect = None
+                self.source.get.return_value = record
+                response = client.get('/api/marketplace/item_1')
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(response['Content-Type'], 'application/json')
+                self.assertEqual(response.json(), {'error': 'Internal Server Error'})
+                head = client.head('/api/marketplace/item_1')
+                self.assertEqual(head.status_code, 500)
+                self.assertEqual(dict(head.headers), dict(response.headers))
+                self.assertEqual(head.content, b'')
+
+    def test_json_source_maps_upstream_404_500_and_invalid_json(self):
+        with patch.dict(os.environ, MARKETPLACE_SOURCE='api', API_BASE='http://example.test/base'):
+            source = MarketplaceSource()
+        for upstream_status, invalid_json, expected_status in ((404, False, 404), (500, False, 500), (200, True, 500)):
+            with self.subTest(upstream_status=upstream_status, invalid_json=invalid_json):
+                upstream = Mock(status_code=upstream_status)
+                if upstream_status == 500:
+                    upstream.raise_for_status.side_effect = requests.HTTPError('private upstream failure')
+                if invalid_json:
+                    upstream.json.side_effect = requests.exceptions.JSONDecodeError('private invalid JSON', '', 0)
+                source.session.get = Mock(return_value=upstream)
+                with patch('itempage.marketplace_views.source', source):
+                    response = self.client.get('/api/marketplace/item_1')
+                    head = self.client.head('/api/marketplace/item_1')
+                self.assertEqual(response.status_code, expected_status)
+                self.assertEqual(response['Content-Type'], 'application/json')
+                self.assertIn('error', response.json())
+                self.assertNotIn(b'private', response.content)
+                self.assertEqual(head.status_code, expected_status)
+                self.assertEqual(dict(head.headers), dict(response.headers))
+                self.assertEqual(head.content, b'')
+                self.assertEqual(source.session.get.call_count, 2)
+                self.assertEqual(upstream.json.call_count, 2 if invalid_json else 0)
+
     def test_empty_statuses_and_csrf(self):
         response = self.client.get('/marketplace/de-DE/item_2')
         self.assertContains(response, LABELS['de-DE']['no_listings'])

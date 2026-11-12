@@ -1133,6 +1133,62 @@ async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
     }
 }
 
+/// A form's submit key with no value (`SubmitKey::template_field`) is for the copies a script
+/// makes of a `<template>`: drawn outside one, a browser without JavaScript sends it empty and
+/// every post is refused, so a debug build's page says so, also for one drawn ahead
+/// (`req.rendered`). Inside a template, nested too or drawn ahead, it is not an error, and neither
+/// is it in a patch: only the runtime asks for one, and it fills the key when the form is sent.
+#[tokio::test]
+async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_build() {
+    fn keys(case: &'static str) -> Router {
+        let field = || crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit);
+        let page = move |req: Req| async move {
+            let form = || html! { <form method="post">{field()}</form> };
+            let row = || html! { <template><p>"row"</p></template> };
+            match case {
+                "template" => req.test_page("Keys", html! { <template>{form()}</template> }),
+                "nested" => req.test_page("Keys", html! { <template><div><template>{form()}</template></div></template> }),
+                "after" => req.test_page("Keys", html! { {row()}{form()} }),
+                "rendered" => {
+                    let drawn = req.rendered(form());
+                    let placed = &drawn;
+                    req.test_page("Keys", html! { {placed} })
+                }
+                "rendered-template" => {
+                    let drawn = req.rendered(form());
+                    let placed = &drawn;
+                    req.test_page("Keys", html! { <template>{placed}</template> })
+                }
+                _ => req.test_page("Keys", form()),
+            }
+        };
+        let patch = move |req: Req| async move {
+            let answer: HtmlResult = req.patch(html! { <form id={MsgId} method="post">{field()}</form> });
+            answer
+        };
+        App::new(Routes::from(Table::new().route("/", get(page)).route("/patch", get(patch))))
+            .dev(true)
+            .error_page(test_error_page, ())
+            .router()
+    }
+    for case in ["template", "nested", "rendered-template"] {
+        let (status, _, body) = call(keys(case), "GET", None).await;
+        assert_eq!(status, 200, "{case}: {body}");
+        assert!(body.contains(r#"<input type="hidden" name="submit" data-submit>"#), "{case}: {body}");
+    }
+    let (status, _, body) = call_with(keys("form"), "GET", "/patch", Some("action"), None).await;
+    assert_eq!(status, 200, "patch: {body}");
+    for case in ["form", "after", "rendered"] {
+        let (status, _, body) = call(keys(case), "GET", None).await;
+        if cfg!(debug_assertions) {
+            assert_eq!(status, 500, "{case}: {body}");
+            assert!(body.contains("so a browser without JavaScript sends it empty"), "{case}: {body}");
+        } else {
+            assert_eq!(status, 200, "{case}: {body}");
+        }
+    }
+}
+
 /// What a view rendered ahead noted reaches the render it is placed in: its values beside those
 /// the outer render wrote before and after it was made, its script modules and its components.
 #[test]
@@ -11919,6 +11975,14 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         let placed = &form;
         req.test_page("Keyed", html! { {placed} })
     }
+    async fn template_keyed_page(req: Req) -> HtmlResult {
+        req.test_page(
+            "Keyed",
+            html! {
+                <template><form method="post">{crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit)}</form></template>
+            },
+        )
+    }
     async fn plain_patch(req: Req) -> HtmlResult {
         req.patch(html! { <p id={MsgId}>"read again"</p> })
     }
@@ -11939,6 +12003,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route("/keyed", get(keyed_page))
         .route("/keyed-patch", get(keyed_patch))
         .route("/keyed-rendered", get(keyed_rendered))
+        .route("/template-keyed", get(template_keyed_page))
         .route("/plain-patch", get(plain_patch))
         .route("/same", get(|| async { html(&[]) }))
         .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
@@ -12060,6 +12125,14 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let patch_tag = tag_of(&headers).expect("a patch read again is tagged");
     assert_eq!(status, StatusCode::OK);
     let (status, ..) = send(router(), "GET", "/plain-patch", &[action, ("if-none-match", &patch_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // A template's submit key field holds no key (the runtime gives a copy one when it is sent),
+    // so nothing was drawn for this request and the page is tagged.
+    let (status, headers, _) = send(router(), "GET", "/template-keyed", &[]).await;
+    let template_tag = tag_of(&headers).expect("a page with only a template's key field is tagged");
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/template-keyed", &[("if-none-match", &template_tag)]).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 
     // Each answers as it would untagged (a 200, or the error), with no tag and no 304.
