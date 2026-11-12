@@ -8,6 +8,8 @@ An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
 The hydrated Pages Router form calls a native Next API route. A plain form still posts to the SSR page.
+Source failures in the enhanced API return the existing 502 JSON error without
+appending an alert, including unavailable upstreams and malformed records.
 
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
@@ -36,3 +38,7 @@ non-document POST in enhanced mode, and reads back through
 `context.request.get` using the browser context's own cookie jar. HTTP checks
 also cover rejected writes, multiple clients and concurrent accepted requests.
 These are functional checks, not throughput measurements.
+
+`node --test --test-name-pattern="enhanced alert POST" production.test.mjs`
+starts the built app and a synthetic HTTP upstream to check source failures,
+JSON error responses and unchanged session readback.
