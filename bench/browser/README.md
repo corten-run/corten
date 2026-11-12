@@ -87,7 +87,7 @@ The harness uses the repository's Playwright and its Chromium.
 ## On Linux, against the most used frameworks (round browser-4)
 
 `droplet.mjs browser-4 --suite browser` on a DigitalOcean c-8 droplet (Xeon Platinum 8358, not
-the 8280 of browser-3), Linux 6.8, headless Chromium 156.0.8078.4, 2026-11-11, at commit 3fb4b1ac.
+the 8280 of browser-3), Linux 6.8, headless Chromium 156.0.8078.4, 2026-11-11, at commit `3fb4b1ac`.
 Corten's runtime, `views.js` and the handler module are the ones the framework serves. Every app
 passed the DOM checks after every operation (no page errors), and every server-rendered app kept
 the server's 1,000 rows (none removed or added while starting).
@@ -148,14 +148,14 @@ What it shows:
    and Remix slower. The CPU, Chromium and Corten's runtime all changed between the rounds, and
    this round does not show which slowed Corten's takeover. An A/B on one Core i9-10885H laptop
    with this round's Chromium (156.0.8078.4), `ssr.mjs` taking turns between this round's commit
-   and 77002fe, measured part of it: takeover +4.24 ± 1.03 ms over 8 pairs of 30 loads and
+   and `77002fe`, measured part of it: takeover +4.24 ± 1.03 ms over 8 pairs of 30 loads and
    +2.96 ± 0.62 ms over 4 more (Solid -0.19 and -0.20 ms), and the runtime's own evaluation at
    load, from performance marks in copies of the page over the loads with no long frame, 9.4 ms
    against 5.9 (+3.5 ms, no spread recorded), spent in four startup steps. This round's median
    load had a long frame, on which takeover reads about 9 ms higher, so part of 6.0 to 10.2 ms is
    probably that.
    [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
-   (8c2a1b71) with this round's runtime, evaluation -4.14 ± 0.16 ms (base 10.15 ms, 9.90 to 10.70,
+   (`8c2a1b71`) with this round's runtime, evaluation -4.14 ± 0.16 ms (base 10.15 ms, 9.90 to 10.70,
    against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads) and the takeover of the loads with
    no long frame -3.91 ± 2.40 ms over 8 pairs of 30 loads, with Solid, the control, at
    -0.31 ± 0.85 ms. The two sessions measured the same runtime at 9.4 and 10.15 ms, so their
@@ -183,7 +183,7 @@ What it shows:
 ## On Linux, against the most used frameworks (round browser-3)
 
 `droplet.mjs browser-3 --suite browser` on a DigitalOcean c-8 droplet (Xeon Platinum 8280),
-Ubuntu 24.04, headless Chromium 148.0.7778.96, 2026-10-23, at commit 77002fe, after the fourteen
+Ubuntu 24.04, headless Chromium 148.0.7778.96, 2026-10-23, at commit `77002fe`, after the fourteen
 apps of `bench/fullstack`'s browser pass were stopped. Corten's runtime, `views.js` and the
 handler module are the ones the framework serves. Every app passed the DOM checks after every
 operation, and every server-rendered app kept the server's 1,000 rows (none removed or added
@@ -260,7 +260,7 @@ they stay. Building the rows from one HTML string was about twice as slow.
 
 ## Results
 
-The tables in this section are the first run, on commit a755602. [Closing the gaps](#closing-the-gaps)
+The tables in this section are the first run, on commit `a755602`. [Closing the gaps](#closing-the-gaps)
 has what changed after it. They were measured on 2026-10-22 on one Windows desktop, with headless Chromium 148.0.7778.96.
 Values are medians in milliseconds. "Commit" runs from the click until the app has updated the
 DOM, which every app has done once the microtasks queued during the click have run;

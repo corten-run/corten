@@ -194,7 +194,7 @@ range when they disagree. Takeover runs from the HTML being parsed to the app ma
 ready, for 1,000 rows the server rendered, less any frame the browser paints in between (the
 median of 30 loads that take turns between the apps); every framework kept the server's rows.
 Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-4 (2026-11-11, at
-3fb4b1ac, on a DigitalOcean c-8 droplet with a Xeon Platinum 8358;
+`3fb4b1ac`, on a DigitalOcean c-8 droplet with a Xeon Platinum 8358;
 [how the round ran](../bench/browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
@@ -219,7 +219,7 @@ takeover is the fastest of the frameworks in this round, but that is one round o
 has moved between runs before: round browser-2 measured 29.5 ms for Corten, and three reruns of
 that step on one CPU model gave 4.9, 20.7 and 6.3 ms
 ([browser benchmark](../bench/browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-3)).
-It is also slower than in round browser-3 (2026-10-23, at 77002fe): 10.2 ms against 6.0 then,
+It is also slower than in round browser-3 (2026-10-23, at `77002fe`): 10.2 ms against 6.0 then,
 while Solid, Svelte, Vue, React and plain JavaScript took over faster in this round than in that
 one (Solid 16.2 ms against 19.6) and Remix slower. Two things moved for Corten that did not for
 most apps. On about half of its loads (and React's) a long frame rendered between parsing and the
@@ -232,14 +232,14 @@ and after Svelte and Vue now. The two rounds ran on different CPUs (a Xeon Plati
 different Chromium versions (148 then) and different Corten runtimes, and they do not show which
 of those slowed Corten's takeover. An A/B on one Intel Core i9-10885H laptop with browser-4's
 Chromium (156.0.8078.4), `bench/browser/ssr.mjs` taking turns between browser-4's commit and
-77002fe, measured part of it: takeover 4.24 ms slower (standard deviation 1.03) over 8 pairs of 30
+`77002fe`, measured part of it: takeover 4.24 ms slower (standard deviation 1.03) over 8 pairs of 30
 loads and 2.96 ms slower (0.62) over 4 more, Solid -0.19 and -0.20 ms, and the runtime's own
 evaluation at load, from performance marks in copies of the page over the loads with no long
 frame, 9.4 ms against 5.9 (+3.5 ms, no spread recorded), spent in four startup steps that did work
 nothing used or did it the slow way. Browser-4's median load had a long frame, on which takeover
 reads about 9 ms higher, so part of 6.0 to 10.2 ms is probably that.
 [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
-(8c2a1b71) with browser-4's runtime, evaluation fell 4.14 ms (standard deviation 0.16; base 10.15
+(`8c2a1b71`) with browser-4's runtime, evaluation fell 4.14 ms (standard deviation 0.16; base 10.15
 ms, 9.90 to 10.70, against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads each), and the
 takeover of the loads with no long frame 3.91 ms (standard deviation 2.40) over 8 pairs of 30
 loads, with Solid, the control, at -0.31 ms (standard deviation 0.85). The two sessions measured

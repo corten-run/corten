@@ -5,6 +5,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Added
+
+- The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
+  prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
+  has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
+  body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
+  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
+  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error` with status 0; the form is left not busy each time. Another file of the same
+  name, chosen while a write sending the first is out, is sent after it, whether its size or only
+  its time differs, where the same file pressed again is not. Each check failed against a runtime
+  with the line it covers taken out
+  ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+
 ### Fixed
 
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
@@ -33,6 +47,24 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+
+### Documentation
+
+- `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
+  (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
+  kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file
+  cites and skips none
+  ([#1260 bench/fullstack/README.md cites three commits GitHub does not have (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check](https://github.com/corten-run/corten/issues/1260)).
+- `npm run check` fails on a commit cited in backticks in the repository's Markdown that is not
+  on the checkout's history or under `refs/tags/evidence/` (which keeps cited commits no branch
+  has), naming its file, line and commit and the fetch from corten-run/corten that brings the
+  evidence tags; a shallow clone fails once, saying to fetch the whole history. CI's `npm-check`
+  group checks out the whole history, and with it every tag. Another repository's commit is
+  written `owner/repo@sha`, as GitHub writes one, and `scripts/choices.mjs` takes that form as a
+  Last checked commit; Corten's own is written alone. Thirteen citations of five commits written
+  without backticks in `docs/`, `bench/browser/README.md` and `bench/fullstack/README.md` now
+  have them, so they are checked
+  ([#1219 Twelve commits design.md cites as evidence for Choices 25, 26 and 38 and Limit 21 are not on GitHub, so their numbers cannot be taken again](https://github.com/corten-run/corten/issues/1219)).
 
 ## 0.2.0 (2026-11-11)
 
