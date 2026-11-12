@@ -35,9 +35,13 @@ Corten is pre-1.0, so any minor version may change the API.
   before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
   it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
   slug `/posts`). A debug build panics when such a link is written, naming the route and the
-  field; a release build writes `%FF` after the value (`/items/..%FF`), which the route answers
-  with a 400. Values that only contain dots (`a.b`, `.hidden`) are written as before, and a route
-  path with a `.` or `..` segment, or that text after a parameter, no longer compiles
+  field; a release build logs that as an error and writes `%FF` after the value (`/items/..%FF`),
+  which the route answers with a 400. Values that only contain dots (`a.b`, `.hidden`) are written
+  as before, and so is an empty value between two segments. A route path with a `.` or `..`
+  segment, or that text after a parameter, no longer compiles, nor does a hand-written `Route`
+  whose `WRITTEN` has that text or whose `PATH` in an area or an API has such a segment; the
+  values a hand-written `write_href` writes are not checked. The check costs a whole-segment value
+  a comparison of its length, and a `{*rest}` value with a dot a second read
   (docs/design.md#limit-path-values)
   ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no

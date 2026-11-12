@@ -2848,17 +2848,28 @@ by design; where it is known, a limit says what would lift it or why it is so.
     value first or last in the path (`//posts` is another host to a browser, `/items/` matches no
     `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
     `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
-    written as they are: a debug build panics when the link is written, naming the route and the
-    field, and a release build writes `%FF` after the value (`/items/..%FF`,
-    `/files/public/..%FF/private/x`, `/%FF/posts`), which no browser resolves and the route
-    answers with a 400, since no parameter reads a value that is not UTF-8. The link opens no
-    other page or file either way. A value that only contains dots (`a.b`, `...`, `.hidden`) is
-    written as it is, and so is an empty one between two segments (`/notes//edit`), which reads
-    back. A route's own path cannot have a `.` or `..` segment, or that text after a parameter:
-    neither compiles. The check is where a link is written, not where a request is read: no
-    browser sends such a segment, so a check on every request with parameters would cost them all
-    to stop what no link sends, and a value decoded from a segment can hold `../` anyway
-    (`..%2F`), so it would not make a parameter safe to use as a file path; an app that does that
-    checks the value itself. Writing a link pays a comparison of each parameter's length, and a
-    pass over each `{*rest}` value. An app whose slugs, names or file keys come from people
-    refuses these values where it stores them, so its links never reach the check.
+    written as they are by a `#[derive(Route)]` link: a debug build panics when the link is
+    written, naming the route and the field, and a release build logs that as an error and writes
+    `%FF` after the value (`/items/..%FF`, `/files/public/..%FF/private/x`, `/%FF/posts`), which
+    no browser resolves and the route answers with a 400, since no parameter reads a value that is
+    not UTF-8. The link opens no other page or file either way. A value that only contains dots
+    (`a.b`, `...`, `.hidden`) is written as it is, and so is an empty one between two segments
+    (`/notes//edit`, or `/shelves//` for `/shelves/{id}/`), which reads back. A route's own path
+    cannot have a `.` or `..` segment, or that text after a parameter: with `#[derive(Route)]`
+    neither compiles, and a `Route` written by hand does not build with either in its `WRITTEN`
+    path, or with a dot segment in its `PATH` where an area or an API adds it. The values a
+    hand-written `write_href` writes are its own, and nothing checks them. The check is where a
+    link is written, not where a request is read: no browser sends such a segment, so a check on
+    every request with parameters would cost them all to stop what no link sends, and a value
+    decoded from a segment can hold `../` anyway (`..%2F`), so it would not make a parameter safe
+    to use as a file path; an app that does that checks the value itself. Writing a link pays
+    inside the pass that already encodes each value, which also says whether the value has a dot,
+    so a whole-segment value pays a comparison of its length. Counted with callgrind in a release
+    build (1,000 and 11,000 links of one route, the difference over 10,000), at `236d3839` against
+    `a7e02c39`, a link costs: `/items/{id}` 120 instructions against 117, `/{user}/posts` 128
+    against 131, `/feeds/{name}.xml` 125 against 121, three parameters (one a `u32`, checked on
+    what its `Display` wrote) 525 against 506, and `/files/{*path}` with a 29-byte value 178
+    against 170 without a dot and 270 against 170 with one (`sum.md`): whether a dot starts a
+    segment depends on the bytes beside it, which that pass does not keep, so a `{*rest}` value
+    with a dot is read again, eight bytes at a time. An app whose slugs, names or file keys come
+    from people refuses these values where it stores them, so its links never reach the check.
