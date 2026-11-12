@@ -28,6 +28,29 @@ Corten is pre-1.0, so any minor version may change the API.
   with the line it covers taken out
   ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
 
+### Changed
+
+- `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
+  `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
+  value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
+  host, such as `href="/items"`, `href={"/items"}` or `action="/watch"`, is a compile error that
+  names the fix, as the type-safety guide already said of every link. This breaks an app that
+  wrote one. To migrate, link to the route, `href={url::Items}` (a `#[derive(Route)]` struct;
+  `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)` for a place on a page),
+  and name a static file by its constant, `src={req.asset(Static::LOGO_SVG)}`
+  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, a tuple that keeps a
+  `srcset`'s descriptors, and for `ping` a tuple that keeps the spaces between its URLs). A path
+  on this origin that the app does not route, such as another service behind the same proxy or
+  `/oauth2/sign_out`, is a `corten::Local`,
+  `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query
+  and `#fragment`: an explicit opt-out the compiler takes on trust, since a `Local` of a path the
+  app routes compiles too. A fragment (`#top`), a full URL, `mailto:`,
+  `tel:` and `//host` still compile. Any other expression in braces is not checked, so a path
+  built there (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it
+  with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
+  say where the check holds
+  ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
+
 ### Fixed
 
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
@@ -64,6 +87,20 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
+  Firefox) is checked against `Host` by its name and port, and under `Policy::hsts` its scheme,
+  where only what followed `://` was compared: under `Policy::hsts` the `Origin` must be `https` or
+  loopback, so a plain-http page on the app's host can no longer open a socket to the HTTPS app
+  (with the user's `Secure` cookies) or post to it. Browsers send `Sec-Fetch-Site` only to secure
+  origins, so an app with `hsts` now refuses every write and handshake from a plain-http page other
+  than loopback, in every browser, the app itself reached as `http://192.168.1.5` included; one
+  served that way must not set `hsts`. A default port is the same written or left out
+  (`https://app.example` matches `Host: app.example:443`), also for the plain notice cookie, and an
+  origin of another scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still
+  not compared, since behind a proxy that ends TLS the app cannot tell which it is served over
+  ([design Limit 26](docs/design.md#limit-origin-scheme)); the deploy guide's checklist says to set
+  `hsts` for an app served only over HTTPS even when the proxy sends the header
+  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
 - Locale negotiation follows RFC 4647 Lookup, then Corten's same-language step: an
   `Accept-Language` tag loses its last subtag (and a single-character one before it) until it
   names a listed locale, and only then is the first locale of its language taken
