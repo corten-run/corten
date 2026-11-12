@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
 import { allApps } from "../fullstack/apps.mjs";
 import { spread } from "../fullstack/passes.mjs";
-import { apps, locales } from "./contract.mjs";
+import { locales } from "./contract.mjs";
+import { groupApps } from "./groups.mjs";
 const labels = {
   nextjs: "Next.js 16.4 (Pages Router, React SSR)",
   phoenix: "Phoenix 1.8 (Elixir, controller + HEEx)",
@@ -18,12 +19,15 @@ export { phases, sources, targets } from "../catalog/contract.mjs";
 // v4: an app container that stops during a load phase is that app's recorded outcome
 // (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
 // than three passes, and each stage that lost a pass carries the stop (stageAggregate).
-export const resultSchema = "marketplace-results/v4";
+// v5 adds named candidate cohorts and raw feature qualification before timing.
+export const resultSchema = "marketplace-results/v5";
 // The schemas report.mjs and compare.mjs read. A v3 summary is read as a v4 one with no stop
 // records: under v3 an app that stopped failed the round, so a valid v3 round has none, and its
-// aggregates lack only the stopped field. Rounds are written as v4 only.
+// aggregates lack only the stopped field. New rounds are written as v5; groupless v4
+// evidence retains its original full-inventory interpretation.
 export const v3Schema = "marketplace-results/v3";
-export const readableSchemas = [v3Schema, resultSchema];
+export const v4Schema = "marketplace-results/v4";
+export const readableSchemas = [v3Schema, v4Schema, resultSchema];
 export const timedProfiles = sources.flatMap((source) => [
   ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },
@@ -37,9 +41,21 @@ export function roundIdentity(round) {
 }
 export function parseArgs(args, inventory) {
   const identity = roundIdentity(args[0]);
-  const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...args.slice(1)], inventory);
+  const rest = args.slice(1), at = rest.indexOf("--group");
+  let group;
+  if (at !== -1) {
+    group = rest[at + 1]; groupApps(group);
+    assert.ok(group && rest.lastIndexOf("--group") === at, "--group requires one named group");
+    assert.ok(!rest.includes("--apps"), "--group cannot be combined with --apps");
+    rest.splice(at, 2);
+  }
+  const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...rest], inventory);
+  if (group !== undefined) {
+    options.group = group; options.apps = groupApps(group);
+    assert.ok(options.apps.every((a) => Object.hasOwn(inventory, a)), "group adapter missing from inventory");
+  }
   if (identity.kind === "official") {
-    assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all twenty apps; use wN for development");
+    assert.deepEqual([...options.apps].sort(), groupApps(group).sort(), "official rounds require the complete named group; use wN for development");
     assert.equal(options.passes, 3, "official rounds require three passes");
     assert.equal(options.checkOnly, false, "use wN for check-only development");
   }

@@ -2521,7 +2521,89 @@ rules something out.
     Last checked: 2026-11-11, RFC 4647 sections 3.4 and 3.4.1 read against `negotiate` as at
     `09a9cd5d6`, and the step's cases run in its tests.
 
-43. <a id="choice-data-on-single-quoted"></a>**`data-on` is a single-quoted attribute, so the JSON of
+43. <a id="choice-no-npm-launcher"></a>**No npm initializer: an app starts from the `corten`
+    command, installed with Cargo, and `create-corten` only says so.** A `create-corten` package,
+    which `npm create corten` runs, could download the prebuilt `corten` of its own version and
+    run `corten new`, so a developer coming from JavaScript could start with a command they know
+    ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
+    Corten publishes no initializer that creates an app. The app it would write is a crate that
+    builds with Cargo, and `corten dev`, `check` and `fmt` are the command's, which Cargo installs
+    (`cargo install corten-cli`, or `cargo binstall corten-cli` for the prebuilt binary), so the
+    package would take the place of `corten new` and leave every other step of getting started as
+    it is: the common case is no shorter, and installing Rust, which no npm package does, is the
+    same either way. Against that it is a second way to start an app and a release channel to
+    keep: a Node script outside the runtime that downloads an executable and runs it; a package on
+    a second registry at the crates' version, where a published version cannot be replaced, as on
+    crates.io; a publish step after crates.io's that can fail on its own, leaving the crates at a
+    version npm does not have; a trusted publisher npm sets up only for a package that already
+    exists, so its first version is published by hand; and a test of each of those on every
+    platform. Such a launcher would also have to check the binary before running it. Its publish
+    step could write each archive's sha256 into the package from the same run's builds, so that
+    is a constraint on its design, not a reason against it. That the release's own archives carry
+    no checksum, signature or attestation is a gap of its own, which `cargo binstall` and a manual
+    download already have
+    ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
+
+    The name is held all the same, as [Releasing](../CONTRIBUTING.md#releasing) holds `corten` on
+    crates.io should it come free ("take it only so no one else can"): `npm create corten` runs
+    whatever `create-corten` holds, so with the name open anyone could make it run their code.
+    `create-corten` is a placeholder, published once by hand, with no dependencies or install
+    scripts, that creates nothing: it prints the three steps (install Rust, `cargo install
+    corten-cli`, `corten new <name>`) and a link to the getting-started guide, and exits with
+    status 1, so a script that goes on into the app stops. Holding it moves the risk from anyone
+    who publishes the name to whoever takes over the account that holds it. That account requires
+    two-factor authentication, and the package refuses tokens and has no trusted publisher, so it
+    changes only through a person signed in. No release publishes it; a move of the guide is a new
+    version of it, by hand.
+
+    Not chosen: an initializer that also installs the command, a second installer for a binary
+    Cargo already installs; the pattern esbuild and Biome use, a package that depends on one
+    package per platform holding the binary (`npx corten dev`), where npm checks each download
+    itself, but six packages are published at every version beside the crates and the app still
+    builds with Cargo, so it moves the `cargo install` line to npm as a second way to install the
+    command; and leaving the name open, which keeps no package but lets a stranger's code answer
+    the npm convention.
+
+    Stands on: platform (on the npm registry `create-corten`, `createcorten`, `corten` and
+    `corten-cli` have no package, the `corten` scope is held by an account that is not the
+    project's (its package list answers, empty) and the `corten-run` scope does not exist, so the
+    unscoped `create-corten`, which `npm create corten` runs, is the only natural name, and it is
+    open to anyone); platform (npm gives names first come, first served, counts a package with no
+    genuine function as squatting and may remove it, and moves a name only on a trademark or like
+    claim, never on request; it sets up a trusted publisher only for a package already on the
+    registry); bet (npm counts a package that tells a developer how Corten is installed as having
+    a function, and does not remove the placeholder as squatting); bet (what stops a developer who
+    knows JavaScript from trying Corten is installing Rust, which an npm package does not do,
+    rather than the `cargo install` line, and the issue proposing the package came from the
+    project, not from someone who stopped there); reasoned (an app `corten new` writes is an
+    ordinary crate, and its other commands are the `corten` command's, so an npm initializer moves
+    `corten new` and leaves the getting-started guide's other steps on Cargo); reasoned (with the
+    name open, `npm create corten` runs a stranger's code with no account taken over; held, it
+    takes a person signed in to one account with two-factor authentication, the kind of risk the
+    crates carry on crates.io, on one more account); value (a release that can stop between two
+    registries, one at the new version and the other not, puts its reliability at risk, first in
+    the values' order; an initializer is a second way to start an app, Values 5, under one way to
+    do things, third in the order; a second channel and a script that runs a downloaded binary
+    have to earn their place, Values 6; and a channel that leaves the common case as long does not
+    make it shorter, Values 7, so it gives only developer convenience, last in the order).
+
+    Revisit when: an app made by `corten new` can be run, reloaded and checked with no command
+    Cargo installs, so an initializer would be the whole of getting started; Corten publishes
+    something on npm for another reason, so a channel, its publisher and its recovery are already
+    kept; someone outside the project asks for `npm create corten` to create an app, or reports
+    giving up at the `cargo install` line; or `create-corten` is not the placeholder: another
+    account published the name first, npm removes the placeholder as squatting, or a version the
+    project did not publish appears. Corten cannot place a placeholder on a name another account
+    holds, so then the getting-started guide warns that `npm create corten` is not Corten's and
+    that Corten is installed with Cargo, and a package that runs anything beyond printing is
+    reported to npm as malware (npm does not hand over a name on request); after a takeover of the
+    project's account, the account is recovered, its sessions revoked and the version reported.
+
+    Last checked: 2026-11-12, the npm registry (`npm view` of the four names, the `corten` and
+    `corten-run` scopes' package lists) and npm's trusted-publishing, `npm trust` (npm 11.21.2) and
+    name-squatting documentation, read at `684a5395f`.
+
+44. <a id="choice-data-on-single-quoted"></a>**`data-on` is a single-quoted attribute, so the JSON of
     a handler's arguments keeps its quotes.** A script gets what it works on through its handler's
     arguments ([Rule 3](#rule-handler-arguments)), so a set of a few hundred records it searches or
     sorts in the browser is a `ToJson` argument, typed by its generated declaration and checked at
