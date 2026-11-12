@@ -138,7 +138,8 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
 }
 
 /// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
-/// elements whose text is not markup. Reads markup as `html!` writes it (`<` escaped in text).
+/// elements whose text is not markup. Reads markup as `html!` writes it (`<` escaped in text), and a
+/// `<` that starts no tag (`1 <2`, in markup placed with `raw`) as text, as the browser does.
 pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
     let mut i = 0;
     std::iter::from_fn(move || loop {
@@ -147,9 +148,17 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
             i = html[at..].find("-->").map_or(html.len(), |n| at + n + 3);
             continue;
         }
-        if !html.as_bytes().get(at + 1).is_some_and(u8::is_ascii_alphabetic) {
-            i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
-            continue;
+        match html.as_bytes().get(at + 1) {
+            Some(c) if c.is_ascii_alphabetic() => {}
+            // An end tag, a doctype or a processing instruction: up to its `>`.
+            Some(b'/' | b'!' | b'?') => {
+                i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
+                continue;
+            }
+            _ => {
+                i = at + 1;
+                continue;
+            }
         }
         let tag = start_tag(html, at);
         i = tag.end;
@@ -245,6 +254,26 @@ mod tests {
         assert_eq!(
             (p.attr("ID"), p.attr("data-vars"), &html[p.start..p.end]),
             (Some("p"), None, &html[15..html.find(">x").unwrap() + 1])
+        );
+    }
+
+    /// The same past a double-quoted value, which may hold `'` and `>`; and a `<` that starts no
+    /// tag is text, as the browser reads it, so the tag after it is still found.
+    #[test]
+    fn start_tags_read_a_double_quoted_value_and_take_a_lone_lt_for_text() {
+        let html = concat!(
+            r#"<p title="It's > 'b' data-vars='x'" id="p">1 <2 <i id="i">x</i> < 3 <= 4</p>"#,
+            r#"<div data-vars="--m__fill:7%"></div></p><?x y="<u>"?><b>"#,
+        );
+        let tags: Vec<_> = super::start_tags(html).map(|tag| (tag.name, tag.attrs)).collect();
+        assert_eq!(
+            tags,
+            [
+                ("p".to_string(), vec![("title", "It's > 'b' data-vars='x'"), ("id", "p")]),
+                ("i".to_string(), vec![("id", "i")]),
+                ("div".to_string(), vec![("data-vars", "--m__fill:7%")]),
+                ("b".to_string(), vec![]),
+            ]
         );
     }
 

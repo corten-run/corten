@@ -11,7 +11,7 @@
 // that is not counted; it prints the median and range per repetition, in microseconds, and checks
 // that the three forms give the same value (docs/design.md#choice-data-on-single-quoted).
 //   cargo test --release -p corten-run --all-features --lib -- --ignored json_argument_cost --nocapture
-//   node bench/browser/data-on-cost.mjs [runs=7] [rounds=100]
+//   node bench/browser/data-on-cost.mjs [runs=8] [rounds=100]
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const playwright = createRequire(join(root, "package.json"))("@playwright/test");
-const [runs = 7, rounds = 100] = process.argv.slice(2).map(Number);
+const [runs = 8, rounds = 100] = process.argv.slice(2).map(Number);
 const forms = ["single", "double", "block"];
 /** @type {Record<string, string>} */
 const pages = Object.fromEntries(forms.map((form) => [form, readFileSync(join(root, "target", "data-on-cost", `${form}.html`), "utf8")]));

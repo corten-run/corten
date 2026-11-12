@@ -3205,6 +3205,11 @@ mod carried_tests {
         let unruled = r#"<p data-on='connect:m.f($t," data-vars=")'></p><div data-vars="--m__fill:7%"></div>"#;
         let error = unruled_vars(unruled, rules).expect_err("7% has no rule").to_string();
         assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
+        // Markup placed with raw() may have a `<` that starts no tag in its text: the tag after it
+        // is still read.
+        let raw = r#"<p>1 <2 <div data-vars="--m__fill:7%"></div></p>"#;
+        let error = unruled_vars(raw, rules).expect_err("7% after a lone < has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
     }
 
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
