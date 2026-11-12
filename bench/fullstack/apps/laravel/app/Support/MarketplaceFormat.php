@@ -63,16 +63,26 @@ final class MarketplaceFormat
 
     public function alert(string $email, string $target, string $title): string
     {
+        return $this->alertResult($email, $target, $title)[0];
+    }
+
+    public function alertResult(string $email, string $target, string $title): array
+    {
         if (! str_contains($email, '@')) {
-            return $this->labels['invalid_email'];
+            return [$this->labels['invalid_email'], null];
         }
         $position = 0;
         $amount = $this->parser->parse($target, NumberFormatter::TYPE_DOUBLE, $position);
         $length = preg_match_all('/./us', $target);
         if ($amount === false || ! is_finite($amount) || $amount <= 0 || $position !== $length) {
-            return $this->labels['invalid_price'];
+            return [$this->labels['invalid_price'], null];
         }
 
-        return strtr($this->labels['alert_set'], ['{email}' => $email, '{title}' => $title, '{price}' => $this->amount($amount)]);
+        $minor = round($amount * 100, 0, PHP_ROUND_HALF_UP);
+        if (! is_finite($minor) || $minor >= PHP_INT_MAX) {
+            return [$this->labels['invalid_price'], null];
+        }
+
+        return [strtr($this->labels['alert_set'], ['{email}' => $email, '{title}' => $title, '{price}' => $this->amount($amount)]), (int) $minor];
     }
 }
