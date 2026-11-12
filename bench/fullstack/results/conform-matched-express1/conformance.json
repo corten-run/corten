@@ -1,0 +1,362 @@
+{
+  "format": 2,
+  "tier": "matched",
+  "commit": "042f5716252062edde643cbcf6e72b4ddf868e98",
+  "dirty": false,
+  "imagesFrom": null,
+  "date": "2026-11-12T08:39:10.001Z",
+  "apps": [
+    "express"
+  ],
+  "results": {
+    "express": {
+      "image": "sha256:361ab5110f25a57db82395f51fbcda22466eeaa415b51329da4c4c38e45b5393",
+      "probes": {
+        "pages": true,
+        "page": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f07-D5yKPcvcOQyWOvtVUIfVdaznzQA\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 7943,
+          "ms": 66
+        },
+        "pageBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-encoding": "br",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f07-D5yKPcvcOQyWOvtVUIfVdaznzQA\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 1688,
+          "ms": 60
+        },
+        "pageAgain": {
+          "status": 304,
+          "headers": {
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f07-D5yKPcvcOQyWOvtVUIfVdaznzQA\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 0,
+          "ms": 69
+        },
+        "json": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"2287-deUujxnYROBbzJby00stx1jYy2U\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 8839,
+          "ms": 68
+        },
+        "jsonBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-encoding": "br",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"2287-deUujxnYROBbzJby00stx1jYy2U\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 1444,
+          "ms": 67
+        },
+        "jsonGzip": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"2287-deUujxnYROBbzJby00stx1jYy2U\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 1570,
+          "ms": 45
+        },
+        "head": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"2287-deUujxnYROBbzJby00stx1jYy2U\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 0,
+          "ms": 103
+        },
+        "json404": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"9-0gXL1ngzMqISxa6S1zx3F4wtLyg\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 9,
+          "ms": 61
+        },
+        "json405": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 158,
+          "ms": 83
+        },
+        "page404": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"25c-bzdxxBYzlc/c7+jTMUs6zyLIiH0\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 604,
+          "ms": 96
+        },
+        "page500": {
+          "status": 500,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 148,
+          "ms": 60
+        },
+        "json500": {
+          "status": 500,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 148,
+          "ms": 64
+        },
+        "badHost": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"2287-deUujxnYROBbzJby00stx1jYy2U\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 8839,
+          "ms": 73
+        },
+        "bigHead": {
+          "error": "ECONNRESET",
+          "ms": 84
+        },
+        "formPath": "/items/item_5",
+        "ownPost": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f51-4XC1Q/NPV2eEyYvMr+sfE/5Jg7I\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 8017,
+          "ms": 93
+        },
+        "crossSite": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f51-4XC1Q/NPV2eEyYvMr+sfE/5Jg7I\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 8017,
+          "ms": 49
+        },
+        "bigBody": {
+          "status": 413,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 144,
+          "ms": 108
+        },
+        "afterBig": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"1f07-D5yKPcvcOQyWOvtVUIfVdaznzQA\"",
+            "content-security-policy": "default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: https:;object-src 'none';base-uri 'self';form-action 'self';frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 7943,
+          "ms": 54
+        },
+        "logLines": "0",
+        "tier": "matched",
+        "unfinishedHead": {
+          "closedMs": 30723
+        },
+        "cap": {
+          "below": 950,
+          "belowHeld": 200,
+          "held": 1050,
+          "whileHeld": null,
+          "afterRelease": "closed",
+          "releaseMs": 0,
+          "afterwards": 200
+        },
+        "live": null,
+        "readyPath": null,
+        "slow": {
+          "status": 503,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+          },
+          "bodyLength": 146,
+          "ms": 10078
+        },
+        "readyDown": null
+      },
+      "row": {
+        "pageHeaders": "all",
+        "pageScripts": "strict",
+        "permissions": "yes",
+        "pageCache": "private, no-cache",
+        "etag": "304",
+        "pageCompression": "br",
+        "crossSite": "200",
+        "bigBody": "413",
+        "page404": "404 html",
+        "page500": "500 html",
+        "jsonHeaders": "all",
+        "jsonCache": "private, no-cache",
+        "jsonCompression": "br; gzip",
+        "json404": "404 text/plain",
+        "json405": "404 html",
+        "json500": "500 html",
+        "head": "200",
+        "host": "200",
+        "bigHead": "error ECONNRESET",
+        "logLines": "0",
+        "live": "none",
+        "readyDown": "no readiness endpoint",
+        "deadline": "503 in 10.1 s",
+        "unfinishedHead": "closed in 30.7 s",
+        "connectionCap": "capped, then closed",
+        "unmet": [
+          "crossSite",
+          "json404",
+          "json405",
+          "json500",
+          "host",
+          "live",
+          "readyDown"
+        ]
+      }
+    }
+  }
+}

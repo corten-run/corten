@@ -36,7 +36,7 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
-| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process; under the matched tier's profile, uvicorn run directly), htmx | [apps/fastapi](apps/fastapi) | not yet |
 | express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
@@ -1708,10 +1708,13 @@ framework has nothing for is left out and shows as a column not met where a colu
 column reads the headers on an error answer, so an app that sends its error answers without the
 profile's headers shows that only in its item below and in the measured paragraph after the list), and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
-companion its documentation points to for it (tower-http for axum); a part that needs the app to
+companion its documentation points to for it (tower-http for axum, Helmet for Express, uvicorn for
+FastAPI); a part that needs the app to
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it;
 code the framework's own documentation gives for a part, written as it gives it, counts as provided
-(Next.js's Proxy for a nonce CSP, ASP.NET Core's inline middleware that appends a header). Topcoat's
+(Next.js's Proxy for a nonce CSP, ASP.NET Core's inline middleware that appends a header, FastAPI's
+`@app.middleware("http")` that sets one, and for Express the middleware Helmet's documentation
+gives for a header Helmet does not set). Topcoat's
 documentation gives such code for headers on its error answers (a layer that queues them with
 `response_headers`), which its app does not use yet; no counted column reads those headers, so its
 row is the same either way.
@@ -1849,7 +1852,69 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    `style-src` violation, htmx's indicator styles in a `<style>` element, which `style-src 'self'`
    blocks (checked at `2fa883a6` with Playwright's Chromium: the sort reorders the prices, "show
    all" shows 25 offers, the alert posts a 200 and shows its message).
-7. `fastapi` and `express` are not in it yet: each joins with its profile.
+7. `fastapi`: `PROFILE=matched` adds Starlette's middleware, which FastAPI's documentation names: the
+   host list (`TrustedHostMiddleware`: localhost, the loopback addresses and `HOSTS`, as aspnet's;
+   others a 400), gzip (`GZipMiddleware` at Starlette's defaults: level 9, answers over 500 bytes,
+   not event streams) and a 2 MiB body limit (`RequestBodyLimitMiddleware`, a 413; without it
+   Starlette's form parser already refused a field over 1 MB, a 400). The middleware FastAPI's
+   tutorial gives for a header (`@app.middleware("http")`) sets axum-maud's security headers on every
+   answer the routes make, and `Cache-Control: private, no-cache` on the pages and the JSON (not
+   `/static`); the host list's 400 goes without them. The JSON routes list `HEAD` beside `GET`, since
+   FastAPI answers it only where a route lists it. `fastapi run` has no setting for uvicorn's
+   connection cap, so under the profile the Dockerfile starts the same uvicorn as FastAPI's "Run a
+   Server Manually" does (`uvicorn app.main:app`), with `--limit-concurrency` (`MAX_CONNECTIONS`);
+   without the profile it runs `fastapi run` as before. Past 1,000 connections or requests in flight
+   uvicorn answers a new request with a 503 and closes it, which the cap column counts as served (it
+   counts a request that waits, is closed or never connects). Its item API client already gave up at
+   10 s (a 502). Left out: an ETag (Starlette tags static files only), a cross-site check on the item
+   form (FastAPI has no CSRF protection; the app's own check is the marketplace page's, which the
+   adapter contract asks for), a head size limit and a header timeout (uvicorn's httptools parser has
+   neither, and its keep-alive timeout starts after an answer, so an unfinished first head is held;
+   `--h11-max-incomplete-event-size` bounds a head only with the h11 parser, and the tier does not
+   switch to it: `--http h11` changes the parser every request goes through, from the one
+   `uvicorn[standard]` installs and uvicorn picks to its pure-Python one, which is a choice of speed
+   rather than a setting for this part), liveness and readiness; its failed reads stay the app's 502 `text/plain`. One
+   `style-src` violation, htmx's indicator styles, as aspnet's.
+8. `express`: Helmet, which Express's security guide gives, sets axum-maud's CSP, referrer and frame
+   policies (its options) and its other headers as it sends them by default (among them
+   `Cross-Origin-Opener-Policy`, `X-Content-Type-Options` and HSTS); the middleware Helmet's
+   documentation gives for a header it does not set ("You might not need Helmet": one middleware that
+   calls `res.set`) adds `Permissions-Policy` to every answer and `Cache-Control: private, no-cache`
+   to the pages and the JSON (it runs after `express.static`, so not the static files). Express's own
+   middleware adds compression (`compression`: Brotli or gzip; its `filter` option leaves out the live
+   stream, which it would hold back to fill its window) and a deadline (`connect-timeout`: a 503 past
+   10 s through Express's error handler; an answer whose headers are sent is no longer timed). The
+   deadline needs the checks its documentation gives: `haltOnTimedout` after each body parser and
+   `if (req.timedout) return;` after each `await` in a handler. Without them the handler answers a
+   timed-out request a second time when its read comes back, which throws: from a page's render that
+   ended the process, and from the JSON's `res.json` Express's error handler closed the connection,
+   with a second request on it unanswered (both seen with an item API that answered in 12 s). The
+   checks stop a late success from writing; a read that fails after the deadline (the item API's 5xx
+   past 10 s, or Node's fetch giving up on a hung API) still rejects the `await`, and Express's error
+   handler, finding the 503 sent, closes the connection, as Express's documented pattern does. The
+   three packages are loaded only under the profile.
+   `app.listen` makes a Node server;
+   under the profile the app makes it as Express's documentation does (`http.createServer(app)`) with
+   Node's settings: `headersTimeout` 30 s (Node's default is 60 s), checked every second
+   (`connectionsCheckingInterval`; at Node's 30 s an unfinished head would close anywhere from 30 to
+   60 s), and `maxConnections` (`MAX_CONNECTIONS`; Node closes a connection past it). Already Express's
+   or Node's defaults: an ETag and a 304 on a rendered page, a 413 past `urlencoded`'s 100 kB, a 431
+   past Node's 16 KiB of headers (or a reset while the probe is still sending them), `HEAD` on a `GET`
+   route, and an HTML 500 from Express's error handler for a page's failed read. Left out: a host
+   list and a cross-site check (Express has neither; `vhost` routes by name and refuses nothing),
+   with `host-validation` too: Helmet's "See also" lists it among modules its maintainers "have not
+   heavily audited", Express's documentation does not name it, and its last release is from 2018,
+   so it is not the framework's own,
+   liveness and readiness (Express's health-check guide describes them and names no middleware), and
+   JSON errors: its 404 is the app's `sendStatus` (`text/plain`), a wrong method falls through to
+   Express's HTML 404 (it has no 405), and its error handler answers HTML. The answers Express's
+   error handler (finalhandler) makes, the 413, the deadline's 503, the 500s and the HTML 404 for a
+   path or method no route has, keep Helmet's other headers and `Permissions-Policy` but carry
+   finalhandler's own CSP, `default-src 'none'`, in place of the profile's (stricter: its error page
+   loads nothing); the item page's 404 is the app's view, with the profile's. One `style-src` violation,
+   htmx's indicator styles, as FastAPI's. Its image grows by 1.5 MB (241,479,756 bytes against
+   239,983,013 built at `31e0443a`, the commit before), FastAPI's by 3 KB (236,298,472 against
+   236,295,182).
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1883,6 +1948,18 @@ readiness with the item API hung (200); its deadline is a 500 in 10.3 s. aspnet-
 `cb-aspnet-aot` built at the same commit, met all 14 of its columns that are not about pages
 (its readiness 503 in 2.0 s, its deadline 503 in 10.1 s), 13 by the tier's rule, since its
 readiness is a health check of its own.
+FastAPI, from `cb-fastapi` built at `042f5716` (`results/conform-matched-fastapi1/conformance.json`),
+met 15 and missed 9: the ETag, the cross-site post (200), both failed reads (502 `text/plain`), the
+64 KiB header (200), liveness and readiness, the unfinished head (held 45 s) and the cap (a request
+was answered with 950 connections held, and with 1,050 held one more was answered 503). Express, from
+`cb-express` built at the same commit (`results/conform-matched-express1/conformance.json`), met 17
+and missed 7: the cross-site post (200), the JSON's 404 (`text/plain`), wrong method (an HTML 404)
+and failed read (an HTML 500), the unknown Host (200), liveness and readiness; its unfinished head
+closed in 30.7 s, and with 1,050 connections held the request on one more was closed (then a 200).
+Without the profile both apps' matrices are as before: from the same two images,
+`results/conform-defaults-fastapi-express1/conformance.json` has every cell as
+`results/conform-defaults-fastapi-express-before1/conformance.json`, probed the same way from images
+built at `31e0443a`, the commit before, except FastAPI's deadline time (a 502 in 10.1 s, then 10.2 s).
 No load phase has run in the tier yet.
 
 ### The hardening step

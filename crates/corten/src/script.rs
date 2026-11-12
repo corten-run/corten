@@ -845,7 +845,7 @@
 //!
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
-//!     html! { <li><img src="/a.png" alt="" on:error={js::crashed(event)}></li> }
+//!     html! { <li><img src="https://cdn.example/a.png" alt="" on:error={js::crashed(event)}></li> }
 //! }
 //! # fn main() {}
 //! ```

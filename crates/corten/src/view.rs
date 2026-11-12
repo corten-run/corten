@@ -33,10 +33,12 @@
 //! - Text is a string literal: `"Price"`. Source whitespace between tags is never output.
 //! - `{expr}` prints an expression, escaped: anything that implements [`Render`] (strings,
 //!   numbers, `Option`, other views) or else `Display`. [`raw`] prints trusted HTML as is.
-//! - Attributes: `class="x"`, `required`, `href={url}`, `href={("/items/", &item.id)}` (a tuple
-//!   prints its parts in order, without building a string). A `bool` value prints the bare name when
-//!   true and nothing when false; `None` leaves the attribute out. `{..attrs}` spreads an
-//!   [`Attrs`] value (`<input {..e.aria(field)}>`, [`crate::Errors::within`]).
+//! - Attributes: `class="x"`, `required`, `href={url::Item { id: &item.id }}` (a link is a route,
+//!   [`crate::route`]), `aria-label={("Remove ", &item.name)}` (a tuple prints its parts in order,
+//!   without building a string). A `bool` value prints the bare name when true and nothing when
+//!   false; `None` leaves the attribute out. `{..attrs}` spreads an [`Attrs`] value
+//!   (`<input {..e.aria(field)}>`, [`crate::Errors::within`]). A path in the app written as text in
+//!   a URL attribute (`href="/items"`) does not compile: see [`html!`].
 //! - `for`, `if`/`else`, `match` and `let` are written as in Rust, with markup in their braces.
 //! - `class={..}` takes a list: a class constant of the component's stylesheet (`class={Title}`,
 //!   see [`crate::style`]), utility classes, text, an `Option` of one, or a tuple of them, joined
@@ -103,19 +105,28 @@ use std::{
 ///
 /// ```
 /// use corten::prelude::*;
-/// let before: Option<&str> = Some("/shipments/1");
+///
+/// #[derive(Route)]
+/// #[route("/")]
+/// struct Home;
+///
+/// #[derive(Route)]
+/// #[route("/items/{id}")]
+/// struct Item<'a> { id: &'a str }
+///
+/// let before: Option<&str> = Some("https://carrier.example/track/1");
 /// let spread: [(&str, &str); 1] = [("role", "img")];
 /// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
 /// let _ = html! { <span aria-label="3 unread" {..spread}>"3"</span> };
-/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
-/// let _ = html! { <a href={before.unwrap_or("/shipments")} aria-label="Previous shipment">"<"</a> };
+/// let _ = html! { <a href={Home} aria-label="Home">"<"</a> };
+/// let _ = html! { <a href={before.unwrap_or("https://carrier.example/track")} aria-label="Previous shipment">"<"</a> };
 /// let _ = html! { <a href={before}>"Previous shipment"</a> };
 /// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
 /// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
 /// let item = 7;
-/// let _ = html! { <a href={format!("/items/{item}").as_str()} aria-label="Item">"7"</a> };
+/// let _ = html! { <a href={Item { id: &item.to_string() }} aria-label="Item">"7"</a> };
 /// macro_rules! next { ($h:ident) => { html! { <a href={$h} aria-label="Next">">"</a> } } }
-/// let to = "/items/8";
+/// let to = Item { id: "8" };
 /// let _ = next!(to);
 /// ```
 ///
@@ -124,6 +135,132 @@ use std::{
 /// app's own that writes nothing. SVG is told by an enclosing `<svg>` in the same `html!`: a
 /// component that draws an SVG fragment names its `<a>` with `role="group"` (or `role="link"`
 /// with its href).
+///
+/// A path in the app written as text in an element's URL attribute does not compile: a link is a
+/// route (`href={url::Items}`, [`crate::route`]) and a static file is named by its constant
+/// (`src={req.asset(Static::LOGO_SVG)}`, [`crate::assets`]), so a typo or a route whose path
+/// changed is a compile error rather than a link that answers 404. The URL attributes are `href`,
+/// `src`, `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping` and
+/// `xlink:href`, in any case, and a path is a URL that starts with one `/` (or `\`, which a
+/// browser reads as `/`), after the spaces a browser drops, or `http:` or `https:` without the
+/// `//` of a host (`https:/items`: on a page of that scheme a browser reads it as `/items`, and on
+/// a page of the other scheme as the host `items`, so it is a mistake either way). The value is text,
+/// `href="/items"`, or one string literal in braces, `href={"/items"}`. The error names the form
+/// the attribute takes: a tuple that keeps a `srcset`'s descriptors
+/// (`srcset={(req.asset(Static::PHOTO_PNG), " 1x, ", req.asset(Static::PHOTO_2X_PNG), " 2x")}`),
+/// or a static file's constant and its fragment (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}`):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post" action="/watch"><button>"Watch"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post"><button formaction="/unwatch">"Remove"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img src="/logo.svg" alt="Corten"> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img srcset="https://cdn.example/logo.svg 1x, /logo-2x.svg 2x" alt="Corten"> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href={"/items"}>"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a HREF="/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="\\items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href=" /items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="https:/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><use xlink:href="/sprite.svg#arrow" /></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <video poster="/clip.jpg"></video> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <object data="/doc.pdf"></object> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="https://example.com" ping="/seen">"Example"</a> };
+/// ```
+///
+/// A fragment, a URL with a scheme (`https:`, `mailto:`, `tel:`, `data:`) and one on another
+/// host (`//cdn.example`) are not paths in the app, and compile, as does the same markup with one
+/// of them:
+///
+/// ```
+/// use corten::prelude::*;
+/// let _ = html! { <a href="#top">"Back to the top"</a> };
+/// let _ = html! { <a href="https://example.com">"Example"</a> };
+/// let _ = html! { <a href="mailto:help@example.com">"Write to us"</a> };
+/// let _ = html! { <a href="tel:+15550100">"Call us"</a> };
+/// let _ = html! { <form method="post" action="https://example.com/watch"><button formaction="https://example.com/unwatch">"Remove"</button></form> };
+/// let _ = html! { <img src="//cdn.example/logo.svg" srcset="data:image/jpeg;base64,/9j/4AAQ 1x, https://cdn.example/logo-2x.svg 2x" alt="Corten"> };
+/// let _ = html! { <a href={"#top"}>"Back to the top"</a> };
+/// let _ = html! { <a HREF="https://example.com" ping="https://stats.example/seen">"Example"</a> };
+/// let _ = html! { <svg><use xlink:href="#arrow" /></svg> };
+/// let _ = html! { <video poster="https://cdn.example/clip.jpg"></video> };
+/// let _ = html! { <object data="https://cdn.example/doc.pdf"></object> };
+/// ```
+///
+/// A path on this origin that the app does not route (another service behind the same proxy, an
+/// `/oauth2/sign_out` a proxy answers) is a [`crate::Local`], the type a test names such a path
+/// with. It is an explicit opt-out the compiler takes on trust: a `Local` of a path the app does
+/// route compiles too, and nothing checks that the path exists. [`crate::Local::parse`] refuses
+/// text that is not a path on this site (`None`), and a `Local` keeps its query and `#fragment`:
+///
+/// ```
+/// use corten::{prelude::*, Local};
+/// let sign_out = Local::parse("/oauth2/sign_out").expect("a path on this site");
+/// let help = Local::parse("/proxy/help?topic=billing#refunds").expect("a path on this site");
+/// let view = html! { <a href={sign_out}>"Sign out"</a><a href={&help}>"Refunds"</a> };
+/// assert_eq!(
+///     view.to_html(),
+///     r#"<a href="/oauth2/sign_out">Sign out</a><a href="/proxy/help?topic=billing#refunds">Refunds</a>"#
+/// );
+/// ```
+///
+/// Only a value whose text the macro sees is read. Any other expression in braces is known only
+/// when the page renders, so `href={format!("/items/{id}")}`, a tuple of a path's parts
+/// (`href={("/items/", &id)}`) and a `&str` compile, as do a spread, a component's prop, a
+/// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
+/// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -1234,7 +1371,7 @@ impl Render for () {
     fn render(&self, _: &mut String) {}
 }
 
-/// Each part in order, without building a string: `href={("/items/", &item.id)}`.
+/// Each part in order, without building a string: `aria-label={("Remove ", &item.name)}`.
 macro_rules! tuples {
     ($(($($name:ident),+)),*) => {$(
         impl<$($name: Render),+> Render for ($($name,)+) {

@@ -26,6 +26,38 @@ Corten is pre-1.0, so any minor version may change the API.
   its time differs, where the same file pressed again is not. Each check failed against a runtime
   with the line it covers taken out
   ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+- FastAPI and Express join `bench/fullstack`'s matched tier, so every app its membership names now
+  starts with the profile. Under `PROFILE=matched` FastAPI adds Starlette's host list, gzip and body
+  limit, the security headers and `Cache-Control` from the middleware FastAPI's tutorial gives,
+  `HEAD` on the JSON, and uvicorn's connection cap (`--limit-concurrency`, a 503 past it, run as
+  FastAPI's manual-server guide starts uvicorn); its matched matrix meets 15 of 24 columns. Express
+  adds Helmet, its own `compression` and `connect-timeout` middleware, `Permissions-Policy` and
+  `Cache-Control` as Helmet's documentation sets a header, and Node's 30 s header timeout and
+  connection cap; it meets 17 of 24. Without the profile both apps answer as before
+  ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+
+### Changed
+
+- `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
+  `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
+  value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
+  host, such as `href="/items"`, `href={"/items"}` or `action="/watch"`, is a compile error that
+  names the fix, as the type-safety guide already said of every link. This breaks an app that
+  wrote one. To migrate, link to the route, `href={url::Items}` (a `#[derive(Route)]` struct;
+  `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)` for a place on a page),
+  and name a static file by its constant, `src={req.asset(Static::LOGO_SVG)}`
+  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, a tuple that keeps a
+  `srcset`'s descriptors, and for `ping` a tuple that keeps the spaces between its URLs). A path
+  on this origin that the app does not route, such as another service behind the same proxy or
+  `/oauth2/sign_out`, is a `corten::Local`,
+  `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query
+  and `#fragment`: an explicit opt-out the compiler takes on trust, since a `Local` of a path the
+  app routes compiles too. A fragment (`#top`), a full URL, `mailto:`,
+  `tel:` and `//host` still compile. Any other expression in braces is not checked, so a path
+  built there (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it
+  with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
+  say where the check holds
+  ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
 
 ### Fixed
 
