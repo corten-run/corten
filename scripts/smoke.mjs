@@ -1032,6 +1032,10 @@ async function run(browser) {
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  // A slow part sent once (the picks): its stream brings it when it is ready, and the <noscript>
+  // link a browser without JavaScript follows for it is never drawn.
+  await page.waitForSelector("ul#picks", { state: "attached", timeout: 4000 }).catch(() => {});
+  check("a slow part a <corten-live> stream sends once arrives, with no link for it", (await page.$$("ul#picks li")).length === 2 && (await page.$("#picks a")) === null);
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
   // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
   // arrives (#1131); its first event decodes while the stream is open.
@@ -5719,6 +5723,15 @@ async function run(browser) {
   check("without JavaScript the form posts and renders the page", ((await plain.textContent("#watch-message")) ?? "").startsWith("Watching Sunreach Solar"));
   check("without JavaScript the visitor's time zone is not known", !((await plain.textContent("#watch-message")) ?? "").includes("Alerts follow"));
   check("the page it renders has the stock on the list", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
+  // A slow part a <corten-live> stream sends once: no stream opens, so the line saying it is on
+  // its way is hidden and a <noscript> link goes to the same page with it read in (#1264).
+  check("without JavaScript a slow part's placeholder is a link, not a line that waits", !(await plain.isVisible("#picks span")) && (await plain.isVisible("#picks a")));
+  await Promise.all([plain.waitForNavigation(), plain.click("#picks a")]);
+  check(
+    "the page it links to has the slow part read in",
+    new URL(plain.url()).search === "?picks=true" && (await plain.$$("ul#picks li")).length === 2 && (await plain.$("corten-live[src='/live/picks']")) === null,
+    plain.url(),
+  );
   await noJs.close();
 
   // Req::resend_to: a browser's first alert names it (a 307 that sets its cookie) and the same

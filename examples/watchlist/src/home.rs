@@ -33,6 +33,15 @@ pub(crate) async fn trades(State(market): State<Market>, since: LiveSince) -> Li
     corten::live_watch(market.trades.subscribe(), since, |(n, _)| *n, |(_, text)| LastTrade { text }.to_html())
 }
 
+/// Picks for the visitor, for `<corten-live src>`: one fragment, once the slow read is done, so the
+/// page is not held up by it.
+pub(crate) async fn picks(State(market): State<Market>, watching: Watching) -> LiveResponse {
+    corten::live(futures_util::stream::once(async move {
+        let picks = market.picks(&watching.ids).await;
+        PicksList { picks: &picks }.to_html()
+    }))
+}
+
 /// The watchlist screen's data: what the view shows, and what a data client gets.
 #[derive(ToJson)]
 struct Home {
@@ -46,14 +55,18 @@ struct Home {
     #[serde(skip)]
     others: Vec<(&'static str, &'static str)>,
     message: String,
+    /// The visitor's picks, when the address asks for them read in (`url::Home { picks }`);
+    /// otherwise the page draws a placeholder and `/live/picks` sends them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    picks: Option<Vec<Stock>>,
 }
 
 impl Home {
-    fn new(market: &Market, watching: &Watching, message: String) -> Self {
+    fn new(market: &Market, watching: &Watching, message: String, picks: Option<Vec<Stock>>) -> Self {
         let stocks = market.stocks.read(|rows| watching.ids.iter().filter_map(|id| rows.get(*id).cloned()).collect());
         let others = Market::listed().filter(|(id, _)| !watching.has(id)).collect();
         let (trades_seen, last_trade) = market.trades.borrow().clone();
-        Home { stocks, last_trade, trades_seen, others, message }
+        Home { stocks, last_trade, trades_seen, others, message, picks }
     }
 }
 
@@ -76,6 +89,13 @@ fn home_view(home: &Home, t: Msg) -> impl Render {
                 <section class={(card(), stack(Space::_2))}>
                     <h2>"Market activity"</h2>
                     <corten-live src={url::Trades} since={home.trades_seen}><LastTrade text={&home.last_trade} /></corten-live>
+                </section>
+                <section class={(card(), stack(Space::_2))}>
+                    <h2>"Picks for you"</h2>
+                    match &home.picks {
+                        Some(picks) => <PicksList picks={picks} />,
+                        None => <corten-live src={url::Picks}><PicksLoading /></corten-live>,
+                    }
                 </section>
             </aside>
         </div>
@@ -225,6 +245,39 @@ fn LastTrade(text: &str) -> impl Render {
     html! { <p id={LastTradeId} aria-live="polite">{text}</p> }
 }
 
+/// The visitor's picks: a placeholder in the home page, replaced by the fragment `/live/picks`
+/// sends.
+#[derive(Id)]
+struct PicksId;
+
+/// The picks' placeholder until `/live/picks` sends them. A browser without JavaScript opens no
+/// stream, so for it the line saying they are on their way is hidden (`picks_loading.css`) and a
+/// link takes it to the same page with the picks read in.
+#[component(css)]
+pub(crate) fn PicksLoading() -> impl Render {
+    html! {
+        <p id={PicksId}>
+            <span class={Finding}>"Finding picks for you..."</span>
+            <noscript><a href={url::Home { picks: Some(true) }}>"Show picks for you"</a></noscript>
+        </p>
+    }
+}
+
+#[component]
+fn PicksList<'a>(picks: &'a [Stock]) -> impl Render {
+    html! {
+        if picks.is_empty() {
+            <p id={PicksId}>"You are watching every stock on the market."</p>
+        } else {
+            <ul id={PicksId} class={stack(Space::_1)}>
+                for stock in picks {
+                    <li>{stock.name}" ("{stock.id}") "{&stock.change}</li>
+                }
+            </ul>
+        }
+    }
+}
+
 /// The whole watchlist screen, for a browser or a data client, with the list's cookie for a
 /// browser that had none.
 fn home_screen(req: &Req, viewer: Option<&Viewer>, watching: &mut Watching, home: &Home) -> HtmlResult {
@@ -238,8 +291,15 @@ pub(crate) async fn page(
     viewer: Option<Caller<Viewer>>,
     State(market): State<Market>,
     mut watching: Watching,
+    Params(at): Params<url::Home>,
 ) -> HtmlResult {
-    let home = Home::new(&market, &watching, String::new());
+    // Read in only when the address asks: otherwise the page goes without them and its
+    // `<corten-live>` brings them once they are ready.
+    let picks = match at.picks {
+        Some(true) => Some(market.picks(&watching.ids).await),
+        _ => None,
+    };
+    let home = Home::new(&market, &watching, String::new(), picks);
     home_screen(&req, viewer.as_deref(), &mut watching, &home)
 }
 
@@ -299,7 +359,7 @@ pub(crate) async fn unwatch(
 /// The answer to a change of the list: with JavaScript, the prices and the form as a patch; without
 /// it, or to a native screen or an agent, the whole screen.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
-    let home = Home::new(market, watching, message);
+    let home = Home::new(market, watching, message, None);
     if req.mode != Mode::Action {
         return home_screen(req, viewer, watching, &home);
     }
@@ -328,7 +388,7 @@ mod tests {
 
     /// The home page, as the visitor sees it.
     async fn watched(app: &Client) -> String {
-        app.get(&url::Home).cookie("visitor", VISITOR).await.text().to_string()
+        app.get(&url::Home { picks: None }).cookie("visitor", VISITOR).await.text().to_string()
     }
 
     /// The visitor's Remove button on the row of `remove`, the stock picked to watch coming along.
@@ -349,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_renders_the_watched_stocks_and_script_for_browsers() {
-        let res = client().get(&url::Home).await;
+        let res = client().get(&url::Home { picks: None }).await;
         assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
         let body = res.text();
         assert!(body.contains("/scripts/live_prices.js\">"), "the script module is preloaded: {body}");
@@ -390,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn a_browser_gets_a_visitor_id_once_and_keeps_its_list_on_the_server() {
         let app = client();
-        let first = app.get(&url::Home).await;
+        let first = app.get(&url::Home { picks: None }).await;
         let cookie = first.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("visitor=") && cookie[8..].find(';') == Some(32), "{cookie}");
         assert!(cookie.ends_with("; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly; Secure"), "{cookie}");
@@ -398,7 +458,7 @@ mod tests {
         assert!(res.headers().get("set-cookie").is_none(), "a browser with a list keeps its id");
         assert_eq!(rows(&watched(&app).await), ["ACME", "GLBX", "INIT", "SOLR"]);
         // Another browser, and a cookie the app did not write, see a list of their own.
-        let other = app.get(&url::Home).cookie("visitor", "nope").await;
+        let other = app.get(&url::Home { picks: None }).cookie("visitor", "nope").await;
         assert_eq!(rows(other.text()), ["ACME", "GLBX", "INIT"]);
     }
 
@@ -413,7 +473,7 @@ mod tests {
         let res = app.post(&url::Watch).mode(Mode::Action).field(StockForm::FIELDS.id, "SOLR").await;
         let cookies: Vec<_> = res.headers().get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
         assert!(cookies.len() == 1 && cookies[0].starts_with("visitor="), "{cookies:?}");
-        let list = app.get(&url::Home).cookie("visitor", res.cookie("visitor").unwrap()).await;
+        let list = app.get(&url::Home { picks: None }).cookie("visitor", res.cookie("visitor").unwrap()).await;
         assert_eq!(rows(list.text()), ["ACME", "GLBX", "INIT", "SOLR"]);
     }
 
@@ -437,7 +497,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_is_json_for_data_clients() {
-        let res = client().get(&url::Home).mode(Mode::Data).await;
+        let res = client().get(&url::Home { picks: None }).mode(Mode::Data).await;
         assert_eq!(res.headers()["content-type"], "application/json");
         let body = res.text();
         assert!(
@@ -448,6 +508,33 @@ mod tests {
             "{body}"
         );
         assert!(!body.contains("HLTH") && !body.contains("trades_seen"), "only the watched stocks: {body}");
+    }
+
+    /// A slow part sent once (#1264): the page goes without the picks and its `<corten-live>`
+    /// brings them; for a browser without JavaScript, which opens no stream, the placeholder links
+    /// to the same page with them read in.
+    #[tokio::test]
+    async fn the_picks_come_later_or_read_in_for_a_browser_without_javascript() {
+        let app = client();
+        let page = app.get(&url::Home { picks: None }).await;
+        let page = page.text();
+        assert!(
+            page.contains(concat!(
+                r#"<corten-live src="/live/picks"><p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
+                r#"<noscript><a href="/?picks=true">Show picks for you</a></noscript></p></corten-live>"#
+            )),
+            "{page}"
+        );
+        // The link's page reads them in, so it has no placeholder, stream or link for them.
+        let read = app.get(&url::Home { picks: Some(true) }).await;
+        let read = read.text();
+        assert!(read.contains("<li>Halcyon Health (HLTH) 0.00%</li><li>Northgate Rail (NRTH) 0.00%</li></ul>"), "{read}");
+        assert!(!read.contains("/live/picks") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
+        // A data client asks the same address for them; without it they are left out.
+        let data = app.get(&url::Home { picks: Some(true) }).mode(Mode::Data).await;
+        assert!(data.text().contains(r#""picks":[{"id":"HLTH","#), "{}", data.text());
+        let data = app.get(&url::Home { picks: None }).mode(Mode::Data).await;
+        assert!(!data.text().contains("picks"), "{}", data.text());
     }
 
     #[tokio::test]

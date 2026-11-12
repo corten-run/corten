@@ -1,0 +1,7 @@
+/* Without JavaScript no stream brings the picks, so the line saying they are on their way is hidden
+   and the link in <noscript>, to the page with them read in, is what shows. */
+@media (scripting: none) {
+  .finding {
+    display: none;
+  }
+}

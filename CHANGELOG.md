@@ -29,6 +29,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A slow part a `<corten-live>` stream sends once had no answer without JavaScript: the browser
+  opens no stream, so its placeholder stayed for good. The live data guide's slow-part pattern
+  and [design Choice 7](docs/design.md#choice-whole-pages) now give it one with what routes
+  already do: the placeholder holds a `<noscript>` link to the page's own route with a query
+  field that has its handler read the part in (`url::Home { picks: Some(true) }`), so an app
+  writes no second route per part, and `@media (scripting: none)` hides the line saying the part
+  is on its way. With JavaScript the link is never drawn. The watchlist's home page has picks
+  written this way, checked with and without JavaScript in Chromium, Firefox and WebKit by
+  `scripts/smoke.mjs`
+  ([#1264 A slow part a <corten-live> stream sends once has no answer without JavaScript: its placeholder stays for good](https://github.com/corten-run/corten/issues/1264)).
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so

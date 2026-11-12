@@ -29,6 +29,10 @@ const LISTED: [(&str, &str, u32); 8] = [
 /// The currency of every price.
 pub const USD: Currency = Currency::new("USD");
 
+/// How long the analyst service takes to pick stocks for a visitor: long enough that the home page
+/// does not wait for it, so its picks are a slow part sent when they are ready.
+pub const PICKS_TAKE: Duration = Duration::from_millis(600);
+
 #[derive(Clone)]
 pub struct Market {
     pub stocks: Feed<Stock>,
@@ -56,6 +60,18 @@ impl Market {
         let mut listed = LISTED.map(|(id, name, _)| (id, name));
         listed.sort_unstable_by_key(|(_, name)| *name);
         listed.into_iter()
+    }
+
+    /// Picks for a visitor: the two stocks they do not watch that moved most since the open,
+    /// asked of an analyst service that takes its time (`PICKS_TAKE`).
+    pub async fn picks(&self, watching: &[&str]) -> Vec<Stock> {
+        tokio::time::sleep(PICKS_TAKE).await;
+        let mut others: Vec<Stock> =
+            self.stocks.read(|rows| rows.values().filter(|s| !watching.contains(&s.id.as_str())).cloned().collect());
+        // Stable, so stocks that moved as much stay in the market's order.
+        others.sort_by_key(|s| std::cmp::Reverse(s.change_bp.unsigned_abs()));
+        others.truncate(2);
+        others
     }
 
     /// One trade: the `n`th stock in a fixed walk moves by a fraction of its price, and the last

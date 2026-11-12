@@ -14,7 +14,11 @@ stays as it is instead of reconnecting, so a stream of one fragment is a slow pa
 when it is ready. A server shutting down ends its streams first, and those browsers reconnect.
 
 ```rust,ignore
-// the route: one fragment, when the slow read is done; it replaces the element with its id
+// in the routes module: the page, whose `picks` has it read them in, and the stream
+//   #[route("/", get = home)] pub struct Home { pub picks: Option<bool> }
+//   #[route("/live/picks", get = picks)] pub struct Picks;
+
+// the stream: one fragment, when the slow read is done; it replaces the element with its id
 async fn picks(State(shop): State<Shop>) -> LiveResponse {
     corten::live(futures_util::stream::once(async move {
         let picks = shop.picks_for_you().await;
@@ -22,9 +26,40 @@ async fn picks(State(shop): State<Shop>) -> LiveResponse {
     }))
 }
 
-// the page: drawn without them, then completed
-html! { <corten-live src={url::Picks}><p id={PicksId}>"Finding picks for you..."</p></corten-live> }
+// the page: drawn without them and completed by the stream, unless its address asks for them
+async fn home(req: Req, Params(at): Params<url::Home>, State(shop): State<Shop>) -> HtmlResult {
+    let picks = match at.picks {
+        Some(true) => Some(shop.picks_for_you().await),
+        _ => None,
+    };
+    req.page(html! {
+        // .. the rest of the page
+        match &picks {
+            Some(picks) => <Picks picks={picks} />,
+            None => <corten-live src={url::Picks}><PicksLoading /></corten-live>,
+        }
+    })
+}
+
+#[component(css)] // picks_loading.css: @media (scripting: none) { .finding { display: none; } }
+fn PicksLoading() -> impl Render {
+    html! {
+        <p id={PicksId}>
+            <span class={Finding}>"Finding picks for you..."</span>
+            <noscript><a href={url::Home { picks: Some(true) }}>"Show picks for you"</a></noscript>
+        </p>
+    }
+}
 ```
+
+A browser without JavaScript opens no stream, so a placeholder alone would stay for good. It gets
+the `<noscript>` link instead: the page's own route with a query field its handler reads the part
+in for, so there is no second route, and with JavaScript the link is never drawn (the runtime
+empties a `<noscript>` in markup it fetches, too). Nothing is on its way there, so the line that
+says so is hidden with `@media (scripting: none)` in the component's CSS. Following the link costs
+that browser one page with the slow read in it; a page with several slow parts reads them all in
+under one field. A data client asks the same address for the part. The field is named in every
+link to the page (`url::Home { picks: None }`) ([design Choice 7](../design.md#choice-whole-pages)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
@@ -152,7 +187,8 @@ nginx passes their events on as they are written ([Deploying](deploy.md#live-str
 
 A browser without JavaScript gets no stream: a page whose part is relayed while a job runs asks
 it alone to reload, with `ReadAgain { after }.without_javascript()` in its head
-([read again](requests-and-forms.md)).
+([read again](requests-and-forms.md)), and a slow part sent once links to the page with it read
+in ([Fragments](#fragments-corten-live)).
 
 `<corten-live>` shows its connection on itself, so a page can say a part is stale with CSS alone:
 `status` is `connecting`, `live` once the stream is open, `reconnecting` while the browser
