@@ -24,7 +24,8 @@ These are what the framework is built around. Code that breaks them fights the f
    or as one string literal in braces (`href="/items"`, `href={"/items"}`, `action="/watch"`,
    `src="/logo.svg"`). It does not see a path built in braces (`href={format!("/items/{id}")}`, a
    tuple of its parts): never write one. A path on this origin the app does not route (another
-   service behind the same proxy) is a `corten::http::Uri`.
+   service behind the same proxy) is a `corten::Local` (`Local::parse("/oauth2/sign_out")`), an
+   explicit opt-out the compiler takes on trust: never use it for a path the app routes.
 2. **Markup is Rust.** Every element comes from `html!`. Scripts never build HTML from strings:
    they clone markup the server rendered (`<template ref={rest}>`, a view's `rows(..).push(..)`)
    and move, show, hide or fill what is on the page.

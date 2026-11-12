@@ -37,10 +37,13 @@ Corten is pre-1.0, so any minor version may change the API.
   wrote one. To migrate, link to the route, `href={url::Items}` (a `#[derive(Route)]` struct;
   `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)` for a place on a page),
   and name a static file by its constant, `src={req.asset(Static::LOGO_SVG)}`
-  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, and a tuple that keeps a
-  `srcset`'s descriptors). A path on this origin that the app does not route, such as another
-  service behind the same proxy or `/oauth2/sign_out`, is a `corten::http::Uri`:
-  `href={Uri::from_static("/oauth2/sign_out")}`. A fragment (`#top`), a full URL, `mailto:`,
+  (`href={(req.asset(Static::SPRITE_SVG), "#arrow")}` with a fragment, a tuple that keeps a
+  `srcset`'s descriptors, and for `ping` a tuple that keeps the spaces between its URLs). A path
+  on this origin that the app does not route, such as another service behind the same proxy or
+  `/oauth2/sign_out`, is a `corten::Local`,
+  `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query
+  and `#fragment`: an explicit opt-out the compiler takes on trust, since a `Local` of a path the
+  app routes compiles too. A fragment (`#top`), a full URL, `mailto:`,
   `tel:` and `//host` still compile. Any other expression in braces is not checked, so a path
   built there (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it
   with a route too. The views guide and the `html!` docs no longer show the hand-built path, and the guides

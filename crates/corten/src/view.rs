@@ -143,7 +143,8 @@ use std::{
 /// `src`, `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping` and
 /// `xlink:href`, in any case, and a path is a URL that starts with one `/` (or `\`, which a
 /// browser reads as `/`), after the spaces a browser drops, or `http:` or `https:` without the
-/// `//` of a host (`https:/items`, which a browser reads as `/items`). The value is text,
+/// `//` of a host (`https:/items`: on a page of that scheme a browser reads it as `/items`, and on
+/// a page of the other scheme as the host `items`, so it is a mistake either way). The value is text,
 /// `href="/items"`, or one string literal in braces, `href={"/items"}`. The error names the form
 /// the attribute takes: a tuple that keeps a `srcset`'s descriptors
 /// (`srcset={(req.asset(Static::PHOTO_PNG), " 1x, ", req.asset(Static::PHOTO_2X_PNG), " 2x")}`),
@@ -239,12 +240,20 @@ use std::{
 /// ```
 ///
 /// A path on this origin that the app does not route (another service behind the same proxy, an
-/// `/oauth2/sign_out` a proxy answers) is a [`crate::http::Uri`], which says so where it is made:
+/// `/oauth2/sign_out` a proxy answers) is a [`crate::Local`], the type a test names such a path
+/// with. It is an explicit opt-out the compiler takes on trust: a `Local` of a path the app does
+/// route compiles too, and nothing checks that the path exists. [`crate::Local::parse`] refuses
+/// text that is not a path on this site (`None`), and a `Local` keeps its query and `#fragment`:
 ///
 /// ```
-/// use corten::{http::Uri, prelude::*};
-/// let view = html! { <a href={Uri::from_static("/oauth2/sign_out")}>"Sign out"</a> };
-/// assert_eq!(view.to_html(), r#"<a href="/oauth2/sign_out">Sign out</a>"#);
+/// use corten::{prelude::*, Local};
+/// let sign_out = Local::parse("/oauth2/sign_out").expect("a path on this site");
+/// let help = Local::parse("/proxy/help?topic=billing#refunds").expect("a path on this site");
+/// let view = html! { <a href={sign_out}>"Sign out"</a><a href={&help}>"Refunds"</a> };
+/// assert_eq!(
+///     view.to_html(),
+///     r#"<a href="/oauth2/sign_out">Sign out</a><a href="/proxy/help?topic=billing#refunds">Refunds</a>"#
+/// );
 /// ```
 ///
 /// Only a value whose text the macro sees is read. Any other expression in braces is known only

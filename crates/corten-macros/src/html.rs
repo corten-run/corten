@@ -832,37 +832,46 @@ fn srcset_urls(value: &str) -> Vec<&str> {
     }
 }
 
-/// The error for `url`, a path in this app written as text in the URL attribute `name`: it names
-/// the typed forms that replace it, as that attribute writes them (a list keeps its descriptors or
-/// spaces, a fragment stays after a static file), and the form for a path the app does not route.
+/// The error for `url`, a path in this app written as text in the URL attribute `name` (as
+/// written; its case does not change the advice): it names the typed forms that replace it, as that
+/// attribute writes them (a list keeps its descriptors or spaces, a fragment stays after a static
+/// file), and the explicit opt-out for a path the app does not route, a `Local`, which keeps a
+/// fragment.
 fn refused_path(name: &str, url: &str) -> String {
     let read = as_read(url);
     let what = if after_web_scheme(&read).is_some() {
-        "has a scheme but no host (no //), so a browser reads it as a path in this app"
+        "has a scheme but no host (no //): on a page of that scheme a browser reads it as a path in this app, and on a page of the other scheme as a host named by its first segment"
     } else {
         "is a path in this app written as text"
     };
-    let list = matches!(name, "srcset" | "imagesrcset" | "ping");
-    let fix = match (name, read.split_once('#')) {
+    let lower = name.to_ascii_lowercase();
+    let list = matches!(lower.as_str(), "srcset" | "imagesrcset" | "ping");
+    let fragment = read.split_once('#').map(|(_, fragment)| fragment);
+    let fix = match (lower.as_str(), fragment) {
         ("srcset" | "imagesrcset", _) => format!(
             "Name each file by its constant in a tuple that keeps the descriptors, {name}={{(req.asset(Static::PHOTO_PNG), \" 1x, \", req.asset(Static::PHOTO_2X_PNG), \" 2x\")}}"
         ),
-        ("ping", _) => "Name each URL by its #[derive(Route)] struct in a tuple that keeps the spaces, ping={(url::Seen.href(), \" \", url::Read.href())}".to_string(),
-        (_, Some((_, fragment))) => format!(
+        ("ping", _) => format!(
+            "Name each URL by its #[derive(Route)] struct in a tuple that keeps the spaces, {name}={{(url::Seen.href(), \" \", url::Read.href())}}"
+        ),
+        (_, Some(fragment)) => format!(
             "A place on a page of the app is its #[derive(Route)] struct's, {name}={{url::Items.at(Id)}}, and a static file with a fragment is its constant and the fragment, {name}={{(req.asset(Static::SPRITE_SVG), \"#{fragment}\")}}"
         ),
         _ => format!(
             "Link to a #[derive(Route)] struct, {name}={{url::Items}} (url::Item {{ id }} for one with parameters, url::Items.at(Id) for a place on a page), or name a static file by its constant, {name}={{req.asset(Static::LOGO_SVG)}}"
         ),
     };
+    let example = match fragment {
+        Some(fragment) => format!("/proxy/page#{fragment}"),
+        None => "/oauth2/sign_out".to_string(),
+    };
     let unrouted = if list {
-        "the text of a corten::http::Uri in the tuple, Uri::from_static(\"/cdn-cgi/image/width=400/photo.png\").to_string()"
-            .to_string()
+        "the text of a corten::Local in the tuple, Local::parse(\"/cdn-cgi/image/photo.png\").expect(\"a path on this site\").to_string()".to_string()
     } else {
-        format!("a corten::http::Uri, {name}={{corten::http::Uri::from_static(\"/oauth2/sign_out\")}}")
+        format!("a corten::Local, {name}={{corten::Local::parse(\"{example}\").expect(\"a path on this site\")}}, which keeps a query and #fragment")
     };
     format!(
-        "{name}: \"{url}\" {what}, which nothing checks. {fix}. A path on this origin that the app does not route (another service behind the same proxy) is {unrouted}, and a URL outside the app is written whole (https://..)"
+        "{name}: \"{url}\" {what}, which nothing checks. {fix}. Only a path on this origin that the app does not route (another service behind the same proxy) may be written out, and then as an explicit opt-out the compiler takes on trust: {unrouted}. A URL outside the app is written whole (https://..)"
     )
 }
 
@@ -2376,11 +2385,14 @@ mod tests {
         let error = refused_path("href", "/items");
         assert!(error.starts_with("href: \"/items\" is a path in this app written as text"), "{error}");
         assert!(error.contains("href={url::Items}"), "{error}");
-        assert!(error.contains("href={corten::http::Uri::from_static(\"/oauth2/sign_out\")}"), "{error}");
+        assert!(error.contains("href={corten::Local::parse(\"/oauth2/sign_out\").expect(\"a path on this site\")}"), "{error}");
 
         let error = refused_path("xlink:href", "/sprite.svg#arrow");
         assert!(error.contains("xlink:href={(req.asset(Static::SPRITE_SVG), \"#arrow\")}"), "{error}");
         assert!(error.contains("xlink:href={url::Items.at(Id)}"), "{error}");
+        // An unrouted path with a fragment is steered to a form that keeps it.
+        assert!(error.contains("Local::parse(\"/proxy/page#arrow\")"), "{error}");
+        assert!(!error.contains("Uri"), "{error}");
 
         let error = refused_path("srcset", "/b.png");
         assert!(error.contains("srcset={(req.asset(Static::PHOTO_PNG), \" 1x, \""), "{error}");
@@ -2391,5 +2403,24 @@ mod tests {
 
         let error = refused_path("href", "https:/items");
         assert!(error.contains("has a scheme but no host"), "{error}");
+        assert!(error.contains("on a page of the other scheme as a host"), "{error}");
+    }
+
+    #[test]
+    fn the_advice_follows_the_attribute_whatever_its_case_and_names_it_as_written() {
+        let error = refused_path("SRCSET", "/b.png");
+        assert!(error.starts_with("SRCSET: "), "{error}");
+        assert!(error.contains("SRCSET={(req.asset(Static::PHOTO_PNG), \" 1x, \""), "{error}");
+        assert!(error.contains("the text of a corten::Local in the tuple"), "{error}");
+
+        let error = refused_path("PING", "/seen");
+        assert!(error.contains("PING={(url::Seen.href(), \" \", url::Read.href())}"), "{error}");
+
+        let error = refused_path("HREF", "/items");
+        assert!(error.contains("HREF={url::Items}"), "{error}");
+        assert_eq!(
+            refused_path("ImageSrcSet", "/b.png").replace("ImageSrcSet", "imagesrcset"),
+            refused_path("imagesrcset", "/b.png")
+        );
     }
 }
