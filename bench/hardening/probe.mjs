@@ -39,7 +39,12 @@ export function payload(phase, index, target, attack, form) {
   const get = `GET /marketplace/en-US/item_1 HTTP/1.1\r\nHost: ${target.authority}\r\n`;
   const bodyHead = (bytes) => `POST ${form.path} HTTP/1.1\r\nHost: ${target.authority}\r\nOrigin: ${target.origin}\r\nCookie: ${form.cookie}\r\nContent-Type: ${form.type}\r\nContent-Length: ${bytes}\r\n\r\n`;
   if (phase === "slow-headers") return { first: get + "X-Slow: ", drip: "x", repeat: true };
-  if (phase === "slow-bodies") return { first: bodyHead(attack.bodyBytes) + form.prefix, drip: "x", repeat: true };
+  if (phase === "slow-bodies") {
+    // Exercise waiting for bytes, not an unrelated oversized-form rejection.
+    const declaredBodyBytes = Math.min(4096, attack.bodyBytes);
+    assert.ok(Buffer.byteLength(form.prefix) < declaredBodyBytes, "native form prefix exceeds slow-body budget");
+    return { first: bodyHead(declaredBodyBytes) + form.prefix, declaredBodyBytes, drip: "x", repeat: true };
+  }
   if (phase === "slow-readers") return { first: (get + "Connection: keep-alive\r\n\r\n").repeat(attack.pipelined), paused: true };
   if (phase === "idle-connections") return { first: "" };
   if (phase === "connection-pressure") return { first: get + "Connection: close\r\n\r\n" };
@@ -49,14 +54,27 @@ export function payload(phase, index, target, attack, form) {
   return { first: bodyHead(attack.bodyBytes) + form.prefix, body: attack.bodyBytes - Buffer.byteLength(form.prefix), variant: "body-size" };
 }
 
+export function tcpQueues(body) {
+  const result = new Map();
+  for (const line of body.split("\n").slice(1)) {
+    const f = line.trim().split(/\s+/);
+    if (f.length > 4) result.set(parseInt(f[1].split(":")[1], 16), parseInt(f[4].split(":")[1], 16));
+  }
+  return result;
+}
+let queuesCache;
 export function unread(port) {
+  const at = process.hrtime.bigint();
+  // A burst of paused readers must not scan the whole TCP table once per socket.
+  // Preserve the sample age rather than presenting cached observations as fresh.
+  const absent = { kernelBytes: { status: "unavailable", reason: "connection absent from TCP sample" } };
+  if (queuesCache && at - queuesCache.at < 50_000_000n) return { ...(queuesCache.values.get(port) ?? absent), sampleAgeMs: Number(at - queuesCache.at) / 1e6, scanMs: queuesCache.scanMs };
   try {
-    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) for (const line of readFileSync(file, "utf8").split("\n").slice(1)) {
-      const f = line.trim().split(/\s+/);
-      if (f.length > 4 && parseInt(f[1].split(":")[1], 16) === port) return parseInt(f[4].split(":")[1], 16);
-    }
-    return 0;
-  } catch { return { status: "unavailable", reason: "Linux /proc TCP receive queues unavailable" }; }
+    const values = new Map();
+    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) for (const [key, bytes] of tcpQueues(readFileSync(file, "utf8"))) values.set(key, { kernelBytes: bytes });
+    const scanMs = Number(process.hrtime.bigint() - at) / 1e6; queuesCache = { at, values, scanMs };
+    return { ...(values.get(port) ?? absent), sampleAgeMs: scanMs, scanMs };
+  } catch { return { kernelBytes: { status: "unavailable", reason: "Linux /proc TCP receive queues unavailable" }, sampleAgeMs: 0, scanMs: 0 }; }
 }
 
 export async function inject({ phase, index, target, attack, form, pool, now, releaseAtMs, emit }) {
@@ -64,6 +82,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
   const row = { type: "attack", index, phase, startedAtMs: now(), established: false, variant: p.variant ?? phase,
     firstBytes: Buffer.byteLength(p.first), firstSha256: sha(p.first), bytesQueued: 0, writes: 0, drips: 0, backpressure: 0,
     responsePrefix: "", targetClosedAtMs: null, releasedAtMs: null };
+  if (p.declaredBodyBytes) row.declaredBodyBytes = p.declaredBodyBytes;
   const socket = pool.socket(target);
   let opened = false, timer, dripTimer;
   const close = new Promise((resolve) => socket.once("close", resolve));
@@ -103,9 +122,10 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
       if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; } }, attack.everyMs);
       const midpoint = now() + Math.max(0, releaseAtMs - now()) / 2;
       await Promise.race([close, sleep(midpoint - now())]);
-      if (p.paused && !socket.destroyed) row.unreadMidpoint = { atMs: now(), kernelBytes: unread(row.localPort), nodeBytes: socket.readableLength, paused: socket.isPaused() };
+      const snapshotUnread = () => { const sample = unread(row.localPort); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
+      if (p.paused && !socket.destroyed) row.unreadMidpoint = snapshotUnread();
       await Promise.race([close, sleep(releaseAtMs - now())]);
-      if (p.paused && !socket.destroyed) row.unreadEnd = { atMs: now(), kernelBytes: unread(row.localPort), nodeBytes: socket.readableLength, paused: socket.isPaused() };
+      if (p.paused && !socket.destroyed) row.unreadEnd = snapshotUnread();
     }
   } finally {
     clearTimeout(timer); clearInterval(dripTimer);
@@ -195,7 +215,7 @@ export function validateControl(result) {
       if (["slow-headers", "slow-bodies"].includes(phase)) {
         assert.ok(r.drips >= 2, "trickle timer did not run");
         if (phase === "slow-headers") assert.ok(!receipt.prefix.includes("\r\n\r\n"));
-        else assert.ok(receipt.prefix.includes("Content-Length: 4194304\r\n\r\n") && receipt.bytes < 4 * 2 ** 20);
+        else assert.ok(receipt.prefix.includes("Content-Length: 4096\r\n\r\n") && receipt.bytes < 4096);
       }
       if (phase === "slow-readers") assert.ok(receipt.responseBackpressure && r.unreadEnd?.paused, `paused-reader control failed: ${JSON.stringify({ receipt, row: r })}`);
       if (phase === "idle-connections") assert.equal(receipt.bytes, 0);

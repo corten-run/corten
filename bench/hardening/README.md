@@ -70,7 +70,8 @@ The same socket injector runs independent receiving controls before/after each
 phase. Controls verify actual emitted/received bytes, trickle ticks, incomplete
 heads/bodies, paused-reader write backpressure and an independently checked JSON
 legitimate response. Attacks send unfinished trickled heads, native form bodies
-trickled after complete heads, pipelined requests from readers that stop reading,
+trickled after complete heads (4 KiB declared, below ordinary form-size caps),
+pipelined requests from readers that stop reading,
 idle sockets, fresh-connection GET floods, and all three oversized variants
 (200 headers, 128 KiB header, 4 MiB body). Oversize writes honor backpressure.
 Scheduled starts and actual monotonic starts are retained including refusals;
@@ -92,6 +93,12 @@ parity/controls/counters, reconstructs the shared-oracle capture and compares it
 to the saved file. This is integrity validation, not signed remote attestation.
 Ephemeral form credentials and the TLS private key are removed after use.
 
+Cleanup's 15 s timeout bounds each Docker cleanup operation, not total artifact
+collection wall time, which is retained separately. API-source upstream failure
+is a charged deployment outcome; unexpected failure of the unused fixture-source
+upstream invalidates its apparatus. Generic HTTP 400/403/5xx responses do not
+identify a defensive rejection; only phase-appropriate limit/timeout statuses do.
+
 The shared outcome validator is used only after real native observations and
 owned cleanup. A refusal, lost useful service, resource exhaustion, missing
 defense or failure to recover remains a target outcome. No target is restarted
@@ -104,8 +111,12 @@ sockets, timers, network and generated image tags are reaped; results remain.
 The driver measures HTTP/1.1, including through the TLS edge, not HTTP/2/3 attacks.
 Slow-reader queue samples establish unread data, not necessarily blocked native
 server writes; protection remains inconclusive without a rejection. A bounded
-hold shorter than a native deadline cannot prove the defense absent outside that
+paused reader may not deliver its peer's EOF to JavaScript until it reads again,
+so closure counters describe client-observed closure, not an exact server FIN time.
+A hold shorter than a native deadline cannot prove the defense absent outside that
 window. Statuses and closures never identify a proxy/server mechanism by inference.
+TCP receive-queue scans are shared for at most 50 ms and retain their sample age;
+an absent connection is unavailable evidence, never an invented zero-byte queue.
 Memory/CPU are window samples, not continuous peaks or kernel socket-memory totals.
 No ranking or throughput claim is supported by these safety runs, particularly
 on a concurrently loaded workstation. Full native qualification and group-wide
