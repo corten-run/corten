@@ -186,6 +186,11 @@ fn a_script_gets_the_pages_formats() {
     );
 }
 
+/// Where the `<corten-live>` elements below stream from.
+#[derive(Route)]
+#[route("/live")]
+struct Live;
+
 /// A float argument is written as `Display` writes it: no fraction on a whole number, never an
 /// exponent, and `null` for NaN (the app guide, Numbers in JSON, says so).
 #[test]
@@ -193,7 +198,7 @@ fn a_float_argument_is_written_as_display_writes_it() {
     for (n, text) in [(2.0f64, "2"), (1e21, "1000000000000000000000"), (-0.0, "-0"), (f64::NAN, "null"), (f64::INFINITY, "null")]
     {
         let html = scoped("x", || {
-            html! { <corten-live src="/live" on:corten-status={shared::log("x", n, true)}></corten-live> }.to_html()
+            html! { <corten-live src={Live} on:corten-status={shared::log("x", n, true)}></corten-live> }.to_html()
         });
         assert!(html.contains(&format!("shared.log(\"x\",{text},true)")), "{html}");
     }
@@ -215,7 +220,7 @@ fn a_json_argument_keeps_its_quotes_in_a_single_quoted_attribute() {
 #[test]
 fn a_live_elements_status_event_takes_a_handler() {
     let html =
-        scoped("x", || html! { <corten-live src="/live" on:corten-status={shared::log("x", 1, true)}></corten-live> }.to_html());
+        scoped("x", || html! { <corten-live src={Live} on:corten-status={shared::log("x", 1, true)}></corten-live> }.to_html());
     assert_eq!(html, r#"<corten-live src="/live" data-on='corten-status:shared.log("x",1,true)'></corten-live>"#);
 }
 

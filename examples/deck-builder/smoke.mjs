@@ -419,7 +419,10 @@ try {
     const form = new URLSearchParams(route.request().postData() ?? "");
     form.set("submit", crypto.randomUUID());
     const answer = await route.fetch({ postData: form.toString() });
-    const body = (await answer.text()).replace(/("stale",\d+,\d+,)false\)/, "$1true)");
+    const text = await answer.text();
+    // The note's call names the outcome as SaveOutcome declares it (types/app.d.ts).
+    const body = text.replace(/("Stale",\d+,\d+,)false\)/, "$1true)");
+    if (body === text) errors.push(`the stale answer to mark unsure was not found: ${text}`);
     await route.fulfill({ response: answer, body });
   });
   await fourth.click("button:has-text('Try again')");

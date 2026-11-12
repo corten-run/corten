@@ -2702,7 +2702,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
-   `@layer`, `@keyframes` and `@font-face`; `@import` and escaped class names are not supported.
+   `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
+   escaped class names are not supported. At the top of the file, an `@scope` rule's root names
+   one of its classes, or else each rule in the body must start at one, as at the top. A root
+   nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
+   that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
+   The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
+   component's: a limit can stop at this component's own classes, never at a nested component's
+   root.
    Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
@@ -2941,3 +2948,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
     It lifts when apps need the received payload in the page for their users, not their
     developers, or when Chromium's panel stops showing an event stream's messages.
+26. <a id="limit-origin-scheme"></a>Without `Policy::hsts`, a write or a WebSocket handshake that carries no `Sec-Fetch-Site`
+    (every handshake from Chromium and Firefox, and any write from a plain-http page, to which
+    browsers send none) is held to its `Origin`'s name and port against `Host`, not its scheme: a
+    plain-http page on the app's host passes against the app served over HTTPS
+    ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
+    The app cannot tell which scheme it is served over: a proxy or CDN in front usually ends TLS
+    and sends plain HTTP on, and the app reads no `X-Forwarded-Proto`, which anyone can send to an
+    app that does not list its proxies. With `hsts` the app says it is HTTPS only, and the
+    `Origin` must then be `https` or loopback. It lifts when the app knows its scheme for itself:
+    a forwarded scheme read only from the proxies `Policy::proxy` lists (as `ClientIp` reads
+    `X-Forwarded-For`), or the connection's own TLS state when `serve_wrapped` ends TLS in the
+    app.

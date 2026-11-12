@@ -315,9 +315,15 @@ call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is th
 patch draws a note whose
 `on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}`
 dispatches `DeckAnswered`, and the deck builder takes the saved version, a refusal or a stale
-save from it. A submit with no answer to draw is `corten:error` on the form (it bubbles, and a
-handler that says so itself calls `preventDefault()`, which keeps corten-ui's `Toaster` quiet),
-and a redirect's notice the page did not draw is `corten:notice` on the document
+save from it. Which of those it was is a `SaveOutcome`, an enum that derives `ToJson`, as the
+event's field and as `answered`'s parameter (`@param {import("../../types/app").SaveOutcome} outcome`),
+so `tsc` checks the builder's `event.outcome === "Refused"` against the enum's names: a renamed
+variant fails the Rust build and then `tsc`, where a `String` field would let the branch quietly stop
+matching. The page as first loaded has had no save answered, and a generated declaration cannot be
+optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
+for which `answered` dispatches nothing. A submit with no answer to draw is `corten:error` on the
+form (it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
+corten-ui's `Toaster` quiet), and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
 `on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every
 form's) and `on:document:corten:notice`, which is the only place one is heard. The handler types
