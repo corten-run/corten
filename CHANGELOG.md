@@ -54,6 +54,15 @@ Corten is pre-1.0, so any minor version may change the API.
   `fr-CA-u-ca-gregory` gets a listed `fr-CA`. Before, a tag that was not listed went straight to
   the first locale of its language, so those readers got the other script
   ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
+- The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names
+  a revision it does not speak, or that sends the header twice, with `400 Bad Request`, as MCP
+  2025-06-18 and 2025-11-25 require: a JSON-RPC error with no `id` (`-32600`, its `data` the
+  revisions it speaks and the one requested), checked before the token, or for a body that is not
+  JSON or a batch, the same error as without the header. It answered such a request as one of its
+  own revisions, with a 200. A request without the header is still read as 2025-03-26, and an
+  `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
+  header names
+  ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
 
 ### Documentation
 
