@@ -33,9 +33,11 @@
 //! - Every rule must start inside the component: a selector names one of the file's classes.
 //!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine.
 //!   Element defaults, resets and fonts belong in the app's `static/style.css`.
-//! - An `@scope` rule's root (CSS Cascade 6) is a rule's selector too, and its root and limit are
-//!   prefixed as any selector is: `@scope (.list) to (.slot)` is the list's elements down to a
-//!   slot. Its rules match only under the root, so they start anywhere (`:scope`, `li`, `> li`).
+//! - An `@scope` rule's root and limit (CSS Cascade 6) are prefixed as any selector is:
+//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When the root names one
+//!   of the file's classes, its rules match only inside the component, so they start anywhere
+//!   (`:scope`, `li`, `> li`); under any other root at the top of the file, such as
+//!   `@scope ([data-theme="dark"])`, each rule starts at one of the classes, as at the top.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
 //!   a class, so a variant without a rule does not compile.
 //! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same
@@ -268,8 +270,9 @@
 //! }
 //! ```
 //!
-//! An `@scope` rule's root and limit are the file's classes, prefixed, as any selector's are
-//! (`scoped_list.css` has `@scope (.list) to (.slot) { li { padding: 0; } }`):
+//! An `@scope` rule's root and limit are prefixed as any selector is (`scoped_list.css` has
+//! `@scope (.list) to (.slot) { li { padding: 0; } }` and
+//! `@scope ([data-theme="dark"]) { .list { color: plum; } }`):
 //!
 //! ```
 //! use corten::prelude::*;
@@ -280,21 +283,35 @@
 //! }
 //!
 //! let style = ScopedList.style.unwrap();
-//! assert_eq!(style.css, "@scope (.scoped-list__list) to (.scoped-list__slot){li{padding:0}}");
+//! assert_eq!(
+//!     style.css,
+//!     r#"@scope (.scoped-list__list) to (.scoped-list__slot){li{padding:0}}@scope ([data-theme="dark"]){.scoped-list__list{color:plum}}"#
+//! );
 //! assert_eq!(style.classes, ["list", "slot"]);
 //! assert_eq!(ScopedList {}.to_html(), r#"<ul class="scoped-list__list"><li class="scoped-list__slot"></li></ul>"#);
 //! ```
 //!
-//! and its root, at the top of the file, is checked as a rule's selector is, so a scope that
-//! starts outside the component (`leaky_scope.css` has `@scope (main) { .list { .. } }`) does not
-//! compile, nor does one with no root, which scopes its rules to the element around the page's
-//! stylesheet link:
+//! but under a root that names none of the file's classes, at the top of the file, a rule that
+//! does not start at one of them would style elements the component does not render
+//! (`leaky_scope.css` has `@scope (main) { li { .. } }`), so it does not compile:
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
 //!
 //! #[component(css)]
 //! fn LeakyScope() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
+//! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which
+//! scopes its rules to the element around the page's stylesheet link:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn RootlessScope() -> impl Render {
 //!     html! { <ul class={List}></ul> }
 //! }
 //! ```
