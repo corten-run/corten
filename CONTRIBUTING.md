@@ -28,6 +28,7 @@ bench/fullstack/     Historical marketplace implementations and diagnostic scrip
 bench/marketplace/   Equivalent-localization marketplace v2, the nightly workload from official r17
 bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, with a separate baseline
 bench/live/          One price feed pushed to many clients in the same frameworks
+bench/nodelay/       A burst of small live events through nginx, with and without TCP_NODELAY
 ```
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
@@ -66,6 +67,14 @@ mounted at `/src`, and cargo could take one checkout's build for another's and s
 the code does not have. The folder name must be one Docker accepts in a volume name (letters,
 digits, `_`, `.` and `-`). The registry volume, `corten-cargo`, holds only downloaded crates and
 is shared. When you remove a checkout, remove its two volumes too.
+
+`npm run check` fails on a commit the Markdown cites that is not on the checkout's history or
+under `refs/tags/evidence/` (`scripts/design-refs.mjs`), so it needs the whole history and those
+tags, which keep cited commits no branch has. A plain `git clone` of corten-run/corten has both,
+but a fork's clone may lack the tags, and `git fetch` brings a new one only with `--tags`; when
+the check names a commit, run
+`git fetch https://github.com/corten-run/corten.git "+refs/tags/evidence/*:refs/tags/evidence/*"`
+(in a shallow clone, with `--unshallow`).
 
 ```powershell
 $checkout = Split-Path -Leaf $PWD
@@ -215,6 +224,14 @@ establish a general ranking.
    Measure release builds and alternate runs of the two. Give the tool, the number of runs and
    their median and range; when one build's runs vary more than the two builds differ, say so
    instead of reporting a difference.
+   A number cited in the repository's Markdown names the commit it ran on, in backticks. A commit
+   no branch that merges will keep (a prototype's, or one on a branch remade before it merged) is
+   pushed to corten-run/corten as an annotated tag `evidence/<name>` (usually the commit's short
+   name) saying what it backs, since `npm run check` fails on a cited commit that is not on the
+   checkout's history or under an evidence tag. The check runs on the pull request's merge with
+   `main`, so a commit of the pull request's own passes there; a pull request that cites one is
+   merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
+   it first, since a squash or rebase merge leaves it out.
 3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
    `CHANGELOG.md` under Unreleased.
 4. Commit messages say what changed and why, in plain sentences.
@@ -273,9 +290,10 @@ It stops before publishing when the tag, the workspace version and the changelog
    to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. The version is
    also in `Cargo.lock`, in the lockfiles of the benchmark apps built from `crates/`
    (`bench/catalog/corten` and `bench/marketplace/corten`, built with `--locked`, and
-   `bench/live/apps/corten`; `cargo metadata --manifest-path <app>/Cargo.toml` rewrites each), in
-   `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and in the README's
-   Status. A release before 1.0 that changes the API bumps the minor version.
+   `bench/live/apps/corten` and `bench/nodelay/app`; `cargo metadata --manifest-path`
+   `<app>/Cargo.toml` rewrites each), in `crates/corten/tests/openapi.json` (the test that checks it
+   rewrites it) and in the README's Status. A release before 1.0 that changes the API bumps the
+   minor version.
 3. Merge it, then tag that commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
 4. Approve the `release` environment when the workflow asks.
