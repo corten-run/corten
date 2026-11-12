@@ -61,6 +61,10 @@ upstream counters, 503/302 refusal, independent liveness under upstream failure,
 and reset/readback receipts. Controls run in the direct and deployed-edge namespace
 as applicable. Wire differences are observations, not proof of native serialization;
 the existing native source and complete browser/content gates remain mandatory.
+The timed API run independently resets its owned upstream before the clock starts
+and retains the actual read/status totals afterwards. Those totals include attack
+reads, not an invented per-legitimate-request attribution. Unavailable observations
+remain unavailable and block numeric qualification; they are never zero reads.
 An unqualified representative is explicitly labeled a native defense-gap
 observation, never qualified performance. Missing defenses are target outcomes.
 

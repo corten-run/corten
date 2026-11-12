@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { validateBudget } from "./plan.mjs";
+import { observe } from "./native.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -241,6 +242,9 @@ export function validateControl(result) {
     const { phase, rows, observations: observed, legitimate: good } = result;
     const count = phase === "oversized-requests" ? 3 : 1;
     assert.equal(result.passed, true); assert.equal(rows.length, count); assert.ok(rows.every((r) => r.established && !r.error));
+    assert.deepEqual(rows.map((r) => r.index), Array.from({ length: count }, (_, i) => i));
+    assert.ok(rows.every((r) => r.phase === phase)); assert.equal(new Set(rows.map((r) => r.localPort)).size, count);
+    if (phase === "oversized-requests") assert.deepEqual(rows.map((r) => r.variant), ["header-count", "header-size", "body-size"]);
     assert.equal(observed.length, count);
     for (let i = 0; i < count; i++) {
       const r = rows[i], receipt = observed.find((o) => o.sourcePort === r.localPort); assert.ok(receipt);
@@ -297,6 +301,11 @@ export async function resourceAsync(path) {
 export async function runProbe(config, emit, sample) {
   const { budget: b, phase, target, form, expected } = config; validateBudget(b);
   const controlBefore = await controls(phase); emit({ type: "control-before", ...controlBefore });
+  if (config.source === "api") {
+    const response = await observe(config.upstream + "/__marketplace/control", { method: "POST", body: "{}" });
+    emit({ type: "upstream-control-before", response });
+    assert.ok(response.complete && response.status === 200 && !response.error && response.body === "{}", "API upstream reset failed before timed injection");
+  }
   const pool = new Connections(), delay = monitorEventLoopDelay({ resolution: 10 }); delay.enable();
   const start = process.hrtime.bigint(), now = () => Number(process.hrtime.bigint() - start) / 1e6;
   emit({ type: "clock", wallAtStart: new Date().toISOString(), monotonicNs: String(start), bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() });
@@ -328,6 +337,7 @@ export async function runProbe(config, emit, sample) {
     await sleep(b.legitimate.after.endMs - now());
   } finally { delay.disable(); await pool.close(); }
   emit({ type: "probe-cleanup", atMs: now(), connections: pool.sockets.size, tasks: 0, errors: pool.errors, failures, eventLoopMaxMs: delay.max / 1e6 });
+  if (config.source === "api") emit({ type: "upstream-control-after", response: await observe(config.upstream + "/__marketplace/control") });
   const controlAfter = await controls(phase); emit({ type: "control-after", ...controlAfter });
   assert.deepEqual(failures, [], "injector task failure"); assert.deepEqual(pool.errors, [], "local injector resource failure");
   assert.equal(attacks.length, b.attack.scheduledAtMs.length); assert.equal(good.length, Object.values(b.legitimate).reduce((n, w) => n + w.scheduledAtMs.length, 0));

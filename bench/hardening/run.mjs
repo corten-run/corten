@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
 import { assemble, artifacts, verifyArtifacts, verifyParity, digest, targetOutcome } from "./evidence.mjs";
-import { assessNative } from "./native.mjs";
+import { assessNative, assessTimedSource } from "./native.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -179,12 +179,12 @@ export async function run(args) {
         snapshot[t.id] = { before: info }; processList.push({ id: t.id, role: t.role, count, containerId: info.Id });
       }
       const deployment = { mode: cell.mode, countAllProcesses: true, processes: processList.map(({ containerId, ...p }) => p) };
-      settings = { review: options.review, case: cell.mode, phase: cell.phase, deployment, effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
+      settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment, effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
       provenance = targets.map((t) => ({ id: t.id, image: t.info.Image, source: t.source, config: digest(readFileSync(join(out, `${t.id}-before.json`))), evidence: `${t.id}-before.json` }));
       const net = JSON.parse(await docker(["network", "inspect", network]))[0];
       assert.deepEqual(Object.keys(net.Containers).sort(), processList.map((p) => p.containerId).sort(), "unaccounted native process container on isolated network");
       json(join(out, "deployment.json"), { network: net, processes: processList, provenance, totalBudget: budget.resources });
-      json(join(out, "probe.json"), { budget, phase: cell.phase, target, form, expected: records().item_1, processes: processList });
+      json(join(out, "probe.json"), { budget, phase: cell.phase, source: cell.source, upstream: `http://${upstreamName}:8080`, target, form, expected: records().item_1, processes: processList });
       await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), "--cgroupns=host", "--pid=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mounted, "-v", `${out}:/results`, tools.node.Id,
         "node", "/repo/bench/hardening/probe.mjs", "/results/probe.json", "/results/raw.jsonl"]);
       startedWall = new Date().toISOString();
@@ -235,7 +235,8 @@ export async function run(args) {
           const capture = assemble({ settings, raw, parity, source: cell.source, cleanup, provenance, lifecycle });
           json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
           cell.defense = capture.defense.protection; cell.recovery = capture.recovery.disposition; cell.capture = `${cell.key}/capture.json`;
-          cell.targetOutcome = targetOutcome(capture, cell.nativeAssessment);
+          if (cell.source === "api") cell.sourceObservation = assessTimedSource(raw);
+          cell.targetOutcome = targetOutcome(capture, cell.edgeAssessment ?? cell.nativeAssessment, cell.sourceObservation);
         } catch (e) { error = e; }
       }
       if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; cell.failedStage = stage;

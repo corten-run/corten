@@ -10,7 +10,7 @@ import { records } from "../marketplace/fixtures.mjs";
 import { qualification, validateQualification } from "../marketplace/feature-contract.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { livePaths } from "../fullstack/conformance.mjs";
-import { nativeControls, assessNative, observe } from "./native.mjs";
+import { nativeControls, assessNative, assessTimedSource, observe } from "./native.mjs";
 import { resourceAsync } from "./probe.mjs";
 import { matrix, nativeGroup, groupReady } from "./plan.mjs";
 import { targetOutcome } from "./evidence.mjs";
@@ -22,7 +22,10 @@ test("real API control receipts detect cache, double reads, passthrough and swal
   let mode = "correct";
   const app = createServer(async (req, res) => {
     if (req.headers.host === "unrecognized.invalid") { res.writeHead(421); return res.end(); }
-    if (req.url === "/health/live") return res.end("live");
+    if (req.url === "/health/live") {
+      if (mode === "health-depends") { const upstreamState = await observe(upstream + "/marketplace/records/item_1"); res.writeHead(upstreamState.status); }
+      return res.end("live");
+    }
     if (!req.url.includes("item_1")) { res.writeHead(404); return res.end(); }
     const raw = await observe(upstream + "/marketplace/records/item_1");
     if (mode === "double") await observe(upstream + "/marketplace/records/item_1");
@@ -32,10 +35,11 @@ test("real API control receipts detect cache, double reads, passthrough and swal
   });
   const base = await listen(app), q = validateQualification(qualification(qualificationProbes(), "api"));
   try {
-    for (mode of ["correct", "cache", "double", "passthrough", "swallow"]) {
+    for (mode of ["correct", "cache", "double", "passthrough", "swallow", "health-depends"]) {
       const raw = await nativeControls({ base, source: "api", upstream, qualification: q, original: fixture.item_1 });
       if (mode === "double") assert.throws(() => assessNative(raw, q), /exactly once/);
-      else assert.equal(assessNative(raw, q).sourceControl, mode === "correct" ? "passed" : "target-functional-failure");
+      else assert.equal(assessNative(raw, q).sourceControl, ["correct", "health-depends"].includes(mode) ? "passed" : "target-functional-failure");
+      if (mode === "health-depends") { assert.equal(assessNative(raw, q).livenessDuringUpstreamFailure, "not-live"); assert.equal(assessNative(raw, q).productionQualified, false); }
       const restored = JSON.parse((await observe(upstream + "/marketplace/records/item_1")).body); assert.deepEqual(restored, fixture.item_1);
       if (mode === "correct") {
         assert.equal(assessNative(raw, q).hostValidation, "observed"); assert.equal(assessNative(raw, q).livenessDuringUpstreamFailure, "observed");
@@ -46,6 +50,21 @@ test("real API control receipts detect cache, double reads, passthrough and swal
       }
     }
   } finally { await close(app); await close(upstreamServer); }
+});
+
+test("timed API receipts preserve independent actual read totals and explicit unavailability", async () => {
+  const server = marketplaceServer(records()), base = await listen(server);
+  const raw = [{ type: "upstream-control-before", response: await observe(base + "/__marketplace/control", { method: "POST", body: "{}" }) }];
+  try {
+    await observe(base + "/marketplace/records/item_1"); await observe(base + "/marketplace/records/item_1");
+    raw.push({ type: "upstream-control-after", response: await observe(base + "/__marketplace/control") });
+    assert.deepEqual(assessTimedSource(raw).counts, { requests: { item_1: 2 }, status: 200, answers: { 200: 2 } });
+    for (const mutate of [(r) => r.pop(), (r) => r.push(r[0]), (r) => r[1].response.sha256 = "invented"]) {
+      const bad = structuredClone(raw); mutate(bad); assert.throws(() => assessTimedSource(bad));
+    }
+  } finally { await close(server); }
+  raw[1].response = await observe(base + "/__marketplace/control");
+  const result = assessTimedSource(raw); assert.equal(result.state, "unavailable"); assert.equal(result.counts, null);
 });
 
 test("missing native host and liveness remain observed gaps, while a catch-all 200 health is inconclusive", async () => {

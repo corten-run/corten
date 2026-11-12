@@ -5,6 +5,7 @@ import { join, resolve, relative, isAbsolute } from "node:path";
 import { hardeningCaptureSchema, hardeningContract, validateHardeningOutcome } from "../workloads/hardening.mjs";
 import { validateBudget } from "./plan.mjs";
 import { validateControl } from "./probe.mjs";
+import { assessTimedSource } from "./native.mjs";
 
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function artifacts(folder) {
@@ -50,6 +51,7 @@ export function defensiveRejection(phase, row) {
 
 export function assemble({ settings, raw, parity, source, cleanup, provenance, lifecycle }) {
   const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
+  if (settings.nativeSource === "api") { assert.equal(source, "api"); assessTimedSource(raw); }
   const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
   for (const type of ["control-before", "control-after"]) {
     const control = one(type); validateControl(control); assert.equal(control.phase, settings.phase);
@@ -130,9 +132,10 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   return validateHardeningOutcome(capture, settings);
 }
 
-export function targetOutcome(capture, assessment) {
+export function targetOutcome(capture, assessment, sourceObservation) {
   const service = Object.fromEntries(Object.entries(capture.legitimate).map(([key, value]) => [key, value.counts]));
   return { classification: Object.values(service).some((counts) => counts.errors > 0) || capture.recovery.disposition !== "recovered"
     ? "target-capacity-failure" : "service-preserved", service, recovery: capture.recovery.disposition,
-    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && assessment?.productionQualified === true };
+    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && assessment?.productionQualified === true
+      && (!sourceObservation || sourceObservation.state === "observed") };
 }
