@@ -12,20 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
-- `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
-  itself: a link reloads it with every script blocked, one of its components is shown as the
-  lines where its three files meet, its own source is broken five ways with what the compiler
-  said, and the server streams its own readings, with the memory it holds, the machine it is on
-  and how much of its CPU and memory is in use (the machine's, or of the limits a container
-  or a systemd unit holds the server to), where the system counts them. Tests hold what it says to
-  `docs/performance.md`, the README,
-  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
-  machine behind nginx as a systemd service: each change on `main` is tested, built, copied over
-  SSH and switched to, and the release before is put back when the new one does not answer as its
-  commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
-  Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
-  behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
-  reads that the plate is no brighter under the steel's type than the type can stand.
+- FastAPI's native record JSON routes bound complete upstream reads, cancel them
+  on caller disconnect and return generic JSON source/serialization errors.
+  Opt-in request tracing spans native serialization without changing successful
+  responses. Focused CI retains failure evidence; unexplained healthy-read errors
+  remain an investigation, not a claimed fix or group load qualification.
 
 - Native record JSON parity checks for Express, Spring and Drogon retain each
   framework's parser and serializer, complete payloads and JSON error/method
@@ -48,6 +39,13 @@ Corten is pre-1.0, so any minor version may change the API.
   handling stays separate; these functional checks are not production qualification
   or performance results.
 
+- Native parity groundwork for Next.js and Django adds opt-in production transport
+  and security settings without replacing their renderers. Next builds bind their
+  profile and scope nonce-dependent rendering to that profile. Leptos's plain form
+  fallback rejects cross-site posts before body/source work; axum retains native
+  typed JSON with bounded source reads. Qualification limits remain explicit, not
+  hidden as missing rows or claimed performance results.
+
 - The separate ASP.NET Core Native AOT JSON adapter now supports complete catalog and numeric
   marketplace records through native source-generated serialization, with fixture-at-startup
   or uncached request-time HTTP sources. Focused source and native executable checks cover
@@ -60,6 +58,12 @@ Corten is pre-1.0, so any minor version may change the API.
   functional gate checks complete catalog and marketplace records, uncached upstream work
   and JSON errors without imposing page features; native serialization still requires source
   verification. Neither integration establishes a new baseline or cloud-run readiness.
+
+- A separate native JSON API group runner retains both payloads and sources,
+  functional observations, independent source-audit requirements and replayed raw
+  timing/runtime evidence. An explicit-commit catalog-page droplet controller uses
+  independent durable reservations, verified archives and terminal-only cleanup.
+  Neither changes the nightly schedule or establishes a native group baseline.
 
 - Offline correctness contracts for the approved mixed-traffic, live-delivery,
   recoverable-live and hardening groups. They preserve native transport/form behavior,
@@ -127,6 +131,21 @@ Corten is pre-1.0, so any minor version may change the API.
   `Cache-Control` as Helmet's documentation sets a header, and Node's 30 s header timeout and
   connection cap; it meets 17 of 24. Without the profile both apps answer as before
   ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+
+- `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
+  itself: a link reloads it with every script blocked, one of its components is shown as the
+  lines where its three files meet, its own source is broken five ways with what the compiler
+  said, and the server streams its own readings, with the memory it holds, the machine it is on
+  and how much of its CPU and memory is in use (the machine's, or of the limits a container
+  or a systemd unit holds the server to), where the system counts them. Tests hold what it says to
+  `docs/performance.md`, the README,
+  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
+  machine behind nginx as a systemd service: each change on `main` is tested, built, copied over
+  SSH and switched to, and the release before is put back when the new one does not answer as its
+  commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
+  Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
+  behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
+  reads that the plate is no brighter under the steel's type than the type can stand.
 
 ### Changed
 

@@ -1,9 +1,12 @@
 from urllib.parse import urlencode
 
+from requests import RequestException
+
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 
 from .marketplace import LABELS, MarketplaceFormat, source
 
@@ -40,9 +43,16 @@ def show(request, locale, record_id):
     })
 
 
-@require_GET
+# This read-only endpoint rejects unsafe methods before any source access. Let its
+# JSON 405 run instead of CSRF's HTML 403; page/form views remain CSRF-protected.
+@csrf_exempt
 def record_json(request, record_id):
-    record = source.get(record_id)
-    if record is None:
-        raise Http404
-    return JsonResponse(record)
+    if request.method not in ("GET", "HEAD"):
+        return JsonResponse({"error": "Method Not Allowed"}, status=405, headers={"Allow": "GET, HEAD"})
+    try:
+        record = source.get(record_id)
+        if record is None:
+            return JsonResponse({"error": "Not Found"}, status=404)
+        return JsonResponse(record)
+    except (RequestException, TypeError, ValueError):
+        return JsonResponse({"error": "Internal Server Error"}, status=500)

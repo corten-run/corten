@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.urls import path
 
 from . import catalog_views, live, marketplace_views, views
@@ -13,3 +14,8 @@ urlpatterns = [
     path("live/prices", live.prices),
     path("live/publish", live.publish),
 ]
+
+if "itempage.production.ProductionHeadersMiddleware" in settings.MIDDLEWARE:
+    from .production import health_live
+
+    urlpatterns.append(path("health/live", health_live))

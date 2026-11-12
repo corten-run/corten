@@ -3,7 +3,7 @@ import os
 from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
@@ -16,6 +16,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from .catalog import CatalogRecord, source as catalog_source
 from .items import ItemView, alert_message, fetch_item, shelf
 from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, source as marketplace_source
+from .record_json import RecordJsonRoute, read_record
 
 # The matched tier's production profile (bench/fullstack/README.md, "The matched tier"), from
 # FastAPI's, Starlette's and uvicorn's own middleware and settings (the end of this file and the
@@ -26,6 +27,7 @@ PROFILE = os.environ.get("PROFILE") == "matched"
 GET = ["GET", "HEAD"] if PROFILE else ["GET"]
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+record_routes = APIRouter(route_class=RecordJsonRoute)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["intcomma"] = lambda n: f"{n:,}"
@@ -126,12 +128,9 @@ async def marketplace(request: Request, locale: str, record_id: str):
     })
 
 
-@app.api_route("/api/marketplace/{record_id}", methods=GET)
-async def marketplace_json(record_id: str) -> MarketplaceRecord:
-    record = await marketplace_source.get(record_id)
-    if record is None:
-        raise HTTPException(status_code=404)
-    return record
+@record_routes.api_route("/api/marketplace/{record_id}", methods=GET)
+async def marketplace_json(request: Request, record_id: str) -> MarketplaceRecord:
+    return await read_record(request, marketplace_source, record_id)
 
 
 @app.get("/catalog/{record_id}", response_class=HTMLResponse)
@@ -148,12 +147,12 @@ async def catalog(request: Request, record_id: str):
     })
 
 
-@app.api_route("/api/catalog/{record_id}", methods=GET)
-async def catalog_json(record_id: str) -> CatalogRecord:
-    record = await catalog_source.get(record_id)
-    if record is None:
-        raise HTTPException(status_code=404)
-    return record
+@record_routes.api_route("/api/catalog/{record_id}", methods=GET)
+async def catalog_json(request: Request, record_id: str) -> CatalogRecord:
+    return await read_record(request, catalog_source, record_id)
+
+
+app.include_router(record_routes)
 
 
 # The live benchmark (bench/live): GET /live/prices is FastAPI's server-sent event stream

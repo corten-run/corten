@@ -36,8 +36,16 @@ selection and historical reservations are unchanged while native parity work is 
 The catalog runner accepts `--group catalog-page` for page-only timing of the exact registry
 selection in both sources, with its stronger native page and JSON correctness gates retained.
 Its versioned group evidence binds checks and timing to each immutable image and verifies
-after-run provenance and saved aggregates. This is a native runner integration, not a passing
-group result or a cloud launcher; see the [catalog procedure](../catalog/README.md).
+after-run provenance and saved aggregates. Its separate explicit-commit cloud controller uses
+independent durable reservations and terminal-only collection/deletion. This is implementation,
+not a passing group result or proof of workload readiness; see the [catalog procedure](../catalog/README.md).
+
+The [JSON API runner](../json-api/README.md) keeps catalog and numeric marketplace payloads
+separate in both sources, with no HTML qualification. Functional responses and independently
+audited native parse/serialization sources are separate gates, bound to exact images and
+configuration. Neither gate can be borrowed from a passing subset or a different ASP.NET
+configuration. Native audit receipts and a complete matrix are prerequisites, not assumed
+readiness; no new baseline or cloud integration is claimed.
 
 Remaining groups stay pending runner/adapter integration. Their presence in this registry is
 not a claim that a new benchmark ran, that all native features exist, or that historical
