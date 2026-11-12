@@ -59,7 +59,7 @@ const HELD: [(&str, &str, &str, &str); 20] = [
         "round browser-2 measured 29.5 ms for Corten, and three reruns of that step on one CPU model gave 4.9, 20.7 and 6.3 ms",
     ),
     (CERT, "corten-run 0.2", MANIFEST, "version = \"0.2."),
-    (SURFACE, "14.5 KB gzipped", README, "A 14.5 KB (gzip) runtime."),
+    (SURFACE, "14.6 KB gzipped", README, "A 14.6 KB (gzip) runtime."),
     (
         AFTER,
         "Firefox 147 and later, Safari 26.2 and later",

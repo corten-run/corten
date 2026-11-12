@@ -104,7 +104,7 @@ fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
     let html = ComboBox { field: &field }.to_html();
     assert!(
         html.starts_with(
-            r#"<div data-scope="ui-combo-box" data-on="connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty)">"#
+            r#"<div data-scope="ui-combo-box" data-on="connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty,$s)">"#
         ),
         "{html}"
     );

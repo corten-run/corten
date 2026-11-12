@@ -121,7 +121,7 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     "A component is a Rust function, and one with no script sends no JavaScript. Behavior is a function in a file beside its component, called from the markup by name and served as written, less its comments."
                 </p>
                 <p>
-                    "Under those functions is Corten's runtime, 14.5 KB gzipped, which swaps pages, patches forms and holds live streams. It keeps no virtual DOM, and nothing runs for an element until an event reaches it."
+                    "Under those functions is Corten's runtime, 14.6 KB gzipped, which swaps pages, patches forms and holds live streams. It keeps no virtual DOM, and nothing runs for an element until an event reaches it."
                 </p>
                 <Built on={&["ES modules", "Import maps", "JSDoc types, checked by TypeScript"][..]} />
             </div>
