@@ -124,7 +124,7 @@ pub(crate) fn Foot() -> impl Render {
                 <a href={links::repository()}>"GitHub"</a>
             </nav>
             <p class={Small}>
-                "\"COR-TEN\" is a U.S. Steel trademark for steel. This site is a Corten app: no web fonts, no bundler, and no framework in the browser but the runtime."
+                "\"COR-TEN\" is a U.S. Steel trademark for steel."
             </p>
         </footer>
     }

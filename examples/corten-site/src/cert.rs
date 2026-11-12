@@ -187,7 +187,7 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                 <div>
                     <h2 class={Title}>"Mill test certificate"</h2>
                     <p class={Standard}>
-                        "A plate of steel ships with a paper saying what was measured and how. This is Corten's. Its first value is to be fast and proven fast, so each number here has its conditions, and every round's full tables are one link away."
+                        "A plate of steel ships with a paper saying what was measured and how. This is Corten's: each number has its conditions, and every round's full tables are one link away."
                     </p>
                 </div>
                 <dl class={Heat}>
@@ -272,7 +272,7 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
             <section class={Part}>
                 <h3 class={Heading}>"A screen the browser changes"</h3>
                 <p class={Lede}>
-                    "Corten sends no framework to the browser, and a screen a script changes is where that is tested: a table of rows, each app written as its js-framework-benchmark entry is. Shorter is better."
+                    "Corten sends no framework to the browser, and a screen a script changes tests that: a table of rows, each app written as its js-framework-benchmark entry is. Shorter is better."
                 </p>
                 <div class={Panels}>
                     for (title, bars) in &drawn {
@@ -291,15 +291,15 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                     }
                 </div>
                 <p class={Phone}>
-                    "And on a throttled phone, the item page of round r16 was interactive in "
+                    "On a throttled phone, round r16's item page was interactive in "
                     <b>{phone("Corten")} " ms"</b>
-                    ". The round's eighteen apps ran from "
+                    ". The eighteen apps ran from "
                     {grouped(PHONE[0].1)}
                     " ms to "
                     {grouped(PHONE[PHONE.len() - 1].1)}
                     " ms, and "
                     {at}
-                    " of them were interactive sooner."
+                    " were interactive sooner."
                 </p>
                 <p class={Conditions}>
                     "Conditions. Round browser-4 (2026-11-11, at 3fb4b1ac, Chromium 156 on Linux, Xeon Platinum 8358). Times run from the click to the DOM being updated, and takeover from the HTML being parsed to the app marking itself ready; memory is what JavaScript holds for each row. The page draws "

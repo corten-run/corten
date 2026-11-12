@@ -59,7 +59,7 @@ pub fn World<'a>(
                         <a href={SurfaceId.fragment()} class={Quiet}>"Go under the surface"</a>
                     </div>
                     <p class={Note}>
-                        "This page is a Corten app, and it is the demonstration: everything below is the page itself, working. The strip along the bottom of the window is your own browser's count of what it has cost."
+                        "This page is a Corten app. The strip along the bottom of the window is your browser's count of what it has cost."
                     </p>
                 </div>
             </section>
@@ -71,7 +71,7 @@ pub fn World<'a>(
                 <img src={req.asset(Static::MARK_SVG)} alt="" width="274" height="169" class={Mark}>
                 <p class={Last}>"Speed that endures."</p>
                 <p class={Origin}>
-                    "Cor-ten is weathering steel. It is meant to rust, and the rust is what protects it: rust underneath, a thin protective surface on top."
+                    "Cor-ten is weathering steel: it is meant to rust, and the rust protects it. Rust underneath, a thin surface on top."
                 </p>
                 <div class={Actions}>
                     <a href={StartId.fragment()} class={Primary}>"Start an app"</a>

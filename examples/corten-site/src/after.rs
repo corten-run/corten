@@ -48,7 +48,7 @@ const LIMITS: [&str; 4] = [
     "Corten speaks HTTP/1.1. A proxy or CDN in front serves browsers HTTP/2 or HTTP/3, which an app with live streams needs.",
     "Pages swap without a full load where the browser has the Navigation API (Chrome, Edge, Firefox 147 and later, Safari 26.2 and later). Older browsers load each page in full; forms, patches and handlers still work.",
     "A native app shell is planned, not built. Agents are given actions as MCP tools behind the agent feature.",
-    "It is 0.2. The API will change before 1.0, and the changelog lists each change.",
+    "It is 0.2: the API will change before 1.0.",
 ];
 
 /// What the reader would otherwise pick, and what is different. Each is a claim the repository
@@ -60,7 +60,7 @@ const AGAINST: [(&str, &str); 5] = [
     ),
     (
         "htmx",
-        "The same idea of HTML first: the server sends markup, and the page works without scripts. Corten's behavior is JavaScript functions next to their component, checked against the markup when the crate compiles.",
+        "HTML first either way: the server sends markup, and the page works without scripts. Corten's behavior is JavaScript functions beside their component, checked against the markup when the crate compiles.",
     ),
     (
         "Leptos, or another WASM framework",
@@ -140,25 +140,20 @@ pub fn After() -> impl Render {
                 <div class={Blocks}>
                     <Code file="" lang={Lang::Shell} source={&start} />
                     <p class={Kept}>
-                        "This page describes the repository's main branch, which can be ahead of the latest release. To run exactly what you read here, build from a checkout:"
+                        "This page describes the main branch, which can be ahead of the latest release. To run what you read here, build from a checkout:"
                     </p>
                     <Code file="from a checkout" lang={Lang::Shell} source={CHECKOUT} />
                 </div>
                 <div class={Words}>
                     <p>
-                        "You need Rust 1.88 or later, and Node.js for the TypeScript that " <code>"corten check"</code>
-                        " type-checks an app's scripts with. Nothing is bundled."
-                    </p>
-                    <p>
-                        <code>"corten new"</code>
-                        " writes a working app: a page, a form that patches part of the page, a component with a script, a test and a Dockerfile. Its package is "
-                        <code>"corten-run"</code> " and its library " <code>"corten"</code>
-                        ", and the app's Cargo.toml says so for you."
+                        "You need Rust 1.88 or later. " <code>"corten new"</code>
+                        " writes a working app: a page, a form that patches part of it, a component with a script, a test and a Dockerfile. Its package is "
+                        <code>"corten-run"</code> " and its library " <code>"corten"</code> ", as the app's Cargo.toml says."
                     </p>
                     <p>
                         "Corten is 0.2: usable and tested, and built for " <a href={links::chase_sets()}>"Chase Sets"</a>
-                        ". The API will change before 1.0, and the " <a href={links::changelog()}>"changelog"</a>
-                        " lists what changed."
+                        ". The " <a href={links::changelog()}>"changelog"</a>
+                        " lists what each release changed."
                     </p>
                     <p class={Ways}>
                         <a href={links::getting_started()} class={Way}>"Read the getting started guide"</a>

@@ -49,10 +49,10 @@ pub fn Seam<'a>(here: Here<'a>, plate: &'a Plate<'a>) -> impl Render {
                     <h3>"One handler, with or without JavaScript"</h3>
                     <p>
                         "A form marked " <code>"data-patch"</code>
-                        " gets back only the elements that changed. Without JavaScript the same form posts, and the same handler answers for the whole page."
+                        " gets back only the elements that changed. Without JavaScript it posts, and the same handler answers for the whole page."
                     </p>
                     <p>
-                        "Name an app and strike its plate, and watch the count at the bottom of the window: the patch is one request of about a kilobyte, carrying only the nameplate's HTML. The first strike also loads two small files: the nameplate's script, and the event it fires, a DOM event whose class is generated from a Rust struct."
+                        "Name an app and strike its plate: the patch is one request of about a kilobyte, carrying only the nameplate's HTML. The first strike also loads the nameplate's script and the event it fires, a DOM event whose class is generated from a Rust struct."
                     </p>
                     <Built on={&["HTML forms", "fetch", "303 See Other", "DOM events"][..]} />
                 </div>
@@ -72,8 +72,8 @@ fn Breaks() -> impl Render {
             <fieldset class={Cuts}>
                 <legend class={Legend}>"Break one seam"</legend>
                 <p class={Why}>
-                    "A typo in one of those names fails the build, " <code>"corten check"</code>
-                    " or startup, before any request, and so does a wrong route, form field or patch. So we broke this page's own source five ways, and kept what the compiler said."
+                    "A typo in one of those names, or a wrong route, form field or patch, fails the build, " <code>"corten check"</code>
+                    " or startup, before any request. Here is this page's source broken five ways, with what the compiler said."
                 </p>
                 for (n, cut) in crate::cuts::CUTS.iter().enumerate() {
                     <label class={CutLabel}>
@@ -117,7 +117,7 @@ fn Breaks() -> impl Render {
                 }
             </div>
             <p class={Kept}>
-                "Each answer is from a real build of this site with that one line changed. Where the build said more, its first error is shown and a line of dots marks what was left out."
+                "Each answer is from a real build of this site with that one line changed. A line of dots marks output left out."
             </p>
         </div>
     }

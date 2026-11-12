@@ -16,7 +16,7 @@ use crate::{
 pub(crate) const HEADERS: [(&str, &str); 9] = [
     (
         "content-security-policy",
-        "No inline script or style runs, this page's included, and scripts load from this origin alone. Trusted Types guard what a script may write into the page.",
+        "No inline script or style runs, and scripts load from this origin alone. Trusted Types guard what a script may write into the page.",
     ),
     ("cache-control", "One reader's page is never handed to another. A handler says so when an answer is for everyone."),
     ("etag", "A reload of a page that has not changed is answered 304, with no body."),
@@ -41,17 +41,17 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
             <div class={Slab {}}>
                 <h3>"Live data is patches"</h3>
                 <p>
-                    "These are the readings of the server you are reading from, streamed as HTML. The runtime swaps each one in by its id, and this page has no script of its own behind them. The page it times is this one, 1,000 wall tiles and three files of source in each render: a heavier page than the item page the certificate measures."
+                    "These are this server's readings, streamed as HTML. The runtime swaps each in by its id, with no script of this page's own. The page it times is this one, 1,000 wall tiles in each render: heavier than the item page the certificate measures."
                 </p>
                 <p>
-                    "Open this page in a second tab and the count of pages following goes up in both. Close it, and the stream's signal aborts on the server: the count comes back down. A stream carries a cursor, so a reconnect resumes where it left off."
+                    "Open this page in a second tab and the count of pages following goes up in both. Close it and the stream's signal aborts on the server, and the count comes back down. A stream carries a cursor, so a reconnect resumes where it left off."
                 </p>
                 if machine.metered {
                     <p>
                         if machine.held() {
-                            "Two of the readings are counted by the operating system each second, for everyone reading this now: the CPU and the memory in use, each of the machine or of the limit this server's container holds it to, as its label says."
+                            "The last two readings are counted by the operating system each second: the CPU and memory in use, of the machine or of the limit this server's container is held to, as each label says."
                         } else {
-                            "Two of the readings are the whole machine's, counted by its operating system each second: the CPU and the memory in use by everything on it, for everyone reading this now."
+                            "The last two readings are the whole machine's, counted by its operating system each second: the CPU and memory in use by everything on it."
                         }
                         // Not where the server is kept to some of the CPUs the count is of.
                         if machine.counts_its_cpus() {
@@ -67,12 +67,12 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
             <div class={Slab {}}>
                 <h3>"Production defaults, in the response you are reading"</h3>
                 <p>
-                    "This is what this server answers your browser with for this page: the headers of a second request, made as you reached here. An app is "
+                    "These are the headers this server answers this page with, read from a second request made as you reached here. An app is "
                     <code>"App::new(routes)"</code> " and " <code>"corten::serve"</code>
-                    ", and these come with it: compression is one feature, the timing header is this site's own."
+                    ", and these come with it, except where a note says otherwise."
                 </p>
                 <p>
-                    "The same address answers a client that asks for JSON with this page's data, so a native screen or an agent reads what a person sees and nothing is scraped from markup. Agents can also be given an app's actions as Model Context Protocol tools."
+                    "Asked for JSON, the same address answers with this page's data, so a native screen or an agent reads what a person sees. Agents can also be given an app's actions as Model Context Protocol tools."
                 </p>
                 <p>
                     "Not in a header: a form another site posts is refused before its handler runs, "
@@ -95,7 +95,7 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
             <div class={Slab {}}>
                 <h3>"One binary"</h3>
                 <p>
-                    "That is the whole of this site: the server, the runtime, this page's scripts, styles and images, compiled into one program. There is no JavaScript build step or bundler in a Corten app, and "
+                    "That is the whole site: server, runtime, scripts, styles and images, compiled into one program. A Corten app has no JavaScript build step, and "
                     <code>"static/"</code> " ships inside the binary."
                 </p>
                 if machine.memory_bytes > 0 {
@@ -112,7 +112,7 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                         }
                         "."
                         if machine.counts_its_cpus() {
-                            " The readings above say how much of both is in use, and how much of the memory this server holds."
+                            " The readings above say how much of each is in use."
                         }
                     </p>
                 }

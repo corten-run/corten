@@ -327,7 +327,7 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
                 <div class={Slab {}}>
                     <h3>"Typed end to end"</h3>
                     <p>
-                        "A component is a Rust function with a script and a stylesheet beside it. Here is one from this page, the wall you can sort above, trimmed to the lines where its files refer to each other. Each colored name is checked when the crate compiles: "
+                        "This is the wall above, cut to the lines where its three files refer to each other. Each colored name is checked when the crate compiles: "
                         <span class={(Tied, Called)}>"a function the markup calls"</span> ", "
                         <span class={(Tied, Named)}>"an element it hands that function"</span> " or "
                         <span class={(Tied, Classed)}>"a class from the stylesheet"</span> ". " <code>"order"</code>
@@ -395,8 +395,8 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
                     }
                     if n == 0 {
                         <p class={Note}>
-                            "One name in these files is checked by nothing: " <code class={(Tied, Loose)}>"data-reading"</code>
-                            ", which the markup writes on each tile and the script reads back as a string."
+                            "The one exception is " <code class={(Tied, Loose)}>"data-reading"</code>
+                            ": the markup writes it and the script reads it back as text, so a misspelling in either file still compiles, and the wall stops sorting."
                         </p>
                     }
                 </section>

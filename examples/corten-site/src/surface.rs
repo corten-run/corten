@@ -64,7 +64,7 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     "Every page arrives rendered. Links are links and forms post, so a page works before its scripts load, and without them."
                 </p>
                 <p>
-                    "This page is the proof. Ask for it with every script blocked, then sort the wall below and strike a plate: the server answers a link and a form, as servers always have."
+                    "Block this page's scripts, then sort the wall below and strike a plate: the server answers a link and a form."
                 </p>
                 <Built on={&["HTML links and forms", "Content-Security-Policy"][..]} />
             </div>
@@ -72,13 +72,13 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                 if here.bare {
                     <p class={State}>"Scripts: blocked"</p>
                     <p class={Told}>
-                        "This page came with one more line, a policy that forbids every script, and your browser is holding it to that. Every word and number is still here. The plate behind the page is flat and the live numbers are still, because those are what the scripts were for."
+                        "This page came with a policy that forbids every script, and your browser is enforcing it. Every word and number is still here. The plate behind the page is flat and the live numbers do not move."
                     </p>
                     <a href={here.scripts(true).at(SurfaceId)} class={Throw}>"Let the scripts run"</a>
                 } else {
                     <p class={State}>"Scripts: running"</p>
                     <p class={Told}>
-                        "One link reloads this page with all of them blocked: the same page, sent with a policy that forbids every script, enforced by your browser. Not a mock-up of a page without scripts."
+                        "The link below reloads this page under a policy that forbids every script. Your browser enforces it."
                     </p>
                     // A page swapped in by the runtime would keep its scripts, so this one loads in full.
                     <a href={here.scripts(false).at(SurfaceId)} class={Throw} data-reload>"Block every script"</a>
@@ -117,13 +117,10 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
             <div class={Slab {}}>
                 <h3>"Plain JavaScript where it is fastest"</h3>
                 <p>
-                    "A component is a Rust function, most with a stylesheet beside it. This site has " {all} ", and "
-                    {PLAIN.len()}
-                    " of them have no script: no JavaScript is sent for them. Where one needs behavior, it is a function in a file next to it, called from the markup by name: "
-                    {SCRIPTED.len()} " files, written by hand and served as written, less their comments."
+                    "A component is a Rust function, and one with no script sends no JavaScript. Behavior is a function in a file beside its component, called from the markup by name and served as written, less its comments."
                 </p>
                 <p>
-                    "Under them is Corten's runtime, 14.5 KB gzipped, which swaps pages, patches forms and holds live streams. No WASM, no virtual DOM, no hydration, no bundler. Nothing runs for an element until an event reaches it."
+                    "Under them is Corten's runtime, 14.5 KB gzipped, which swaps pages, patches forms and holds live streams. It keeps no virtual DOM: nothing runs for an element until an event reaches it."
                 </p>
                 <Built on={&["ES modules", "Import maps", "JSDoc types, checked by TypeScript"][..]} />
             </div>
@@ -132,12 +129,11 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
             <div class={Slab {}}>
                 <h3>"The browser acts on what it has"</h3>
                 <p>
-                    "These 1,000 samples arrived as HTML, each with a reading. Putting them in order is work the browser can do with the data it already holds, so no request is sent: watch the count at the bottom of the window stay where it is."
+                    "These 1,000 samples arrived as HTML, each with a reading. The browser has all it needs to put them in order, so no request is sent: the count at the bottom of the window stays where it is."
                 </p>
                 <p>
-                    "The same control is a link. Where no script runs, the server puts them in order and draws the page again."
+                    "The same control is a link: with no script, the server puts them in order and draws the page again."
                 </p>
-                <p>"This wall is one component. The next layer opens it up, at the lines where its three files meet."</p>
                 <Built on={&["The DOM", "Performance timing"][..]} />
             </div>
             <Wall here={here} t={t} />
