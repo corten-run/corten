@@ -59,6 +59,10 @@ export async function run(args) {
   }
   const limits = (role) => ["--cpus", String(role.cpu), "--memory", String(role.memory), "--memory-swap", String(role.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536"];
   const mounted = ["-v", `${repo}:/repo:ro`];
+  // Mount leaves separately: a missing node_modules mountpoint cannot be created
+  // beneath a read-only repository mount in an otherwise clean worktree.
+  const checkMounts = ["-v", `${join(repo, "bench")}:/repo/bench:ro`, "-v", `${join(repo, "scripts")}:/repo/scripts:ro`,
+    "-v", `${join(repo, "package.json")}:/repo/package.json:ro`];
   const dependencies = resolve(repo, options.nodeModules);
   assert.ok(existsSync(join(dependencies, "@playwright/test/package.json")), "--node-modules must name an installed pinned dependency tree");
   assert.equal(JSON.parse(readFileSync(join(dependencies, "@playwright/test/package.json"))).version,
@@ -97,7 +101,7 @@ export async function run(args) {
   }
   async function sidecar(name, namespace, args, out, file, timeout, memory = budget.resources.qualification.memory) {
     const cert = join(out, "cert/cert.pem");
-    await owned(name, ["create", "--network", `container:${namespace}`, ...limits({ cpu: 2, memory }), "--shm-size", "1g", ...mounted,
+    await owned(name, ["create", "--network", `container:${namespace}`, ...limits({ cpu: 2, memory }), "--shm-size", "1g", ...checkMounts,
       "-v", `${dependencies}:/repo/node_modules:ro`, ...fixture, "-v", `${out}:/results`,
       ...(existsSync(cert) ? ["-e", "NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "-e", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : []),
       "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", tools.checker.Id, "node", ...args]);
