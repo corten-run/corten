@@ -444,6 +444,12 @@ mod tests {
             assert!(PERFORMANCE.contains(&row), "docs/performance.md has no row: {row}");
         }
         assert!(PHONE.windows(2).all(|pair| pair[0].1 <= pair[1].1), "fastest first");
+        // The rows are the document's column, each app once and in its order.
+        let (_, rows) = table(TABLES[2]);
+        let documents: Vec<(String, String)> = rows.iter().map(|row| (row[0].clone(), row[1].clone())).collect();
+        let these: Vec<(String, String)> =
+            PHONE.iter().map(|&(app, ms)| (app.to_string(), format!("{} ms", grouped(ms)))).collect();
+        assert_eq!(these, documents);
         // What the certificate says of the phone is counted from these rows: the apps ahead.
         let ours = PHONE.iter().position(|&(app, _)| app == "Corten").expect("Corten is in the round");
         assert_eq!(
@@ -556,7 +562,11 @@ mod tests {
         let (mine, unit) = measure(&ours).expect("Corten's result is a number");
         let mut ahead = Vec::new();
         for row in rows {
-            let Some((other, its)) = measure(&row[column]) else { continue };
+            let Some((other, its)) = measure(&row[column]) else {
+                // Only an app that failed has no number to compare.
+                assert!(row[column].starts_with("failed"), "{head}: {} has no number: {}", row[0], row[column]);
+                continue;
+            };
             assert_eq!(its, unit, "{head}: {} is in another unit than Corten's {ours}", row[0]);
             let leads = if more { other > mine } else { other < mine };
             if leads {
@@ -568,8 +578,8 @@ mod tests {
 
     /// `TRAILS` is every column of the round's three tables where another app is ahead of
     /// Corten, with Corten's result and the number ahead: a result that moves an app ahead
-    /// fails here until the certificate says so, and so does a column the document gains, until
-    /// it is said which way is better in it.
+    /// fails here until `TRAILS` has it, which is when to say it in the paragraph, and so does a
+    /// column the document gains, until it is said which way is better in it.
     #[test]
     fn where_others_lead_is_every_column_of_the_rounds() {
         let mut found = Vec::new();
@@ -585,6 +595,9 @@ mod tests {
         let said: Vec<(String, String, usize)> =
             TRAILS.iter().map(|&(column, ours, ahead)| (column.to_string(), ours.to_string(), ahead)).collect();
         assert_eq!(found, said);
+        // The paragraph writes each of these counts as more than one app.
+        let phone = PHONE.iter().position(|&(app, _)| app == "Corten").expect("Corten is in the round");
+        assert!([PEAK.2, PAINT.2, DESKTOP.2, phone].iter().all(|ahead| *ahead > 1));
     }
 
     /// Each result the certificate gives for an app ahead is the document's, and where it names
@@ -610,6 +623,7 @@ mod tests {
         fn names(column: &str) -> Vec<&'static str> {
             NAMED.iter().filter(|row| row.0 == column).map(|row| row.1).collect()
         }
+        assert_eq!(names("Pages per CPU-second"), ["axum 0.8 + Maud 0.27"]);
         assert_eq!(names("Pages a second per MiB"), ["axum 0.8 + Maud 0.27", "Drogon 1.9"]);
         assert_eq!(names("Phone: client navigation"), ["Phoenix 1.8"]);
         assert_eq!(names("JavaScript, gzip"), ["Astro 7", "Leptos 0.8"]);

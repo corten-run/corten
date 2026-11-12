@@ -19,8 +19,8 @@ on:
 permissions:
   contents: read
 
-# One deploy at a time, and none is cancelled for the next: a cancelled deploy could leave an
-# unchecked release served.
+# One deploy at a time, and a running one is never cancelled for the next: a cancelled deploy
+# could leave an unchecked release served.
 concurrency:
   group: site
   cancel-in-progress: false
@@ -106,19 +106,27 @@ jobs:
           # The machine may be out of reach for a moment, which is what failed the deploy: the
           # put-back is tried three times.
           put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          # A release's directory starts with its commit, which its page names: the put-back is
+          # checked as that release, not as any answer. It is read with this commit's words for
+          # it, so a change to how the page names its commit fails this check once.
+          was="${before%/}"
+          was="${was##*/}"
           if put_back; then
             for try in $(seq 1 20); do
-              if curl -fsS --max-time 5 -o /dev/null "$site/"; then
-                echo "put back on $before, which answers"
+              if page "${was::7}"; then
+                echo "put back on $before, which answers as itself"
                 # A deploy that failed is a release too, and the disk is small.
                 machine prune || true
                 exit 1
               fi
               sleep 1
             done
-            echo "put back on $before, which does not answer either"
+            echo "put back on $before, which does not answer as itself"
           else
-            echo "$before could not be put back"
+            echo "$before could not be put back in three tries"
+            # The link moves before the restart, so it may not be what the service runs.
+            echo "current points at $($ssh 'readlink /opt/corten-site/current' 2>/dev/null || echo 'a release not known: the machine did not answer')"
+            if page "$commit"; then echo "the site answers as $commit, which was not checked in full"; fi
           fi
           exit 1
       # The actions above have steps that run after this one; the key is gone before they do.
