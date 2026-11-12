@@ -63,6 +63,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
   header names
   ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
+- `examples/deck-builder`'s `DeckAnswered`, the pattern the scripts guide shows for learning a
+  `data-patch` submit's outcome, carries it as `SaveOutcome`, an enum that derives `ToJson`, in
+  place of a `String`: `answered` takes it and the builder's branches compare its declared names,
+  so a renamed or misspelled outcome fails the build or `tsc` instead of leaving a refused save
+  not rolled back. The page as loaded is a variant of its own, `Loaded`, for which no event is sent
+  ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
 
