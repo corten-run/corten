@@ -73,14 +73,29 @@ export function assessNative(report, qualification) {
       && healthy(byName["restored-json"]) && isDeepStrictEqual(jsonOf(byName["restored-json"]), api.original);
     sourceControl = valid ? "passed" : "target-functional-failure";
   } else assert.equal(report.api, null);
-  return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched",
-    productionQualified: qualification.eligible && hostState === "observed" && livenessState === "observed" && sourceControl !== "target-functional-failure",
+  const liveDuringFailure = expectedLive && report.source === "api" ? healthy(report.api.responses.find((r) => r.step === "live-503").response) ? "observed" : "not-live" : "unavailable";
+  const productionQualified = qualification.eligible && hostState === "observed" && livenessState === "observed" && sourceControl !== "target-functional-failure"
+    && (report.source !== "api" || liveDuringFailure === "observed");
+  return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched", productionQualified,
     productionQualificationScope: "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence",
     missingProductionFeatures: qualification.missing,
     hostValidation: hostState, liveness: livenessState, sourceControl,
-    livenessDuringUpstreamFailure: expectedLive && report.source === "api" ? healthy(report.api.responses.find((r) => r.step === "live-503").response) ? "observed" : "not-live" : "unavailable",
-    qualificationPurpose: qualification.eligible ? "qualified-native-hardening-observation" : "explicit-native-defense-gap-observation-not-qualified-performance",
+    livenessDuringUpstreamFailure: liveDuringFailure,
+    qualificationPurpose: productionQualified ? "qualified-native-hardening-observation" : "explicit-native-defense-gap-observation-not-qualified-performance",
     alternatives: [] };
+}
+
+export function assessTimedSource(raw) {
+  const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); receipt(rows[0].response); return rows[0].response; };
+  const before = one("upstream-control-before"), after = one("upstream-control-after");
+  assert.ok(healthy(before), "API upstream reset failed before timed injection"); assert.deepEqual(jsonOf(before), {});
+  if (!healthy(after)) return { state: "unavailable", status: after.status ?? null, error: after.error ?? (after.timedOut ? "timeout" : "incomplete response"), counts: null };
+  const counts = jsonOf(after); assert.deepEqual(Object.keys(counts).sort(), ["answers", "requests", "status"]); assert.equal(counts.status, 200, "upstream control state changed during injection");
+  for (const map of [counts.requests, counts.answers]) {
+    assert.ok(map && typeof map === "object" && !Array.isArray(map));
+    assert.ok(Object.values(map).every((value) => Number.isSafeInteger(value) && value >= 0), "invalid upstream counters");
+  }
+  return { state: "observed", status: 200, counts, attribution: "all native upstream reads including attacks; not assigned to individual legitimate requests" };
 }
 
 export async function nativeControls({ base, source, upstream, qualification, original, request = observe }) {

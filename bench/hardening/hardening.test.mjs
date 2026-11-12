@@ -37,7 +37,7 @@ test("same native socket injectors pass independent receiver controls for all si
 test("control assertions reject corrupted receipts rather than trusting a passing flag", async () => {
   for (const phase of ["slow-headers", "slow-readers", "oversized-requests"]) {
     const measured = await controls(phase);
-    for (const corrupt of [(c) => c.observations[0].bytes++, (c) => c.rows.pop(), (c) => c.legitimate.bodySha256 = "invented", (c) => c.legitimate.ok = false]) {
+    for (const corrupt of [(c) => c.observations[0].bytes++, (c) => c.rows.pop(), (c) => c.rows[0].phase = "substituted", (c) => c.rows[0].index++, (c) => c.legitimate.bodySha256 = "invented", (c) => c.legitimate.ok = false]) {
       const changed = structuredClone(measured); corrupt(changed); assert.throws(() => validateControl(changed));
     }
     const changed = structuredClone(measured);
@@ -45,6 +45,7 @@ test("control assertions reject corrupted receipts rather than trusting a passin
     if (phase === "slow-readers") changed.observations[0].responseBackpressure = false;
     if (phase === "oversized-requests") changed.rows[2].bodyBytesQueued = 0;
     assert.throws(() => validateControl(changed));
+    if (phase === "oversized-requests") { const wrong = structuredClone(measured); wrong.rows[2].variant = "header-count"; assert.throws(() => validateControl(wrong)); }
   }
 });
 
