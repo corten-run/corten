@@ -28,6 +28,7 @@ EOF
         gh api -X POST "repos/$repo/environments/$1/deployment-branch-policies" -f name=main > /dev/null
 }
 has_secret() { gh secret list --env "$1" --json name --jq '.[].name' | grep -qx "$2"; }
+has_variable() { gh variable list --env "$1" --json name --jq '.[].name' | grep -qx "$2"; }
 
 environment site
 environment site-machine
@@ -36,11 +37,17 @@ environment site-machine
 # workflow's, its public half the machine's. The host key is the other way round: the machine
 # is given the private half as it starts, and the Site workflow knows the host by the public
 # half, under the site's name, so a machine that replaces another is still the host it trusts.
-if has_secret site SITE_SSH_KEY && has_secret site-machine SITE_HOST_KEY; then
+# All four halves or none: a run that stopped between them leaves keys nothing can be matched
+# to, and they are made again.
+if has_secret site SITE_SSH_KEY && has_secret site-machine SITE_HOST_KEY &&
+    has_variable site-machine SITE_DEPLOY_KEY && has_variable site-machine SITE_HOST_KEY_PUBLIC; then
     echo "the keys are already there, and are kept"
 else
     work=$(mktemp -d)
+    # The private halves do not outlast the run, however it ends: sh runs the EXIT trap for a
+    # signal only when the signal is caught.
     trap 'rm -rf "$work"' EXIT
+    trap 'exit 1' INT TERM HUP
     ssh-keygen -q -t ed25519 -N "" -C corten-site-deploy -f "$work/deploy"
     ssh-keygen -q -t ed25519 -N "" -C corten-site -f "$work/host"
     gh secret set SITE_SSH_KEY --env site < "$work/deploy"
@@ -49,8 +56,13 @@ else
     gh variable set SITE_HOST_KEY_PUBLIC --env site-machine --body "$(cat "$work/host.pub")"
 fi
 # The Site workflow reaches the machine by the site's name, and knows it by the host key.
-gh variable get SITE_HOST_KEY_PUBLIC --env site-machine | cut -d' ' -f1-2 | sed "s/^/$domain /" |
-    gh secret set SITE_KNOWN_HOSTS --env site
+host=$(gh variable get SITE_HOST_KEY_PUBLIC --env site-machine)
+host=$(printf '%s\n' "$host" | cut -d' ' -f1-2)
+case $host in
+"ssh-ed25519 "?*) ;;
+*) echo "the machine's host key did not read back as a public key: nothing more was set" >&2; exit 1 ;;
+esac
+printf '%s %s\n' "$domain" "$host" | gh secret set SITE_KNOWN_HOSTS --env site
 
 printf '%s' "$email" | gh secret set SITE_EMAIL --env site-machine
 gh variable set SITE_DOMAIN --body "$domain"

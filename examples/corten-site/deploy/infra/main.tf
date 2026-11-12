@@ -16,7 +16,8 @@ locals {
     "/root/deploy/boot.sh"                         = file("${path.module}/boot.sh")
     "/root/deploy/deploy.pub"                      = "${trimspace(var.deploy_key)}\n"
     "/etc/systemd/system/corten-site-boot.service" = file("${path.module}/corten-site-boot.service")
-    # Read by boot.sh as shell. Each value is checked to hold no quote (variables.tf).
+    # Read by boot.sh as shell. Each value is checked to hold no quote (variables.tf), the size
+    # and region in the third among them.
     "/root/deploy/site.conf" = join("", [
       "domain='${var.domain}'\n",
       "email='${var.email}'\n",
@@ -52,9 +53,12 @@ resource "digitalocean_tag" "site" {
   name = "corten-site"
 }
 
-# The address stays when the machine is replaced, so the name never has to move.
+# The address stays when the machine is replaced, so the name never has to move. It names its
+# machine itself, so a replacement changes it in place, once the new machine is made: a separate
+# assignment is replaced instead, and its old half is removed before the new machine exists.
 resource "digitalocean_reserved_ip" "site" {
-  region = var.region
+  region     = var.region
+  droplet_id = digitalocean_droplet.site.id
 }
 
 resource "digitalocean_droplet" "site" {
@@ -66,20 +70,16 @@ resource "digitalocean_droplet" "site" {
   tags      = [digitalocean_tag.site.id]
   user_data = "#cloud-config\n${yamlencode(local.cloud_config)}"
 
-  # The new machine is made before the old one goes. The address moves between the two, and the
-  # site is down from then until the new machine has its certificate and its first release.
+  # The new machine is made before the address moves to it, and the old one goes after that: a
+  # machine that cannot be made leaves the old one serving. The site is down from the move
+  # until the new machine has its certificate and its first release.
   lifecycle {
     create_before_destroy = true
   }
 }
 
-resource "digitalocean_reserved_ip_assignment" "site" {
-  ip_address = digitalocean_reserved_ip.site.ip_address
-  droplet_id = digitalocean_droplet.site.id
-}
-
-# The machine's own firewall (ufw, ../provision.sh) allows the same three ports. This one holds
-# from the machine's first second, before it has set its own.
+# The machine's own firewall (ufw, ../provision.sh) allows the same three ports. This one is by
+# tag, so it holds for a machine before the machine has set its own.
 resource "digitalocean_firewall" "site" {
   name = "corten-site"
   tags = [digitalocean_tag.site.id]
@@ -121,6 +121,13 @@ resource "digitalocean_record" "site" {
   name   = local.record
   value  = digitalocean_reserved_ip.site.ip_address
   ttl    = 300
+
+  lifecycle {
+    precondition {
+      condition     = var.domain == local.zone || endswith(var.domain, ".${local.zone}")
+      error_message = "The site's name is not in the zone given: its record would be written under another name."
+    }
+  }
 }
 
 resource "digitalocean_record" "spf" {

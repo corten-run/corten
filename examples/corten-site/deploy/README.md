@@ -40,7 +40,8 @@ until the site's name reaches it, and runs them itself.
 1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
    droplets, reserved addresses, firewalls, tags, and domains with their records; one with
    full access is the simple choice. A Spaces key with full access lets the workflow make the
-   bucket on its first run; one limited to a bucket you made works as well.
+   bucket on its first run and keep each version of the state in it. A key limited to one
+   bucket has not been tried: the workflow sets versioning on the bucket in every run.
 2. From a clone of the repository, with `gh` signed in as someone who administers it:
 
    ```sh
@@ -48,8 +49,8 @@ until the site's name reaches it, and runs them itself.
    ```
 
    It makes the environments `site` and `site-machine`, which only `main` may use; makes the
-   deploy key and the machine's SSH host key, and stores each half where it is used and nowhere
-   else; and sets the variables both workflows read. A fifth argument, `refuse-mail`, adds
+   deploy key and the machine's SSH host key, and stores each half with the workflow that uses
+   it; and sets the variables both workflows read. A fifth argument, `refuse-mail`, adds
    records that say the zone sends no mail (`v=spf1 -all`, and DMARC's `p=reject`): only for a
    zone that has none. Run again, it keeps the keys.
 3. Type the three secrets that are yours alone, each at `gh`'s prompt:
@@ -60,7 +61,11 @@ until the site's name reaches it, and runs them itself.
    gh secret set SPACES_SECRET_ACCESS_KEY --env site-machine
    ```
 
-4. Run the workflow (`gh workflow run site-machine.yml`). It makes everything in `infra/`.
+4. Run the workflow (`gh workflow run site-machine.yml`). It makes everything in `infra/`, then
+   waits up to half an hour for the machine to answer and ends with a warning when it does not,
+   as it will not while the name points elsewhere. A zone of the site's name already in the
+   DigitalOcean account makes this run fail: remove it there first, or leave the zone where it
+   is with `SITE_DNS_ELSEWHERE`.
 5. At the name's registrar, name `ns1.digitalocean.com`, `ns2.digitalocean.com` and
    `ns3.digitalocean.com` as the zone's name servers. Records the zone had elsewhere do not
    come along: add each to `infra/main.tf` first. The machine waits for the name to reach it,
@@ -73,12 +78,22 @@ until the site's name reaches it, and runs them itself.
    ```
 
 From then on a change on `main` under `infra/`, or to `provision.sh`, `nginx.conf` or the service
-file, is applied by the workflow. A droplet is never changed in place: a change to anything it
-is handed makes a new droplet, moves the address to it and removes the old one, and the
-workflow then starts the Site workflow to ship it a release. The site is down from the move
-until that release is served, which is the minutes a machine takes to install its packages
-and get a certificate. Let's Encrypt issues the same name five certificates a week, so that is
-also how many replacements a week there can be.
+file, is applied by the workflow, and by it alone: the Site workflow does not run for those
+files. A droplet is never changed in place. A change to anything it is handed, a comment in one
+of those files included, makes a new droplet, moves the address to it once it exists, and
+removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
+the workflow asks the machine at the address for the site, and starts the Site workflow when a
+machine it made answers or the one there has no release.
+
+The site is down from the move until that release is served. That is the time a machine takes
+to install its packages and get a certificate, and then a whole run of the Site workflow, which
+tests and builds before it ships; none of it has been timed yet. The old machine and its
+certificate are gone by then, and Let's Encrypt issues the same name five certificates a week:
+a sixth replacement inside a week leaves the site down until the oldest of the five is a week
+old. So gather changes to those files into one merge. When an apply fails, run the workflow
+again (`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
+site to a machine left without a release. With deploys on, a run fails when the machine does
+not answer.
 
 | Where | Name | What it is |
 |---|---|---|
@@ -92,7 +107,9 @@ also how many replacements a week there can be.
 `SITE_MACHINE` is what the page adds after the machine's own count of itself (without it, the
 droplet's size and region). `SITE_ADMIN_KEYS` is a JSON list of the fingerprints of SSH keys in
 the DigitalOcean account that may sign in as root; with none, root is reached through the
-control panel's console alone, and no password signs in over SSH either way. `SITE_ZONE` names
+control panel's console alone, with the password DigitalOcean emails the account for each
+droplet made without a key (its practice, not checked here), and no password signs in over SSH
+either way. `SITE_ZONE` names
 the zone where it is not the site's name itself (`example.com` for `www.example.com`), and
 `SITE_DNS_ELSEWHERE` set to `true` leaves the zone where it is: point an A record at the address
 the workflow's apply prints. Changing `SITE_MACHINE` or `SITE_ADMIN_KEYS` replaces the droplet
@@ -102,9 +119,11 @@ The state holds no secret: of what a droplet is handed the provider keeps a hash
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
 time, so do not run `tofu apply` from a second place while it runs. The host key is the same on
 every droplet made here, which is what lets the Site workflow know a new one as the host it
-trusts. What a droplet is handed can be read on it from the metadata address by anything that
-runs there; the site's service, the one process on it that reads what strangers send, cannot
-reach that address or any other but the machine's own (`IPAddressDeny=` in the service file).
+trusts. What a droplet is handed, the host key and the email among it, can be read on it from
+the metadata address by any process there. The site's service cannot reach that address or any
+other but the machine's own (`IPAddressDeny=` in the service file). nginx's workers and whoever
+signs in as `deploy` can: the holder of the deploy key can read the host key, so the two keys
+are kept apart on GitHub and not on the machine.
 
 ### By hand, on any machine
 

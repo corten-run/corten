@@ -10,6 +10,13 @@ on:
     branches: [main]
     paths:
       - examples/corten-site/**
+      # A change to what a machine is made from is the Site machine workflow's: it makes the new
+      # machine and runs this one when that machine answers. Shipped from here as well, a release
+      # would go to a machine about to be removed, or to one still setting itself up.
+      - "!examples/corten-site/deploy/infra/**"
+      - "!examples/corten-site/deploy/provision.sh"
+      - "!examples/corten-site/deploy/nginx.conf"
+      - "!examples/corten-site/deploy/corten-site.service"
       - crates/**
       - Cargo.toml
       - Cargo.lock

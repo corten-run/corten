@@ -39,12 +39,20 @@ variable "region" {
   description = "The DigitalOcean region the machine is in."
   type        = string
   default     = "sfo3"
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.region))
+    error_message = "Give the region's slug, such as sfo3."
+  }
 }
 
 variable "size" {
   description = "The droplet's size. The default is the smallest there is."
   type        = string
   default     = "s-1vcpu-512mb-10gb"
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.size))
+    error_message = "Give the size's slug, such as s-1vcpu-512mb-10gb."
+  }
 }
 
 variable "machine" {
@@ -52,8 +60,8 @@ variable "machine" {
   type        = string
   default     = null
   validation {
-    condition     = var.machine == null || can(regex("^[^'\"\\\\\\n]*$", var.machine))
-    error_message = "Say what the machine is without quotes or backslashes, on one line."
+    condition     = var.machine == null || can(regex("^[^'\"\\\\[:cntrl:]]*$", var.machine))
+    error_message = "Say what the machine is without quotes, backslashes or control characters, on one line."
   }
 }
 
@@ -70,6 +78,10 @@ variable "host_key" {
   description = "The private half of the machine's SSH host key. Given to each machine made here, so a machine that replaces another is known to the Site workflow as the same host."
   type        = string
   sensitive   = true
+  validation {
+    condition     = startswith(trimspace(var.host_key), "-----BEGIN OPENSSH PRIVATE KEY-----")
+    error_message = "Give the private key as ssh-keygen writes it. With none, a machine comes up with a host key the Site workflow does not know."
+  }
 }
 
 variable "host_key_public" {
