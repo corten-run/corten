@@ -1,6 +1,7 @@
 // Read-only deployment selection. This module never builds, launches or promotes an image.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
@@ -29,6 +30,61 @@ function keys(value, wanted, at) {
 const appRoot = (app) => `bench/fullstack/apps/${app}`;
 const productionGroups = ["localized-marketplace", "mixed-production", "hardening"];
 const profiles = ["aspnet", "nextjs", "express", "fastapi", "django", "leptos", "topcoat"];
+const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${path}`, import.meta.url))) ? "source-present" : "pending-integration";
+
+// These are the dispatched keyed live applications, not historical price transports.
+const liveNative = freeze({
+  express: { framework: "Express native SSE application", runtime: "Node 24", build: "npm ci --omit=dev --ignore-scripts",
+    server: "Express response SSE / browser EventSource", workers: "one Node application process; bounded per-reader queues",
+    command: ["node", "server.mjs"], environment: { PORT: "8080" }, refs: ["package.json", "package-lock.json", "server.mjs", "client.js"],
+    middleware: "server.mjs: express.json 256kb, native /parity controls and SSE, browser keyed renderer; no marketplace EJS/matched stack" },
+  aspnet: { framework: "ASP.NET Core native SSE application", runtime: ".NET 10 JIT", build: "dotnet publish -c Release -o /out",
+    server: "Kestrel / TypedResults.ServerSentEvents / browser EventSource", workers: "one .NET process; bounded Channels per reader",
+    command: ["dotnet", "LiveParity.dll"], environment: { ASPNETCORE_HTTP_PORTS: "8080" }, refs: ["LiveParity.csproj", "Program.cs", "wwwroot/client.js", "wwwroot/index.html"],
+    middleware: "Program.cs: UseDefaultFiles, UseStaticFiles, /parity controls and TypedResults.ServerSentEvents; not Razor Pages" },
+  gin: { framework: "Gin native SSE application", runtime: "Go 1.27.3 native", build: "CGO_ENABLED=0 go build -mod=readonly -p 2 -trimpath -o /server .",
+    server: "Gin SSEvent / bounded Go channel / browser EventSource", workers: "one Go process; native scheduler and bounded reader channels",
+    command: ["./server"], environment: { GIN_MODE: "release" }, refs: ["go.mod", "go.sum", "main.go", "client.js", "index.html"],
+    middleware: "main.go: native Gin /parity controls, SSE and static browser application; no templ marketplace rendering" },
+});
+
+function liveRepresentative(app) {
+  const base = `bench/live/apps/${app}`, n = liveNative[app];
+  if (!n) return { id: `${app}-live-native`, app, role: "representative", implementation: "pending-implementation", configuration: null,
+    expectedSourceRoot: base, reason: "Native keyed live/recovery port is pending catalog integration and review. Historical fullstack/transport-only code is not this application's implementation; no binding launch topology is asserted.",
+    ...(app === "corten" ? { configurationTemplate: { context: ".", dockerfile: `${base}/Dockerfile.parity`, command: ["/app/server"],
+      server: "corten_feed::Feed / native subscribe and generated keyed views / browser EventSource", workers: "one native process; Tokio runtime; no broker",
+      environment: { HOST: "0.0.0.0", PORT: "8080", LIVE_PARITY: "1" },
+      sourceRefs: [`${base}/Cargo.toml`, `${base}/src/main.rs`, `${base}/src/parity.rs`, `${base}/src/parity_row.rs`, `${base}/src/parity_screen.rs`, `${base}/src/parity_screen.js`],
+      requiredProfile: "native-feed; must be explicitly selected for every app under the same work and bounds",
+      scope: "Native corten_feed::Feed, subscribe and generated keyed views port under active integration; not the historical /live price stream and not a qualified recovery baseline",
+    } } : {}) };
+  const sourceRefs = ["bench/live/native.mjs", "bench/live/parity.mjs", `${base}/Dockerfile`, ...n.refs.map((ref) => `${base}/${ref}`)];
+  return { id: `${app}-live-native`, app, role: "representative", implementation: sourceState(sourceRefs), configuration: {
+    framework: n.framework, runtime: n.runtime, build: n.build, server: n.server, workers: n.workers, command: n.command,
+    profile: "bounded; explicit runner profile must be identical for all apps in the round", environment: n.environment,
+    edge: "direct native container; no proxy or external broker configured", middleware: n.middleware,
+    builds: { app: { context: base, dockerfile: `${base}/Dockerfile`, args: {} } }, sourceRefs,
+  } };
+}
+
+function clientRepresentative(app) {
+  const base = "bench/client-heavy", entry = `${base}/apps/${app}.${["react", "solid"].includes(app) ? "jsx" : app === "remix" ? "tsx" : "js"}`;
+  const sourceRefs = [`${base}/build.mjs`, `${base}/run.mjs`, `${base}/observer.mjs`, "bench/workloads/client.mjs", "bench/browser/package.json", "bench/browser/package-lock.json",
+    ...(app === "corten" ? ["bench/browser/gen/Cargo.toml", "bench/browser/gen/src/bin/client.rs", "bench/browser/gen/src/bin/client.js", "crates/corten/js/dist/corten.js"]
+      : [entry, `${base}/apps/input.js`, ...(["svelte", "vue"].includes(app) ? [`${base}/apps/${app}.${app}`] : [])])];
+  return { id: `${app}-browser-production`, app, role: "representative", implementation: sourceState(sourceRefs), configuration: {
+    framework: app === "corten" ? "Corten keyed views" : app, runtime: "browser production ES modules; Node native journey driver",
+    build: app === "corten" ? "bench/client-heavy/build.mjs buildApps: cargo release client generator (bench/browser/gen/src/bin/client.rs), bundle client.js + generated screen/views/runtime"
+      : "bench/client-heavy/build.mjs buildApps: production esbuild with the framework's native compiler and explicit workload fixture",
+    server: "bench/client-heavy/run.mjs serve(): ephemeral loopback Node static host; not an application-server comparison",
+    workers: "one Chromium instance; one renderer process limit; one concurrent page; browser main-thread app; no OS resource isolation claimed",
+    command: ["node", `${base}/run.mjs`], arguments: "Required round and exact native runner options are supplied and recorded by the dispatcher; no workload sizes/default tuning introduced here",
+    profile: "native client-heavy production bundles; separate qualification and measured journeys", environment: {}, edge: "none configured",
+    middleware: "run.mjs no-store static host; observer.mjs browser resource instrumentation",
+    builds: { screen: { context: ".", dockerfile: null, args: {}, entry: `${base}/build.mjs`, function: "buildApps" } }, sourceRefs,
+  } };
+}
 
 // These describe checked-in launch paths, not framework support or passing group results.
 const native = freeze({
@@ -71,22 +127,15 @@ export const optionSources = freeze({
 function representative(group, app) {
   const matched = productionGroups.includes(group) && profiles.includes(app);
   const profile = matched ? "matched" : "framework-default";
-  if (group === "client-heavy") {
-    const adapter = app === "corten" ? "state" : app;
-    return { id: `${app}-browser-production`, app, role: "representative", implementation: "source-present",
-      configuration: { framework: app === "corten" ? "Corten views" : app, runtime: "browser ES modules", build: "bench/browser/build.mjs production bundles",
-        server: "bench/browser/serve.mjs static host, not an application server comparison", workers: "browser main thread; no synthetic server workers",
-        command: ["node", "bench/browser/serve.mjs"], profile: "production", environment: {}, edge: "none configured", middleware: "static benchmark host only",
-        builds: { screen: { context: ".", dockerfile: null, args: {} } },
-        sourceRefs: ["bench/browser/build.mjs", "bench/browser/serve.mjs", "bench/browser/package.json", `bench/browser/apps/${adapter}`] } };
-  }
+  if (group === "client-heavy") return clientRepresentative(app);
+  if (["live-delivery", "recoverable-live"].includes(group)) return liveRepresentative(app);
   if (app === "corten") {
-    const area = group === "catalog-page" ? "catalog" : ["live-delivery", "recoverable-live"].includes(group) ? "live/apps" : "marketplace";
+    const area = group === "catalog-page" ? "catalog" : "marketplace";
     const areas = group === "json-api" ? { "catalog-v1": "catalog", "marketplace-v2": "marketplace" } : { app: area };
     return { id: `corten-${group}-native`, app, role: "representative", implementation: "source-present",
       configuration: { framework: "Corten", runtime: "Rust native release", build: "cargo release using the checked-in Dockerfile and Cargo profiles",
         server: "corten::serve (hyper HTTP/1.1)", workers: "one application process; Tokio configuration from source",
-        command: [area === "live/apps" ? "/app/server" : "/server"], profile, environment: matched ? { PROFILE: "matched", MAX_CONNECTIONS: String(qualificationSettings.maxConnections) } : { PROFILE: "" }, edge: "none configured; deployed-edge remains pending exact edge manifest",
+        command: ["/server"], profile, environment: matched ? { PROFILE: "matched", MAX_CONNECTIONS: String(qualificationSettings.maxConnections) } : { PROFILE: "" }, edge: "none configured; deployed-edge remains pending exact edge manifest",
         middleware: "native App defaults and app source; no features removed for parity",
         builds: Object.fromEntries(Object.entries(areas).map(([key, path]) => [key, { context: ".", dockerfile: `bench/${path}/corten/Dockerfile`, args: {} }])),
         sourceRefs: [...new Set(Object.values(areas).flatMap((path) => [`bench/${path}/corten/Dockerfile`, `bench/${path}/corten/Cargo.toml`, `bench/${path}/corten/src/main.rs`]))] } };
@@ -100,11 +149,6 @@ function representative(group, app) {
     builds: Object.fromEntries((group === "json-api" ? ["catalog-v1", "marketplace-v2"] : ["app"]).map((key) => [key, { context, dockerfile, args: matched ? { PROFILE: "matched" } : {} }])),
     sourceRefs: [dockerfile, ...n.refs.map((ref) => `${context}/${ref}`)] };
   if (app === "django" && matched) Object.assign(configuration, { server: "Granian WSGI HTTP/1", workers: "one worker; one runtime thread; one runtime blocking thread; three Python blocking threads (start_matched.py)", command: ["python", "start_matched.py"] });
-  if (app === "laravel" && group === "recoverable-live") Object.assign(configuration, {
-    command: ["sh", "-c", "php artisan reverb:start --host=0.0.0.0 --port=8081 & exec php artisan octane:frankenphp --host=0.0.0.0 --port=8080 --workers=2"],
-    server: "Octane on FrankenPHP + separate Reverb process", workers: "two Octane workers plus Reverb; all inside the same declared app budget",
-    sourceRefs: [...configuration.sourceRefs, "bench/live/apps.mjs"],
-  });
   return { id: `${app}-${matched ? "matched" : "native"}`, app, role: "representative", implementation: "source-present", configuration };
 }
 
@@ -113,16 +157,19 @@ function candidates(group, app, baseline) {
   const candidate = (id, change, sources, implementation = "pending-implementation") => choices.push({ id, app, role: "candidate", implementation, basedOn: baseline.id, change, sources,
     reason: "Not qualified. Requires its own exact configuration, native parity and repeated performance review for the entire group." });
   if (app === "express") {
-    candidate("express-bun", { runtime: "Bun", framework: "Express + EJS retained", buildMode: "ordinary runtime", implementationPath: "bench/deployments/express-bun" }, [optionSources.bunExpress]);
-    choices.at(-1).configurationTemplate = { framework: baseline.configuration.framework, runtime: "Bun 1.4.4 (exact binary and dependencies in native receipt)",
+    const isLive = ["live-delivery", "recoverable-live"].includes(group), framework = `${baseline.configuration.framework} retained`;
+    candidate("express-bun", { runtime: "Bun", framework, buildMode: "ordinary runtime",
+      ...(isLive ? { supportScope: "upstream Express runtime compatibility only", doubts: "no native live-port Bun build/runtime receipt; the fullstack Express/Bun lane is not this SSE application" }
+        : { implementationPath: "bench/deployments/express-bun" }) }, [optionSources.bunExpress]);
+    if (!isLive) choices.at(-1).configurationTemplate = { framework: baseline.configuration.framework, runtime: "Bun 1.4.4 (exact binary and dependencies in native receipt)",
       build: { context: ".", dockerfile: "bench/deployments/express-bun/Dockerfile", argsFrom: "bench/deployments/express-bun/pins.json", args: ["NODE_IMAGE", "BUN_IMAGE"] },
       command: ["bun", "server.mjs"], workers: "one application process; same image and npm tree as Node comparator", server: "Bun node:http compatibility running Express, not Bun.serve",
       middleware: baseline.configuration.middleware, environment: baseline.configuration.environment,
       receipt: { schema: "express-bun-qualification/v1", cells: "Node/Bun x fixture/API x default/matched", readyForLoad: false, readyForMeasurement: false },
       status: "Pending integration of native lane files and exact group qualification; narrower runtime checks alone cannot admit this alternative" };
-    candidate("express-bun-packaged", { runtime: "Bun", framework: "Express + EJS retained", buildMode: "bun build --compile; runtime packaging, not machine AOT" }, [optionSources.bunPackaging]);
-    candidate("express-bun-bytecode", { runtime: "Bun", framework: "Express + EJS retained", buildMode: "bun build --compile --bytecode; bytecode, not machine AOT" }, [optionSources.bunBytecode]);
-    candidate("express-bun-machine-aot", { runtime: "Bun", framework: "Express + EJS retained", buildMode: "experimental bun compile machine AOT; compatibility unverified" }, [optionSources.bunMachineAot]);
+    candidate("express-bun-packaged", { runtime: "Bun", framework, buildMode: "bun build --compile; runtime packaging, not machine AOT" }, [optionSources.bunPackaging]);
+    candidate("express-bun-bytecode", { runtime: "Bun", framework, buildMode: "bun build --compile --bytecode; bytecode, not machine AOT" }, [optionSources.bunBytecode]);
+    candidate("express-bun-machine-aot", { runtime: "Bun", framework, buildMode: "experimental bun compile machine AOT; compatibility unverified" }, [optionSources.bunMachineAot]);
   }
   if (app === "django" && baseline.configuration.profile === "matched") {
     candidate("django-gunicorn-sync", { server: "Gunicorn WSGI sync", workers: "three preloaded sync workers", buildProfile: "defaults", productionParity: "must independently pass; baseline middleware differs" }, [optionSources.pythonServers], "source-present");
@@ -180,9 +227,14 @@ export function deploymentDescriptor(group, app, id, binding) {
   keys(binding, ["commit", "images", "configuration", "budget", "evidence"], "deployment binding");
   assert.match(binding.commit ?? "", /^[a-f0-9]{40}$/, "exact commit required");
   const configuration = binding.configuration ?? entry.configuration;
-  assert.ok(configuration, "candidate requires an implemented configuration manifest");
+  if (entry.role === "representative") assert.ok(entry.configuration, "pending native implementation; no concrete representative deployment can be bound");
+  assert.ok(configuration, "deployment requires an implemented configuration manifest");
   if (entry.role === "representative") assert.deepEqual(configuration, entry.configuration, "representative configuration cannot be silently changed");
-  else assert.equal(configuration.framework, representative(group, app).configuration.framework, "alternative must retain the native framework; no replacement server app");
+  else {
+    const baseline = representative(group, app).configuration;
+    assert.ok(baseline, "pending native implementation; alternative needs a concrete native representative first");
+    assert.equal(configuration.framework, baseline.framework, "alternative must retain the native framework; no replacement server app");
+  }
   for (const field of ["framework", "runtime", "build", "server", "workers", "middleware", "profile", "edge"]) string(configuration[field], field);
   assert.ok(Array.isArray(configuration.command) && configuration.command.length > 0, "exact launch command required");
   configuration.command.forEach((part) => string(part, "command argument"));

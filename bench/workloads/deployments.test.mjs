@@ -68,7 +68,11 @@ test("all nine exact groups, cases, contenders and retained families survive wit
       assert.equal(row.deployments[0].id, row.representative);
       assert.equal(new Set(row.deployments.map((d) => d.id)).size, row.deployments.length);
       assert.ok(row.deployments.every((d) => d.qualification === "pending" && d.evidence.length === 0));
-      for (const ref of row.deployments[0].configuration.sourceRefs) assert.ok(existsSync(new URL(`../../${ref}`, import.meta.url)), ref);
+      const representative = row.deployments[0];
+      if (representative.configuration) {
+        const present = representative.configuration.sourceRefs.every((ref) => existsSync(new URL(`../../${ref}`, import.meta.url)));
+        assert.equal(representative.implementation, present ? "source-present" : "pending-integration");
+      } else assert.equal(representative.implementation, "pending-implementation");
     }
     assert.throws(() => p.apps.pop());
   }
@@ -90,7 +94,6 @@ test("native profile facts and pending alternatives are concrete and group-scope
   assert.equal(manifest("json-api", "fastapi").configuration.environment.PROFILE, "");
   assert.equal(manifest("mixed-production", "fastapi").configuration.environment.PROFILE, "matched");
   assert.match(manifest("fullstack-browser", "laravel").configuration.workers, /two explicitly/);
-  assert.match(manifest("recoverable-live", "laravel").configuration.server, /Reverb/);
   const json = deploymentPlan("json-api");
   assert.ok(json.apps.some((r) => r.app === "aspnet")); assert.ok(json.apps.some((r) => r.app === "aspnet-aot"));
   assert.match(manifest("json-api", "aspnet-aot").configuration.framework, /JSON only/);
@@ -103,6 +106,67 @@ test("native profile facts and pending alternatives are concrete and group-scope
   assert.match(express[4].change.buildMode, /experimental/);
   assert.ok(json.apps.find((r) => r.app === "fastapi").deployments.some((d) => d.id === "fastapi-nuitka"));
   assert.ok(deploymentPlan("fullstack-browser").apps.find((r) => r.app === "laravel").deployments.some((d) => d.id === "laravel-frankenphp-jit"));
+});
+
+test("live representatives use dispatched native ports and missing recovery ports stay pending", () => {
+  for (const group of ["live-delivery", "recoverable-live"]) {
+    const aspnet = manifest(group, "aspnet");
+    assert.deepEqual(aspnet.configuration.command, ["dotnet", "LiveParity.dll"]);
+    assert.equal(aspnet.configuration.builds.app.context, "bench/live/apps/aspnet");
+    assert.equal(aspnet.configuration.builds.app.dockerfile, "bench/live/apps/aspnet/Dockerfile");
+    assert.ok(aspnet.configuration.sourceRefs.includes("bench/live/apps/aspnet/LiveParity.csproj"));
+    assert.match(aspnet.configuration.middleware, /ServerSentEvents/);
+    assert.deepEqual(deploymentDescriptor(group, "aspnet", aspnet.id, binding(aspnet.configuration)).configuration.command, ["dotnet", "LiveParity.dll"]);
+    for (const row of deploymentPlan(group).apps) {
+      const entry = row.deployments[0];
+      assert.ok(!JSON.stringify(entry).includes("bench/fullstack/apps/"), `${group}/${row.app} borrows an unrelated app`);
+      if (entry.configuration) assert.ok(entry.configuration.sourceRefs.some((path) => path.startsWith(`bench/live/apps/${row.app}/`)));
+      else {
+        assert.equal(entry.implementation, "pending-implementation");
+        assert.equal(entry.expectedSourceRoot, `bench/live/apps/${row.app}`);
+        assert.throws(() => deploymentDescriptor(group, row.app, entry.id, binding(manifest("catalog-page", "express").configuration)), /pending native implementation/);
+      }
+    }
+  }
+  const express = manifest("live-delivery", "express").configuration;
+  assert.deepEqual(express.command, ["node", "server.mjs"]);
+  assert.equal(express.builds.app.context, "bench/live/apps/express");
+  assert.match(express.framework, /Express.*SSE/);
+  assert.ok(!deploymentPlan("live-delivery").apps.find((row) => row.app === "express").deployments[1].configurationTemplate, "fullstack Bun template cannot describe the native live application");
+  const gin = manifest("live-delivery", "gin").configuration;
+  assert.deepEqual(gin.command, ["./server"]);
+  assert.equal(gin.builds.app.context, "bench/live/apps/gin");
+  assert.match(gin.runtime, /Go 1\.27\.3/);
+  assert.equal(manifest("recoverable-live", "laravel").implementation, "pending-implementation");
+  assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /pending native implementation/);
+  assert.equal(manifest("recoverable-live", "topcoat").configuration, null);
+  const corten = manifest("recoverable-live", "corten");
+  assert.equal(corten.configuration, null); assert.equal(corten.implementation, "pending-implementation");
+  assert.equal(corten.configurationTemplate.dockerfile, "bench/live/apps/corten/Dockerfile.parity");
+  assert.equal(corten.configurationTemplate.context, ".");
+  assert.deepEqual(corten.configurationTemplate.command, ["/app/server"]);
+  assert.equal(corten.configurationTemplate.environment.LIVE_PARITY, "1");
+  assert.match(corten.configurationTemplate.requiredProfile, /native-feed/);
+});
+
+test("client-heavy manifests describe the current native builder, driver and generator", () => {
+  const entries = deploymentPlan("client-heavy").apps.map((row) => row.deployments[0]);
+  for (const entry of entries) {
+    const c = entry.configuration;
+    assert.deepEqual(c.command, ["node", "bench/client-heavy/run.mjs"]);
+    assert.ok(c.sourceRefs.includes("bench/client-heavy/build.mjs"));
+    assert.ok(c.sourceRefs.includes("bench/client-heavy/run.mjs"));
+    assert.ok(c.sourceRefs.includes("bench/client-heavy/observer.mjs"));
+    assert.match(c.server, /run\.mjs.*static/);
+    assert.doesNotMatch(JSON.stringify(c), /bench\/browser\/(?:build\.mjs|serve\.mjs|apps\/state)/);
+    assert.deepEqual(deploymentDescriptor("client-heavy", entry.app, entry.id, binding(c)).configuration.command, c.command);
+  }
+  const corten = entries.find((e) => e.app === "corten").configuration;
+  assert.ok(corten.sourceRefs.includes("bench/browser/gen/src/bin/client.rs"));
+  assert.ok(corten.sourceRefs.includes("bench/browser/gen/src/bin/client.js"));
+  assert.ok(entries.find((e) => e.app === "react").configuration.sourceRefs.includes("bench/client-heavy/apps/react.jsx"));
+  assert.ok(entries.find((e) => e.app === "svelte").configuration.sourceRefs.includes("bench/client-heavy/apps/svelte.svelte"));
+  assert.ok(entries.find((e) => e.app === "vue").configuration.sourceRefs.includes("bench/client-heavy/apps/vue.vue"));
 });
 
 test("new descriptor binds exact commit/images/config/work/budgets and evidence without touching registry identity", () => {

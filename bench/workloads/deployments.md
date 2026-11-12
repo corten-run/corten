@@ -2,7 +2,8 @@
 
 `deployments.mjs` is a read-only, versioned selection layer over `registry.mjs`, not a
 runner, benchmark result, certification authority or replacement registry. It maps every
-approved app in all nine feature-parity groups to one named representative native deployment.
+approved app in all nine feature-parity groups to one named intended representative deployment,
+including explicit pending native-port entries rather than substitute applications.
 It retains the original cases, popular/performance-oriented contenders and auxiliary families.
 The legacy registry identity, hashes, `selectedApps`, scheduled selection and saved rounds do
 not change. There is no claim that the remaining parity work or all nine runners are complete.
@@ -28,7 +29,12 @@ node --test bench/workloads/deployments.test.mjs
 
 The CLI emits only an inventory. It accepts no build, launch, cloud, tuning, app-subset,
 receipt-promotion or pass-assertion flags. `plan.mjs` and existing runners are unchanged.
-The module has no subprocess, network or write API. All entries initially report pending
+The module has no subprocess, network or write API. Read-only source-path checks distinguish
+`source-present` from `pending-integration` for known concrete manifests; missing files never
+become `source-present`. A missing native port has `implementation:"pending-implementation"`,
+`configuration:null` and an `expectedSourceRoot`, not a fullstack fallback. Such entries cannot
+bind deployment descriptors, even if a caller supplies an unrelated configuration.
+All entries initially report pending
 qualification with no evidence; `source-present` means only that the native configuration
 is checked in, not that it implements the entire group's required behavior.
 Implementation state, certification and effective deployment are separate: a source path
@@ -48,24 +54,45 @@ The machine-readable inventory is authoritative for each app/group mapping. Exam
 
 | App | Named current native configuration | Important boundary |
 |---|---|---|
-| Corten | workload-specific catalog, marketplace and live Rust Dockerfiles; browser screen bundles | Native App features stay enabled; legacy live support alone does not establish recoverable-live parity. |
+| Corten | workload-specific catalog/marketplace Dockerfiles and native client-heavy generator | Live remains an explicit pending native port/template; legacy price transport is not a recovery application. |
 | Express | Node 24, Express + EJS, one process; matched production middleware where selected | Express remains Express. `Bun.serve` is not a replacement contender for it. |
 | ASP.NET Core | ordinary Razor Pages/Kestrel/.NET JIT | Never silently replaced by the separate AOT row. |
 | ASP.NET Native AOT | existing `aspnet-aot` minimal API/Kestrel native binary | JSON-only representative in `json-api`, not an HTML/Razor qualification. |
 | Django | checked-in matched Granian WSGI launch, one worker, three blocking request threads | Gunicorn's three preloaded sync workers and the existing Uvicorn ASGI override remain visible alternatives, not borrowed production passes. |
 | FastAPI | existing `fastapi run`/Uvicorn default; direct Uvicorn matched command | Auto loop selection is disclosed, not relabeled as an explicitly tested loop. |
-| Laravel | Octane/FrankenPHP, two explicit persistent workers, production INI | Recoverable-live additionally inventories the existing Reverb process; count every process in the total budget. OPcache installed is not proof of enabled JIT. |
+| Laravel | fullstack Octane/FrankenPHP, two explicit persistent workers, production INI | Native recoverable-live port is pending; the historical Reverb launch cannot stand in for it. OPcache installed is not proof of enabled JIT. |
+| Native live Express / ASP.NET / Gin | separate `bench/live/apps/{express,aspnet,gin}/Dockerfile` app-local contexts | Commands are `node server.mjs`, `dotnet LiveParity.dll`, and `./server`; native SSE/keyed browser apps, not marketplace/EJS/Razor/templ implementations. |
 | Other selected server apps | their existing release Dockerfile, framework server, native workers and middleware references | A production profile string is not a capability receipt. |
-| Client-heavy apps | native production bundles built/served by `bench/browser` | Static hosting is not substituted for application-server performance; the whole client-heavy contract still needs qualification. |
+| Client-heavy apps | `bench/client-heavy/build.mjs` native production builder and `run.mjs` journey/static host | Native source is `bench/client-heavy/apps`; Corten uses `bench/browser/gen/src/bin/client.{rs,js}`, not historical `apps/state`. No application-server performance or isolated ranking is claimed. |
 
-The Express/Bun native lane supplies `bench/deployments/express-bun/Dockerfile`, root build
-context, `pins.json` build arguments `NODE_IMAGE`/`BUN_IMAGE`, one shared npm/source tree and
+Live selection follows the new dispatched native inventory, not `bench/live/apps.mjs`'s
+historical transport images. Each concrete live manifest includes its own Dockerfile,
+server/client source, native transport, middleware and bounded reader topology. Corten's
+active native Feed/subscribe/keyed-view work is retained only as a non-binding root-context
+`Dockerfile.parity` template (`/app/server`, `LIVE_PARITY=1`) requiring explicit `native-feed`
+profile for the entire round; the port still needs integration/review. Phoenix, Rails, Laravel,
+Drogon, Leptos and Topcoat remain pending native handovers. Draft files, partial scenarios and old fullstack
+images do not change those statuses. Known port files absent from this checkout remain
+`pending-integration`; file presence does not establish registration, scenario correctness,
+measurement eligibility or certification.
+
+Client-heavy manifests reference the current driver, builder, observer, native app inputs,
+dependency manifests and the Rust/JavaScript client generator. The driver's required round
+and effective options are recorded separately. The static host is its ephemeral loopback
+`serve()` implementation. The historical `bench/browser/build.mjs` and `serve.mjs` are not
+the dispatched build or host for this group.
+
+For fullstack-derived groups, the Express/Bun native lane supplies
+`bench/deployments/express-bun/Dockerfile`, root build context, `pins.json` build arguments
+`NODE_IMAGE`/`BUN_IMAGE`, one shared npm/source tree and
 the commands `node server.mjs` and `bun server.mjs`. The catalog includes this concrete
 configuration template without importing its executable build/run scripts. Until those files
 are integrated, implementation remains pending here. Its `express-bun-qualification/v1`
 eight runtime/source/profile cells are narrower than an entire workload-group qualification;
 `readyForLoad:false` and `readyForMeasurement:false` are not passes. Its pending review and
 performance evidence cannot be inferred from an ordinary runtime compatibility check.
+That fullstack source/image template is not reused for the distinct native live SSE app;
+live Bun candidates need their own concrete build and native evidence.
 
 Pending compiler/server candidates are deliberately not executable recipes: no default worker
 tuning, new arbitrary connection cap, JIT buffer size or deployment count cap is introduced.
