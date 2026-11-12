@@ -1068,8 +1068,11 @@ async function run(browser) {
     await held.waitForSelector(`${picksLive}[status="closed"]`, { state: "attached", timeout: 5000 }).catch(() => {});
     const closed = await placeholder();
     check("a slow part whose stream gave up links to the page with it read in, in place of its line", closed.status === "closed" && !closed.line && closed.link, JSON.stringify(closed));
-    await held.click("#picks a");
-    await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    // Followed only when shown, so a link that is not fails the checks, not the run.
+    if (closed.link) {
+      await held.click("#picks a", { timeout: 3000 }).catch(() => {});
+      await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    }
     check(
       "the page it links to has the slow part read in, with JavaScript too",
       new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$(picksLive)) === null,
@@ -5766,10 +5769,11 @@ async function run(browser) {
   check("without JavaScript the visitor's time zone is not known", !((await plain.textContent("#watch-message")) ?? "").includes("Alerts follow"));
   check("the page it renders has the stock on the list", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
   // A slow part a <corten-live> stream sends once: no stream opens, so the line saying it is on
-  // its way is hidden and a link, shown under @media (scripting: none), goes to the same page with
-  // it read in (#1264).
-  check("without JavaScript a slow part's placeholder is a link, not a line that waits", !(await plain.isVisible("#picks span")) && (await plain.isVisible("#picks a")));
-  await Promise.all([plain.waitForNavigation(), plain.click("#picks a")]);
+  // its way is hidden under @media (scripting: none), and the link to the same page with it read
+  // in is not (#1264). Followed only when shown, so a link that is not fails the checks, not the run.
+  const plainLink = await plain.isVisible("#picks a");
+  check("without JavaScript a slow part's placeholder is a link, not a line that waits", !(await plain.isVisible("#picks span")) && plainLink);
+  if (plainLink) await Promise.all([plain.waitForNavigation({ timeout: 5000 }), plain.click("#picks a", { timeout: 3000 })]).catch(() => {});
   check(
     "the page it links to has the slow part read in",
     new URL(plain.url()).search === "?picks=true" && (await plain.$$("ul#picks li")).length === 2 && (await plain.$("corten-live[src='/live/picks']")) === null,

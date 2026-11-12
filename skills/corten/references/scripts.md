@@ -191,9 +191,11 @@ slow part sent once is a stream of one item. Where no stream will bring it (no J
 stream that gave up), its placeholder's link shows:
 `<a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">..</a>`, the page's own
 route with a query field its handler reads the part in for (no second route per part; the route
-derives `Default`, so other links are `url::Home::default()`). The component's CSS hides it and
-shows it in place of the loading line under `@media (scripting: none)` and inside
-`corten-live[status="closed"]`. See the live-data guide.
+derives `Default`, so other links are `url::Home::default()`). The component's CSS swaps it for
+the loading line: `@media (scripting: enabled) { .show { display: none } }` and
+`@media (scripting: none) { .finding { display: none } }`, and the same swap inside
+`corten-live[status="closed"]`, so a browser without the `scripting` feature shows both. See the
+live-data guide.
 
 A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job
 moves; a growing log or a generated answer is a `view::Append(id, lines)` per piece. A script that

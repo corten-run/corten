@@ -58,8 +58,8 @@ App::new(url::router()).components(&[.., PicksLoading])
 
 ```css
 /* picks_loading.css: the link shows in place of the line where no stream will bring the picks */
-.show { display: none; }
-@media (scripting: none) { .finding { display: none; } .show { display: inline; } }
+@media (scripting: enabled) { .show { display: none; } }
+@media (scripting: none) { .finding { display: none; } }
 corten-live[status="closed"] .finding { display: none; }
 corten-live[status="closed"] .show { display: inline; }
 ```
@@ -68,11 +68,15 @@ A browser without JavaScript opens no stream, and a stream can give up (`closed`
 placeholder alone would stay for good. Its link goes to the page's own route with a query field
 its handler reads the part in for, so there is no second route. The component's CSS hides the
 link while a stream may still bring the part, and shows it in place of the line saying the part
-is on its way under `@media (scripting: none)` and inside a `closed` `<corten-live>`. Following it
-costs one page with the slow read in it: `?picks=true` waits for the read wherever it is opened,
-with JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with
-several slow parts reads them all in under one field, and a data client asks the same address for
-the part. What the pattern costs is one field plus one handler branch per page
+is on its way under `@media (scripting: none)` and inside a `closed` `<corten-live>`; a browser
+without the `scripting` media feature matches neither query and shows both. The query follows
+whether scripts are on, not whether the runtime ran
+([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
+the runtime blocked or failed, the line stays and the link is hidden. Following the link costs
+one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
+JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
+slow parts reads them all in under one field, and a data client asks the same address for the
+part. What the pattern costs is one field plus one handler branch per page
 ([design Choice 43](../design.md#choice-slow-part-link)).
 
 A value that keeps changing is the next section's `corten::live_watch`.

@@ -251,10 +251,10 @@ fn LastTrade(text: &str) -> impl Render {
 struct PicksId;
 
 /// The picks' placeholder until `/live/picks` sends them. Its link goes to the same page with the
-/// picks read in, and shows only where no stream will bring them (`picks_loading.css`): without
+/// picks read in, and shows where no stream will bring them (`picks_loading.css`): without
 /// JavaScript, which opens none, and once the stream has given up (`status="closed"`), when the
-/// line saying they are on their way is hidden instead. `nofollow`, as the page it opens waits for
-/// the slow read.
+/// line saying they are on their way is hidden instead. A browser without the `scripting` media
+/// feature shows both. `nofollow`, as the page it opens waits for the slow read.
 #[component(css)]
 pub(crate) fn PicksLoading() -> impl Render {
     html! {

@@ -1,15 +1,15 @@
-/* The line saying the picks are on their way shows while a stream can still bring them. Where
-   none will, the link to the page with them read in shows instead: without JavaScript, which
-   opens no stream, and once the stream has given up (`closed`: an error or a 204 answered it). */
-.show {
-  display: none;
+/* The line saying the picks are on their way shows while a stream can still bring them, and the
+   link to the page with them read in where none will: without JavaScript, which opens no stream,
+   and once the stream has given up (`closed`: an error or a 204 answered it). A browser without
+   the `scripting` media feature matches neither query and shows both. */
+@media (scripting: enabled) {
+  .show {
+    display: none;
+  }
 }
 @media (scripting: none) {
   .finding {
     display: none;
-  }
-  .show {
-    display: inline;
   }
 }
 corten-live[status="closed"] .finding {

@@ -2530,37 +2530,43 @@ rules something out.
     holds a link to the page's own route with a query field whose handler branch reads the part
     in (`url::Home { picks: Some(true) }`, `rel="nofollow"`), as an address already says what a
     page reads (the receipt a page waits for): no second route per part, and nothing of Corten's
-    own in the URL. The component's CSS hides the link, and shows it in place of the loading line
-    under `@media (scripting: none)` and inside `corten-live[status="closed"]`. Corten adds no
-    element, attribute or marker for it: `<corten-live>` cannot draw the link without a script, so
-    the server would, from a label only the app has, which is the link the app writes; and a query
-    parameter Corten reads on every page would be a second way for an address to say what a page
-    reads. The cost is one field plus one handler branch per page with a slow part; other links
-    name the page through its route's `Default` (`url::Home::default()`), and the address the link
-    opens waits for the slow read wherever it is opened, with JavaScript too. Not chosen: the link
-    in a `<noscript>`, which the runtime empties in markup it fetches, so it would never show for a
-    stream that gave up.
+    own in the URL. The component's CSS hides the link under `@media (scripting: enabled)` and the
+    loading line under `@media (scripting: none)`, and swaps them inside
+    `corten-live[status="closed"]`, so a browser without the `scripting` media feature shows both.
+    Corten adds no element, attribute or marker for it: `<corten-live>` cannot draw the link
+    without a script, so the server would, from a label only the app has, which is the link the
+    app writes; and a query parameter Corten reads on every page would be a second way for an
+    address to say what a page reads. The cost is one field plus one handler branch per page with
+    a slow part; other links name the page through its route's `Default` (`url::Home::default()`),
+    and the address the link opens waits for the slow read wherever it is opened, with JavaScript
+    too. Two cases are left with the line and no link: scripting is on but the runtime never runs
+    (blocked by an extension or the CSP, or failed to load), as the query follows whether scripts
+    are on, not whether one ran
+    ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); and a stream that
+    ends (`end`) after a fragment that failed to apply, where a rule on `status="ended"` would
+    show the link for a moment after every stream that ends as it should. Not chosen: the link in
+    a `<noscript>`, which a browser with scripting on never draws, on the first page or in markup
+    the runtime fetches, so it would never show for a stream that gave up.
 
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); platform (with scripting off
-    `@media (scripting: none)` matches and with it on it does not, and `<corten-live>` sets
-    `status="closed"` when its stream gives up, so CSS alone tells where no stream will bring the
-    part; a browser that runs no script and applies CSS without Media Queries 5's `scripting`
-    shows the line and not the link); reasoned (the page's handler can call the read the stream
-    calls, so reading the part in is a branch on the field, not a second handler; the link is in
-    the markup with JavaScript too, so no runtime step draws or removes it); value (a page works
-    without a script, Values 3, where a part a stream sends would never come).
+    `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
+    reverse, and a browser without Media Queries 5's `scripting` matches neither; an
+    `EventSource` answered with an error or a 204 closes for good instead of reconnecting);
+    reasoned (the runtime sets `status="closed"` on a `<corten-live>` whose `EventSource` has
+    closed for good, in `crates/corten/js/corten.js`, so CSS can tell a stream that gave up; the
+    page's handler can call the read the stream calls, so reading the part in is a branch on the
+    field, not a second handler; the link is in the markup with JavaScript too, so no runtime
+    step draws or removes it); value (a page works without a script, Values 3, where a part a
+    stream sends would never come).
 
-    Revisit when: an app writes such a field and handler branch on three or more of its routes, or
-    the Chase Sets pilot reports writing one on a second route; or a browser the repository's
-    Playwright runs matches `@media (scripting: none)` with JavaScript on, or not with it off.
+    Revisit when: the repository's examples and the Chase Sets pilot between them write such a
+    field and handler branch on three or more routes; or a browser the repository's Playwright
+    runs matches `@media (scripting: none)` with JavaScript on, or not with it off.
 
-    Last checked: 2026-11-12, `@media (scripting: none)` with JavaScript off and on
-    (`javaScriptEnabled` in Playwright 1.64.1) and `status="closed"` after a 204, probed in
-    Chromium 156, Firefox 157 and WebKit 27.2 by `scripts/smoke.mjs`. On a build of the watchlist
-    whose `picks_loading.css` kept only its `@media (scripting: none)` block, the smoke's
-    with-JavaScript checks of the placeholder failed (three in Chromium and Firefox; two in WebKit,
-    which has no Navigation API and so skips the client navigation) and no other check did.
+    Last checked: 2026-11-12, `@media (scripting: none)` and `(scripting: enabled)` with
+    JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1) and an `EventSource` closing
+    after a 204, probed in Chromium 156, Firefox 157 and WebKit 27.2 by `scripts/smoke.mjs`.
 
 ## Rules
 
