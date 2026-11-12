@@ -258,10 +258,7 @@ pub mod source {
                 return Source::Fixture(serde_json::from_str(&text).expect("marketplace numeric fixture"));
             }
             let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-            Source::Api {
-                client: reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("HTTP client"),
-                base: base.parse().expect("API_BASE is a URL"),
-            }
+            Source::Api { client: crate::record_http::client(), base: base.parse().expect("API_BASE is a URL") }
         })
     }
     /// No memoization, pass-through JSON, or response cache.

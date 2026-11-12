@@ -35,10 +35,22 @@ const fixture = process.env.MARKETPLACE_SOURCE === "fixture"
     ))).map(([id, value]) => [id, parseMarketplaceRecord(value)]))
   : null;
 
-export async function fetchMarketplaceRecord(id: string): Promise<MarketplaceRecord | null> {
+export async function fetchMarketplaceRecord(id: string, signal?: AbortSignal): Promise<MarketplaceRecord | null> {
   if (fixture) return fixture.get(id) ?? null;
-  const response = await fetch(base + "/marketplace/records/" + encodeURIComponent(id), { cache: "no-store", redirect: "manual" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error("marketplace API returned " + response.status);
-  return parseMarketplaceRecord(await response.json());
+  const controller = new AbortController();
+  // One request deadline covers both headers and the entire body, not an idle timeout.
+  const timer = setTimeout(() => controller.abort(new DOMException("marketplace API deadline exceeded", "TimeoutError")), 10_000);
+  timer.unref();
+  try {
+    const response = await fetch(base + "/marketplace/records/" + encodeURIComponent(id), {
+      cache: "no-store", redirect: "manual",
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error("marketplace API returned " + response.status);
+    return parseMarketplaceRecord(await response.json());
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }

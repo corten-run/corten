@@ -2,9 +2,10 @@
   "name": "item-page-nextjs",
   "private": true,
   "scripts": {
-    "test:marketplace": "node --test marketplace.test.mjs",
+    "test:marketplace": "node --test marketplace.test.mjs marketplace-deadline.test.mjs server-profile.test.mjs layout.test.mjs",
+    "test:production": "node --test production.test.mjs",
     "build": "next build",
-    "start": "node .next/standalone/server.js"
+    "start": "node server.mjs"
   },
   "dependencies": {
     "next": "16.4.2",

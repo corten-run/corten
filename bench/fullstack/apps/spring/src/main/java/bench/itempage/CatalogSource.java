@@ -13,11 +13,18 @@ public class CatalogSource {
     private final RestClient api;
     private final Map<String, CatalogRecord> fixture;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public CatalogSource(ObjectMapper json) {
+        this(json, System.getenv().getOrDefault("API_BASE", "http://localhost:8080"),
+                "fixture".equals(System.getenv("CATALOG_SOURCE"))
+                        ? System.getenv().getOrDefault("CATALOG_FIXTURE_PATH", "/fixtures/catalog.json") : null);
+    }
+
+    CatalogSource(ObjectMapper json, String base, String fixturePath) {
         this.json = json;
-        api = RestClient.create(System.getenv().getOrDefault("API_BASE", "http://localhost:8080"));
-        fixture = "fixture".equals(System.getenv("CATALOG_SOURCE"))
-                ? json.readValue(new File(System.getenv().getOrDefault("CATALOG_FIXTURE_PATH", "/fixtures/catalog.json")),
+        api = RestClient.create(base);
+        fixture = fixturePath != null
+                ? json.readValue(new File(fixturePath),
                         new TypeReference<Map<String, CatalogRecord>>() {})
                 : null;
     }

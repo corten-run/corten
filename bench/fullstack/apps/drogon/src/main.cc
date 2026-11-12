@@ -8,11 +8,13 @@
 #include "model.h"
 
 #include <drogon/drogon.h>
+#include <drogon/HttpMiddleware.h>
 #include <sched.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -51,8 +53,16 @@ int main()
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     // Load the fixture (if any) before listening, like the other apps.
     items::load();
-    catalog::load();
-    marketplace::load();
+    try
+    {
+        catalog::load();
+        marketplace::load();
+    }
+    catch (const std::exception &error)
+    {
+        std::fprintf(stderr, "record fixture startup: %s\n", error.what());
+        return 1;
+    }
     marketplace::routes();
     const char *port = std::getenv("PORT");
 
@@ -132,13 +142,9 @@ int main()
         }, {Get});
     app().registerHandler(
         "/api/catalog/{id}",
-        [](const HttpRequestPtr &, Callback &&callback, const std::string &id) {
-            catalog::get(id, [callback = std::move(callback)](catalog::RecordPtr record, bool failed) {
-                if (failed) return callback(failure());
-                if (!record) return callback(HttpResponse::newHttpResponse(k404NotFound, CT_TEXT_PLAIN));
-                callback(HttpResponse::newHttpJsonResponse(record->toJson()));
-            });
-        }, {Get});
+        [](const HttpRequestPtr &request, Callback &&callback, const std::string &id) {
+            catalog::json(request, std::move(callback), id);
+        }, {drogon::HttpOptionsMiddleware::classTypeName()});
 
     // The live benchmark (bench/live): server-sent events, and the publisher that feeds them.
     app().registerHandler(
