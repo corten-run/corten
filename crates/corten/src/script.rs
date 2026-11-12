@@ -19,7 +19,7 @@
 //! }
 //!
 //! let html = CartLine { name: "Lamp", quantity: 2 }.to_html();
-//! assert!(html.contains(r#"<button data-on="click:cart_line.confirm($e,@dialog,&quot;Lamp&quot;)">"#));
+//! assert!(html.contains(r#"<button data-on='click:cart_line.confirm($e,@dialog,"Lamp")'>"#));
 //! ```
 //!
 //! ```js
@@ -50,7 +50,10 @@
 //!   `on:`), `signal` (aborts when that element leaves the page) and `scope` (the root element of
 //!   the component that made the handler). Their types come from the event and the tag.
 //! - Other arguments are values, sent as JSON: strings, numbers, booleans, typed routes (their
-//!   URL), and with feature `json` anything `ToJson`.
+//!   URL), and with feature `json` anything `ToJson`. `data-on` is a single-quoted attribute, so
+//!   the JSON's quotes are written as they are, and a list of a few hundred records for a script
+//!   (a set it searches and sorts) costs about its JSON's size; only `&`, `'`, `<` and `>` are
+//!   written as entities.
 //! - `on:connect` runs when the element joins the page (its `signal` aborts when it leaves).
 //! - `on:document:keydown` runs for that event anywhere on the page while the element is on it,
 //!   after the handlers on the event's path (unless one stopped it), as a listener on the
@@ -108,12 +111,12 @@
 //!
 //! # fn main() {
 //! let html = StockGrid { rows: &[("a", 1)] }.to_html();
-//! assert!(html.contains(r#"data-on="click:stock_grid.toggle(^row,{rows:*row,count:@count})"#));
+//! assert!(html.contains(r#"data-on='click:stock_grid.toggle(^row,{rows:*row,count:@count})"#));
 //! assert!(html.contains(r#"<td data-ref="qty" data-key="a">1</td>"#));
 //! # }
 //! ```
 //!
-//! The browser gets plain HTML: `data-ref="save"` and `data-on="click:cart_line.enable(@save)"`.
+//! The browser gets plain HTML: `data-ref="save"` and `data-on='click:cart_line.enable(@save)'`.
 //! One listener per event type on the document runs the handlers; nothing runs per element until
 //! an event reaches it.
 //!
@@ -176,7 +179,7 @@
 //! }
 //!
 //! let html = CartLine { name: "Lamp", quantity: 2 }.to_html();
-//! assert!(html.contains(r#"<span data-scope="quantity"><input value="2" data-on="input:cart_line.enable(@save)">"#), "{html}");
+//! assert!(html.contains(r#"<span data-scope="quantity"><input value="2" data-on='input:cart_line.enable(@save)'>"#), "{html}");
 //! ```
 //!
 //! A handler of the owner's that takes `scope` gets the owner's root, so the owner has one (a
@@ -340,7 +343,7 @@
 //! # fn main() {
 //! # use corten::prelude::*;
 //! # #[cfg(feature = "feed")]
-//! assert!(app::LevelFeed {}.to_html().contains("level_feed.follow(@body,&quot;/feed/levels&quot;,$s)"));
+//! assert!(app::LevelFeed {}.to_html().contains(r#"level_feed.follow(@body,"/feed/levels",$s)"#));
 //! # }
 //! ```
 //!
@@ -514,7 +517,7 @@
 //!     html! { <li on:document:keydown={js::shortcut(event, target)}></li> }
 //! }
 //! # fn main() {
-//! assert!(CartLine {}.to_html().contains(r#"data-on="document.keydown:cart_line.shortcut($e,$t)""#));
+//! assert!(CartLine {}.to_html().contains(r#"data-on='document.keydown:cart_line.shortcut($e,$t)'"#));
 //! # }
 //! ```
 //!
@@ -544,7 +547,7 @@
 //!     html! { <li><form on:corten:error={js::failed(event, target)}></form></li> }
 //! }
 //! # fn main() {
-//! assert!(CartLine {}.to_html().contains(r#"data-on="corten:error:cart_line.failed($e,$t)""#));
+//! assert!(CartLine {}.to_html().contains(r#"data-on='corten:error:cart_line.failed($e,$t)'"#));
 //! # }
 //! ```
 //!
@@ -774,8 +777,8 @@
 //! }
 //! # fn main() {
 //! let html = CartLine {}.to_html();
-//! assert!(html.contains(r#"data-on="document.formdata:cart_line.tidy($e)""#), "{html}");
-//! assert!(html.contains(r#"data-on="formdata:cart_line.tidy($e)""#), "{html}");
+//! assert!(html.contains(r#"data-on='document.formdata:cart_line.tidy($e)'"#), "{html}");
+//! assert!(html.contains(r#"data-on='formdata:cart_line.tidy($e)'"#), "{html}");
 //! # }
 //! ```
 //!
@@ -812,7 +815,7 @@
 //!     html! { <li on:document:securitypolicyviolation={js::refused(event)}></li> }
 //! }
 //! # fn main() {
-//! assert!(CartLine {}.to_html().contains(r#"data-on="document.securitypolicyviolation:cart_line.refused($e)""#));
+//! assert!(CartLine {}.to_html().contains(r#"data-on='document.securitypolicyviolation:cart_line.refused($e)'"#));
 //! # }
 //! ```
 //!
@@ -862,7 +865,7 @@
 //!     html! { <li on:corten:error={js::remove(target)}><form></form></li> }
 //! }
 //! # fn main() {
-//! assert!(CartLine {}.to_html().contains(r#"data-on="corten:error:cart_line.remove($t)""#));
+//! assert!(CartLine {}.to_html().contains(r#"data-on='corten:error:cart_line.remove($t)'"#));
 //! # }
 //! ```
 //!
@@ -953,7 +956,7 @@
 //!     html! { <nav on:click={js::show(target, Tab::Offers)}></nav> }
 //! }
 //! # fn main() {
-//! assert!(TabBar {}.to_html().contains(r#"tab_bar.show($t,&quot;offers&quot;)"#), "{}", TabBar {}.to_html());
+//! assert!(TabBar {}.to_html().contains(r#"tab_bar.show($t,"offers")"#), "{}", TabBar {}.to_html());
 //! # }
 //! ```
 //!
@@ -1000,7 +1003,7 @@
 //!     }
 //! }
 //! # fn main() {
-//! assert!(Mixer {}.to_html().contains(r#"mixer.start(@a,@b,@c,@d,@e,@f,@g,@h,&quot;i&quot;,"#));
+//! assert!(Mixer {}.to_html().contains(r#"mixer.start(@a,@b,@c,@d,@e,@f,@g,@h,"i","#));
 //! # }
 //! ```
 //!
@@ -1023,7 +1026,7 @@
 //! }
 //! # fn main() {
 //! let html = Mixer {}.to_html();
-//! assert!(html.contains(r#"mixer.long(@a,@b,@c,@d,@e,@f,@g,@h,&quot;1&quot;,&quot;2&quot;,&quot;3&quot;,&quot;4&quot;,&quot;5&quot;,&quot;6&quot;,&quot;7&quot;,&quot;8&quot;,&quot;9&quot;,&quot;10&quot;,&quot;11&quot;,&quot;12&quot;,&quot;13&quot;,&quot;14&quot;,&quot;15&quot;,&quot;16&quot;,$s)"#), "{html}");
+//! assert!(html.contains(r#"mixer.long(@a,@b,@c,@d,@e,@f,@g,@h,"1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16",$s)"#), "{html}");
 //! # }
 //! ```
 //!
@@ -1733,7 +1736,7 @@ impl<T, V> Ref<T, V> {
     ///
     /// # fn main() {
     /// let html = StockGrid { ids: &["a", "b"] }.to_html();
-    /// assert!(html.contains(r#"<tbody data-on="click:stock_grid.pick(^row)">"#));
+    /// assert!(html.contains(r#"<tbody data-on='click:stock_grid.pick(^row)'>"#));
     /// assert!(html.contains(r#"<tr data-ref="row"><td>a</td></tr>"#));
     /// # }
     /// ```
@@ -2416,21 +2419,22 @@ pub mod __private {
         ref_attr(r, out)
     }
 
-    /// ` data-on="click:m.f(..) input:m.g(..)"`, or nothing when no handler is there.
+    /// ` data-on='click:m.f(..) input:m.g(..)'`, or nothing when no handler is there. Single-quoted,
+    /// so the JSON in its arguments keeps its quotes as they are (`docs/design.md#choice-data-on-single-quoted`).
     pub fn data_on(out: &mut String, binds: &[(&str, &dyn Bind)]) {
         let mut first = true;
         for (event, bind) in binds {
             if !bind.present() {
                 continue;
             }
-            out.push_str(if first { " data-on=\"" } else { " " });
+            out.push_str(if first { " data-on='" } else { " " });
             first = false;
             out.push_str(event);
             out.push(':');
             bind.write_bind(out);
         }
         if !first {
-            out.push('"');
+            out.push('\'');
         }
     }
 
@@ -2585,12 +2589,12 @@ pub mod __private {
     /// JavaScript's `Number.MAX_SAFE_INTEGER`.
     const MAX_SAFE_INTEGER: u128 = (1 << 53) - 1;
 
-    /// Writes `text` as a JSON string, escaped for a double-quoted attribute.
+    /// Writes `text` as a JSON string, escaped for `data-on`'s single-quoted attribute.
     pub fn json_str(text: &str, out: &mut String) {
-        out.push_str("&quot;");
+        out.push('"');
         for c in text.chars() {
             match c {
-                '"' => out.push_str("\\&quot;"),
+                '"' => out.push_str("\\\""),
                 '\\' => out.push_str("\\\\"),
                 '&' => out.push_str("&amp;"),
                 '<' => out.push_str("&lt;"),
@@ -2603,7 +2607,28 @@ pub mod __private {
                 c => out.push(c),
             }
         }
-        out.push_str("&quot;");
+        out.push('"');
+    }
+
+    /// Writes JSON text into `data-on`'s single-quoted attribute: its quotes as they are, and `&`,
+    /// `'`, `<` and `>` as entities. `<` and `>` need none in an attribute, but the server's own
+    /// readers of its markup (a page's parts, a patch's checks) find tags by them.
+    #[cfg(feature = "json")]
+    pub fn json_attr(json: &str, out: &mut String) {
+        let mut start = 0;
+        for (i, byte) in json.bytes().enumerate() {
+            let entity = match byte {
+                b'&' => "&amp;",
+                b'\'' => "&#39;",
+                b'<' => "&lt;",
+                b'>' => "&gt;",
+                _ => continue,
+            };
+            out.push_str(&json[start..i]);
+            out.push_str(entity);
+            start = i + 1;
+        }
+        out.push_str(&json[start..]);
     }
 
     /// A value as written and behind one or two references (`&&str` from `rows.iter()`).
@@ -2746,13 +2771,13 @@ pub mod __private {
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Generated<T>> for T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {
-            crate::view::escape_into(&self.to_json(), out);
+            json_attr(&self.to_json(), out);
         }
     }
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Generated<T>> for &T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {
-            crate::view::escape_into(&self.to_json(), out);
+            json_attr(&self.to_json(), out);
         }
     }
 
@@ -2760,7 +2785,7 @@ pub mod __private {
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Any> for T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {
-            crate::view::escape_into(&self.to_json(), out);
+            json_attr(&self.to_json(), out);
         }
     }
 

@@ -21,7 +21,7 @@ use corten::prelude::*;
 /// let html = html! { <PrintButton label="Print slips" class={()} /> }.to_html();
 /// assert_eq!(
 ///     html,
-///     r#"<button type="button" hidden data-on="connect:ui.print_button.connect($t) click:ui.print_button.print()">Print slips</button>"#
+///     r#"<button type="button" hidden data-on='connect:ui.print_button.connect($t) click:ui.print_button.print()'>Print slips</button>"#
 /// );
 /// ```
 #[component(js)]

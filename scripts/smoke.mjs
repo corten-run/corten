@@ -488,6 +488,35 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // `data-on` is single-quoted, so the JSON of a handler's arguments (here the feed's address and
+  // the formats) goes in with its quotes as they are, and the watch above read them as written.
+  {
+    const served = await (await page.request.get(base)).text();
+    const watched = /data-on='connect:live_prices\.watch\(([^']*)\)'/.exec(served)?.[1] ?? "";
+    check(
+      "data-on is single-quoted, its JSON's quotes as they are",
+      watched.includes('"/feed/stocks"') && watched.includes('%{"z":') && !served.includes('data-on="') && !/data-on='[^']*&quot;/.test(served),
+      watched.slice(0, 120),
+    );
+  }
+  // A handler is given its text and JSON arguments as the server had them, with an apostrophe
+  // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them.
+  {
+    const quoted = await browser.newPage();
+    await quoted.goto(`${base}/smoke/quoted`);
+    const got = await quoted
+      .waitForFunction(() => document.getElementById("quoted")?.textContent || null, undefined, { timeout: 5000 })
+      .then((shown) => shown.jsonValue(), () => null);
+    const served = await (await quoted.request.get(`${base}/smoke/quoted`)).text();
+    const text = `It's "<b>" & more`;
+    const written = `It&#39;s \\"&lt;b&gt;\\" &amp; more`;
+    check(
+      "a handler gets text and JSON arguments with an apostrophe, quotes, & and < in them as the server had them",
+      got === JSON.stringify([text, [text]]) && served.includes(`data-on='connect:quoted.show($t,"${written}",["${written}"])'`),
+      `${got} ${/data-on='[^']*'/.exec(served)?.[0] ?? "no data-on"}`,
+    );
+    await quoted.close();
+  }
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
