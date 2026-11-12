@@ -6,25 +6,38 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps, locales, workload } from "./contract.mjs";
+import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { anchors, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { groupApps, groupNames } from "./groups.mjs";
+import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { qualificationProbes } from "./qualification-fixture.mjs";
+import { cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, validatePlan, validateState } from "./droplet-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
 import { betweenDroplets, mergeParts } from "./split.mjs";
 import { launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
 
-const commit = "a".repeat(40);
-// A whole round shaped like run.mjs writes it: app i serves 1000 + 37i + pass requests per phase.
-function full(round = "r17") {
+const commit = "a".repeat(40), group = "production";
+const qualified = () => Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
+// Raw evidence of a candidate that lacks a required feature: no Content-Security-Policy.
+function unsupported() {
+  const probes = qualificationProbes(); delete probes.page.headers["content-security-policy"];
+  return { fixture: qualification(probes, "fixture"), api: qualification(probes, "api") };
+}
+// Excluded by its raw qualification: not timed, so no runs or aggregates.
+const exclude = (a) => Object.assign(a, { qualification: unsupported(), runs: {}, phases: {} });
+// A whole round of a named group shaped like run.mjs writes it: candidate i serves 1000 + 37i +
+// pass requests per phase, and every candidate qualified on both sources.
+function full(round = "r17", g = group) {
+  const apps = groupApps(g);
   const s = { schema: resultSchema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: commit, finishedDirty: false,
-    startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T01:00:00.000Z", options: { round, build: true, apps, checkOnly: false, ...nightly, startupTimeout: 120 }, apps: {},
+    startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T01:00:00.000Z", options: { round, build: true, apps, checkOnly: false, ...nightly, startupTimeout: 120, group: g }, apps: {},
     host: { cpu: "Synthetic CPU", onlineCpus: "0-7", platform: "test", release: "test", node: "test", docker: "test" }, tools: Object.fromEntries(["upstream", "checker", "k6"].map((k) => [k, { imageId: `sha256:${"b".repeat(64)}` }])),
-    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20 } };
+    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile, qualificationSettings } };
   apps.forEach((app, i) => {
-    const a = s.apps[app] = { label: app, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {} };
+    const a = s.apps[app] = { label: app, image: `cb-marketplace-production-${app}`, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {}, qualification: qualified() };
     for (const source of sources) {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264, profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
         upstream: source === "api" ? { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } : null };
@@ -50,74 +63,97 @@ function scale(a, f) {
     a.phases[key] = Object.fromEntries(phases.map((p) => [p, stageAggregate(runs, p, 3)]));
   }
 }
-// Droplet k's part of a round split n ways, as run.mjs --part k/n writes it.
-function part(k, n, { round = "r17", anchorScale = {} } = {}) {
-  const s = full(round), share = splitApps(n)[k - 1];
+// Droplet k's part of a group round split n ways, as run.mjs --group g --part k/n writes it:
+// its share of the candidates, each qualified, the ones in excluded not timed.
+function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [] } = {}) {
+  const s = full(round, g), share = splitApps(g, n)[k - 1];
   s.options = { ...s.options, apps: share, part: { index: k, of: n } };
   s.apps = Object.fromEntries(share.map((app) => [app, s.apps[app]]));
   s.runId = `marketplace-${round}-d${k}`;
   s.host = { ...s.host, cpu: `Synthetic CPU d${k}` };
   if (k > 1) s.finishedAt = `2026-01-01T01:00:0${k}.000Z`;
-  for (const [app, f] of Object.entries(anchorScale)) scale(s.apps[app], f);
+  if (cortenScale !== 1) scale(s.apps.corten, cortenScale);
+  for (const app of excluded) exclude(s.apps[app]);
   return validateSummary(s);
 }
 const merged = (n, options = {}) => validateSummary(mergeParts(options.round ?? "r17", Array.from({ length: n }, (_, i) => part(i + 1, n, i === 1 ? options : { round: options.round }))));
 
-test("a split gives every droplet both anchors and each other app to exactly one droplet, in catalog order", () => {
-  assert.deepEqual(anchors, ["corten", "axum-maud"]);
-  for (let n = 2; n <= maxDroplets; n++) {
-    const shares = splitApps(n);
-    assert.equal(shares.length, n);
-    for (const share of shares) {
-      for (const anchor of anchors) assert.ok(share.includes(anchor));
-      assert.deepEqual(share, apps.filter((app) => share.includes(app)), "catalog order");
+test("a split gives every droplet Corten and each other candidate of its group to exactly one droplet, in the group's order", () => {
+  assert.equal(splitSubject, "corten");
+  for (const g of groupNames) {
+    const candidates = groupApps(g);
+    assert.equal(maxDroplets(g), candidates.length - 1);
+    for (let n = 2; n <= maxDroplets(g); n++) {
+      const shares = splitApps(g, n);
+      assert.equal(shares.length, n);
+      for (const share of shares) {
+        assert.ok(share.includes("corten"));
+        assert.deepEqual(share, candidates.filter((app) => share.includes(app)), "the group's order");
+      }
+      for (const app of candidates.filter((a) => a !== "corten")) assert.equal(shares.filter((s) => s.includes(app)).length, 1, app);
+      assert.deepEqual([...new Set(shares.flat())].sort(), [...candidates].sort(), "no app outside the group, none left out");
     }
-    for (const app of apps.filter((a) => !anchors.includes(a))) assert.equal(shares.filter((s) => s.includes(app)).length, 1, app);
   }
-  assert.deepEqual(splitApps(2)[0].slice(0, 3), ["corten", "nextjs", "sveltekit"]);
-  for (const n of [0, 1, maxDroplets + 1, 2.5, "2"]) assert.throws(() => splitApps(n));
+  // No second anchor: axum-maud is on no production droplet, and in the full qualification group
+  // it is one candidate on one droplet like any other.
+  assert.ok(!splitApps("production", 3).flat().includes("axum-maud"));
+  assert.equal(splitApps("production-qualify", 4).filter((s) => s.includes("axum-maud")).length, 1);
+  assert.deepEqual(splitApps("production", 2), [["corten", "nextjs", "fastapi", "topcoat"], ["corten", "aspnet", "express", "leptos"]]);
+  for (const n of [0, 1, maxDroplets(group) + 1, 2.5, "2"]) assert.throws(() => splitApps(group, n));
+  assert.throws(() => splitApps(undefined, 2), /named group/);
+  assert.throws(() => splitApps("production-performant", 3 + 1));
   assert.deepEqual(parsePart("2/3"), { index: 2, of: 3 });
   for (const bad of ["4/3", "0/3", "1/1", "2", "a/b", " 1/2", { index: 1, of: 2, extra: true }]) assert.throws(() => parsePart(bad));
   assert.equal(partName("r17", { index: 2, of: 3 }), "r17-d2"); assert.equal(partName("r17", null), "r17");
 });
 
-test("run.mjs --part measures one droplet's share of an official round, and only with --part", () => {
-  const options = parseArgs(["r17", "--part", "2/3", "--build", "--passes", "3"], inventory);
-  assert.deepEqual(options.apps, splitApps(3)[1]); assert.deepEqual(options.part, { index: 2, of: 3 }); assert.equal(options.build, true);
-  assert.equal(parseArgs(["r17", "--build"], inventory).part, undefined);
-  assert.ok(!("part" in parseArgs(["r17"], inventory)), "a whole round's options are unchanged");
-  for (const args of [["r17", "--apps", "corten"], ["r17", "--part", "2/3", "--apps", "corten"], ["r17", "--part", "4/3"], ["r17", "--part", "1/2", "--part", "1/2"], ["r17", "--part"]]) assert.throws(() => parseArgs(args, inventory), args.join(" "));
+test("run.mjs --part measures one droplet's share of a named group, and only with --group", () => {
+  const options = parseArgs(["r17", "--group", group, "--part", "2/3", "--build", "--passes", "3"], inventory);
+  assert.deepEqual(options.apps, splitApps(group, 3)[1]); assert.deepEqual(options.part, { index: 2, of: 3 }); assert.equal(options.group, group); assert.equal(options.build, true);
+  assert.deepEqual(parseArgs(["r17", "--part", "1/2", "--group", group], inventory).apps, splitApps(group, 2)[0]);
+  assert.equal(parseArgs(["r17", "--group", group, "--build"], inventory).part, undefined);
+  assert.ok(!("part" in parseArgs(["r17", "--group", group], inventory)), "a whole round's options are unchanged");
+  for (const args of [["r17", "--part", "2/3"], ["r17", "--group", group, "--part", "2/3", "--apps", "corten"], ["r17", "--group", group, "--part", "4/3"], ["r17", "--group", group, "--part", "2/7"],
+    ["r17", "--group", group, "--part", "1/2", "--part", "1/2"], ["r17", "--group", group, "--part"]]) assert.throws(() => parseArgs(args, inventory), args.join(" "));
 });
 
-test("--droplets splits a launch, 1 is today's one-droplet round, and collect reads the plan instead", () => {
-  const one = parseDropletArgs(["r17", "--detach", "--ssh-key", "42", "--state-dir", "s"]);
-  assert.deepEqual(parseDropletArgs(["r17", "--detach", "--ssh-key", "42", "--state-dir", "s", "--droplets", "1"]), one);
-  assert.equal(parseDropletArgs(["r17", "--plan", "--ssh-key", "42", "--state-dir", "s", "--droplets", "3"]).droplets, 3);
-  for (const bad of [["--droplets", "0"], ["--droplets", "x"], ["--droplets", String(maxDroplets + 1)], ["--droplets"]]) assert.throws(() => parseDropletArgs(["r17", "--detach", "--ssh-key", "42", "--state-dir", "s", ...bad]), bad.join(" "));
+test("--droplets splits a launch's group, 1 is today's one-droplet round, and collect reads the plan instead", () => {
+  const flags = ["r17", "--detach", "--ssh-key", "42", "--state-dir", "s"];
+  const one = parseDropletArgs(flags);
+  assert.deepEqual(parseDropletArgs([...flags, "--droplets", "1"]), one);
+  const three = parseDropletArgs(["r17", "--plan", "--ssh-key", "42", "--state-dir", "s", "--droplets", "3"]);
+  assert.equal(three.droplets, 3); assert.equal(three.group, group);
+  assert.equal(parseDropletArgs([...flags, "--group", "production-performant", "--droplets", "3"]).droplets, 3);
+  for (const bad of [["--droplets", "0"], ["--droplets", "x"], ["--droplets", String(maxDroplets(group) + 1)], ["--droplets"], ["--group", "production-performant", "--droplets", "4"]]) assert.throws(() => parseDropletArgs([...flags, ...bad]), bad.join(" "));
   assert.throws(() => parseDropletArgs(["r17", "--collect", "--state-dir", "s", "--droplets", "2"]), /reads the split/);
 });
 
-test("a part's state, remote job and archive name its droplet and run only its share", () => {
+test("a part's state, remote job and archive name its droplet and run only its share of the group", () => {
   const s = { workload: "marketplace-v2", round: "r17", commit, options: nightly, name: "corten-marketplace-r17-d2", unit: "corten-marketplace-r17-d2.service",
-    tag: "corten-marketplace-run-0123456789abcdef", part: { index: 2, of: 3 } };
+    tag: "corten-marketplace-run-0123456789abcdef", part: { index: 2, of: 3 }, group, apps: splitApps(group, 3)[1] };
   validateState(s, "r17");
   assert.throws(() => validateState({ ...s, name: "corten-marketplace-r17" }, "r17"));
   assert.throws(() => validateState({ ...s, part: { index: 4, of: 3 } }, "r17"));
+  assert.throws(() => validateState({ ...s, apps: groupApps(group) }, "r17"), /membership/);
+  const { group: _g, apps: _a, ...ungrouped } = s;
+  assert.throws(() => validateState(ungrouped, "r17"), /named group/);
   const files = remoteFiles(s);
-  assert.match(files["job.sh"], /marketplace\/run.mjs r17 --part 2\/3 --build --passes 3 --duration 15 --warmup 10 --rate 150/);
+  assert.match(files["job.sh"], /marketplace\/run.mjs r17 --build --passes 3 --duration 15 --warmup 10 --rate 150 --group production --part 2\/3\n/);
   assert.match(files["job.sh"], /report.mjs bench\/marketplace\/results\/r17\/d2\/summary.json/);
   assert.match(files["pack.sh"], /files\+=\(repo\/bench\/marketplace\/results\/r17\/d2\)/);
-  assert.match(files[s.unit], /Description=Localized marketplace r17 d2 of 3, 8 apps, three passes/);
+  assert.match(files[s.unit], /Description=Localized marketplace r17 d2 of 3, production group, three passes/);
   safeArchive("run.log\nexit-code\nrepo/bench/marketplace/results/r17/d2/summary.json\n", "-rw file", "r17", { index: 2, of: 3 });
   assert.throws(() => safeArchive("repo/bench/marketplace/results/r17/d1/summary.json", "-rw file", "r17", { index: 2, of: 3 }));
   assert.throws(() => safeArchive("repo/bench/marketplace/results/r17/summary.json", "-rw file", "r17", { index: 2, of: 3 }));
 });
 
-test("the plan records the commit once and must be the split of the apps", () => {
-  const plan = splitPlan("r17", 2, commit, "2026-01-01T00:00:00.000Z");
+test("the plan records the commit and group once and must be the group's split", () => {
+  const plan = splitPlan("r17", group, 2, commit, "2026-01-01T00:00:00.000Z");
   assert.deepEqual(plan.parts.map((p) => p.name), ["corten-marketplace-r17-d1", "corten-marketplace-r17-d2"]);
+  assert.deepEqual(plan.parts.map((p) => p.apps), splitApps(group, 2));
   assert.equal(validatePlan(structuredClone(plan), "r17").commit, commit);
-  for (const change of [(p) => { p.parts[0].apps.pop(); }, (p) => { delete p.commit; }, (p) => { p.tree = "c".repeat(40); }, (p) => { p.round = "r18"; }, (p) => { p.droplets = 3; }, (p) => { p.options = { ...nightly, passes: 1 }; }]) {
+  for (const change of [(p) => { p.parts[0].apps.pop(); }, (p) => { p.parts[1].apps.push("axum-maud"); }, (p) => { delete p.commit; }, (p) => { delete p.group; }, (p) => { p.group = "production-popular"; },
+    (p) => { p.tree = "c".repeat(40); }, (p) => { p.round = "r18"; }, (p) => { p.droplets = 3; }, (p) => { p.options = { ...nightly, passes: 1 }; }]) {
     const bad = structuredClone(plan); change(bad); assert.throws(() => validatePlan(bad, "r17"));
   }
 });
@@ -133,7 +169,7 @@ test("a split collection's exit: errors, leftovers and unknown codes first, then
 });
 
 test("droplets named for a part but owned by no live part are leftovers", () => {
-  const plan = splitPlan("r17", 2, commit);
+  const plan = splitPlan("r17", group, 2, commit);
   const d = (id, name, tags = []) => ({ id, name, tags });
   const live = { id: "101", tag: "corten-marketplace-run-1111111111111111" };
   assert.deepEqual(leftoverDroplets([d(101, "corten-marketplace-r17-d1"), d(7, "corten-catalog-c1"), d(8, "corten-marketplace-r18-d1")], plan, [live, null]), []);
@@ -143,73 +179,117 @@ test("droplets named for a part but owned by no live part are leftovers", () => 
   assert.deepEqual(leftoverDroplets([d(105, "corten-marketplace-r17-d2", [live.tag])], plan, [null, { tag: live.tag }]), [], "an ambiguous create is matched by its tag");
 });
 
-test("droplets' parts merge into one round of twenty apps, each from its own droplet, anchors on every droplet", () => {
+test("droplets' parts merge into one round of the group, each candidate from its own droplet, Corten on every droplet", () => {
   const parts = [part(1, 2), part(2, 2)];
   const s = validateSummary(mergeParts("r17", parts));
-  assert.deepEqual(Object.keys(s.apps), apps);
+  assert.deepEqual(Object.keys(s.apps), groupApps(group));
+  assert.deepEqual(s.options.apps, groupApps(group)); assert.equal(s.options.group, group);
   assert.equal(s.apps.corten, parts[0].apps.corten);
-  assert.equal(s.apps.nextjs, parts[0].apps.nextjs); assert.equal(s.apps["tanstack-start"], parts[1].apps["tanstack-start"]);
+  assert.equal(s.apps.nextjs, parts[0].apps.nextjs); assert.equal(s.apps.leptos, parts[1].apps.leptos);
   assert.deepEqual(s.split.parts.map((p) => p.host.cpu), ["Synthetic CPU d1", "Synthetic CPU d2"]);
-  assert.equal(s.split.parts[1].anchors["axum-maud"], parts[1].apps["axum-maud"]);
+  assert.equal(s.split.parts[1].corten, parts[1].apps.corten);
+  assert.ok(!("axum-maud" in s.apps) && s.split.parts.every((p) => !("anchors" in p)), "no second anchor");
   assert.equal(s.finishedAt, parts[1].finishedAt); assert.equal(s.options.part, undefined);
-  for (const [k, change] of [[2, (v) => { v.commit = "d".repeat(40); }], [2, (v) => { v.options.duration = 60; }], [2, (v) => { v.options.part = { index: 1, of: 2 }; }], [2, (v) => { v.measurement = { ...v.measurement, encoding: "gzip" }; }]]) {
+  for (const [k, change] of [[2, (v) => { v.commit = "d".repeat(40); }], [2, (v) => { v.options.duration = 60; }], [2, (v) => { v.options.part = { index: 1, of: 2 }; }], [2, (v) => { v.measurement = { ...v.measurement, encoding: "gzip" }; }],
+    [2, (v) => { v.options.group = "production-popular"; }], [1, (v) => { delete v.apps.topcoat; }]]) {
     const bad = structuredClone(parts); change(bad[k - 1]); assert.throws(() => mergeParts("r17", bad));
   }
   assert.throws(() => mergeParts("r18", parts));
-  for (const change of [(v) => { v.split.parts[1].apps.pop(); }, (v) => { delete v.split.parts[1].anchors.corten; }, (v) => { v.split.parts[0].host = { ...v.split.parts[0].host, cpu: "other" }; },
-    (v) => { v.split.parts[1].anchors.corten.phases["fixture-en-US-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; }]) {
+  assert.throws(() => mergeParts("r17", [parts[0]]), "one part is not a split");
+  for (const change of [(v) => { v.split.parts[1].apps.pop(); }, (v) => { delete v.split.parts[1].corten; }, (v) => { v.split.parts[0].host = { ...v.split.parts[0].host, cpu: "other" }; },
+    (v) => { v.split.parts[1].corten.phases["fixture-en-US-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; },
+    (v) => { delete v.apps.leptos; }, (v) => { v.options.apps = v.options.apps.slice(0, 4); }, (v) => { delete v.options.group; }, (v) => { v.schema = "marketplace-results/v4"; }]) {
     const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad));
   }
-  assert.throws(() => validateSummary({ ...parts[1], apps: { ...parts[1].apps, nextjs: undefined } }));
+  assert.throws(() => validateSummary({ ...parts[1], apps: { ...parts[1].apps, aspnet: undefined } }));
 });
 
-test("a merged round prints every droplet's anchors in every table, with each app's ratio to its own Corten", () => {
+test("every candidate is accounted for once, timed when admitted and kept with its evidence when excluded", () => {
+  // d2 excludes aspnet on its raw qualification: it is not timed, and the merge keeps its evidence.
+  const s = merged(2, { excluded: ["aspnet"] });
+  assert.deepEqual(s.apps.aspnet.runs, {}); assert.deepEqual(s.apps.aspnet.qualification.api.missing.length > 0, true);
+  const text = report(s);
+  assert.match(text, /^\| Candidate \| Droplet \| Result \| Missing required work \|$/m);
+  assert.match(text, /^\| aspnet \| r17-d2 \| excluded, not timed \| fixture: .+; api: .+ \|$/m);
+  assert.match(text, /^\| corten \| r17-d1 \| admitted \| none \|$/m); assert.match(text, /^\| corten \| r17-d2 \| admitted \| none \|$/m);
+  assert.doesNotMatch(text, /^\| aspnet \| r17-d2 \| \d/m, "an excluded candidate has no measured row");
+  assert.match(text, /^Group: production\. Measured adapters: corten, nextjs, fastapi, express, topcoat, leptos\./m);
+  // Evidence that does not match its raw probes, or an excluded candidate with runs, is refused.
+  const forged = structuredClone(s); forged.apps.aspnet.qualification.api.eligible = true;
+  assert.throws(() => validateSummary(forged));
+  const timed = structuredClone(s); timed.apps.aspnet.runs = structuredClone(s.apps.nextjs.runs); timed.apps.aspnet.phases = structuredClone(s.apps.nextjs.phases);
+  assert.throws(() => validateSummary(timed), /excluded candidate/);
+  const noEvidence = structuredClone(s); delete noEvidence.apps.aspnet.qualification;
+  assert.throws(() => validateSummary(noEvidence));
+});
+
+test("a part whose peers are all excluded is no comparison: it fails alone and in the merge", () => {
+  const lone = { excluded: ["aspnet", "express", "leptos"] };
+  assert.throws(() => part(2, 2, lone), /feature-qualified Corten and peer/);
+  // Built past the part's own check, the merge still refuses it.
+  const d2 = part(2, 2); for (const app of lone.excluded) exclude(d2.apps[app]);
+  assert.throws(() => validateSummary(mergeParts("r17", [part(1, 2), d2])), /d2 needs a feature-qualified Corten and peer: a part whose peers are all excluded is no comparison/);
+  // So does a droplet whose own Corten is excluded.
+  const d1 = part(1, 2); exclude(d1.apps.corten);
+  assert.throws(() => validateSummary(mergeParts("r17", [d1, part(2, 2)])));
+});
+
+test("the v5 reader keeps its whole-inventory check for a single host and takes no arbitrary subset", () => {
+  // A whole round's candidates are its whole group; a share of them is a part, only with its part.
+  const subset = full(); subset.options.apps = splitApps(group, 2)[0]; subset.apps = Object.fromEntries(subset.options.apps.map((a) => [a, subset.apps[a]]));
+  assert.throws(() => validateSummary(subset));
+  const wrongShare = structuredClone(part(1, 2)); wrongShare.options.part = { index: 2, of: 2 };
+  assert.throws(() => validateSummary(wrongShare));
+  const ungrouped = structuredClone(part(1, 2)); delete ungrouped.options.group; ungrouped.schema = "marketplace-results/v4";
+  for (const app of Object.values(ungrouped.apps)) delete app.qualification;
+  assert.throws(() => validateSummary(ungrouped), /named group/);
+  validateSummary(full());
+  assert.match(report(full()), /^# Marketplace v2 r17$/m);
+});
+
+test("a merged round prints every droplet's Corten in every table, with each candidate's ratio to its own Corten", () => {
   const text = report(merged(2));
   assert.match(text, /^# Marketplace v2 r17 \(split across 2 droplets\)$/m);
   assert.match(text, /CPU: d1 Synthetic CPU d1 \(online CPUs 0-7\); d2 Synthetic CPU d2 \(online CPUs 0-7\)\./);
-  assert.match(text, /on their own droplet before that droplet's load/);
+  assert.match(text, /on its own droplet before that droplet's load/);
   const tables = text.split("\n").filter((l) => l.startsWith("| Framework |"));
   assert.equal(tables.length, 8 * 4);
   for (const header of tables) assert.match(header, /^\| Framework \| Droplet \|/);
   for (const header of tables.filter((h) => h.includes("req/s |"))) assert.match(header, /req\/s ratio to Corten \| CPU us\/request ratio to Corten \|$/);
-  for (const droplet of ["r17-d1", "r17-d2"]) for (const app of anchors) assert.equal(text.split("\n").filter((l) => l.startsWith(`| ${app} | ${droplet} |`)).length, 8 * 4, `${app}@${droplet}`);
-  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |")).length, 8 * 4);
-  // Corten is 1.00 of itself; axum-maud (catalog index 15) serves about 1557 to Corten's 1002.
+  // Measured rows; the Feature Qualification table has one more row for each droplet's Corten.
+  for (const droplet of ["r17-d1", "r17-d2"]) assert.equal(text.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && !l.includes("admitted")).length, 8 * 4, droplet);
+  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |") && !l.includes("admitted")).length, 8 * 4);
+  // axum-maud is outside the production group: listed as omitted, never a row or an anchor.
+  assert.match(text, /^Omitted adapters: .*axum-maud/m);
+  assert.doesNotMatch(text, /^\| axum-maud|anchor/m);
+  // Corten is 1.00 of itself; leptos (group index 6) serves about 1224 to Corten's 1002.
   assert.match(text, /^\| corten \| r17-d2 \|.* \| 1\.00 \| 1\.00 \|$/m);
-  assert.match(text, /^\| axum-maud \| r17-d2 \|.* \| 1\.55 \| 0\.64 \|$/m);
+  assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.22 \| 0\.82 \|$/m);
   assert.match(text, /^## Between droplets$/m);
-  assert.match(text, /^\| r17-d2 \| Synthetic CPU d2 \| 0-7 \| corten, tanstack-start, react-router, django, laravel, spring, astro, topcoat, axum-maud, drogon, express \|$/m);
-  assert.match(text, /^Flagged: none\. No two droplets' axum-maud ratios to Corten differ by more than the noise in any of the 48 stages\.$/m);
-  assert.doesNotMatch(text, /^Note: the anchors' raw numbers/m);
+  assert.match(text, /^\| r17-d2 \| Synthetic CPU d2 \| 0-7 \| corten, aspnet, express, leptos \|$/m);
+  assert.match(text, /^Flagged: none\. Corten's numbers on no two droplets differ by more than the noise in any of the 48 stages\.$/m);
   const part2 = report(part(2, 3));
   assert.match(part2, /^# Marketplace v2 r17 part d2 of 3$/m);
-  assert.match(part2, /This part's 8 apps pass both sources/);
+  assert.match(part2, /This part qualifies its share of the group's candidates \(corten, aspnet, topcoat\)/);
   assert.doesNotMatch(part2, /Droplet|Between droplets/);
-  assert.doesNotMatch(report(full()), /Droplet|Between droplets|ratio to Corten/);
+  assert.doesNotMatch(report(full()), /Droplet|Between droplets|ratio to Corten|This part/);
 });
 
-test("a droplet is flagged when its anchor ratio differs beyond the noise, not when only its machine is faster", () => {
-  const flagged = merged(2, { anchorScale: { "axum-maud": 1.5 } });
-  const check = betweenDroplets(flagged);
+test("droplets are flagged where Corten's own numbers differ beyond the noise", () => {
+  const faster = merged(2, { cortenScale: 1.2 });
+  const check = betweenDroplets(faster);
+  // Corten is 20% faster on d2: its req/s and its CPU per request differ in every stage.
   assert.equal(check.flagged.length, 48);
   assert.ok(check.flagged.every((r) => r.differ.length === 1 && r.differ[0].join() === "1,2"));
-  const text = report(flagged);
+  const text = report(faster);
   assert.match(text, /^Flagged: 48 of 48 stages \(d1 and d2 differ\)\.$/m);
-  assert.match(text, /^\| fixture-en-US-page \| sat64 \| req\/s \| 1\.55 \[1\.55-1\.56\] \| 2\.33 \[2\.33-2\.33\] \| d1 and d2 differ \|$/m);
-
-  // Both anchors 20% faster on d2: the raw numbers differ, the ratio does not. The anchor rows in
-  // every table show the raw difference; nothing else repeats it.
-  const faster = merged(2, { anchorScale: { corten: 1.2, "axum-maud": 1.2 } });
-  assert.equal(betweenDroplets(faster).flagged.length, 0);
-  const note = report(faster);
-  assert.match(note, /^Flagged: none\./m);
-  assert.doesNotMatch(note, /raw numbers across droplets|^- corten req\/s|^Note:/m);
-  const rps = (droplet) => note.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && l.endsWith("| 1.00 | 1.00 |")).map((l) => Number(l.split("|")[3].trim().split(" ")[0]));
-  assert.equal(rps("r17-d2").length, 24);
-  assert.ok(rps("r17-d2").every((v, i) => Math.abs(v / rps("r17-d1")[i] - 1.2) < 0.01), "corten's rows show d2 20% faster");
-
+  assert.match(text, /^\| fixture-en-US-page \| sat64 \| req\/s \| 1002\.00 \[1001\.00-1003\.00\] \| 1202\.00 \[1201\.00-1204\.00\] \| d1 and d2 differ \|$/m);
+  // Each candidate's ratio uses its own droplet's Corten, so d2's are lower against the faster Corten.
+  assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.02 \| /m);
+  const even = betweenDroplets(merged(2));
+  assert.equal(even.flagged.length, 0);
   // With three droplets each pair that differs is named.
-  const three = validateSummary(mergeParts("r17", [part(1, 3), part(2, 3), part(3, 3, { anchorScale: { "axum-maud": 1.5 } })]));
+  const three = validateSummary(mergeParts("r17", [part(1, 3), part(2, 3), part(3, 3, { cortenScale: 1.5 })]));
   assert.match(report(three), /^Flagged: 48 of 48 stages \(d1 and d3 differ; d2 and d3 differ\)\.$/m);
 });
 
@@ -224,6 +304,10 @@ test("a split round compares only with one split the same way, droplet by drople
   }
   const otherCpu = structuredClone(now); otherCpu.split.parts[1].host.cpu = "Other CPU";
   assert.equal(compare(otherCpu, then).compatible, false);
+  // A candidate admitted in the baseline and excluded now changes the admitted set: no deltas.
+  const lost = merged(2, { round: "r18", excluded: ["aspnet"] });
+  const loss = compare(lost, then);
+  assert.equal(loss.compatible, false); assert.equal(loss.qualificationLosses[0].app, "aspnet");
   // Droplets on mixed CPU models compare only with a baseline mixed the same way, droplet by droplet.
   const mixed = (s, d1, d2) => { const v = structuredClone(s); v.split.parts[0].host.cpu = v.host.cpu = d1; v.split.parts[1].host.cpu = d2; return validateSummary(v); };
   const x8168 = "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", x8280 = "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz";
@@ -235,11 +319,12 @@ test("a split round compares only with one split the same way, droplet by drople
 });
 
 test("plan mode prints the split and every command without git, doctl or ssh", () => {
-  const plan = splitDryRun({ round: "r17", droplets: 2, sshKey: "42", stateDir: join(tmpdir(), "never-created") });
-  assert.deepEqual(plan.plan.parts.map((p) => p.apps), splitApps(2));
+  const plan = splitDryRun({ round: "r17", group, droplets: 2, sshKey: "42", stateDir: join(tmpdir(), "never-created") });
+  assert.equal(plan.plan.group, group);
+  assert.deepEqual(plan.plan.parts.map((p) => p.apps), splitApps(group, 2));
   assert.equal(plan.commands.filter((c) => c.startsWith("doctl compute droplet create")).length, 2);
   assert.ok(plan.commands.includes("doctl account get --output json"));
-  assert.match(plan.files.d2["job.sh"], /--part 2\/2/);
+  assert.match(plan.files.d2["job.sh"], /--group production --part 2\/2/);
   assert.equal(existsSync(join(tmpdir(), "never-created")), false);
 });
 
@@ -612,7 +697,7 @@ test("the command line's --plan calls no git, doctl or ssh: it runs with only no
   const split = plan("--droplets", "2");
   assert.equal(split.status, 0, split.stderr);
   const out = JSON.parse(split.stdout);
-  assert.deepEqual(out.plan.parts.map((p) => p.apps), splitApps(2));
+  assert.deepEqual(out.plan.parts.map((p) => p.apps), splitApps(group, 2));
   assert.equal(out.commands.filter((c) => c.startsWith("doctl compute droplet create")).length, 2);
   const one = plan();
   assert.equal(one.status, 0, one.stderr);

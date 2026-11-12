@@ -8,7 +8,8 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { leftoverDroplets, nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, terminalUnit, validatePlan, validateState } from "./droplet-contract.mjs";
 import { validateSummary } from "./report.mjs";
-import { partName } from "./run-contract.mjs";
+import { groupApps, scheduledGroup } from "./groups.mjs";
+import { partName, splitApps } from "./run-contract.mjs";
 import { mergeParts } from "./split.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -54,9 +55,11 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
       assert.equal(run("git", ["status", "--porcelain"]).stdout.trim(), "", "launch requires clean measured commit");
       assert.ok(!benchTagged(list()), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
     }
-    const name = `corten-marketplace-${partName(options.round, part)}`;
+    const name = `corten-marketplace-${partName(options.round, part)}`, group = options.group ?? scheduledGroup(options.round);
     state = { workload: "marketplace-v2", round: options.round, commit, status: "creating", name,
-      tag: `corten-marketplace-run-${randomBytes(8).toString("hex")}`, unit: `${name}.service`, startedAt: new Date().toISOString(), options: nightly, ...(part ? { part } : {}) };
+      tag: `corten-marketplace-run-${randomBytes(8).toString("hex")}`, unit: `${name}.service`, startedAt: new Date().toISOString(), options: nightly, ...(part ? { part } : {}),
+      // A part reserves its share of the group's candidates; a whole round the whole group.
+      group, apps: part ? splitApps(group, part.of)[part.index - 1] : groupApps(group) };
     writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", { flag: "wx" });
     const created = run("doctl", ["compute", "droplet", "create", state.name, "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64", "--ssh-keys", options.sshKey,
       "--tag-names", `corten-bench,corten-marketplace,${state.tag}`, "--wait", "--output", "json"], 10 * 60000, true);
@@ -147,6 +150,8 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
             const s = validateSummary(JSON.parse(readFileSync(join(source, "summary.json"), "utf8")));
             assert.equal(s.round, state.round); assert.equal(s.commit, state.commit);
             assert.deepEqual(s.options.part ?? null, state.part ?? null, "the summary is not this droplet's part");
+            assert.equal(s.options.group ?? "full", state.group ?? "full", "collected group differs from reservation");
+            assert.deepEqual(s.options.apps, state.apps ?? groupApps(), "collected adapters differ from reservation");
             for (const [key, value] of Object.entries(nightly)) assert.equal(s.options[key], value, `unexpected ${key}`);
             state.complete = true;
           } catch (e) { state.validationError = e.message; }
@@ -204,7 +209,7 @@ export function splitController(options, deps = {}) {
   let plan = existsSync(planPath) ? validatePlan(JSON.parse(readFileSync(planPath, "utf8")), options.round) : null;
   const partDir = (k) => join(local, `d${k}`);
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
-  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, part: { index: p.index, of: plan.droplets }, commit: plan.commit }, deps);
+  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, part: { index: p.index, of: plan.droplets }, group: plan.group, commit: plan.commit }, deps);
   const stateOf = (p) => {
     const file = join(partDir(p.index), "state.json");
     return existsSync(file) ? validateState(JSON.parse(readFileSync(file, "utf8")), options.round) : null;
@@ -265,9 +270,9 @@ export function splitController(options, deps = {}) {
     const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
     assert.ok(Number.isSafeInteger(limit) && limit > 0, "doctl account get gave no droplet_limit");
     assert.ok(droplets.length + options.droplets <= limit, `the account's droplet limit is ${limit} and ${droplets.length} droplets exist: no room for ${options.droplets} more`);
-    plan = splitPlan(options.round, options.droplets, commit);
+    plan = splitPlan(options.round, options.group ?? scheduledGroup(options.round), options.droplets, commit);
     writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { flag: "wx" });
-    console.log(`split ${options.round} across ${plan.droplets} droplets, commit ${commit}`);
+    console.log(`split ${options.round} (group ${plan.group}) across ${plan.droplets} droplets, commit ${commit}`);
     for (const p of plan.parts) console.log(`${name(p)}: ${p.apps.join(", ")}`);
     const tasks = plan.parts.map(task);
     try {
@@ -364,9 +369,9 @@ export function splitController(options, deps = {}) {
 }
 // What a split launch would do (#816), without git, doctl or ssh: the split and every command.
 export function splitDryRun(options) {
-  const plan = splitPlan(options.round, options.droplets, "0".repeat(40), "not written: plan mode");
+  const plan = splitPlan(options.round, options.group ?? scheduledGroup(options.round), options.droplets, "0".repeat(40), "not written: plan mode");
   const base = { workload: "marketplace-v2", round: options.round, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: plan.commit, options: nightly };
-  const states = plan.parts.map((p) => ({ ...base, name: p.name, unit: `${p.name}.service`, part: { index: p.index, of: plan.droplets } }));
+  const states = plan.parts.map((p) => ({ ...base, name: p.name, unit: `${p.name}.service`, part: { index: p.index, of: plan.droplets }, group: plan.group, apps: p.apps }));
   return { options, measurements: nightly, plan,
     commands: ["git rev-parse HEAD", "git status --porcelain", "doctl compute droplet list --output json", "doctl account get --output json",
       `write ${join(resolve(options.stateDir), "split.json")}`,
@@ -380,7 +385,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const split = !options.plan && (options.droplets !== undefined || existsSync(join(resolve(options.stateDir), "split.json")));
     if (options.plan && options.droplets) console.log(JSON.stringify(splitDryRun(options), null, 2));
     else if (options.plan) {
-      const s = { workload: "marketplace-v2", round: options.round, name: `corten-marketplace-${options.round}`, unit: `corten-marketplace-${options.round}.service`, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: "0".repeat(40), options: nightly };
+      const s = { workload: "marketplace-v2", round: options.round, name: `corten-marketplace-${options.round}`, unit: `corten-marketplace-${options.round}.service`, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: "0".repeat(40), options: nightly, group: options.group, apps: groupApps(options.group) };
       console.log(JSON.stringify({ options, measurements: nightly, files: remoteFiles(s) }, null, 2));
     } else if (split) {
       // The split launcher alone knows every droplet: a closed stdout or stderr or a hangup must

@@ -7,20 +7,29 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
-- A nightly `bench/marketplace` round can be split across droplets started together:
+- A nightly `bench/marketplace` group round can be split across droplets started together:
   `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the
-  account's droplet limit once, writes the plan (commit and each droplet's apps) and
+  account's droplet limit once, writes the plan (commit, group and each droplet's candidates) and
   creates every droplet before starting any, holding `launch.lock` so collect waits for a live
-  launch and a hangup does not stop it. Each runs Corten and axum + Maud beside a
-  round-robin share of the other apps (`run.mjs --part k/n`) and gates its own apps before its own
-  load. `--collect` collects and deletes each droplet as it finishes, reports any leftover
-  droplet, prints the command that stops each running droplet once one that never started, is partial
-  or is missing means the round cannot merge, and merges the round only when every droplet has finished; the report shows each
-  droplet's CPU and anchors in every table, each app's ratio to the Corten on its own droplet, and
-  flags a stage where axum + Maud's ratio to Corten differs between droplets beyond the pass
-  ranges. A one-droplet round runs, reports and compares as before, and a split round compares
-  only with one split the same way
+  launch and a hangup does not stop it. Each droplet runs Corten beside a round-robin share of
+  the group's other candidates (`run.mjs --group <g> --part k/n`), qualifies them with the
+  group's feature contract and times only those it admits; a droplet with no admitted peer fails
+  its part. `--collect` collects and deletes each droplet as it finishes, reports any leftover
+  droplet, prints the command that stops each running droplet once one that never started, is
+  partial or is missing means the round cannot merge, and merges the round only when every
+  droplet has finished and every candidate of the group is accounted for once, admitted and
+  measured or excluded with its evidence. The report shows each droplet's CPU and Corten in
+  every table, each candidate's ratio to the Corten on its own droplet, and flags a stage where
+  Corten's own numbers differ between droplets beyond the pass ranges. A one-droplet round runs,
+  reports and compares as before, and a split round compares only with one split the same way
   ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
+- Feature-qualified marketplace comparison groups: popular and performance-oriented
+  candidate pools share one deduplicated production run instead of timing the full inventory
+  each night. Both sources must satisfy the same scoped production checklist, then the full
+  localized browser/content gate; unsupported candidates are listed with missing features,
+  not timed or silently dropped. No framework is an unconditional anchor. ETag and downstream
+  readiness are disclosed exceptions, not claims of complete enterprise equivalence.
+
 - The marketplace alert-form check saves the exact submitted case, POST status and response,
   current message and original timeout when the result message does not arrive. The
   React Router timeout from r19 remains unconfirmed as an adapter defect
@@ -38,8 +47,9 @@ Corten is pre-1.0, so any minor version may change the API.
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
   body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
-  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
-  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error`, a bare `204` or `205` dispatches none (below), and a bare `304` is
+  `corten:error` with that status (in Chromium and Firefox: Playwright cannot answer one in
+  WebKit); one answered with a status of 600 is
   `corten:error` with status 0; the form is left not busy each time. Another file of the same
   name, chosen while a write sending the first is out, is sent after it, whether its size or only
   its time differs, where the same file pressed again is not. Each check failed against a runtime
@@ -80,6 +90,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
+  server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
+  with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
+  no longer shows its failed text for a write that succeeded, and a submit pressed while it was
+  out is sent, where before it was dropped. A `205` also resets the form (firing `reset`), unless
+  the user changed a field after it was sent (another file of the same name, or text a number
+  input cannot read, among them), a control was added to the form since, or the user pressed again
+  with other values
+  ([#1258 A data-patch write answered 204, which the server doc gives for a write with nothing to say, fires corten:error and drops the queued submit](https://github.com/corten-run/corten/issues/1258)).
+  corten-ui's `NumberField` and `ComboBox` follow a form reset, which sends no `input`: a
+  button at the bound the reset puts back is disabled again, and the option marked as the value
+  is the select's. A file input's files are told by each one's name, size and time there and when
+  a patch answers: another file of the same name, chosen while the answer that takes the first is
+  on its way, stays chosen, where before it was taken with the answer.
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so

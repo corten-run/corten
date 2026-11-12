@@ -3,17 +3,18 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { apps } from "./contract.mjs";
 import { aggregateCold, coldStop, phases, resultSchema, roundIdentity, stopsEarlier, timedProfiles } from "./run-contract.mjs";
 import { validateSummary } from "./report.mjs";
+import { admitted } from "./feature-contract.mjs";
 
 const hostFields = ["cpu", "onlineCpus", "platform", "release", "node", "docker"];
-const measurementOptions = ({ round, build, ...options }) => options;
+const measurementOptions = ({ round, build, group = "full", ...options }) => ({ ...options, group });
 const canonical = (v) => Array.isArray(v) ? v.map(canonical)
   : v !== null && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v;
 // A round split across droplets (#816) measured each app on its own droplet's machine: it
 // compares only with a round split the same way, droplet by droplet. Null for a whole round.
-const splitShape = (s) => s.split ? s.split.parts.map((p) => ({ apps: p.apps,
+// Each droplet's candidates and which of them it admitted are part of that shape.
+const splitShape = (s) => s.split ? s.split.parts.map((p) => ({ apps: p.apps, admitted: p.apps.filter((a) => admitted(a === "corten" ? p.corten : s.apps[a])),
   host: Object.fromEntries(hostFields.map((k) => [k, p.host[k] ?? null])), tools: Object.fromEntries(["upstream", "k6"].map((tool) => [tool, p.tools[tool].imageId])) })) : null;
 
 /** SHA-256 regression key, independent of round/build/commit and JSON property order.
@@ -73,7 +74,7 @@ export function comparisonKey(s) {
 export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const result = { schema: "marketplace-comparison/v1", current: current?.round ?? null,
     baseline: baseline?.round ?? null, compatible: false, comparisonKeys: null, subject: "corten",
-    unchangedApps: [], rows: [], cold: [], cohort: { apps: [], rows: [], cold: [] }, newOutcomes: [], warnings: [] };
+    unchangedApps: [], rows: [], cold: [], cohort: { apps: [], rows: [], cold: [] }, newOutcomes: [], qualificationLosses: [], warnings: [] };
   const warn = (message) => result.warnings.push(message);
   for (const [name, summary] of [["current", current], ["baseline", baseline]]) {
     try { validateSummary(summary); }
@@ -86,18 +87,29 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   try { result.comparisonKeys = { current: comparisonKey(current), baseline: comparisonKey(baseline) }; }
   catch (error) { warn(error.message); }
   const now = roundIdentity(current.round), old = roundIdentity(baseline.round);
+  // A lost capability is an observed investigation even when the changed admitted set
+  // forbids performance deltas. It is not a claim about cause or statistical regression.
+  if (now.kind === "official" && old.kind === "official" && old.number < now.number && current.options.group &&
+    isDeepStrictEqual(measurementOptions(current.options), measurementOptions(baseline.options)) &&
+    isDeepStrictEqual(current.measurement, baseline.measurement) && current.fixtureSha256 === baseline.fixtureSha256) {
+    for (const app of current.options.apps) if (admitted(baseline.apps[app]) && !admitted(current.apps[app])) {
+      result.qualificationLosses.push({ app, missing: Object.fromEntries(["fixture", "api"].map((source) => [source, current.apps[app].qualification[source].missing])) });
+    }
+  }
   if (now.kind !== "official" || old.kind !== "official" || old.number >= now.number) warn("Comparison requires an earlier official marketplace-v2 r17+ baseline; development, legacy r16 and catalog rounds have no deltas.");
   const same = (label, a, b) => { if (!isDeepStrictEqual(a, b)) warn(`Incompatible ${label}; no deltas.`); };
   // Both schemas passed validateSummary, so both are read as v4 (v3 with no stop records).
   for (const key of ["workload", "fixtureSha256", "measurement"]) same(key, current[key], baseline[key]);
   same("measurement options", measurementOptions(current.options), measurementOptions(baseline.options));
+  same("qualified adapter set", Object.keys(current.apps).filter((a) => !current.options.group || admitted(current.apps[a])).sort(),
+    Object.keys(baseline.apps).filter((a) => !baseline.options.group || admitted(baseline.apps[a])).sort());
   for (const key of hostFields) {
     if (typeof current.host[key] !== "string" || !current.host[key] || typeof baseline.host[key] !== "string" || !baseline.host[key]) warn(`Missing host ${key}; no deltas.`);
     else same(`host ${key}`, current.host[key], baseline.host[key]);
   }
   for (const tool of ["upstream", "k6"]) same(`${tool} image`, current.tools[tool].imageId, baseline.tools[tool].imageId);
-  same("droplet split (apps, host and images per droplet)", splitShape(current), splitShape(baseline));
-  if (!Array.isArray(unchangedApps) || new Set(unchangedApps).size !== unchangedApps.length || unchangedApps.some((app) => !apps.includes(app))) warn("unchangedApps must be distinct known adapter names supplied by the caller; no deltas.");
+  same("droplet split (candidates, admitted adapters, host and images per droplet)", splitShape(current), splitShape(baseline));
+  if (!Array.isArray(unchangedApps) || new Set(unchangedApps).size !== unchangedApps.length || unchangedApps.some((app) => !current.options.apps.includes(app) || !baseline.options.apps.includes(app) || !current.apps[app]?.runs[timedProfiles[0].key] || !baseline.apps[app]?.runs[timedProfiles[0].key])) warn("unchangedApps must be distinct measured adapter names supplied by the caller; no deltas.");
   if (result.warnings.length) return result;
   result.compatible = true;
   result.unchangedApps = unchangedApps.filter((app) => app !== "corten");
@@ -105,7 +117,7 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const comparedApps = ["corten", ...result.unchangedApps];
   warn("New marketplace-v2 baseline only: no r16 or catalog cross-workload delta. Caller-attested unchanged adapters are not independently verified. Median deltas are observations, not significance or maximum-capacity claims; overlapping pass ranges do not establish a difference.");
   warn("Corten is always compared as the regression subject, not an unchanged reference. Cohort median percentage changes provide context only; they do not normalize Corten or establish causation.");
-  const excluded = apps.filter((app) => !comparedApps.includes(app));
+  const excluded = current.options.apps.filter((app) => !comparedApps.includes(app));
   if (excluded.length) warn(`No reference deltas for adapters not declared unchanged: ${excluded.join(", ")}.`);
   if (!result.unchangedApps.length) warn("No non-Corten unchanged reference cohort supplied; Corten deltas have no cohort context.");
   if (Object.values(current.measurement.cpus).some((c) => !c.cpuset)) warn("CPU quota-only placement does not prove isolation in either round.");

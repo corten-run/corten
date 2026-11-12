@@ -1,7 +1,12 @@
 # Marketplace v2: equivalent localization work
 
 **A separate application workload, with twenty native adapters and a pre-load conformance
-gate.** Every selected app must pass the Docker/browser checks before any load test starts.
+gate.** Nightly uses feature-qualified popular and performance-oriented cohorts, deduplicated
+into one production run. Candidates lacking the production contract are explicitly excluded
+before timing; every admitted app must then pass both Docker/browser gates before any load.
+No framework, including axum or Corten, gets unconditional admission. See
+[framework groups](nightly.md#framework-groups) for requirements, candidate pools and limits.
+An omitted adapter was not tested; an excluded candidate has capability evidence, not timing.
 No v2 performance baseline is published here. Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 
@@ -93,7 +98,8 @@ not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
 ### Splitting a round across droplets
 
-A round's wall time grows with every app, so it can be split across droplets started together
+A round's wall time grows with every candidate, so a named group's round can be split across
+droplets started together
 ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)):
 
 ```sh
@@ -103,17 +109,24 @@ node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplac
 ```
 
 `--plan` prints the split, each droplet's remote files and every command, calling neither
-`git`, `doctl` nor `ssh`. Every droplet runs Corten and axum + Maud (the anchors) beside its
-share of the other apps, dealt round-robin in catalog order, as an ordinary c-8 round of those
-apps (`run.mjs rN --part k/n`, into `results/rN/d<k>`). Each droplet gates its own apps, both
-sources and all twelve browser profiles, before its own load; the gate checks each app against
-the contract, not against Corten, so it needs no other droplet. A droplet whose gate fails
-fails the round, as one app's failure fails an unsplit round, though other droplets may already
-have measured.
+`git`, `doctl` nor `ssh`. A split splits the launch's group (`--group`, by default the
+scheduled one), never the whole inventory: every droplet runs Corten, the subject, beside its
+share of the group's other candidates, dealt round-robin in the group's order, so each candidate
+is on exactly one droplet and no other app is added (axum + Maud is no anchor; in a group that
+has it, it is one candidate like the rest). A group of n candidates besides Corten splits across
+at most n droplets. Each droplet is an ordinary c-8 round of its share (`run.mjs rN --group <g>
+--part k/n`, into `results/rN/d<k>`): it qualifies each of its candidates, Corten included,
+with the same feature contract as an unsplit round, keeps the raw qualification of each, and
+times only those it admits. Each droplet then gates its admitted candidates, both sources and all
+twelve browser profiles, before its own load; the gate checks each against the contract, not
+against Corten, so it needs no other droplet. A droplet must admit its Corten and at least one
+peer, as an unsplit round must: a droplet whose peers are all excluded compares nothing and
+fails its part, as does a droplet whose gate fails, so the round cannot merge, though other
+droplets may already have measured.
 
 The launcher checks the clean checkout, that no benchmark droplet exists and the account's
-droplet limit (`doctl account get`) once, then writes `split.json` (commit and each droplet's
-apps) and refuses another launch from that state directory.
+droplet limit (`doctl account get`) once, then writes `split.json` (commit, group and each
+droplet's candidates) and refuses another launch from that state directory.
 It creates every droplet before starting any round, so the rounds start within minutes of each
 other; each droplet has its own `d<k>/` state, known_hosts and evidence. Ctrl-C, SIGTERM or
 Ctrl-Break stops the launch between steps, and the
@@ -150,20 +163,25 @@ droplet's `d<k>/`). Exit 2 wins over 3: while one droplet runs, an error on anot
 printed `ssh` stop command, or clear the reported error), and run `--collect` again until it
 exits 0 or 1; never relaunch the round.
 
-The merged summary is a round of all twenty apps, each from the droplet that measured it, with
-each droplet's CPU model, tools and anchors in `split`. Its report gives every table a Droplet
-column and both anchors on every droplet, and each app's req/s and CPU us/request as a ratio to
-the Corten on its own droplet beside the raw numbers. Raw numbers across droplets carry any
-difference between their machines; compare apps on different droplets by those ratios. A
-Between droplets section lists each droplet's CPU and checks axum + Maud's ratio to Corten on
-each. A droplet's ratio range is the widest its passes allow: axum + Maud's lowest over Corten's
-highest to axum + Maud's highest over Corten's lowest. A stage is flagged ("d1 and d2 differ")
-when two droplets' ranges do not overlap, that is when one droplet's lowest ratio is above the
-other's highest. The anchors' rows in every table show how far their raw numbers differ between
-droplets. `compare.mjs` compares a split round only with one split the same way, each droplet's
+The merge accounts for every candidate of the group exactly once: Corten from each droplet, and
+each other candidate from the one droplet whose share it was, admitted and measured or excluded
+with its raw qualification and no runs. The parts must be exactly the group's split, so no
+subset of candidates can pass as a round. The merged summary is a v5 round of the group, with
+each droplet's candidates, CPU model, tools and Corten in `split`; the reader checks the split
+and each droplet's admission, and a whole round's check of the full group is unchanged. Its
+report's Feature Qualification table names each candidate's droplet, every table gets a Droplet
+column with Corten on every droplet, and each admitted candidate's req/s and CPU us/request is a
+ratio to the Corten on its own droplet beside the raw numbers. Ratios are to Corten only. Raw
+numbers across droplets carry any difference between their machines; compare candidates on
+different droplets by those ratios. A Between droplets section lists each droplet's CPU and
+candidates and Corten's own req/s and CPU us/request on each. A stage is flagged ("d1 and d2
+differ") when two droplets' Corten ranges do not overlap, that is when one droplet's lowest is
+above the other's highest: raw numbers on those droplets are then not like for like. With only
+Corten on every droplet, nothing checks that a ratio carries from one droplet's machine to
+another's. `compare.mjs` compares a split round only with one split the same way, each droplet's
 host and images equal to the baseline's same droplet, and Corten's rows are d1's. A droplet's CPU
 model is not chosen at create, so droplets can land on a mix (Xeon Platinum 8168 on d1 and 8280
-on d2, say). The round still merges and its report reads each app by its ratio to its own
+on d2, say). The round still merges and its report reads each candidate by its ratio to its own
 droplet's Corten. But `compare.mjs` refuses it, with no deltas, against any baseline whose
 same-numbered droplet had another model, including the same two models swapped. It does not fall
 back to comparing ratios: compare rounds with mixed droplets by their ratio columns by hand.
@@ -174,15 +192,19 @@ For local development, `wN` remains the development identity:
 npm ci
 node bench/marketplace/fixtures.mjs
 npm run check:marketplace
-node bench/marketplace/run.mjs w1 --build --check-only
+node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
-node bench/marketplace/run.mjs w2 --build --passes 3
+node bench/marketplace/run.mjs w2 --group production --build --passes 3
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
 
 Use a fresh `wN` each time: an existing result directory is never overwritten. `--apps` may
-select individual apps for development checks. A full publishable baseline needs all twenty
-apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
+select individual apps for development checks. A publishable group baseline needs raw
+qualification for every candidate, the full gate and three passes for every admitted app,
+and a qualified Corten plus at least one peer. `--group production-qualify` explicitly audits
+the full inventory. ETag and downstream readiness are disclosed exceptions to the reused
+production checklist; this uncached workload does not claim all enterprise features match.
+The read-only reporter rejects arbitrary subsets, check-only runs, dirty commits,
 missing profiles or passes, failed cleanup and aggregates that disagree with saved passes. A
 phase in which an app answered requests with anything but a 200 or timed out on them, or could
 not keep the fixed rate, is the app's result, not a failed run: it is saved with its failure
@@ -202,9 +224,9 @@ Still failures: a phase with no k6 summary or in which no request succeeded, a 2
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
 from the upstream to a record read. Results written
-this way are schema `marketplace-results/v4`. The reporter and `compare.mjs` also read a
-`marketplace-results/v3` summary, as v4 with no stop records (under v3 an app that stopped
-failed the round), so a v3 round compares with v4 rounds; any other schema is rejected.
+this way are schema `marketplace-results/v5`, with raw feature qualification for named groups.
+The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
+failed the round). Historical full-inventory results do not compare with qualified groups.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace
@@ -223,7 +245,7 @@ The gate checks all 500 JSON records and 264 page/interaction observations in tw
 responsive application, visible row counts, exact formatted text, escaped content, native
 forms, navigation, missing IDs and unsupported locales. HTTP probes change the record between
 requests and verify one upstream read, reserialization rather than forwarding, and errors.
-Every selected app must pass both sources before *any* app is timed. CI runs both the legacy
+Every admitted app must pass both sources before *any* app is timed. CI runs both the legacy
 catalog gate and this gate for each of the twenty apps.
 
 Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.

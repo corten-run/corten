@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
 import { allApps } from "../fullstack/apps.mjs";
 import { spread } from "../fullstack/passes.mjs";
-import { apps, locales } from "./contract.mjs";
+import { locales } from "./contract.mjs";
+import { groupApps } from "./groups.mjs";
 const labels = {
   nextjs: "Next.js 16.4 (Pages Router, React SSR)",
   phoenix: "Phoenix 1.8 (Elixir, controller + HEEx)",
@@ -18,12 +19,15 @@ export { phases, sources, targets } from "../catalog/contract.mjs";
 // v4: an app container that stops during a load phase is that app's recorded outcome
 // (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
 // than three passes, and each stage that lost a pass carries the stop (stageAggregate).
-export const resultSchema = "marketplace-results/v4";
+// v5 adds named candidate cohorts and raw feature qualification before timing.
+export const resultSchema = "marketplace-results/v5";
 // The schemas report.mjs and compare.mjs read. A v3 summary is read as a v4 one with no stop
 // records: under v3 an app that stopped failed the round, so a valid v3 round has none, and its
-// aggregates lack only the stopped field. Rounds are written as v4 only.
+// aggregates lack only the stopped field. New rounds are written as v5; groupless v4
+// evidence retains its original full-inventory interpretation.
 export const v3Schema = "marketplace-results/v3";
-export const readableSchemas = [v3Schema, resultSchema];
+export const v4Schema = "marketplace-results/v4";
+export const readableSchemas = [v3Schema, v4Schema, resultSchema];
 export const timedProfiles = sources.flatMap((source) => [
   ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },
@@ -35,26 +39,32 @@ export function roundIdentity(round) {
   assert.equal(round, `${round[0]}${number}`, "round identity must be canonical, with no whitespace or padding");
   return { kind: round[0] === "r" ? "official" : "development", number };
 }
-// A round split across droplets started together (#816): every droplet runs Corten, the subject,
-// and axum + Maud, the anchor, so each app has a Corten measured on its own machine, and the
-// anchor's ratio to Corten shows whether the droplets' machines differ by more than the noise.
-export const anchors = ["corten", "axum-maud"];
-// At most one non-anchor app per droplet.
-export const maxDroplets = apps.length - anchors.length;
+// A round split across droplets started together (#816) splits one named group (groups.mjs). Every
+// droplet runs Corten, the subject, so each candidate is compared with a Corten measured on its own
+// machine; the group's other candidates are dealt round-robin in the group's order, so each runs on
+// exactly one droplet. No other app is added: admission (feature-contract.mjs) decides, on each
+// droplet, which of its candidates are timed.
+export const splitSubject = "corten";
+// At most one candidate besides Corten per droplet.
+export const maxDroplets = (group) => groupApps(group).length - 1;
 /**
- * The apps each droplet of a round split n ways measures, in catalog order: both anchors on every
- * droplet, the other apps dealt round-robin in catalog order, so each app runs on exactly one.
- * @param {number} n droplets, 2 to maxDroplets
+ * The candidates each droplet of a group's round split n ways qualifies and, if admitted, measures:
+ * Corten on every droplet and each other candidate on exactly one, in the group's order.
+ * @param {string} group a named group from groups.mjs
+ * @param {number} n droplets, 2 to maxDroplets(group)
  * @returns {string[][]} one list per droplet, d1 first
  */
-export function splitApps(n) {
-  assert.ok(Number.isSafeInteger(n) && n >= 2 && n <= maxDroplets, `a round splits across 2 to ${maxDroplets} droplets`);
-  const shares = Array.from({ length: n }, () => new Set(anchors));
-  apps.filter((app) => !anchors.includes(app)).forEach((app, i) => shares[i % n].add(app));
-  return shares.map((share) => apps.filter((app) => share.has(app)));
+export function splitApps(group, n) {
+  assert.ok(group !== undefined, "a split round splits a named group; pass --group");
+  const candidates = groupApps(group), max = maxDroplets(group);
+  assert.ok(Number.isSafeInteger(n) && n >= 2 && n <= max, `group ${group} splits across 2 to ${max} droplets`);
+  const shares = Array.from({ length: n }, () => new Set([splitSubject]));
+  candidates.filter((app) => app !== splitSubject).forEach((app, i) => shares[i % n].add(app));
+  return shares.map((share) => candidates.filter((app) => share.has(app)));
 }
 /**
  * One droplet's part of a split round, from run.mjs --part k/n or saved state: {index: k, of: n}.
+ * splitApps checks n against the group.
  * @param {string | {index: number, of: number}} value
  */
 export function parsePart(value) {
@@ -64,7 +74,7 @@ export function parsePart(value) {
     return { index, of };
   })() : value;
   assert.deepEqual(Object.keys(part ?? {}).sort(), ["index", "of"], "a part is {index, of}");
-  splitApps(part.of);
+  assert.ok(Number.isSafeInteger(part.of) && part.of >= 2, "a split round has at least two droplets");
   assert.ok(Number.isSafeInteger(part.index) && part.index >= 1 && part.index <= part.of, `part ${part.index} of ${part.of} does not exist`);
   return { index: part.index, of: part.of };
 }
@@ -72,16 +82,29 @@ export function parsePart(value) {
 export const partName = (round, part) => (part ? `${round}-d${part.index}` : round);
 export function parseArgs(args, inventory) {
   const identity = roundIdentity(args[0]);
-  // --part k/n measures one droplet's share of a split round (#816); it sets the apps itself.
-  const at = args.indexOf("--part", 1);
-  const part = at === -1 ? null : parsePart(args[at + 1] ?? "");
-  const rest = at === -1 ? args.slice(1) : [...args.slice(1, at), ...args.slice(at + 2)];
-  assert.ok(!part || !rest.includes("--part"), "duplicate option --part");
-  assert.ok(!part || !rest.includes("--apps"), "--part sets the apps; do not also pass --apps");
+  const rest = args.slice(1), at = rest.indexOf("--group");
+  let group;
+  if (at !== -1) {
+    group = rest[at + 1]; groupApps(group);
+    assert.ok(group && rest.lastIndexOf("--group") === at, "--group requires one named group");
+    assert.ok(!rest.includes("--apps"), "--group cannot be combined with --apps");
+    rest.splice(at, 2);
+  }
+  // --part k/n measures one droplet's share of a split group round (#816); it sets the apps itself.
+  const pat = rest.indexOf("--part");
+  const part = pat === -1 ? null : parsePart(rest[pat + 1] ?? "");
+  if (part) {
+    rest.splice(pat, 2);
+    assert.ok(!rest.includes("--part"), "duplicate option --part");
+    assert.ok(group !== undefined, "--part splits a named group; pass --group");
+  }
   const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...rest], inventory);
-  if (part) options.apps = splitApps(part.of)[part.index - 1];
+  if (group !== undefined) {
+    options.group = group; options.apps = part ? splitApps(group, part.of)[part.index - 1] : groupApps(group);
+    assert.ok(options.apps.every((a) => Object.hasOwn(inventory, a)), "group adapter missing from inventory");
+  }
   if (identity.kind === "official") {
-    if (!part) assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all twenty apps; use wN for development");
+    assert.deepEqual([...options.apps].sort(), (part ? splitApps(group, part.of)[part.index - 1] : groupApps(group)).sort(), "official rounds require the complete named group, or with --part its share; use wN for development");
     assert.equal(options.passes, 3, "official rounds require three passes");
     assert.equal(options.checkOnly, false, "use wN for check-only development");
   }

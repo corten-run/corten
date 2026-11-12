@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { groupApps, scheduledGroup } from "./groups.mjs";
 import { parsePart, partName, splitApps } from "./run-contract.mjs";
 
 export const nightly = Object.freeze({ passes: 3, duration: 15, warmup: 10, rate: 150 });
@@ -13,19 +14,23 @@ export function parseDropletArgs(args) {
     const flag = args[i];
     assert.ok(!seen.has(flag), `duplicate ${flag}`); seen.add(flag);
     if (["--collect", "--detach", "--plan"].includes(flag)) options[flag.slice(2)] = true;
-    else if (["--ssh-key", "--state-dir"].includes(flag)) {
+    else if (["--ssh-key", "--state-dir", "--group"].includes(flag)) {
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${flag} needs a value`);
-      options[flag === "--ssh-key" ? "sshKey" : "stateDir"] = value;
+      options[flag === "--ssh-key" ? "sshKey" : flag === "--group" ? "group" : "stateDir"] = value;
     } else if (flag === "--droplets") {
       // A round split across n droplets started together (#816); 1 is the whole round on one.
       const value = args[++i]; assert.match(value ?? "", /^[1-9]\d*$/, "--droplets needs a count");
-      if (Number(value) > 1) { splitApps(Number(value)); options.droplets = Number(value); }
+      if (Number(value) > 1) options.droplets = Number(value);
     } else throw new Error(`unknown option ${flag}`);
   }
   assert.ok(options.stateDir, "--state-dir is required (durable launcher state, outside the checkout)");
   assert.ok(options.collect ? !options.detach && !options.plan : options.detach || options.plan, "use --detach to launch, or --collect");
   assert.ok(!(options.collect && seen.has("--droplets")), "--collect reads the split from the state directory's split.json; omit --droplets");
   assert.ok(options.collect || /^\d+$/.test(options.sshKey ?? ""), "--ssh-key needs a DigitalOcean key id");
+  assert.ok(!options.collect || options.group === undefined, "collection uses the reserved group, never a new selection");
+  if (!options.collect) { options.group ??= scheduledGroup(options.round); groupApps(options.group); }
+  // A split deals the group's candidates: at most one besides Corten per droplet.
+  if (options.droplets) splitApps(options.group, options.droplets);
   return options;
 }
 export function validateState(s, round) {
@@ -37,6 +42,10 @@ export function validateState(s, round) {
   assert.match(s.tag, /^corten-marketplace-run-[a-f0-9]{16}$/);
   assert.match(s.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(s.options, nightly);
+  assert.ok(!part || s.group !== undefined, "a part of a split round splits a named group");
+  if (s.group !== undefined) {
+    assert.deepEqual(s.apps, part ? splitApps(s.group, part.of)[part.index - 1] : groupApps(s.group), "reserved group membership changed");
+  } else assert.equal(s.apps, undefined, "legacy reservations have no group selection");
   if (s.id !== undefined) assert.match(s.id, /^\d+$/);
   if (s.ip !== undefined) assert.match(s.ip, /^\d{1,3}(?:\.\d{1,3}){3}$/);
   return s;
@@ -105,11 +114,11 @@ test "$(nproc)" -ge 8
 timeout 900 npm ci --no-audit --no-fund
 node bench/marketplace/fixtures.mjs
 export MARKETPLACE_APP_CPUS=1 MARKETPLACE_API_CPUS=2-3 MARKETPLACE_LOAD_CPUS=4-7
-node bench/marketplace/run.mjs ${s.round}${part} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}
+node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}${s.group === undefined ? "" : ` --group ${s.group}`}${part}
 node bench/marketplace/report.mjs ${results.slice("repo/".length)}/summary.json > /bench/report.md
 `;
   const unit = `[Unit]
-Description=Localized marketplace ${s.part ? `${s.round} d${s.part.index} of ${s.part.of}, ${splitApps(s.part.of)[s.part.index - 1].length} apps` : `${s.round}, twenty apps`}, three passes
+Description=Localized marketplace ${s.round}${s.part ? ` d${s.part.index} of ${s.part.of}` : ""}, ${s.group ?? "full"} group, three passes
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -126,22 +135,23 @@ KillMode=control-group
 
 /**
  * A split round's plan (#816), split.json in the launcher's state directory, written once before
- * any droplet: the measured commit, decided once for every droplet, and each droplet's name and
- * apps. Each droplet's launcher state is d<k>/state.json beside it.
+ * any droplet: the measured commit, decided once for every droplet, the named group it splits, and
+ * each droplet's name and candidates (splitApps). Each droplet's launcher state is d<k>/state.json
+ * beside it.
  */
 export function validatePlan(plan, round) {
   officialRound(round);
-  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "options", "parts", "round", "workload"], "unexpected split plan fields");
+  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "group", "options", "parts", "round", "workload"], "unexpected split plan fields");
   assert.equal(plan.workload, "marketplace-v2"); assert.equal(plan.round, round);
   assert.match(plan.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(plan.options, nightly);
-  const shares = splitApps(plan.droplets);
-  assert.deepEqual(plan.parts, shares.map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })), "split plan parts are not the split of the apps");
+  const shares = splitApps(plan.group, plan.droplets);
+  assert.deepEqual(plan.parts, shares.map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })), "split plan parts are not the split of the group's candidates");
   return plan;
 }
-export function splitPlan(round, droplets, commit, createdAt = new Date().toISOString()) {
-  return validatePlan({ workload: "marketplace-v2", round, droplets, commit, createdAt, options: nightly,
-    parts: splitApps(droplets).map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })) }, round);
+export function splitPlan(round, group, droplets, commit, createdAt = new Date().toISOString()) {
+  return validatePlan({ workload: "marketplace-v2", round, group, droplets, commit, createdAt, options: nightly,
+    parts: splitApps(group, droplets).map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })) }, round);
 }
 /**
  * The exit code of a split round's collection from each droplet's (#816). Each is a collect()
