@@ -477,6 +477,10 @@ function resolve(arg, el, event, binding) {
   switch (arg.kind) {
     case "v":
       return arg.value;
+    case "d": {
+      const block = document.getElementById(arg.id);
+      return block ? JSON.parse(block.textContent ?? "null") : undefined;
+    }
     case "%":
       return message(arg.parts);
     case "f":

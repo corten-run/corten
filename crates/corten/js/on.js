@@ -93,6 +93,7 @@ function parseArg(text) {
     });
     return { kind: "{", fields };
   }
+  if (c === "&") return { kind: "d", id: text.slice(1) };
   if (c === "%") return text[1] === "[" ? { kind: "%", parts: JSON.parse(text.slice(1)) } : { kind: "f", spec: JSON.parse(text.slice(1)) };
   return { kind: "v", value: JSON.parse(text) };
 }
