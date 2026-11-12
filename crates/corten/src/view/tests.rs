@@ -138,12 +138,15 @@ fn void_elements_doctype_fragments_and_raw_text() {
         <!DOCTYPE html>
         <>
             <br>
-            <img src="/a.png" alt="" />
+            <img src="https://cdn.example/a.png" alt="" />
             <div />
             <style>"a > b { color: red }"</style>
         </>
     };
-    assert_eq!(view.to_html(), r#"<!DOCTYPE html><br><img src="/a.png" alt=""><div></div><style>a > b { color: red }</style>"#);
+    assert_eq!(
+        view.to_html(),
+        r#"<!DOCTYPE html><br><img src="https://cdn.example/a.png" alt=""><div></div><style>a > b { color: red }</style>"#
+    );
 }
 
 #[component]
@@ -370,8 +373,8 @@ fn a_view_renders_once() {
 #[test]
 fn tuples_print_their_parts() {
     let id = "a&b";
-    let view = html! { <a href={("/items/", id, "?x=", 1)}>{("#", 2)}</a> };
-    assert_eq!(view.to_html(), r#"<a href="/items/a&amp;b?x=1">#2</a>"#);
+    let view = html! { <a title={("Item ", id, " of ", 1)}>{("#", 2)}</a> };
+    assert_eq!(view.to_html(), r#"<a title="Item a&amp;b of 1">#2</a>"#);
 }
 
 #[test]

@@ -750,6 +750,145 @@ fn checks_href(name: &str, attrs: &[Attr]) -> bool {
     name == "a" && label_of(attrs).is_some() && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if named(n)))
 }
 
+/// Attributes whose value is a URL a browser loads or goes to.
+const URL_ATTRS: &[&str] =
+    &["href", "xlink:href", "src", "srcset", "imagesrcset", "poster", "action", "formaction", "data", "ping"];
+
+/// The URL in `value`, the text of the attribute `name` (lowercase), that is a path in this app
+/// (`is_local_path`). `srcset` and `imagesrcset` hold a list of candidates and `ping` a list of
+/// URLs, and each URL in them is read. A link is a route and a static file its constant, so a path
+/// written as text is refused (`refused_path`).
+fn local_path<'a>(name: &str, value: &'a str) -> Option<&'a str> {
+    match name {
+        "srcset" | "imagesrcset" => srcset_urls(value).into_iter().find(|url| is_local_path(url)),
+        "ping" => value.split_ascii_whitespace().find(|url| is_local_path(url)),
+        _ if URL_ATTRS.contains(&name) => is_local_path(value).then_some(value),
+        _ => None,
+    }
+}
+
+/// `url` as a browser reads it: without the spaces and control characters it drops at either end,
+/// or the tabs and newlines it drops anywhere.
+fn as_read(url: &str) -> String {
+    url.trim_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect()
+}
+
+/// What follows `http:` or `https:` (in any case) at the start of `url`.
+fn after_web_scheme(url: &str) -> Option<&str> {
+    ["http:", "https:"].into_iter().find_map(|scheme| {
+        url.get(..scheme.len()).filter(|start| start.eq_ignore_ascii_case(scheme)).map(|_| &url[scheme.len()..])
+    })
+}
+
+/// Whether `url` is a path in this app as a browser reads it (`as_read`): it starts with one `/`
+/// or `\` (which a browser reads as `/`), not two, which name another host. So is `http:` or
+/// `https:` without the two slashes of a host (`https:/items`, `https:items`): on a page of that
+/// scheme a browser reads it as `/items` or `items`. A fragment, another URL with a scheme and a
+/// relative path are not.
+fn is_local_path(url: &str) -> bool {
+    let url = as_read(url);
+    let slashes = |s: &str| s.chars().take(2).take_while(|c| matches!(c, '/' | '\\')).count();
+    match after_web_scheme(&url) {
+        Some(rest) => slashes(rest) < 2,
+        None => slashes(&url) == 1,
+    }
+}
+
+/// The URLs of a `srcset`, split as the HTML standard splits it: a candidate is a URL (the text up
+/// to a space, less its trailing commas) and its descriptors, up to the next comma outside
+/// parentheses, which do not nest (the first `)` closes them). A comma inside a URL
+/// (`data:image/jpeg;base64,/9j/..`) does not split it.
+fn srcset_urls(value: &str) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let mut rest = value;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
+        if rest.is_empty() {
+            return urls;
+        }
+        let end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(',');
+        urls.push(url);
+        let ended = url.len() < end;
+        rest = &rest[end..];
+        if ended {
+            // A comma after the URL ends the candidate: it has no descriptors.
+            continue;
+        }
+        let mut in_parens = false;
+        let cut = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                match c {
+                    '(' => in_parens = true,
+                    ')' => in_parens = false,
+                    ',' if !in_parens => return true,
+                    _ => {}
+                }
+                false
+            })
+            .map_or(rest.len(), |(at, _)| at);
+        rest = &rest[cut..];
+    }
+}
+
+/// The error for `url`, a path in this app written as text in the URL attribute `name` (as
+/// written; its case does not change the advice): it names the typed forms that replace it, as that
+/// attribute writes them (a list keeps its descriptors or spaces, a fragment stays after a static
+/// file), and the explicit opt-out for a path the app does not route, a `Local`, which keeps a
+/// fragment.
+fn refused_path(name: &str, url: &str) -> String {
+    let read = as_read(url);
+    let what = if after_web_scheme(&read).is_some() {
+        "has a scheme but no host (no //): on a page of that scheme a browser reads it as a path in this app, and on a page of the other scheme as a host named by its first segment"
+    } else {
+        "is a path in this app written as text"
+    };
+    let lower = name.to_ascii_lowercase();
+    let list = matches!(lower.as_str(), "srcset" | "imagesrcset" | "ping");
+    let fragment = read.split_once('#').map(|(_, fragment)| fragment);
+    let fix = match (lower.as_str(), fragment) {
+        ("srcset" | "imagesrcset", _) => format!(
+            "Name each file by its constant in a tuple that keeps the descriptors, {name}={{(req.asset(Static::PHOTO_PNG), \" 1x, \", req.asset(Static::PHOTO_2X_PNG), \" 2x\")}}"
+        ),
+        ("ping", _) => format!(
+            "Name each URL by its #[derive(Route)] struct in a tuple that keeps the spaces, {name}={{(url::Seen.href(), \" \", url::Read.href())}}"
+        ),
+        (_, Some(fragment)) => format!(
+            "A place on a page of the app is its #[derive(Route)] struct's, {name}={{url::Items.at(Id)}}, and a static file with a fragment is its constant and the fragment, {name}={{(req.asset(Static::SPRITE_SVG), \"#{fragment}\")}}"
+        ),
+        _ => format!(
+            "Link to a #[derive(Route)] struct, {name}={{url::Items}} (url::Item {{ id }} for one with parameters, url::Items.at(Id) for a place on a page), or name a static file by its constant, {name}={{req.asset(Static::LOGO_SVG)}}"
+        ),
+    };
+    let example = match fragment {
+        Some(fragment) => format!("/proxy/page#{fragment}"),
+        None => "/oauth2/sign_out".to_string(),
+    };
+    let unrouted = if list {
+        "the text of a corten::Local in the tuple, Local::parse(\"/cdn-cgi/image/photo.png\").expect(\"a path on this site\").to_string()".to_string()
+    } else {
+        format!("a corten::Local, {name}={{corten::Local::parse(\"{example}\").expect(\"a path on this site\")}}, which keeps a query and #fragment")
+    };
+    format!(
+        "{name}: \"{url}\" {what}, which nothing checks. {fix}. Only a path on this origin that the app does not route (another service behind the same proxy) may be written out, and then as an explicit opt-out the compiler takes on trust: {unrouted}. A URL outside the app is written whole (https://..)"
+    )
+}
+
+/// The text of a value in braces that is one string literal, `href={"/items"}`, which the macro
+/// sees as it sees `href="/items"`: `value` gives it in parentheses.
+fn braced_text(expr: &TokenStream) -> Option<String> {
+    let mut outer = expr.clone().into_iter();
+    let (Some(TokenTree::Group(group)), None) = (outer.next(), outer.next()) else {
+        return None;
+    };
+    let mut inner = group.stream().into_iter();
+    match (inner.next(), inner.next()) {
+        (Some(TokenTree::Literal(lit)), None) => string_value(&lit),
+        _ => None,
+    }
+}
+
 /// `tokens` with every span, inside groups too, located at `at`, so an error in them points
 /// there; their names still resolve where the macro expands (a `macro_rules!` around `html!`).
 fn respan(tokens: TokenStream, at: Span) -> TokenStream {
@@ -1118,9 +1257,20 @@ impl Cursor {
                     }
                     if is_punct(self.peek(), '=') {
                         self.next();
+                        let value_span = self.span();
                         match self.value(false)? {
-                            (Some(text), _) => attrs.push(Attr::Static(name, text)),
+                            (Some(text), _) => {
+                                if let Some(path) = local_path(&lower, &text) {
+                                    return err(value_span, refused_path(&name, path));
+                                }
+                                attrs.push(Attr::Static(name, text))
+                            }
                             (None, expr) => {
+                                if let Some(text) = braced_text(&expr) {
+                                    if let Some(path) = local_path(&lower, &text) {
+                                        return err(value_span, refused_path(&name, path));
+                                    }
+                                }
                                 // One `data-vars` per element: a browser keeps the first of two.
                                 if name == "style" && attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "style")) {
                                     return err(
@@ -2158,4 +2308,119 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{local_path, refused_path};
+
+    #[test]
+    fn a_path_in_the_app_is_found_in_each_url_attribute() {
+        for (name, value, path) in [
+            ("href", "/items", "/items"),
+            ("href", "/", "/"),
+            ("href", "/items?tab=offers#review", "/items?tab=offers#review"),
+            ("action", " /watch ", " /watch "),
+            ("formaction", "/unwatch", "/unwatch"),
+            ("href", "\\items", "\\items"),
+            ("href", "\t/items", "\t/items"),
+            ("src", "/logo.svg", "/logo.svg"),
+            ("poster", "/clip.jpg", "/clip.jpg"),
+            ("data", "/doc.pdf", "/doc.pdf"),
+            ("xlink:href", "/sprite.svg#arrow", "/sprite.svg#arrow"),
+            ("srcset", "a.png 1x, /b.png 2x", "/b.png"),
+            ("srcset", "/a.png, https://cdn.example/b.png 2x", "/a.png"),
+            ("srcset", "https://cdn.example/a.png 1x,/b.png 2x", "/b.png"),
+            ("srcset", "https://cdn.example/a.png 100w,/b.png 200w", "/b.png"),
+            ("imagesrcset", "https://cdn.example/a.png 1x, /b.png 2x", "/b.png"),
+            ("ping", "https://stats.example/p /track", "/track"),
+            // A scheme without the two slashes of a host: a path or a relative path on its page.
+            ("href", "https:/items", "https:/items"),
+            ("href", "HTTPS:items", "HTTPS:items"),
+            ("action", " http:/watch", " http:/watch"),
+            ("href", "https:\\items", "https:\\items"),
+            ("srcset", "https:/a.png 1x", "https:/a.png"),
+            // Parentheses do not nest: the first `)` closes them, so the comma after it splits.
+            ("srcset", "https://cdn.example/a.png 1x (a (b) c), /b.png 2x", "/b.png"),
+        ] {
+            assert_eq!(local_path(name, value), Some(path), "{name}={value:?}");
+        }
+    }
+
+    #[test]
+    fn other_urls_and_other_attributes_are_not_paths_in_the_app() {
+        for (name, value) in [
+            ("href", "#top"),
+            ("href", "https://example.com"),
+            ("href", "mailto:help@example.com"),
+            ("href", "tel:+15550100"),
+            ("href", "//cdn.example/a.png"),
+            ("href", "/\\evil.example"),
+            ("href", "\\\\evil.example"),
+            ("href", "/\t/evil.example"),
+            ("href", "items/7"),
+            ("href", "?page=2"),
+            ("href", ""),
+            ("src", "data:image/png;base64,iVBORw0KGgo="),
+            ("srcset", "data:image/jpeg;base64,/9j/4AAQ 1x, https://cdn.example/b.png 2x"),
+            // One URL: a comma splits candidates only after a space or at the URL's end.
+            ("srcset", "https://cdn.example/a.png,/b.png 2x"),
+            ("srcset", "a.png 1x, b.png 2x"),
+            ("ping", "https://stats.example/p https://stats.example/q"),
+            ("title", "/items"),
+            ("data-path", "/items"),
+            ("content", "0; url=/items"),
+            ("href", "https:\\\\evil.example"),
+            ("href", "https:/\\evil.example"),
+            ("href", "HTTP://example.com"),
+            ("href", "httpx:/items"),
+            ("href", "ftp:/items"),
+        ] {
+            assert_eq!(local_path(name, value), None, "{name}={value:?}");
+        }
+    }
+
+    #[test]
+    fn the_error_names_the_form_the_attribute_takes() {
+        let error = refused_path("href", "/items");
+        assert!(error.starts_with("href: \"/items\" is a path in this app written as text"), "{error}");
+        assert!(error.contains("href={url::Items}"), "{error}");
+        assert!(error.contains("href={corten::Local::parse(\"/oauth2/sign_out\").expect(\"a path on this site\")}"), "{error}");
+
+        let error = refused_path("xlink:href", "/sprite.svg#arrow");
+        assert!(error.contains("xlink:href={(req.asset(Static::SPRITE_SVG), \"#arrow\")}"), "{error}");
+        assert!(error.contains("xlink:href={url::Items.at(Id)}"), "{error}");
+        // An unrouted path with a fragment is steered to a form that keeps it.
+        assert!(error.contains("Local::parse(\"/proxy/page#arrow\")"), "{error}");
+        assert!(!error.contains("Uri"), "{error}");
+
+        let error = refused_path("srcset", "/b.png");
+        assert!(error.contains("srcset={(req.asset(Static::PHOTO_PNG), \" 1x, \""), "{error}");
+        assert!(error.contains(".to_string()"), "{error}");
+
+        let error = refused_path("ping", "/seen");
+        assert!(error.contains("ping={(url::Seen.href(), \" \", url::Read.href())}"), "{error}");
+
+        let error = refused_path("href", "https:/items");
+        assert!(error.contains("has a scheme but no host"), "{error}");
+        assert!(error.contains("on a page of the other scheme as a host"), "{error}");
+    }
+
+    #[test]
+    fn the_advice_follows_the_attribute_whatever_its_case_and_names_it_as_written() {
+        let error = refused_path("SRCSET", "/b.png");
+        assert!(error.starts_with("SRCSET: "), "{error}");
+        assert!(error.contains("SRCSET={(req.asset(Static::PHOTO_PNG), \" 1x, \""), "{error}");
+        assert!(error.contains("the text of a corten::Local in the tuple"), "{error}");
+
+        let error = refused_path("PING", "/seen");
+        assert!(error.contains("PING={(url::Seen.href(), \" \", url::Read.href())}"), "{error}");
+
+        let error = refused_path("HREF", "/items");
+        assert!(error.contains("HREF={url::Items}"), "{error}");
+        assert_eq!(
+            refused_path("ImageSrcSet", "/b.png").replace("ImageSrcSet", "imagesrcset"),
+            refused_path("imagesrcset", "/b.png")
+        );
+    }
 }
