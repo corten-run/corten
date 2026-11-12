@@ -25,7 +25,7 @@ const SCRIPTED: [(&str, &str, &str, &str); 6] = [
 ];
 
 /// The components with no script: a Rust function, and a stylesheet where they have one.
-const PLAIN: [&str; 17] = [
+const PLAIN: [&str; 18] = [
     "Layout",
     "Shared",
     "Bar",
@@ -41,6 +41,7 @@ const PLAIN: [&str; 17] = [
     "Press",
     "Steel",
     "Readout",
+    "Host",
     "Certificate",
     "After",
 ];
@@ -72,7 +73,7 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                 if here.bare {
                     <p class={State}>"Scripts: blocked"</p>
                     <p class={Told}>
-                        "This page came with a policy that forbids every script, and your browser is enforcing it. Every word and number is still here. The plate behind the page is flat and the live numbers do not move."
+                        "This page came with a policy that forbids every script, and your browser is enforcing it. The plate behind the page is flat and the live numbers do not move. The links and forms still work."
                     </p>
                     <a href={here.scripts(true).at(SurfaceId)} class={Throw}>"Let the scripts run"</a>
                 } else {
@@ -120,7 +121,7 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     "A component is a Rust function, and one with no script sends no JavaScript. Behavior is a function in a file beside its component, called from the markup by name and served as written, less its comments."
                 </p>
                 <p>
-                    "Under them is Corten's runtime, 14.5 KB gzipped, which swaps pages, patches forms and holds live streams. It keeps no virtual DOM: nothing runs for an element until an event reaches it."
+                    "Under those functions is Corten's runtime, 14.5 KB gzipped, which swaps pages, patches forms and holds live streams. It keeps no virtual DOM, and nothing runs for an element until an event reaches it."
                 </p>
                 <Built on={&["ES modules", "Import maps", "JSDoc types, checked by TypeScript"][..]} />
             </div>

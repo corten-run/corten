@@ -393,19 +393,14 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
                             {*held}
                         </p>
                     }
-                    if n == 0 {
-                        <p class={Note}>
-                            "The one exception is " <code class={(Tied, Loose)}>"data-reading"</code>
-                            ": the markup writes it and the script reads it back as text, so a misspelling in either file still compiles, and the wall stops sorting."
-                        </p>
-                    }
                 </section>
             }
             <details ref={whole} class={Whole}>
                 <summary class={All}>"Read the Wall function and its two files in full: " {all} " lines"</summary>
                 <p class={Rest}>
-                    "Every name the files share is marked here: the twelve heat classes too, and the unchecked "
-                    <code class={(Tied, Loose)}>"data-reading"</code> "."
+                    "Every name the files share is marked here: the twelve heat classes too, and the one name nothing checks, "
+                    <code class={(Tied, Loose)}>"data-reading"</code>
+                    ". The markup writes it and the script reads it back as text, so a misspelling in either file still compiles, and the wall stops sorting."
                 </p>
                 <div class={Files}>
                     for file in FILES.iter() {

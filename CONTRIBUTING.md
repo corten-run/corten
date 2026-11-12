@@ -59,8 +59,9 @@ the framework itself.
 ## Checks
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
-PowerShell from the repository root; in another shell use `$PWD` for `${PWD}` and
-`checkout=$(basename "$PWD")` for the first line).
+PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
+`checkout=$(basename "$PWD")` for the first line, and `SITE_HELD=1` before the command that
+follows the line setting it).
 
 Each checkout builds into its own volumes, named after its folder (`corten-target-<folder>`,
 `corten-msrv-target-<folder>`), so two checkouts or worktrees never share one: every checkout is
@@ -103,7 +104,9 @@ docker run -d --name corten-site -p 18488:8080 corten-site
 node examples/corten-site/smoke.mjs http://localhost:18488
 docker rm -f corten-site
 docker run -d --name corten-site --cpus 1 --memory 512m -p 18488:8080 corten-site
-SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+$env:SITE_HELD = "1"
+node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+Remove-Item Env:SITE_HELD
 docker rm -f corten-site
 docker build -f examples/seller-desk/Dockerfile -t corten-seller-desk .
 docker run -d --name corten-seller-desk -p 18484:8080 corten-seller-desk

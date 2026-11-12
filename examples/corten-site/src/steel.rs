@@ -41,7 +41,7 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
             <div class={Slab {}}>
                 <h3>"Live data is patches"</h3>
                 <p>
-                    "These are this server's readings, streamed as HTML. The runtime swaps each in by its id, with no script of this page's own. The page it times is this one, 1,000 wall tiles in each render: heavier than the item page the certificate measures."
+                    "These are this server's readings, streamed as HTML. The runtime swaps each in by its id, with no script of this page's own. The page timed is this one, 1,000 wall tiles in each render: heavier than the item page the certificate measures."
                 </p>
                 <p>
                     "Open this page in a second tab and the count of pages following goes up in both. Close it and the stream's signal aborts on the server, and the count comes back down. A stream carries a cursor, so a reconnect resumes where it left off."
@@ -49,13 +49,9 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                 if machine.metered {
                     <p>
                         if machine.held() {
-                            "The last two readings are counted by the operating system each second: the CPU and memory in use, of the machine or of the limit this server's container is held to, as each label says."
+                            "The last two readings are counted by the operating system each second: the CPU and memory in use, of the machine or of the limit this server is held to, as each says."
                         } else {
                             "The last two readings are the whole machine's, counted by its operating system each second: the CPU and memory in use by everything on it."
-                        }
-                        // Not where the server is kept to some of the CPUs the count is of.
-                        if machine.counts_its_cpus() {
-                            " If the server is falling behind, they say so before the page does."
                         }
                     </p>
                 }
@@ -72,7 +68,7 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                     ", and these come with it, except where a note says otherwise."
                 </p>
                 <p>
-                    "Asked for JSON, the same address answers with this page's data, so a native screen or an agent reads what a person sees. Agents can also be given an app's actions as Model Context Protocol tools."
+                    "Asked for JSON, the same address answers with this page's data, so a native screen or an agent reads what a person sees. Behind the agent feature, agents can also be given an app's actions as Model Context Protocol tools."
                 </p>
                 <p>
                     "Not in a header: a form another site posts is refused before its handler runs, "
@@ -99,25 +95,35 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                     <code>"static/"</code> " ships inside the binary."
                 </p>
                 if machine.memory_bytes > 0 {
-                    <p>
-                        "The machine serving you this has " {machine.cpus}
-                        if machine.cpus == 1 {
-                            " CPU"
-                        } else {
-                            " CPUs"
-                        }
-                        " and " {megabytes(machine.memory_bytes)} " MiB of memory, by its own count"
-                        for named in machine.named.iter() {
-                            ": " {named.as_str()}
-                        }
-                        "."
-                        if machine.counts_its_cpus() {
-                            " The readings above say how much of each is in use."
-                        }
-                    </p>
+                    <Host machine={machine} />
                 }
             </div>
         </div>
+    }
+}
+
+/// What the server has to work with, by the system's count, and what whoever runs it calls it:
+/// the machine, or the limits its control group holds it to, which a container sets, or a unit.
+/// It points at the gauges only where they are of the CPUs the server may use.
+#[component]
+fn Host<'a>(machine: &'a Machine) -> impl Render {
+    let count = machine.cpu_limit.map_or_else(|| cpus(machine.cpus as f64), cpus);
+    html! {
+        <p>
+            if machine.held() {
+                "This server is held to "
+            } else {
+                "The machine serving you this has "
+            }
+            {count.as_str()} " and " {megabytes(machine.memory_bytes)} " MiB of memory, by the system's count"
+            for named in machine.named.iter() {
+                ": " {named.as_str()}
+            }
+            "."
+            if machine.counts_its_cpus() {
+                " The readings above say how much of each is in use."
+            }
+        </p>
     }
 }
 
@@ -159,7 +165,7 @@ pub struct CpuUsedId;
 #[derive(Id)]
 pub struct MemoryUsedId;
 
-/// A container's limit as a count of CPUs, as text, to the hundredth and never none: `1 CPU`,
+/// A limit as a count of CPUs, as text, to the hundredth and never none: `1 CPU`,
 /// `0.5 CPU`, `1.5 CPUs`.
 fn cpus(limit: f64) -> String {
     let hundredths = ((limit * 100.0).round() as u64).max(1);
@@ -171,8 +177,8 @@ fn cpus(limit: f64) -> String {
 /// The server's readings. Drawn by the page, then by every fragment `/live/works` streams; a
 /// number that moved since the last reading is drawn hot, and cools. The last two say how much
 /// is in use of what the server has to work with, each with a meter, and are drawn where the
-/// system counts both (`Machine::metered`): the machine's, or, where a container holds the
-/// server to a limit, what is in use of that limit, and each label says which. A figure is
+/// system counts both (`Machine::metered`): the machine's, or, where its control group holds the
+/// server to a limit, what is in use of that limit, and each gauge says which. A figure is
 /// sized to its gauge by how much it holds, so a count in the millions fits a third of a row.
 #[component(css)]
 pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
@@ -233,7 +239,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                 <div class={(Gauge, Wide)}>
                     <dt id={CpuUsedId}>
                         if machine.cpu_limit.is_some() {
-                            "CPU this container is using"
+                            "CPU in use"
                         } else {
                             "CPU this machine is using"
                         }
@@ -250,7 +256,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                         None => <dd class={(Figure, Long)}>"counting"</dd>,
                     }
                     match machine.cpu_limit {
-                        Some(limit) => <dd class={Note}>"of the " {cpus(limit)} " it is held to"</dd>,
+                        Some(limit) => <dd class={Note}>"of the " {cpus(limit)} " this server is held to"</dd>,
                         None => {
                             for own in used.cpu_own.iter() {
                                 <dd class={Note}>"this server: " {own} "%"</dd>
@@ -261,7 +267,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                 <div class={(Gauge, Wide)}>
                     <dt id={MemoryUsedId}>
                         if machine.memory_limited {
-                            "Memory this container is using"
+                            "Memory in use"
                         } else {
                             "Memory this machine is using"
                         }
@@ -294,7 +300,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                         {megabytes(machine.memory_bytes)}
                         " MiB"
                         if machine.memory_limited {
-                            " it is held to"
+                            " this server is held to"
                         }
                     </dd>
                 </div>
@@ -392,13 +398,13 @@ mod tests {
         Readout { pulse: &pulse, machine }.to_html()
     }
 
-    /// A machine the system counts for, with the limits a container sets on it.
+    /// A machine the system counts for, with the limits a control group sets on it.
     fn metered(memory_max: Option<&str>, cpu_max: Option<&str>) -> Machine {
         Machine { metered: true, ..Machine::counted(1, MEMINFO, memory_max, cpu_max) }
     }
 
     /// The last two gauges are drawn where the system counts, each with a meter of how much is in
-    /// use, and say whose count they are: the machine's, with this server's part, or a container's.
+    /// use, and say whose count they are: the machine's, with this server's part, or of a limit.
     #[test]
     fn the_last_two_gauges_say_how_much_is_in_use_and_of_what() {
         use crate::works::Used;
@@ -411,14 +417,18 @@ mod tests {
         assert!(whole.contains(r#"aria-valuetext="200.0 of 457.4 MiB" min="0" max="100" high="80" value="44""#), "{whole}");
         assert!(whole.contains("this server: 31%") && whole.contains(">of 457.4 MiB<"), "{whole}");
         assert!(!whole.contains("container") && !whole.contains("held to"), "{whole}");
-        // Held to half a CPU and 256 MiB: both counts are the container's, and say so.
+        // Held to half a CPU and 256 MiB: both counts are of the limit, and say so.
         let held = draw(&metered(Some("268435456\n"), Some("50000 100000\n")), used(Some(85), None, 250 << 20));
-        assert!(held.contains("CPU this container is using") && held.contains("Memory this container is using"), "{held}");
-        assert!(held.contains(">of the 0.5 CPU it is held to<") && held.contains(">of the 256.0 MiB it is held to<"), "{held}");
+        assert!(held.contains(">CPU in use</dt>") && held.contains(">Memory in use</dt>"), "{held}");
+        assert!(
+            held.contains(">of the 0.5 CPU this server is held to<")
+                && held.contains(">of the 256.0 MiB this server is held to<"),
+            "{held}"
+        );
         assert!(held.contains(r#"value="85""#) && held.contains(r#"value="98""#) && !held.contains("this machine"), "{held}");
         // One limit alone changes its own gauge and leaves the other the machine's.
         let memory = draw(&metered(Some("268435456\n"), None), used(Some(41), Some(31), 200 << 20));
-        assert!(memory.contains("CPU this machine is using") && memory.contains("Memory this container is using"), "{memory}");
+        assert!(memory.contains("CPU this machine is using") && memory.contains(">Memory in use</dt>"), "{memory}");
         // The first reading has no CPU yet, and says it is counting; nothing is drawn empty.
         let first = draw(&metered(None, None), used(None, None, 200 << 20));
         assert!(
@@ -430,7 +440,29 @@ mod tests {
         }
         // Where the system does not count, neither gauge is drawn, whatever a reading holds.
         let none = draw(&Machine::counted(1, MEMINFO, None, None), used(Some(41), Some(31), 200 << 20));
-        assert!(!none.contains("is using") && !none.contains("<meter"), "{none}");
+        assert!(!none.contains("is using") && !none.contains("in use") && !none.contains("<meter"), "{none}");
+    }
+
+    /// The page says what the server has to work with as what it is: a machine's, or a limit it
+    /// is held to, which is not a container's alone. It points at the gauges only where they
+    /// are of the CPUs the server may use.
+    #[test]
+    fn the_host_is_said_as_a_machine_or_as_a_limit() {
+        let host = |machine: &Machine| Host { machine }.to_html().replace("&#39;", "'");
+        let whole = Machine { stat_cpus: 1, ..metered(None, None) };
+        assert_eq!(
+            host(&whole),
+            "<p>The machine serving you this has 1 CPU and 457.4 MiB of memory, by the system's count. The readings above say how much of each is in use.</p>"
+        );
+        // Kept to one CPU of the eight the machine's count is of, by no limit: the gauge is not of that one.
+        let kept = Machine { stat_cpus: 8, ..metered(None, None) };
+        assert_eq!(host(&kept), "<p>The machine serving you this has 1 CPU and 457.4 MiB of memory, by the system's count.</p>");
+        let held = Machine { named: Some("the smallest size".into()), ..metered(Some("268435456\n"), Some("50000 100000\n")) };
+        assert_eq!(
+            host(&held),
+            "<p>This server is held to 0.5 CPU and 256.0 MiB of memory, by the system's count: the smallest size. The readings above say how much of each is in use.</p>"
+        );
+        assert!(!host(&held).contains("container") && !host(&held).contains("machine"));
     }
 
     /// How many classes the figure that reads `text` has.

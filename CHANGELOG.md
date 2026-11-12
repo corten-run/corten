@@ -12,7 +12,7 @@ Corten is pre-1.0, so any minor version may change the API.
   lines where its three files meet, its own source is broken five ways with what the compiler
   said, and the server streams its own readings, with the memory it holds, the machine it is on
   and how much of its CPU and memory is in use (the machine's, or of the limits a container
-  holds the server to), where the system counts them. Tests hold what it says to
+  or a systemd unit holds the server to), where the system counts them. Tests hold what it says to
   `docs/performance.md`, the README,
   `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
   machine behind nginx as a systemd service: each change on `main` is tested, built, copied over

@@ -14,7 +14,8 @@ const kinds = { chromium, firefox, webkit };
 const engines = /** @type {(keyof typeof kinds)[]} */ (process.argv.slice(3));
 if (engines.length === 0) engines.push("chromium", "firefox", "webkit");
 const held = process.env.SITE_HELD === "1";
-const whose = held ? "container" : "machine";
+/** What each of the last two gauges is called: of a limit the server is held to, or the machine's. */
+const called = held ? ["CPU in use", "Memory in use"] : ["CPU this machine is using", "Memory this machine is using"];
 /** The engine the checks are running in. @type {keyof typeof kinds} */
 let engine = "chromium";
 const failures = [];
@@ -204,18 +205,18 @@ for (engine of engines) {
       )
     );
     const [cpu, memory] = gauges;
-    check("the server reads the CPU in use, and says whose", gauges.length === 2 && cpu?.label === `CPU this ${whose} is using` && /^\d+%$/.test(cpu.figure) && cpu.value <= 100, JSON.stringify(cpu));
+    check("the server reads the CPU in use, and says whose", gauges.length === 2 && cpu?.label === called[0] && /^\d+%$/.test(cpu.figure) && cpu.value <= 100, JSON.stringify(cpu));
     check("its meter is at the figure", cpu !== undefined && cpu.value === Number.parseInt(cpu.figure, 10) && cpu.high === 80, JSON.stringify(cpu));
-    check("and the memory in use, and says whose", memory?.label === `Memory this ${whose} is using` && size(memory.figure) > 0, JSON.stringify(memory));
+    check("and the memory in use, and says whose", memory?.label === called[1] && size(memory.figure) > 0, JSON.stringify(memory));
     check("its meter is read as the sizes", memory !== undefined && memory.said.startsWith(`${memory.figure.replace(" MiB", "")} of `) && memory.value > 0 && memory.value <= 100, JSON.stringify(memory));
     check("each meter is a thin bar across its gauge", gauges.length === 2 && gauges.every((gauge) => gauge.height >= 4 && gauge.height <= 8 && gauge.width > 200), JSON.stringify(gauges.map((gauge) => [gauge.width, gauge.height])));
     check(
       "each says what it is a part of",
-      held ? /^of the [\d.]+ CPUs? it is held to$/.test(cpu?.note ?? "") && /^of the [\d,.]+ MiB it is held to$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
+      held ? /^of the [\d.]+ CPUs? this server is held to$/.test(cpu?.note ?? "") && /^of the [\d,.]+ MiB this server is held to$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
       `${cpu?.note} | ${memory?.note}`,
     );
     check("the readout says how many followed at most", /^[1-9][\d,]* at most$/.test(await page.evaluate(() => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent === "Pages following this stream")?.parentElement?.lastElementChild?.textContent ?? "")));
-    check("the page says what machine serves it", /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory/.test(await page.locator("body").innerText()));
+    check("the page says what serves it", (held ? /This server is held to [\d.]+ CPUs? and [\d,.]+ MiB of memory/ : /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory/).test(await page.locator("body").innerText()));
 
     // The response read back, and the same address as JSON. A header the response lacked is
     // written in as that, in words, so every value is held to being a header's.

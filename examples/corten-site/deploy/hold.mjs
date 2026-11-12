@@ -1,12 +1,13 @@
 // Measures what the site holds: the memory it has idle and with a number of live streams open,
 // and the pages it serves a second while they are held. It talks to the app itself over HTTP,
 // with no proxy between, and reads the memory from the page's own JSON, with the CPU and memory
-// the server last read as in use: its machine's, or of the limits its container is held to. A
+// the server last read as in use: its machine's, or of the limits it is held to. A
 // browser asks for its stream compressed, and each compressed stream holds a coder's memory:
 // name a coding (zstd or gzip) to hold the streams as a browser does, or none to hold them as
-// they are. A coder's memory is held as its window fills, which at a reading a second took a
-// zstd stream about a minute, so compressed streams are held 90 seconds before the memory is
-// read, and others 10.
+// they are. A coder's memory is held as its window fills, which at this site's reading a second
+// (about 1,500 bytes, into a zstd window of 64 KiB) took under a minute, so compressed streams
+// are held 90 seconds before the memory is read, and others 10. Smaller readings fill it more
+// slowly and need a longer hold.
 // Usage: node examples/corten-site/deploy/hold.mjs http://localhost:18488 [streams] [seconds] [coding]
 import http from "node:http";
 
@@ -40,7 +41,7 @@ const get = (path, headers = {}) =>
 /** The server's own readings, from the page's JSON. */
 const server = async () => JSON.parse((await get("/", { accept: "application/json" })).text).data.server;
 const mib = (/** @type {number} */ bytes) => (bytes / 1048576).toFixed(1);
-/** What is in use by the server's last reading, of its machine or of its container's limits; nothing where the system does not count. */
+/** What is in use by the server's last reading, of its machine or of the limits it is held to; nothing where the system does not count. */
 const using = (/** @type {{ machine_cpu_used_percent: number | null, machine_memory_used_bytes: number }} */ read) =>
   read.machine_cpu_used_percent === null ? "" : `; in use by its reading: ${read.machine_cpu_used_percent}% of the CPU and ${mib(read.machine_memory_used_bytes)} MiB`;
 

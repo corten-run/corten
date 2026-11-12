@@ -65,9 +65,9 @@ error: could not compile `corten-site` (lib) due to 1 previous error; 1 warning 
         broken: r#"on:click={js::order(event, readout, grid, ordered, number)}
 "#,
         verdict: r#"error[E0277]: the handler takes an HTMLDivElement, and this is an HTMLOutputElement
-    --> examples/corten-site/src/surface.rs:186:48
+    --> examples/corten-site/src/surface.rs:183:48
      |
- 186 |                     on:click={js::order(event, readout, grid, ordered, number)}
+ 183 |                     on:click={js::order(event, readout, grid, ordered, number)}
      |                               ---------        ^^^^^^^ an HTMLOutputElement, from the tag its ref is on
      |                               |
      |                               required by a bound introduced by this call

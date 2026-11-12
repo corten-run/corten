@@ -224,12 +224,12 @@ struct Server {
     memory_held_bytes: u64,
     machine_memory_bytes: u64,
     machine_cpus: usize,
-    /// Whether that memory is a limit a container holds the server to, and the CPUs it holds it
+    /// Whether that memory is a limit the server's control group holds it to, and the CPUs it holds it
     /// to (`null` with no limit). Each decides whose count the reading under it is.
     machine_memory_limited: bool,
     machine_cpu_limit: Option<f64>,
     /// How much is in use: of the machine, by everything on it, or of a limit, by what the
-    /// container holds. 0 where the system does not count, and the percent is `null` there and
+    /// group holds. 0 where the system does not count, and the percent is `null` there and
     /// until two counts are half a second apart.
     machine_memory_used_bytes: u64,
     machine_cpu_used_percent: Option<u8>,
@@ -447,7 +447,7 @@ mod tests {
     }
 
     /// The JSON's readings are the pulse's, and it says whose count each of the machine's is: a
-    /// client told only "41%" could not tell a container's limit from the machine.
+    /// client told only "41%" could not tell a limit from the machine.
     #[test]
     fn the_json_says_what_the_readout_shows_and_whose_count_it_is() {
         let meminfo = Some("MemTotal:       12250780 kB\nMemAvailable:   8000000 kB\n");

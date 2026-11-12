@@ -48,7 +48,7 @@ const LIMITS: [&str; 4] = [
     "Corten speaks HTTP/1.1. A proxy or CDN in front serves browsers HTTP/2 or HTTP/3, which an app with live streams needs.",
     "Pages swap without a full load where the browser has the Navigation API (Chrome, Edge, Firefox 147 and later, Safari 26.2 and later). Older browsers load each page in full; forms, patches and handlers still work.",
     "A native app shell is planned, not built.",
-    "It is 0.2: the API will change before 1.0.",
+    "The API will change before 1.0.",
 ];
 
 /// What the reader would otherwise pick, and what is different. Each is a claim the repository
@@ -70,10 +70,7 @@ const AGAINST: [(&str, &str); 5] = [
         "Next.js, SvelteKit or Nuxt",
         "No hydration and no bundler, and the server is Rust. You give up server-side JSX and the component libraries built for it.",
     ),
-    (
-        "Rails, Phoenix or Laravel",
-        "The ORM, the jobs and the mail those bring are yours to choose.",
-    ),
+    ("Rails, Phoenix or Laravel", "Those bring the ORM, the jobs and the mail. With Corten they are yours to choose."),
 ];
 
 /// The README's order for when two values conflict, first deciding.
@@ -146,7 +143,7 @@ pub fn After() -> impl Render {
                 </div>
                 <div class={Words}>
                     <p>
-                        "You need Rust 1.88 or later. " <code>"corten new"</code>
+                        "You need Rust 1.88 or later, and Node.js for TypeScript. " <code>"corten new"</code>
                         " writes a working app: a page, a form that patches part of it, a component with a script, a test and a Dockerfile. Its package is "
                         <code>"corten-run"</code> " and its library " <code>"corten"</code> ", as the app's Cargo.toml says."
                     </p>
