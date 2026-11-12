@@ -256,7 +256,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                         None => <dd class={(Figure, Long)}>"counting"</dd>,
                     }
                     match machine.cpu_limit {
-                        Some(limit) => <dd class={Note}>"of the " {cpus(limit)} " this server is held to"</dd>,
+                        Some(limit) => <dd class={Note}>"of a limit of " {cpus(limit)}</dd>,
                         None => {
                             for own in used.cpu_own.iter() {
                                 <dd class={Note}>"this server: " {own} "%"</dd>
@@ -295,13 +295,10 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                     <dd class={Note}>
                         "of "
                         if machine.memory_limited {
-                            "the "
+                            "a limit of "
                         }
                         {megabytes(machine.memory_bytes)}
                         " MiB"
-                        if machine.memory_limited {
-                            " this server is held to"
-                        }
                     </dd>
                 </div>
             }
@@ -416,15 +413,11 @@ mod tests {
         // 200 MiB of 468428 KiB is 44%, and the meter is read as the sizes.
         assert!(whole.contains(r#"aria-valuetext="200.0 of 457.4 MiB" min="0" max="100" high="80" value="44""#), "{whole}");
         assert!(whole.contains("this server: 31%") && whole.contains(">of 457.4 MiB<"), "{whole}");
-        assert!(!whole.contains("container") && !whole.contains("held to"), "{whole}");
+        assert!(!whole.contains("container") && !whole.contains("limit"), "{whole}");
         // Held to half a CPU and 256 MiB: both counts are of the limit, and say so.
         let held = draw(&metered(Some("268435456\n"), Some("50000 100000\n")), used(Some(85), None, 250 << 20));
         assert!(held.contains(">CPU in use</dt>") && held.contains(">Memory in use</dt>"), "{held}");
-        assert!(
-            held.contains(">of the 0.5 CPU this server is held to<")
-                && held.contains(">of the 256.0 MiB this server is held to<"),
-            "{held}"
-        );
+        assert!(held.contains(">of a limit of 0.5 CPU<") && held.contains(">of a limit of 256.0 MiB<"), "{held}");
         assert!(held.contains(r#"value="85""#) && held.contains(r#"value="98""#) && !held.contains("this machine"), "{held}");
         // One limit alone changes its own gauge and leaves the other the machine's.
         let memory = draw(&metered(Some("268435456\n"), None), used(Some(41), Some(31), 200 << 20));

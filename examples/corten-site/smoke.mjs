@@ -212,7 +212,7 @@ for (engine of engines) {
     check("each meter is a thin bar across its gauge", gauges.length === 2 && gauges.every((gauge) => gauge.height >= 4 && gauge.height <= 8 && gauge.width > 200), JSON.stringify(gauges.map((gauge) => [gauge.width, gauge.height])));
     check(
       "each says what it is a part of",
-      held ? /^of the [\d.]+ CPUs? this server is held to$/.test(cpu?.note ?? "") && /^of the [\d,.]+ MiB this server is held to$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
+      held ? /^of a limit of [\d.]+ CPUs?$/.test(cpu?.note ?? "") && /^of a limit of [\d,.]+ MiB$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
       `${cpu?.note} | ${memory?.note}`,
     );
     check("the readout says how many followed at most", /^[1-9][\d,]* at most$/.test(await page.evaluate(() => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent === "Pages following this stream")?.parentElement?.lastElementChild?.textContent ?? "")));
