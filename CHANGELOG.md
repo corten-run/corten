@@ -29,6 +29,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
+  after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
+  socket hyper hands to the route. Before, it was given back at the switch, so a client that
+  opened connections and switched them was not bounded by the cap
+  ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
   longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
   traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and

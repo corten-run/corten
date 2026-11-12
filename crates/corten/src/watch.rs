@@ -211,10 +211,14 @@ pub(crate) fn bounded<F: Future>(watch: Option<&Watch>, step: Pin<&mut F>, cx: &
 }
 
 /// A connection's IO, whose reads fail once its [`Watch`] has expired idle, and whose writes
-/// fail once one has waited past the send timeout.
+/// fail once one has waited past the send timeout. It holds the connection's place under
+/// [`crate::App::max_connections`] too: hyper hands the IO to the route when the connection
+/// switches (a WebSocket, a tunnel), so the place is given back when the route drops the socket,
+/// not when hyper's connection ends.
 pub(crate) struct Watched<I> {
     pub io: I,
     pub watch: Option<Arc<Watch>>,
+    pub _open: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 fn timed_out() -> io::Error {
@@ -379,7 +383,7 @@ mod tests {
         use tokio::io::AsyncWriteExt;
         let clock = Clock::start(None, Some(Duration::from_millis(40))).unwrap();
         for step in ["write", "flush", "shutdown"] {
-            let mut io = Watched { io: Stuck, watch: Some(clock.watch()) };
+            let mut io = Watched { io: Stuck, watch: Some(clock.watch()), _open: None };
             let done = tokio::time::timeout(Duration::from_secs(2), async {
                 match step {
                     "write" => io.write(b"x").await.map(drop),

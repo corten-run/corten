@@ -1027,8 +1027,8 @@ impl<M: Middleware> App<M> {
     /// set). At the limit it accepts no more until one closes; the operating system queues the
     /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
     /// A switched connection (a WebSocket after its `101`, a tunnel after a `2xx` to `CONNECT`)
-    /// stops counting once it switches, so the cap does not bound those; a route that accepts
-    /// them limits them itself (`docs/design.md#limit-protocol-switch`).
+    /// counts until its route drops the socket, so size the cap for the sockets an app keeps open
+    /// as well as for its requests.
     pub fn max_connections(mut self, max: usize) -> Self {
         assert!(max > 0, "corten: max_connections is at least 1");
         self.connections.max = Some(max);
@@ -1813,7 +1813,8 @@ where
         let service = hyper_util::service::TowerToHyperService::new(connection);
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
-            let _permit = permit;
+            // Held by the task until the step is done, then by the IO (`Watched`).
+            let permit = permit;
             // The step, until it is done, the clock expires the connection or shutdown begins.
             let io = {
                 let mut step = std::pin::pin!(wrap(io));
@@ -1829,7 +1830,7 @@ where
                     _ => return,
                 }
             };
-            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch });
+            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
                 _ = conn.as_mut() => return,
