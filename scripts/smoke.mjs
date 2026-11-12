@@ -1053,7 +1053,8 @@ async function run(browser) {
     await held.goto(`${base}/`);
     await held.waitForSelector(`${picksLive}[status]`, { state: "attached", timeout: 5000 }).catch(() => {});
     const loaded = await placeholder();
-    check("with JavaScript a slow part's placeholder says it is on its way, with no link for it", loaded.line && !loaded.link && loaded.status !== "closed", JSON.stringify(loaded));
+    // `connecting`: the runtime ran and opened the stream, which the route holds unanswered.
+    check("with JavaScript a slow part's placeholder says it is on its way, with no link for it", loaded.line && !loaded.link && loaded.status === "connecting", JSON.stringify(loaded));
     if (swaps) {
       let documents = 0;
       held.on("request", (r) => r.resourceType() === "document" && documents++);
@@ -1062,7 +1063,7 @@ async function run(browser) {
       await held.click('header nav a[href="/"]');
       await held.waitForFunction((live) => location.pathname === "/" && !!document.querySelector(`${live}[status]`), picksLive, { timeout: 5000 }).catch(() => {});
       const drawn = { ...(await placeholder()), documents };
-      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.status !== "closed" && documents === 0, JSON.stringify(drawn));
+      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.status === "connecting" && documents === 0, JSON.stringify(drawn));
     } else skip("and so does it in a page a client navigation drew", noSwaps);
     answer = "none";
     await held.goto(`${base}/`);

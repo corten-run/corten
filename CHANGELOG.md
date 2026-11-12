@@ -100,9 +100,9 @@ Corten is pre-1.0, so any minor version may change the API.
   `corten-live[status="closed"]`, so a browser without the `scripting` media feature shows both.
   The watchlist's home page has picks written this way. `scripts/smoke.mjs` checks, in Chromium,
   Firefox and WebKit, that without JavaScript the link shows and opens the page with the picks;
-  that with it, while the stream is held open, the line shows and the link does not, in the page
-  loaded and in one a client navigation drew; and that a stream answered with a 204 shows the
-  link, which opens the page with the picks
+  that with it, while the stream is held unanswered (`connecting`), the line shows and the link
+  does not, in the page loaded and in one a client navigation drew; and that a stream answered
+  with a 204 shows the link, which opens the page with the picks
   ([#1264 A slow part a <corten-live> stream sends once has no answer without JavaScript: its placeholder stays for good](https://github.com/corten-run/corten/issues/1264)).
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and

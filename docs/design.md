@@ -2621,34 +2621,40 @@ rules something out.
     address to say what a page reads. The cost is one field plus one handler branch per page with
     a slow part; other links name the page through its route's `Default` (`url::Home::default()`),
     and the address the link opens waits for the slow read wherever it is opened, with JavaScript
-    too. Two cases are left with the line and no link: scripting is on but the runtime never runs
-    (blocked by an extension or the CSP, or failed to load), as the query follows whether scripts
-    are on, not whether one ran
-    ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); and a stream that
-    ends (`end`) after a fragment that failed to apply, where a rule on `status="ended"` would
-    show the link for a moment after every stream that ends as it should. Not chosen: the link in
-    a `<noscript>`, which a browser with scripting on never draws, on the first page or in markup
-    the runtime fetches, so it would never show for a stream that gave up.
+    too. Three cases are left with the line and no link: scripting is on but the runtime never
+    runs (blocked by an extension or the CSP, or failed to load), as the query follows whether
+    scripts are on, not whether one ran
+    ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); a stream that ends
+    (`end`) after a fragment that failed to apply, where a rule on `status="ended"` would show the
+    link for a moment after every stream that ends as it should; and a stream dropped each time
+    before the part is sent (a proxy whose idle timeout is shorter than the slow read), which stays
+    `reconnecting` while the browser retries, where a rule on that status would show the link at
+    every drop the browser recovers from. Not chosen: the link in a `<noscript>`, which a browser
+    with scripting on never draws, on the first page or in markup the runtime fetches, so it would
+    never show for a stream that gave up.
 
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); platform (with scripting off
     `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
-    reverse, and a browser without Media Queries 5's `scripting` matches neither; an
-    `EventSource` answered with an error or a 204 closes for good instead of reconnecting);
-    reasoned (the runtime sets `status="closed"` on a `<corten-live>` whose `EventSource` has
-    closed for good, in `crates/corten/js/corten.js`, so CSS can tell a stream that gave up; the
-    page's handler can call the read the stream calls, so reading the part in is a branch on the
-    field, not a second handler; the link is in the markup with JavaScript too, so no runtime
-    step draws or removes it); value (a page works without a script, Values 3, where a part a
-    stream sends would never come).
+    reverse; an `EventSource` answered with an error or a 204 closes for good instead of
+    reconnecting); reasoned (a browser without Media Queries 5's `scripting` matches neither
+    query, as Media Queries evaluates a feature it does not know to unknown, which a query takes
+    as false, so it shows both; the runtime sets `status="closed"` on a `<corten-live>` whose
+    `EventSource` has closed for good, in `crates/corten/js/corten.js`, so CSS can tell a stream
+    that gave up; the page's handler can call the read the stream calls, so reading the part in
+    is a branch on the field, not a second handler; the link is in the markup with JavaScript
+    too, so no runtime step draws or removes it); value (a page works without a script, Values 3,
+    where a part a stream sends would never come).
 
     Revisit when: the repository's examples and the Chase Sets pilot between them write such a
     field and handler branch on three or more routes; or a browser the repository's Playwright
     runs matches `@media (scripting: none)` with JavaScript on, or not with it off.
 
     Last checked: 2026-11-12, `@media (scripting: none)` and `(scripting: enabled)` with
-    JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1) and an `EventSource` closing
-    after a 204, probed in Chromium 156, Firefox 157 and WebKit 27.2 by `scripts/smoke.mjs`.
+    JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1), and an `EventSource` closing
+    after a 204 (the picks' checks and the `#flaky-live` one) and after a 503 (the feed's check of
+    a stream answered with an error), probed in Chromium 156, Firefox 157 and WebKit 27.2 by
+    `scripts/smoke.mjs`.
 
 ## Rules
 
