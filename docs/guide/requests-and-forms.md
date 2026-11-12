@@ -1617,7 +1617,9 @@ with nothing for the app to do. A page reads that one only from a request withou
 `Sec-Fetch-Site`, which current browsers send to every secure origin, so on HTTPS another site on
 the domain cannot plant a notice in it there; a browser too old to send it (Safari before 16.4,
 Firefox before 90) could be shown one, as text. An app served only over HTTPS says so with
-`Policy::hsts()`, and then Corten never sets or reads the plain cookie. `localhost` and
+`Policy::hsts()`, and then Corten never sets or reads the plain cookie, and refuses that write
+from a plain `http://` page as it refuses another site's
+([WebSockets and relays](app.md#websockets-and-relays), item 1). `localhost` and
 `127.0.0.1` count as secure and keep `__Host-corten-notice`. A notice from a `GET` handler (no
 `Origin` to tell by) always rides in `__Host-corten-notice`, so on a plain-http LAN address it
 is lost: redirect with a notice from the write.

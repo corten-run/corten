@@ -14,9 +14,14 @@ fn demo(text: &str) -> impl Render + '_ {
     html! {
         <p>{text}</p>
         <sort-table><b>"x"</b></sort-table>
-        <corten-live src="/x"></corten-live>
+        <corten-live src={DemoLive}></corten-live>
     }
 }
+
+/// Where `demo`'s `<corten-live>` streams from.
+#[derive(crate::Route)]
+#[route("/x")]
+struct DemoLive;
 
 /// A path of the test's own under the system's temp directory (`corten-{name}-{pid}`): any
 /// leftover there is removed when it is made, the test creates what it writes, and the directory
@@ -6804,6 +6809,11 @@ fn a_plain_origin_is_http_off_loopback() {
         assert!(!plain(origin), "{origin}");
     }
     assert!(!crate::page::plain_origin(&HeaderMap::new()), "no Origin: not a browser's write");
+    // A default port is the same written or left out, as in the same-origin check.
+    assert!(with("http://lan", "lan:80", None));
+    assert!(with("http://lan:80", "lan", None));
+    assert!(!with("http://lan", "lan:8080", None));
+    assert!(!with("http://localhost", "localhost:80", None));
     // A browser that counts the origin as secure (a policy for an internal tool) sends
     // `Sec-Fetch-Site`, takes a `Secure` cookie and is not read the plain one.
     assert!(!with("http://automation.lan:3001", "automation.lan:3001", Some("same-origin")));
@@ -6892,18 +6902,29 @@ async fn a_notice_written_over_plain_http_on_the_lan_reaches_its_page() {
         .header("sec-fetch-site", "same-origin");
     let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
     assert!(set(&res)[0].starts_with("__Host-corten-notice="), "{:?}", set(&res));
-    // An app that says it is HTTPS only (`Policy::hsts`) never sets nor reads the plain one.
-    let routes =
-        Table::new().route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") })).route(
-            "/done",
-            get(|req: Req| async move {
-                let notice = req.notice();
-                req.test_page("Done", html! { <p>{notice}</p> })
-            }),
-        );
-    let https = App::new(Routes::from(routes)).policy(crate::security::Policy::new().hsts()).router();
+    // An app that says it is HTTPS only (`Policy::hsts`) never sets nor reads the plain one: the
+    // write from a plain-http page that would set it is refused there, as another site's (#1212).
+    let https_app = |policy: crate::security::Policy| {
+        let routes = Table::new()
+            .route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") }))
+            .route(
+                "/done",
+                get(|req: Req| async move {
+                    let notice = req.notice();
+                    req.test_page("Done", html! { <p>{notice}</p> })
+                }),
+            );
+        App::new(Routes::from(routes)).policy(policy.hsts()).router()
+    };
+    let https = https_app(crate::security::Policy::new());
     let req = Request::post("/").header("origin", "http://192.168.1.5").header("host", "192.168.1.5");
     let res = https.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(set(&res).is_empty(), "{:?}", set(&res));
+    // One it allows by name keeps `__Host-`.
+    let allowed = https_app(crate::security::Policy::new().allow_origin("http://192.168.1.5"));
+    let req = Request::post("/").header("origin", "http://192.168.1.5").header("host", "192.168.1.5");
+    let res = allowed.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
     assert!(set(&res)[0].starts_with("__Host-corten-notice="), "{:?}", set(&res));
     let req = Request::get("/done").header(header::COOKIE, plain.as_str()).body(Body::empty()).unwrap();
     let res = https.clone().oneshot(req).await.unwrap();
@@ -10010,6 +10031,51 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
 #[derive(crate::Route)]
 #[route("/api/ws")]
 struct ApiWs;
+
+/// A handshake with no `Sec-Fetch-Site` (what Chromium and Firefox send) is held to its `Origin`
+/// against `Host`, scheme included once the app says it is HTTPS only: a plain-http page on the
+/// app's host cannot open a socket to the HTTPS app with the user's `Secure` cookies (#1212).
+/// Allowed, a oneshot answers 426, since it cannot switch; refused, 403.
+#[tokio::test]
+async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
+    use crate::security::Policy;
+    use crate::upgrade::Upgrade;
+    async fn nothing(_: crate::upgrade::Stream, _: crate::Signal) {}
+    let app = |policy: Policy| {
+        App::new(Routes::from(Table::new().route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(nothing) }))))
+            .policy(policy.host("app.example"))
+            .router()
+    };
+    let status = |router: crate::Router, origin: &'static str, host: &'static str| async move {
+        let req = Request::get("/ws")
+            .header("host", host)
+            .header("origin", origin)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .unwrap();
+        router.oneshot(req).await.unwrap().status()
+    };
+    let (open, refused) = (StatusCode::UPGRADE_REQUIRED, StatusCode::FORBIDDEN);
+    let https_only = app(Policy::new().hsts());
+    let either = app(Policy::new());
+    assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");
+    assert_eq!(status(https_only.clone(), "https://app.example", "app.example").await, open);
+    assert_eq!(status(https_only.clone(), "https://app.example", "app.example:443").await, open, "the default port");
+    assert_eq!(status(https_only.clone(), "https://app.example", "app.example:8443").await, refused, "another port");
+    // Loopback is secure over plain http, and Chromium and Firefox send no `Sec-Fetch-Site` there.
+    assert_eq!(status(https_only.clone(), "http://localhost:3000", "localhost:3000").await, open, "loopback");
+    assert_eq!(status(https_only.clone(), "http://192.168.1.5", "192.168.1.5").await, refused, "a LAN page");
+    assert_eq!(status(https_only, "capacitor://localhost", "localhost").await, refused, "an app's own scheme");
+    // Without hsts the app cannot tell its public scheme behind a proxy that ends TLS.
+    assert_eq!(status(either.clone(), "http://app.example", "app.example").await, open);
+    assert_eq!(status(either.clone(), "http://192.168.1.5", "192.168.1.5").await, open);
+    assert_eq!(status(either.clone(), "https://app.example", "app.example").await, open);
+    assert_eq!(status(either.clone(), "http://app.example", "app.example:80").await, open, "the default port");
+    assert_eq!(status(either, "http://app.example:443", "app.example").await, refused, "not http's default port");
+}
 
 /// A relayed answer goes through the whole app uncompressed, a page-sized body and an event stream
 /// alike, so a long model stream holds no compression context (#205).
