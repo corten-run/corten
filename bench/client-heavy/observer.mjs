@@ -6,6 +6,7 @@ export function installObserver() {
   const listeners = new Set(), timers = new Set(), tasks = new Set(), connections = new Set(), network = [];
   const byTarget = new WeakMap();
   const pageDelegates = new Set();
+  const baselineHandlers = new WeakMap();
   let recording = false, screen, nodeId = 0, domId = 0, lastAt = -1;
   const nodes = new WeakMap();
   const now = () => { lastAt = Math.max(performance.now(), lastAt + 0.001); return lastAt; };
@@ -118,6 +119,25 @@ export function installObserver() {
   }
   // These apps do not use workers. Fail closed rather than omit their resource/network activity.
   for (const name of ["Worker", "SharedWorker"]) if (window[name]) window[name] = class { constructor() { throw new Error("unobserved-worker-not-supported"); } };
+  const globalTargets = () => [window, document, document.documentElement, document.body].filter(Boolean);
+  // HTML's WindowEventHandlers and Window-reflecting body handlers target Window,
+  // not the body. Count that slot once, without merging independent same callbacks.
+  // https://html.spec.whatwg.org/multipage/webappapis.html#event-handler-target
+  const bodyWindowHandlers = new Set(["onblur", "onerror", "onfocus", "onload", "onresize", "onscroll",
+    "onafterprint", "onbeforeprint", "onbeforeunload", "onhashchange", "onlanguagechange", "onmessage", "onmessageerror",
+    "onoffline", "ononline", "onpagehide", "onpagereveal", "onpageshow", "onpageswap", "onpopstate", "onrejectionhandled",
+    "onstorage", "onunhandledrejection", "onunload"]);
+  const handlers = (target) => {
+    const names = new Set();
+    for (let proto = target; proto; proto = Object.getPrototypeOf(proto)) {
+      for (const name of Object.getOwnPropertyNames(proto)) if (/^on[a-z]/.test(name)) names.add(name);
+    }
+    return new Map([...names].filter((name) => target !== document.body || !bodyWindowHandlers.has(name))
+      .map((name) => [name, target[name]]).filter(([, value]) => typeof value === "function"));
+  };
+  const propertyListeners = () => recording ? globalTargets().flatMap((target) => [...handlers(target)]
+    .filter(([name, callback]) => baselineHandlers.get(target)?.get(name) !== callback)
+    .map(([type]) => ({ type, target, property: true }))) : [];
   const owned = () => {
     const live = [...listeners].filter((r) => r.owned && !(r.target instanceof AbortSignal));
     // Detached element-bound UI handlers cannot receive browser input. Global listeners
@@ -125,7 +145,7 @@ export function installObserver() {
     const lasting = live.filter((r) => !(r.target instanceof Node) ||
       r.target.isConnected);
     return { subscriptions: live.filter((r) => r.target === window.clientSource).length, connections: connections.size,
-      listeners: lasting.length, timers: timers.size, pendingTasks: tasks.size };
+      listeners: lasting.length + propertyListeners().length, timers: timers.size, pendingTasks: tasks.size };
   };
   const dom = () => {
     screen ??= document.getElementById("screen");
@@ -139,8 +159,8 @@ export function installObserver() {
       totalMinor: Number(screen.querySelector("#total").textContent) };
   };
   window.clientObserver = { now, dom, owned, network,
-    listenerDetails() { return [...listeners].filter((r) => r.owned || r.pageOwned).map((r) => ({ type: r.type, target: r.target.constructor.name, connected: r.target instanceof Node ? r.target.isConnected : null, pageOwned: r.pageOwned })); },
-    begin() { recording = true; return { kind: "resources", at: now(), owned: owned() }; },
+    listenerDetails() { return [...listeners].filter((r) => r.owned || r.pageOwned).concat(propertyListeners()).map((r) => ({ type: r.type, target: r.target.constructor.name, connected: r.target instanceof Node ? r.target.isConnected : null, pageOwned: !!r.pageOwned, property: !!r.property })); },
+    begin() { for (const target of globalTargets()) baselineHandlers.set(target, handlers(target)); recording = true; return { kind: "resources", at: now(), owned: owned() }; },
     loaded() { return JSON.parse(document.getElementById("fixture").textContent).initial; },
     detached() { return screen && !screen.isConnected; },
     settle() { return new Promise((resolve) => original.raf(() => original.raf(resolve))); },

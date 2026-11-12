@@ -27,19 +27,10 @@ contract. `--seed`, `--cleanup-ms`, `--observation-ms`, and `--timeout-ms` are
 recorded with the effective workload. There is deliberately no contender filter.
 Build output is isolated under the output directory. Use `--cargo <executable>`
 to choose a Cargo-compatible launcher; the default is `cargo`.
-Alternatively `--generator <executable>` executes an already compiled native
-`client` generator with `<workload.json> <output-directory>` arguments. It is
-not an alternate renderer: compile `bench/browser/gen/src/bin/client.rs` against
-this checkout first. Its executable hash and native build output are retained.
-When using a wrapper, that hash identifies the wrapper; record the wrapped
-binary's hash in its stdout as well. Do not reuse binaries from other revisions.
-The output directory must be new. `--built <earlier-result.json>` reuses a native
-build only after rechecking its workload, all contenders, compiler/fixture source
-hashes, bundled input hashes and every served artifact hash. It always runs new
-qualification and measurement journeys; an earlier pass is never reused. The
-new provenance links the earlier result by its SHA-256. A missing/stale build
-fails closed for the whole group. Reuse expects the original `native/` beside
-that result (not a result that itself reused another directory).
+Every invocation builds the current native sources and compiles/runs the Corten Rust
+generator through that launcher. External build receipts and precompiled generator
+executables are not accepted: self-consistent hashes cannot establish that artifacts
+were produced by the claimed framework. The output directory must be new.
 
 The dashboard source is an EventTarget delivering tick *inputs*, not rendered
 rows, a reducer, expected snapshots or DOM. Native effects subscribe and native
@@ -52,7 +43,9 @@ animation/idle/microtask/MessageChannel/scheduler, fetch/XHR/beacon and socket A
 before scripts load. The source's real listener set supplies subscription counts.
 Workers are refused, service workers blocked, rather than left unobserved.
 Element-bound input handlers on detached elements cannot receive browser input;
-they are not active owned listeners. Global app listeners *are* counted. The one
+they are not active owned listeners. Global app listeners *are* counted, including
+event-handler properties on the window, document, document element and body; replacing
+a bootstrap handler is counted too. The one
 explicit infrastructure classification is Corten's pair of document delegates for
 `click` and `input`: these are page-lifetime listeners installed lazily by the
 runtime's `listen`, not component subscriptions. Only each first capture/bubble
@@ -86,7 +79,7 @@ has `records: null` in that capture and its partial observations under `failure`
 No measured action timings are released for a failing measured journey.
 
 Set `CLIENT_NATIVE_DIR` to the run's `native` directory before running
-`native.test.mjs` to exercise thirteen deliberate faults in the actual React app
+`native.test.mjs` to exercise deliberate faults in the actual React app
 and Corten-specific subscription/global-listener cleanup faults.
 Without it only that integration test is explicitly skipped; the observer and
 dispatch-gate tests need no build. The hostile cases are not framework evidence.

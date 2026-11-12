@@ -13,7 +13,7 @@ export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex"
 const json = (x) => JSON.stringify(x, null, 2) + "\n";
 const flags = { "process.env.NODE_ENV": '"production"', __VUE_OPTIONS_API__: "true", __VUE_PROD_DEVTOOLS__: "false", __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: "false" };
 
-export async function buildApps(workload, directory, cargo = "cargo", generator = null) {
+export async function buildApps(workload, directory, cargo = "cargo") {
   const { build } = require("esbuild");
   const out = resolve(directory), apps = {};
   mkdirSync(out, { recursive: true });
@@ -28,8 +28,8 @@ export async function buildApps(workload, directory, cargo = "cargo", generator 
       const plugins = [];
       if (app === "corten") {
         const input = [relative(root, join(out, "workload.json")).replaceAll("\\", "/"), relative(root, dir).replaceAll("\\", "/")];
-        const command = generator ?? cargo;
-        const args = generator ? input : ["run", "--quiet", "--release", "--manifest-path", "bench/browser/gen/Cargo.toml", "--bin", "client", "--", ...input];
+        const command = cargo;
+        const args = ["run", "--quiet", "--release", "--manifest-path", "bench/browser/gen/Cargo.toml", "--bin", "client", "--", ...input];
         if (process.platform === "win32" && /\.cmd$/i.test(command) && [command, ...args].some((arg) => /[&|<>^%!"\r\n]/.test(arg))) throw new Error("unsafe-batch-argument");
         // A build launcher may wait in a machine queue. Do not kill just its shell and
         // leave the actual build orphaned. Native browser journeys have their own bound.

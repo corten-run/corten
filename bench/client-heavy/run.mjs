@@ -15,46 +15,18 @@ export const schema = "client-heavy-native/v1";
 export function options(args) {
   const [round, ...rest] = args;
   assert.match(round ?? "", /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/, "explicit safe round argument required");
-  const values = { rows: 14, large: 110, append: 7, cards: 24, seed: 7, "cleanup-ms": 2000, "observation-ms": 100, "timeout-ms": 30000, cargo: "cargo", generator: "", built: "", out: join(here, "work", round) };
+  const values = { rows: 14, large: 110, append: 7, cards: 24, seed: 7, "cleanup-ms": 2000, "observation-ms": 100, "timeout-ms": 30000, cargo: "cargo", out: join(here, "work", round) };
   const seen = new Set();
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i].replace(/^--/, "");
     assert.ok(rest[i].startsWith("--") && Object.hasOwn(values, key) && rest[i + 1] !== undefined && !seen.has(key), "unknown, missing or duplicate option");
     seen.add(key);
-    values[key] = ["out", "cargo", "generator", "built"].includes(key) ? rest[i + 1] : Number(rest[i + 1]);
+    values[key] = ["out", "cargo"].includes(key) ? rest[i + 1] : Number(rest[i + 1]);
   }
   for (const key of ["cleanup-ms", "observation-ms", "timeout-ms"]) assert.ok(Number.isSafeInteger(values[key]) && values[key] > 0 && values[key] <= 120000, `invalid ${key}`);
   assert.ok(values["timeout-ms"] > values["observation-ms"] + values["cleanup-ms"], "journey timeout must exceed cleanup bounds");
   const workload = createClientWorkload({ seed: values.seed, rowCount: values.rows, largeRowCount: values.large, appendCount: values.append, dashboardCount: values.cards });
-  assert.ok(!values.built || !values.generator, "choose prebuilt assets or a generator, not both");
-  return { round, out: resolve(values.out), cargo: values.cargo, generator: values.generator ? resolve(values.generator) : null, built: values.built ? resolve(values.built) : null, timeoutMs: values["timeout-ms"], settings: { maxCleanupMs: values["cleanup-ms"], cleanupObservationMs: values["observation-ms"] }, workload };
-}
-
-export async function checkedBuild(previousFile, workload, sources) {
-  const bytes = await readFile(previousFile), previous = JSON.parse(bytes), directory = join(dirname(previousFile), "native");
-  assert.equal(previous.schema, schema, "native runner provenance required");
-  assert.deepEqual(previous.effectiveWorkload, workload, "prebuilt workload differs");
-  assert.deepEqual(previous.selectedApps, selectedApps("client-heavy"), "prebuilt contender set differs");
-  // The harness can be fixed without rebuilding native apps. Everything that compiled
-  // the native applications, the oracle, dependencies and fixture must still match.
-  for (const [path, hash] of Object.entries(sources)) {
-    if (["bench/client-heavy/run.mjs", "bench/client-heavy/observer.mjs"].includes(path)) continue;
-    assert.equal(previous.provenance.sources?.[path], hash, `stale native source: ${path}`);
-  }
-  for (const app of selectedApps("client-heavy")) {
-    const build = previous.builds?.[app];
-    assert.equal(build?.outcome, "built", `no native build for ${app}`);
-    assert.ok(Array.isArray(build.inputs) && build.inputs.length > 0, "native input hashes required");
-    for (const input of build.inputs) {
-      const file = resolve(root, input.path), rel = relative(root, file);
-      assert.ok(!rel.startsWith("..") && !isAbsolute(rel), "native input outside checkout");
-      assert.equal(sha256(await readFile(file)), input.sha256, `stale native input: ${input.path}`);
-    }
-    const expected = ["index.html", app === "corten" ? "client.js" : "app.js", ...(app === "corten" ? ["runtime.js", "views.js"] : [])].sort();
-    assert.deepEqual(Object.keys(build.artifacts).sort(), expected, "incomplete native artifacts");
-    for (const name of expected) assert.equal(sha256(await readFile(join(directory, app, name))), build.artifacts[name], `stale native artifact: ${app}/${name}`);
-  }
-  return { directory, builds: previous.builds, provenance: { resultSha256: sha256(bytes), commit: previous.provenance.commit } };
+  return { round, out: resolve(values.out), cargo: values.cargo, timeoutMs: values["timeout-ms"], settings: { maxCleanupMs: values["cleanup-ms"], cleanupObservationMs: values["observation-ms"] }, workload };
 }
 
 export async function serve(directory) {
@@ -171,17 +143,15 @@ export async function run(args) {
   const sources = Object.fromEntries(await Promise.all([...new Set(sourcePaths)].sort().map(async (path) => [path, sha256(await readFile(join(root, path)))])));
   const provenance = { commit: git("rev-parse", "HEAD"), dirty: !!git("status", "--porcelain"), sources, diffSha256: sha256(git("diff", "HEAD", "--", "bench/browser", "bench/client-heavy", "crates")),
     node: process.version, platform: platform(), release: release(), cpu: cpus()[0]?.model ?? "unknown", logicalCpus: cpus().length,
-    generatorSha256: config.generator ? sha256(await readFile(config.generator)) : null,
     browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "Bounded local verification on an uncontrolled host; no throughput or ranking claim. No OS CPU or memory isolation." };
   const output = { schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
     selectedApps: selectedApps("client-heavy"), definition: definition("client-heavy"), builds: null, cells: {}, passed: false, readyForLoad: false };
   let server, browser;
   try {
-    let nativeDirectory = join(config.out, "native");
-    if (config.built) {
-      const checked = await checkedBuild(config.built, config.workload, sources);
-      output.builds = checked.builds; nativeDirectory = checked.directory; provenance.prebuilt = checked.provenance;
-    } else output.builds = await buildApps(config.workload, nativeDirectory, config.cargo, config.generator);
+    const nativeDirectory = join(config.out, "native");
+    // Receipts and self-consistent hashes cannot prove which framework produced a
+    // bundle. Compile the native sources in this invocation, including the Rust generator.
+    output.builds = await buildApps(config.workload, nativeDirectory, config.cargo);
     server = await serve(nativeDirectory);
     browser = await chromium.launch({ headless: true, args: ["--renderer-process-limit=1"] });
     provenance.browser = browser.version();

@@ -21,13 +21,15 @@ test("native hostile mutations are rejected before a measurement pass", { skip: 
     "browser error": () => document.getElementById("swap").addEventListener("click", () => { throw new Error("hostile-test"); }),
     "leaked subscription": () => window.clientSource.addEventListener("tick", () => {}),
     "leaked global input listener": () => document.addEventListener("input", () => {}),
+    "leaked global input property": () => { document.oninput = () => {}; },
+    "leaked global property retaining detached screen": () => { const screen = document.getElementById("screen"); document.oninput = () => { if (!screen.isConnected) screen.querySelector("#total").textContent = "1"; }; },
     "leaked timer": () => { const detach = window.clientDetach; window.clientDetach = () => { detach(); setInterval(() => {}, 60000); }; },
     "leaked animation task": () => { const detach = window.clientDetach; window.clientDetach = () => { detach(); const again = () => requestAnimationFrame(again); again(); }; },
     "post-detach update": () => { const screen = document.getElementById("screen"); window.clientSource.addEventListener("tick", () => { if (!screen.isConnected) screen.querySelector("#total").textContent = "1"; }); },
   };
   try {
     const cases = Object.entries(attacks).map(([name, attack]) => ({ app: "react", name, attack }));
-    for (const name of ["leaked subscription", "leaked global input listener"]) cases.push({ app: "corten", name, attack: attacks[name] });
+    for (const name of ["leaked subscription", "leaked global input listener", "leaked global input property", "leaked global property retaining detached screen"]) cases.push({ app: "corten", name, attack: attacks[name] });
     for (const { app, name, attack } of cases) await t.test(`${app}: ${name}`, async () => {
       const calls = [];
       const result = await qualifyAndMeasure(async (phase) => {
