@@ -1,16 +1,16 @@
 {
   "format": 2,
   "tier": "matched",
-  "commit": "b1c478d713b53167dd9a7c485eed4fe0562ebef0",
+  "commit": "042f5716252062edde643cbcf6e72b4ddf868e98",
   "dirty": false,
   "imagesFrom": null,
-  "date": "2026-11-12T07:38:07.468Z",
+  "date": "2026-11-12T08:39:10.001Z",
   "apps": [
     "express"
   ],
   "results": {
     "express": {
-      "image": "sha256:ed9ed37b3406ea0f78dccb1afdb927b71a51f9e607f7d0ab20b8850de1cfbb96",
+      "image": "sha256:361ab5110f25a57db82395f51fbcda22466eeaa415b51329da4c4c38e45b5393",
       "probes": {
         "pages": true,
         "page": {
@@ -27,7 +27,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 7943,
-          "ms": 187
+          "ms": 66
         },
         "pageBr": {
           "status": 200,
@@ -44,7 +44,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 1688,
-          "ms": 119
+          "ms": 60
         },
         "pageAgain": {
           "status": 304,
@@ -59,7 +59,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 0,
-          "ms": 108
+          "ms": 69
         },
         "json": {
           "status": 200,
@@ -75,7 +75,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8839,
-          "ms": 75
+          "ms": 68
         },
         "jsonBr": {
           "status": 200,
@@ -92,7 +92,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 1444,
-          "ms": 83
+          "ms": 67
         },
         "jsonGzip": {
           "status": 200,
@@ -109,7 +109,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 1570,
-          "ms": 90
+          "ms": 45
         },
         "head": {
           "status": 200,
@@ -125,7 +125,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 0,
-          "ms": 122
+          "ms": 103
         },
         "json404": {
           "status": 404,
@@ -141,7 +141,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 9,
-          "ms": 81
+          "ms": 61
         },
         "json405": {
           "status": 404,
@@ -156,7 +156,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 158,
-          "ms": 49
+          "ms": 83
         },
         "page404": {
           "status": 404,
@@ -172,7 +172,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 604,
-          "ms": 51
+          "ms": 96
         },
         "page500": {
           "status": 500,
@@ -187,7 +187,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 148,
-          "ms": 68
+          "ms": 60
         },
         "json500": {
           "status": 500,
@@ -202,7 +202,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 148,
-          "ms": 70
+          "ms": 64
         },
         "badHost": {
           "status": 200,
@@ -218,11 +218,11 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8839,
-          "ms": 55
+          "ms": 73
         },
         "bigHead": {
           "error": "ECONNRESET",
-          "ms": 105
+          "ms": 84
         },
         "formPath": "/items/item_5",
         "ownPost": {
@@ -239,7 +239,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8017,
-          "ms": 75
+          "ms": 93
         },
         "crossSite": {
           "status": 200,
@@ -255,7 +255,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8017,
-          "ms": 66
+          "ms": 49
         },
         "bigBody": {
           "status": 413,
@@ -270,7 +270,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 144,
-          "ms": 69
+          "ms": 108
         },
         "afterBig": {
           "status": 200,
@@ -286,12 +286,12 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 7943,
-          "ms": 60
+          "ms": 54
         },
         "logLines": "0",
         "tier": "matched",
         "unfinishedHead": {
-          "closedMs": 31037
+          "closedMs": 30723
         },
         "cap": {
           "below": 950,
@@ -317,7 +317,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 146,
-          "ms": 10123
+          "ms": 10078
         },
         "readyDown": null
       },
@@ -345,7 +345,7 @@
         "live": "none",
         "readyDown": "no readiness endpoint",
         "deadline": "503 in 10.1 s",
-        "unfinishedHead": "closed in 31.0 s",
+        "unfinishedHead": "closed in 30.7 s",
         "connectionCap": "capped, then closed",
         "unmet": [
           "crossSite",

@@ -1909,7 +1909,7 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    path or method no route has, keep Helmet's other headers and `Permissions-Policy` but carry
    finalhandler's own CSP, `default-src 'none'`, in place of the profile's (stricter: its error page
    loads nothing); the item page's 404 is the app's view, with the profile's. One `style-src` violation,
-   htmx's indicator styles, as FastAPI's. Its image grows by 1.5 MB (241,478,946 bytes against
+   htmx's indicator styles, as FastAPI's. Its image grows by 1.5 MB (241,479,756 bytes against
    239,983,013 built at `31e0443a`, the commit before), FastAPI's by 3 KB (236,298,472 against
    236,295,182).
 
@@ -1945,19 +1945,18 @@ readiness with the item API hung (200); its deadline is a 500 in 10.3 s. aspnet-
 `cb-aspnet-aot` built at the same commit, met all 14 of its columns that are not about pages
 (its readiness 503 in 2.0 s, its deadline 503 in 10.1 s), 13 by the tier's rule, since its
 readiness is a health check of its own.
-FastAPI, from `cb-fastapi` built at `b1c478d7` (`results/conform-matched-fastapi1/conformance.json`),
+FastAPI, from `cb-fastapi` built at `042f5716` (`results/conform-matched-fastapi1/conformance.json`),
 met 15 and missed 9: the ETag, the cross-site post (200), both failed reads (502 `text/plain`), the
 64 KiB header (200), liveness and readiness, the unfinished head (held 45 s) and the cap (a request
 was answered with 950 connections held, and with 1,050 held one more was answered 503). Express, from
 `cb-express` built at the same commit (`results/conform-matched-express1/conformance.json`), met 17
 and missed 7: the cross-site post (200), the JSON's 404 (`text/plain`), wrong method (an HTML 404)
 and failed read (an HTML 500), the unknown Host (200), liveness and readiness; its unfinished head
-closed in 31.0 s, and with 1,050 connections held the request on one more was closed (then a 200).
-Without the profile both apps' matrices are as before: every cell the same as from images built at
-`31e0443a`, the commit before (probed the same way, not stored), in
-`results/conform-defaults-fastapi-express1/conformance.json` (from the same two images; it says
-`dirty` because this README was being edited, and nothing else under `bench/fullstack` differed
-from `b1c478d7`).
+closed in 30.7 s, and with 1,050 connections held the request on one more was closed (then a 200).
+Without the profile both apps' matrices are as before: from the same two images,
+`results/conform-defaults-fastapi-express1/conformance.json` has every cell as
+`results/conform-defaults-fastapi-express-before1/conformance.json`, probed the same way from images
+built at `31e0443a`, the commit before, except FastAPI's deadline time (a 502 in 10.1 s, then 10.2 s).
 No load phase has run in the tier yet.
 
 ### The hardening step
