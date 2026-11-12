@@ -63,7 +63,7 @@ where
                 let picture = picture.filter(|id| pictures.has(id));
                 Ok(Viewer { name, picture, session: token.to_string() })
             }
-            None => Err(Refused::sign_in(&app::url::Home)),
+            None => Err(Refused::sign_in(&app::url::Home::default())),
         }
     }
 }
@@ -130,7 +130,7 @@ pub(crate) async fn sign_in(req: Req, State(sessions): State<Sessions>, before: 
         sessions.end(&viewer.session);
     }
     let token = sessions.start("Ada");
-    Ok(req.redirect(&app::url::Home)?.with_cookie(SetCookie::new("session", &token)))
+    Ok(req.redirect(&app::url::Home::default())?.with_cookie(SetCookie::new("session", &token)))
 }
 
 /// Ends the session on the server and takes the cookie away.
@@ -138,7 +138,7 @@ pub(crate) async fn sign_out(req: Req, State(sessions): State<Sessions>, viewer:
     if let Some(Caller(viewer)) = viewer {
         sessions.end(&viewer.session);
     }
-    Ok(req.redirect(&app::url::Home)?.with_cookie(SetCookie::remove("session")))
+    Ok(req.redirect(&app::url::Home::default())?.with_cookie(SetCookie::remove("session")))
 }
 
 /// The pictures people uploaded, by id. An id is a 128-bit hash of the bytes with keys of this
@@ -450,12 +450,12 @@ mod tests {
         let app = client();
         let shell = |page: &str| page.split(r#"<meta name="corten-shell" content=""#).nth(1).map(|rest| rest[..16].to_string());
         let first = sign_in(&app).await;
-        let ada = shell(app.get(&Home).cookie("session", &first).await.text()).unwrap();
+        let ada = shell(app.get(&Home::default()).cookie("session", &first).await.text()).unwrap();
         let second = sign_in(&app).await;
         assert_ne!(first, second);
-        let again = shell(app.get(&Home).cookie("session", &second).await.text()).unwrap();
+        let again = shell(app.get(&Home::default()).cookie("session", &second).await.text()).unwrap();
         assert_eq!(ada, again);
-        let visitor = shell(app.get(&Home).await.text()).unwrap();
+        let visitor = shell(app.get(&Home::default()).await.text()).unwrap();
         assert_ne!(ada, visitor, "the key does follow who is signed in");
     }
 
@@ -496,7 +496,7 @@ mod tests {
             ("image/png", "public, max-age=31536000, immutable")
         );
         assert_eq!(res.bytes().as_ref(), PNG);
-        let res = app.get(&Home).cookie("session", &session).await;
+        let res = app.get(&Home::default()).cookie("session", &session).await;
         assert!(res.text().contains(&img), "the header shows it on every page");
         // The same bytes are the same picture.
         let again = upload(&app, Mode::Action, &session, "again.png", PNG).await;

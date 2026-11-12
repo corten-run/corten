@@ -14,7 +14,12 @@ stays as it is instead of reconnecting, so a stream of one fragment is a slow pa
 when it is ready. A server shutting down ends its streams first, and those browsers reconnect.
 
 ```rust,ignore
-// the route: one fragment, when the slow read is done; it replaces the element with its id
+// in the routes module: the page, whose `picks` has it read them in (other links to it are
+// `url::Home::default()`), and the stream
+//   #[route("/", get = home)] #[derive(Default)] pub struct Home { pub picks: Option<bool> }
+//   #[route("/live/picks", get = picks)] pub struct Picks;
+
+// the stream: one fragment, when the slow read is done; it replaces the element with its id
 async fn picks(State(shop): State<Shop>) -> LiveResponse {
     corten::live(futures_util::stream::once(async move {
         let picks = shop.picks_for_you().await;
@@ -22,9 +27,57 @@ async fn picks(State(shop): State<Shop>) -> LiveResponse {
     }))
 }
 
-// the page: drawn without them, then completed
-html! { <corten-live src={url::Picks}><p id={PicksId}>"Finding picks for you..."</p></corten-live> }
+// the page: drawn without them and completed by the stream, unless its address asks for them
+async fn home(req: Req, Params(at): Params<url::Home>, State(shop): State<Shop>) -> HtmlResult {
+    let picks = match at.picks {
+        Some(true) => Some(shop.picks_for_you().await),
+        _ => None,
+    };
+    req.page(html! {
+        // .. the rest of the page
+        match &picks {
+            Some(picks) => <Picks picks={picks} />,
+            None => <corten-live src={url::Picks}><PicksLoading /></corten-live>,
+        }
+    })
+}
+
+#[component(css)] // picks_loading.css, below
+fn PicksLoading() -> impl Render {
+    html! {
+        <p id={PicksId}>
+            <span class={Finding}>"Finding picks for you..."</span>
+            <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
+        </p>
+    }
+}
+
+// listed with the app's components, so its stylesheet is served
+App::new(url::router()).components(&[.., PicksLoading])
 ```
+
+```css
+/* picks_loading.css: the link shows in place of the line where no stream will bring the picks */
+@media (scripting: enabled) { .show { display: none; } }
+@media (scripting: none) { .finding { display: none; } }
+corten-live[status="closed"] .finding { display: none; }
+corten-live[status="closed"] .show { display: inline; }
+```
+
+A browser without JavaScript opens no stream, and a stream can give up (`closed`, below), so a
+placeholder alone would stay for good. Its link goes to the page's own route with a query field
+its handler reads the part in for, so there is no second route. The component's CSS hides the
+link while a stream may still bring the part, and shows it in place of the line saying the part
+is on its way under `@media (scripting: none)` and inside a `closed` `<corten-live>`; a browser
+without the `scripting` media feature matches neither query and shows both. The query follows
+whether scripts are on, not whether the runtime ran
+([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
+the runtime blocked or failed, the line stays and the link is hidden. Following the link costs
+one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
+JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
+slow parts reads them all in under one field, and a data client asks the same address for the
+part. What the pattern costs is one field plus one handler branch per page
+([design Choice 44](../design.md#choice-slow-part-link)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
@@ -152,7 +205,8 @@ nginx passes their events on as they are written ([Deploying](deploy.md#live-str
 
 A browser without JavaScript gets no stream: a page whose part is relayed while a job runs asks
 it alone to reload, with `ReadAgain { after }.without_javascript()` in its head
-([read again](requests-and-forms.md)).
+([read again](requests-and-forms.md)), and a slow part sent once links to the page with it read
+in ([Fragments](#fragments-corten-live)).
 
 `<corten-live>` shows its connection on itself, so a page can say a part is stale with CSS alone:
 `status` is `connecting`, `live` once the stream is open, `reconnecting` while the browser

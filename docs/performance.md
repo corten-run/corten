@@ -50,6 +50,8 @@ requires every adapter in the reserved [framework group](../bench/marketplace/ni
 both sources and every conformance profile for each feature-qualified candidate. Popular and
 performance-oriented shortlists share one deduplicated production run; native capability
 probes exclude unsupported peers, with explicit reasons. Axum is not an automatic anchor.
+A round can be [split across droplets](../bench/marketplace/nightly.md#split-rounds) started
+together; the nightly default stays one host.
 A group result does not rank unmeasured apps; only identical groups, admitted sets and
 otherwise compatible configurations can be compared. The scoped production checklist's
 ETag and downstream-readiness exceptions are disclosed in the group contract.

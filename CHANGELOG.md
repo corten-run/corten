@@ -7,6 +7,25 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A nightly `bench/marketplace` group round can be split across droplets started together:
+  `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the
+  account's droplet limit once, writes the plan (commit, group and each droplet's candidates) and
+  creates every droplet before starting any, holding `launch.lock` so collect waits for a live
+  launch and a hangup does not stop it. Each droplet runs Corten beside a round-robin share of
+  the group's other candidates (`run.mjs --group <g> --part k/n`), qualifies them with the
+  group's feature contract and times only those it admits; a droplet with no admitted peer fails
+  its part. `--collect` collects and deletes each droplet as it finishes, reports any leftover
+  droplet, prints the command that stops each running droplet once one that never started, is
+  partial or is missing means the round cannot merge, and merges the round only when every
+  droplet has finished clean and every candidate of the group is accounted for once, admitted and
+  measured or excluded with its evidence; parts that did not run together, or share a run, do not
+  merge. The report shows each droplet's CPU and Corten in
+  every table, each candidate's ratio to the Corten on its own droplet (`-` where either stage
+  stopped), and flags a stage where
+  Corten's own numbers differ between droplets beyond the pass ranges. A one-droplet round runs,
+  reports and compares as before, and a split round compares only with one split the same way,
+  each row naming its droplet
+  ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
 - Feature-qualified marketplace comparison groups: popular and performance-oriented
   candidate pools share one deduplicated production run instead of timing the full inventory
   each night. Both sources must satisfy the same scoped production checklist, then the full
@@ -109,6 +128,22 @@ Corten is pre-1.0, so any minor version may change the API.
   is the select's. A file input's files are told by each one's name, size and time there and when
   a patch answers: another file of the same name, chosen while the answer that takes the first is
   on its way, stays chosen, where before it was taken with the answer.
+- A slow part a `<corten-live>` stream sends once had no answer without JavaScript: the browser
+  opens no stream, so its placeholder stayed for good, as it did when a stream gave up. The live
+  data guide's slow-part pattern and
+  [design Choice 44](docs/design.md#choice-slow-part-link) now give it one with what routes
+  already do: the placeholder holds a link (`rel="nofollow"`) to the page's own route with a query
+  field that has its handler read the part in (`url::Home { picks: Some(true) }`), so an app
+  writes no second route per part, at the cost of one field plus one handler branch per page.
+  The component's CSS hides the link under `@media (scripting: enabled)` and the line saying the
+  part is on its way under `@media (scripting: none)`, and swaps them inside
+  `corten-live[status="closed"]`, so a browser without the `scripting` media feature shows both.
+  The watchlist's home page has picks written this way. `scripts/smoke.mjs` checks, in Chromium,
+  Firefox and WebKit, that without JavaScript the link shows and opens the page with the picks;
+  that with it, while the stream is held unanswered (`connecting`), the line shows and the link
+  does not, in the page loaded and in one a client navigation drew; and that a stream answered
+  with a 204 shows the link, which opens the page with the picks
+  ([#1264 A slow part a <corten-live> stream sends once has no answer without JavaScript: its placeholder stays for good](https://github.com/corten-run/corten/issues/1264)).
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
