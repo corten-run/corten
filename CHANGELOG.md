@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Offline correctness contracts for the full-stack browser and client-heavy groups
+  cover native navigation/forms, equivalent keyed state, operation-time HTTP and
+  terminal resource cleanup. Reference helpers cannot supply native observations;
+  these contracts do not qualify adapters or produce timings.
+
 - Ordinary ASP.NET Core's catalog and marketplace JSON routes support native `HEAD`
   and Problem Details for JSON-compatible clients in both profiles. Page/form error
   handling stays separate; these functional checks are not production qualification
