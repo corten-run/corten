@@ -82,11 +82,17 @@ async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>)
     Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?))
 }
 fn app(source: Source) -> App {
-    App::new(routes::router(source.clone()))
+    let app = App::new(routes::router(source.clone()))
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
         .messages::<Msg>()
-        .components(&[views::SiteHeader])
+        .components(&[views::SiteHeader]);
+    if std::env::var("PROFILE").as_deref() == Ok("matched") {
+        let cap = std::env::var("MAX_CONNECTIONS").expect("production benchmark requires MAX_CONNECTIONS");
+        app.max_connections(cap.parse().ok().filter(|n| *n > 0).expect("MAX_CONNECTIONS must be positive"))
+    } else {
+        app
+    }
 }
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

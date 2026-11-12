@@ -20,7 +20,7 @@ test("versioned round namespace and safe defaults", () => {
 });
 
 test("timed schema has six localized pages and exactly two locale-neutral JSON profiles", () => {
-  assert.equal(resultSchema, "marketplace-results/v4");
+  assert.equal(resultSchema, "marketplace-results/v5");
   assert.equal(timedProfiles.length, 8);
   assert.equal(new Set(timedProfiles.map((p) => p.key)).size, 8);
   for (const source of ["fixture", "api"]) {
