@@ -12,9 +12,19 @@ Corten is pre-1.0, so any minor version may change the API.
   lines where its three files meet, its own source is broken five ways with what the compiler
   said, and the server streams its own readings, with the memory it holds and the machine it is on
   where the system counts them. Tests hold what it says to `docs/performance.md`, the README,
-  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small machine behind nginx
-  as a systemd service; the workflow does nothing until the repository names a machine. Its smoke
-  test runs in CI's `webkit-gallery` group.
+  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
+  machine behind nginx as a systemd service: each change on `main` is tested, built, copied over
+  SSH and switched to, and the release before is put back when the new one does not answer as its
+  commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
+  Chromium, Firefox and WebKit, in CI's `webkit-gallery` group.
+- `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
+  (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
+  the scheme in any case, one or more spaces, the token trimmed, and `None` for no
+  `Authorization`, another scheme, `Bearer` with nothing after it, a value outside visible ASCII
+  or two `Authorization` lines (RFC 9110 5.3). The `Challenge` and `Tools::auth` examples (now a
+  compiled doctest, where it called an `auth::bearer` that does not exist) and card-market's
+  partners and agents read with it in place of their own parsers
+  ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
 - The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no

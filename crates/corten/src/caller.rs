@@ -92,6 +92,7 @@ use crate::extract::{FromRequestParts, OptionalFromRequestParts};
 use crate::response::IntoResponse;
 use crate::response::Response;
 use http::request::Parts;
+use http::HeaderMap;
 use http::HeaderValue;
 use http::StatusCode;
 
@@ -246,19 +247,16 @@ impl Refused {
 /// 11.6.1): a scheme, and that scheme's parameters, for [`Refused::unauthorized`].
 ///
 /// ```
-/// use corten::{http::request::Parts, prelude::*};
+/// use corten::{caller, http::request::Parts, prelude::*};
 ///
 /// #[derive(Clone, Hash)]
 /// struct Partner { name: String }
 ///
 /// impl<S: Sync> Identify<S> for Partner {
 ///     async fn identify(parts: &Parts, _state: &S) -> Result<Self, Refused> {
-///         // The scheme is matched in any case (RFC 9110 11.1).
-///         let sent = parts.headers.get("authorization").and_then(|v| v.to_str().ok());
-///         let key = sent.and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"));
-///         match key.map(|(_, key)| key.trim()).filter(|key| !key.is_empty()) {
+///         match caller::bearer(&parts.headers) {
 ///             // No key, or another scheme's credentials: say how to send one, and no error (RFC
-///             // 6750 3.1). An empty key, which RFC 6750 does not allow, is taken as none.
+///             // 6750 3.1).
 ///             None => Err(Refused::unauthorized(Challenge::bearer("partners"))),
 ///             // A real app looks the key up here.
 ///             Some("dev-key") => Ok(Partner { name: "dev".into() }),
@@ -377,6 +375,42 @@ impl Challenge {
     pub(crate) fn value(&self) -> &HeaderValue {
         &self.0
     }
+}
+
+/// The token a request sends as bearer credentials (RFC 6750 2.1), `Authorization: Bearer <token>`,
+/// the scheme [`Challenge::bearer`] asks a client to use, for an [`Identify`] that looks up a key
+/// or token and for the MCP endpoint's `Tools::auth`:
+///
+/// ```
+/// use corten::{caller, http::HeaderMap};
+///
+/// let mut headers = HeaderMap::new();
+/// headers.insert("authorization", "bearer  dev-key ".parse().unwrap());
+/// assert_eq!(caller::bearer(&headers), Some("dev-key"));
+/// ```
+///
+/// The scheme is matched in any case (RFC 9110 11.1) and followed by one or more spaces, and the
+/// token is trimmed of spaces and tabs. It is `None` without an `Authorization`, for another
+/// scheme's credentials (`Basic YTpi`), and for `Bearer` with no token after it, which RFC 6750
+/// does not allow. It is `None` too for credentials it cannot read as one token: a value with a
+/// byte outside visible ASCII (RFC 6750's token is ASCII, and such a byte, obs-text in RFC 9110
+/// 5.5, has no character set to read it by), and two `Authorization` lines, which RFC 9110 (5.3)
+/// does not let a client send, since two readers could each take a different one. An app that
+/// wants RFC 6750's `error="invalid_token"` for those treats an `Authorization` that is present
+/// but unreadable as a malformed token, as the MCP endpoint does for one that starts `Bearer `.
+///
+/// The token is not checked against RFC 6750's `b64token` syntax: whether it is one the app knows
+/// is the lookup's to say, and a malformed one is refused there as a wrong one,
+/// `error="invalid_token"`, which RFC 6750 (3.1) names for a malformed token too.
+pub fn bearer(headers: &HeaderMap) -> Option<&str> {
+    let mut sent = headers.get_all(http::header::AUTHORIZATION).iter();
+    let value = sent.next()?;
+    if sent.next().is_some() {
+        return None;
+    }
+    let (scheme, token) = value.to_str().ok()?.split_once(' ')?;
+    let token = token.trim_ascii();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 /// Whether `a` and `b` are the same ASCII text in any case, in a `const`.
@@ -637,6 +671,46 @@ impl<S: Send + Sync, T: Identify<S>> OptionalFromRequestParts<S> for Caller<T> {
 #[cfg(test)]
 mod tests {
     use super::Challenge;
+    use http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
+
+    /// RFC 6750 2.1's credentials, with the scheme in any case (RFC 9110 11.1).
+    #[test]
+    fn a_bearer_token_is_read_from_its_credentials() {
+        let read = |sent: &[&[u8]]| {
+            let mut headers = HeaderMap::new();
+            for line in sent {
+                headers.append(AUTHORIZATION, HeaderValue::from_bytes(line).unwrap());
+            }
+            super::bearer(&headers).map(str::to_owned)
+        };
+        for (sent, token) in [
+            (&b"Bearer t"[..], Some("t")),
+            (b"bearer t", Some("t")),
+            (b"BEARER t", Some("t")),
+            // One or more spaces after the scheme, and the token trimmed.
+            (b"Bearer  t ", Some("t")),
+            (b"Bearer \tt\t", Some("t")),
+            // Not checked against b64token: the lookup refuses it as a wrong token.
+            (b"Bearer two words", Some("two words")),
+            // No token: none at all, only whitespace, or another scheme's credentials.
+            (b"Bearer", None),
+            (b"Bearer   ", None),
+            (b"Bearer \t", None),
+            (b"Bearert", None),
+            (b"Bearer\tt", None),
+            (b"Basic YTpi", None),
+            (b"Bearers t", None),
+            // Outside visible ASCII, in UTF-8 or not, is none.
+            ("Bearer caf\u{e9}".as_bytes(), None),
+            (b"Bearer caf\xe9", None),
+        ] {
+            assert_eq!(read(&[sent]).as_deref(), token, "{:?}", String::from_utf8_lossy(sent));
+        }
+        assert_eq!(read(&[]), None);
+        // Two lines (RFC 9110 5.3 allows one): neither is taken, whichever is first.
+        assert_eq!(read(&[b"Bearer t", b"Bearer u"]), None);
+        assert_eq!(read(&[b"Bearer t", b"Basic YTpi"]), None);
+    }
 
     #[test]
     fn a_challenge_is_its_scheme_then_its_parameters_quoted() {
