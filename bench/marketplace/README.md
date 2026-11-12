@@ -122,11 +122,14 @@ twelve browser profiles, before its own load; the gate checks each against the c
 against Corten, so it needs no other droplet. A droplet must admit its Corten and at least one
 peer, as an unsplit round must: a droplet whose peers are all excluded compares nothing and
 fails its part, as does a droplet whose gate fails, so the round cannot merge, though other
-droplets may already have measured. So a split is worth launching only when the latest
-single-host round's qualification admitted enough peers to give every part at least one: compare
-the `--plan` split with that round's Feature Qualification table first, or the round fails only
-after the other droplets have spent their hours ([nightly.md](nightly.md#split-rounds) says where
-the default stands).
+droplets may already have measured. The deal is by membership, the group's selected candidates
+as `groups.mjs` sets them, not by qualification status, what `admitted()` says of each on a
+given run: a candidate that lacks a feature stays selected, since missing support is
+implementation backlog, not a reason to drop it. So a split is worth launching only when the
+latest full round's Feature Qualification table (not a check-only run's, which has no report)
+admits at least one peer for every part of the `--plan` split, or the round fails only after the
+other droplets have spent their hours ([nightly.md](nightly.md#split-rounds) says where the
+default stands).
 
 The launcher checks the clean checkout, that no benchmark droplet exists and the account's
 droplet limit (`doctl account get`) once, then writes `split.json` (commit, group and each
@@ -189,7 +192,8 @@ above the other's highest: raw numbers on those droplets are then not like for l
 Corten on every droplet, nothing checks that a ratio carries from one droplet's machine to
 another's. `compare.mjs` compares a split round only with one split the same way, each droplet's
 host and images equal to the baseline's same droplet, and Corten's rows are d1's. It says so in
-one warning, since the cohort context then mixes droplets, and gives each row its droplet. A droplet's CPU
+one warning, which adds that the cohort context mixes droplets when an unchanged reference
+adapter is on a droplet other than d1, and gives each row its droplet. A droplet's CPU
 model is not chosen at create, so droplets can land on a mix (Xeon Platinum 8168 on d1 and 8280
 on d2, say). The round still merges and its report reads each candidate by its ratio to its own
 droplet's Corten. But `compare.mjs` refuses it, with no deltas, against any baseline whose

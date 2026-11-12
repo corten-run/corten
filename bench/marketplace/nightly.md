@@ -169,13 +169,15 @@ A round may be split across droplets started together with `--droplets <n>`
 ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816));
 the [marketplace README](README.md#splitting-a-round-across-droplets) describes the split, the
 merge and the check. The nightly default stays one droplet until a split round has been run and
-validated with Todd's approval. A split is worth launching only when the latest single-host
-round's qualification admitted enough peers to give every part at least one: a part whose peers
-are all excluded makes the round unmergeable, and that shows only after the other droplets have
-spent their hours. Compare the `--plan` split with that round's Feature Qualification table
-before launching. As of 2026-11-12 the local qualification admits only Corten and ASP.NET Core,
-so every split of `production` leaves a part with no peer, and the default stays one host. When
-splitting, check `--plan` first, then launch with the same
+validated with Todd's approval. A split deals every selected candidate of the group to a part
+by membership. Membership is the group's candidates as `groups.mjs` sets them, and it does not
+shrink when an adapter lacks a feature: missing support is implementation backlog, not a reason
+to drop a candidate. Qualification status is what `admitted()` says of each candidate on a given
+run, on its own droplet. So a split is worth launching only when the latest full round's Feature
+Qualification table (not a check-only run's, which has no report) admits at least one peer for
+every part of the `--plan` split: a part whose peers are all excluded makes the round
+unmergeable, and that shows only after the other droplets have spent their hours. When
+splitting, check `--plan` against that table first, then launch with the same
 state directory rules as above:
 
 ```sh
@@ -195,7 +197,9 @@ droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its dele
 deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
 droplet finished, was deleted and merged into `round/rN/` in the state directory. Exit 2 wins
 over 3: a droplet can still be running when collect exits 2. Then fix what it names and collect
-again until it exits 0 or 1; never relaunch. When a droplet never started, is partial or is
+again until it exits 0 or 1; never relaunch. Exit 1 is final for the round: when the parts do not
+merge, collect says the round cannot be merged and to follow the exit 1 steps in
+[State And Collection](#state-and-collection); the next round takes the next rN. When a droplet never started, is partial or is
 missing, the round cannot merge, and collect prints an `ssh ... systemctl stop` command for each
 droplet still running, whatever the exit code: run each, then collect again. This overrides "keep
 running" above, so a round that cannot merge stops billing. Import that merged folder, not a

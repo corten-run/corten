@@ -356,6 +356,13 @@ test("a split round compares only with one split the same way, droplet by drople
   // Corten's rows are d1's and each reference's are its own droplet's: said once, and on each row.
   assert.equal(same.warnings.filter((w) => /^Split across 2 droplets: Corten's rows are d1's, .*cohort context mixes droplets/.test(w)).length, 1);
   for (const rows of [same.rows, same.cold]) assert.deepEqual([...new Set(rows.map((r) => `${r.app}@d${r.droplet}`))], ["corten@d1", "nextjs@d1", "leptos@d2"]);
+  // With every unchanged reference on d1 beside Corten, or none, the cohort mixes no droplets:
+  // the warning still says Corten's rows are d1's, and no more.
+  for (const unchangedApps of [["nextjs"], []]) {
+    const d1 = compare(now, then, { unchangedApps });
+    assert.equal(d1.compatible, true, d1.warnings.join("\n"));
+    assert.deepEqual(d1.warnings.filter((w) => w.startsWith("Split")), ["Split across 2 droplets: Corten's rows are d1's, and each reference adapter's rows are from its own droplet (each row's droplet)."], unchangedApps.join());
+  }
   const whole = compare(full("r18"), full(), { unchangedApps: ["nextjs"] });
   assert.equal(whole.compatible, true, whole.warnings.join("\n"));
   assert.ok(whole.rows.every((r) => !("droplet" in r)) && whole.cold.every((r) => !("droplet" in r)) && !whole.warnings.some((w) => w.startsWith("Split")));
@@ -737,6 +744,19 @@ test("parts that finish but do not merge are partial, exit 1, with no merged rou
   assert.equal(result.value, 1, result.out);
   assert.deepEqual(f.deleted, ["101", "102"]);
   assert.match(result.out, /partial: every droplet finished and was deleted, but they do not merge into one round: d2's options differ from d1's: not one round/);
+  assert.match(result.out, /^r17 cannot be merged: follow the exit 1 steps in bench\/marketplace\/nightly\.md \(State And Collection\); the next round takes a new number, never relaunch r17\.$/m);
+  assert.equal(existsSync(join(f.local, "round")), false);
+});
+
+test("parts that did not run together are partial at collect, which says the round cannot be merged and what to do", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  // d2's part ran four days after d1's finished, every time in it moved, so it validates alone.
+  f.finish(1, 2); f.finish(2, 2, { change: (s) => Object.assign(s, JSON.parse(JSON.stringify(s).replaceAll("2026-01-01T", "2026-01-05T"))) });
+  const result = await quiet(t, () => f.task().collect());
+  assert.equal(result.value, 1, result.out);
+  assert.deepEqual(f.deleted, ["101", "102"]);
+  assert.match(result.out, /do not merge into one round: a part started after another finished: the droplets did not run together, so this is not one round\nr17 cannot be merged: follow the exit 1 steps in bench\/marketplace\/nightly\.md \(State And Collection\); the next round takes a new number, never relaunch r17\./);
   assert.equal(existsSync(join(f.local, "round")), false);
 });
 

@@ -125,7 +125,8 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   if (Object.values(current.measurement.cpus).some((c) => !c.cpuset)) warn("CPU quota-only placement does not prove isolation in either round.");
   // The split shapes are equal, so an app is on the same droplet in both rounds.
   const droplet = current.split ? (app) => ({ droplet: app === "corten" ? 1 : current.split.parts.find((p) => p.apps.includes(app)).index }) : () => ({});
-  if (current.split) warn(`Split across ${current.split.droplets} droplets: Corten's rows are d1's, and each reference adapter's rows are from its own droplet (each row's droplet), so the cohort context mixes droplets and their machines.`);
+  // The cohort context mixes droplets only when an unchanged reference is not on Corten's d1.
+  if (current.split) warn(`Split across ${current.split.droplets} droplets: Corten's rows are d1's, and each reference adapter's rows are from its own droplet (each row's droplet)${result.unchangedApps.some((app) => droplet(app).droplet !== 1) ? ", so the cohort context mixes droplets and their machines" : ""}.`);
   const delta = (a, b) => ({ baseline: { ...a }, current: { ...b }, percentChange: a.median === 0 ? null : (b.median / a.median - 1) * 100,
     rangesOverlap: a.min <= b.max && b.min <= a.max });
   // A stage that fails more than in the baseline is reported whatever the percentages say (a 0%

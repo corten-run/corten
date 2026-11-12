@@ -339,7 +339,7 @@ export function splitController(options, deps = {}) {
     if (doomed.length && stops.length) console.log(`${options.round} cannot merge: ${doomed.join(", ")} will not complete it. Stop each running droplet so it stops billing:\n${stops.join("\n")}\nThen run ${collectCommand} again: it collects their partial evidence and deletes them.`);
     if (code === 0) {
       try { console.log(`all done: ${options.round} merged from ${plan.droplets} droplets into ${merge(states)}; every droplet's deletion is confirmed`); }
-      catch (e) { console.error(`partial: every droplet finished and was deleted, but they do not merge into one round: ${e.message}`); code = 1; }
+      catch (e) { console.error(`partial: every droplet finished and was deleted, but they do not merge into one round: ${e.message}\n${options.round} cannot be merged: follow the exit 1 steps in bench/marketplace/nightly.md (State And Collection); the next round takes a new number, never relaunch ${options.round}.`); code = 1; }
     } else if (code === 3) {
       if (!doomed.length) console.log(`${options.round} is not finished: ${which(3)} still running. Finished droplets are collected and deleted; run ${collectCommand} again later.`);
     } else if (code === 1) console.log(`${options.round} is partial: ${which(1, "missing")} did not finish its part. Every droplet's deletion is confirmed; there is no merged round.`);
