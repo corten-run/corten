@@ -687,7 +687,8 @@ while it is pending sends nothing (a double click). A newer submit of a read (a 
 filter) aborts the older one, whose answer is worth nothing now. While a write is pending, any
 newer submit of the form waits instead: the server may already have applied the write, and its
 answer is the page's next state. Once the runtime has drawn the write's answer (a patch or a
-page) and it took the write (2xx) or refused only its input (422), it sends the latest of the submits that waited, from the form as it is then,
+page) and it took the write (2xx) or refused only its input (422), or the write was done with
+nothing to draw (a bare `204` or `205`, below), it sends the latest of the submits that waited, from the form as it is then,
 so the version or count the answer wrote goes out with it, under the form's new key. Its
 `on:submit` handlers ran at the press and do not run again, and the browser does not check the
 form's constraints again (the server checks what it gets). Several presses while the write is
@@ -704,7 +705,16 @@ late answer never patches a page it was not meant for. A screen whose every pres
 its own (a count's + and -, each a delta the server adds) keeps its own ordered queue in its
 script: the form sends where the user ended up, not each step.
 
-When a `data-patch` submit gets no answer the runtime can draw, it dispatches `corten:error` on
+A `204 No Content` or `205 Reset Content` with none of Corten's headers (`StatusCode::NO_CONTENT`,
+the answer for a write with nothing to say) is the submit done with nothing to draw (RFC 9110,
+15.3.5 and 15.3.6): the page stays as it is, the form gets a new key as after any whole answer
+below 500, a submit that waited goes, and nothing says it failed. A `205` asks the client to put
+the form back as it came, so the runtime resets it (the browser's `form.reset()`, which fires
+`reset`), unless the user changed the form after it was sent or pressed again while it was out:
+their work is kept, as against a patch. A browser without JavaScript stays on the page for
+either and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`.
+
+When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
 one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its

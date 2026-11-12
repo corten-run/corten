@@ -316,7 +316,8 @@ so `tsc` checks the builder's `event.outcome === "Refused"` against the enum's n
 variant fails the Rust build and then `tsc`, where a `String` field would let the branch quietly stop
 matching. The page as first loaded has had no save answered, and a generated declaration cannot be
 optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
-for which `answered` dispatches nothing. A submit with no answer to draw is `corten:error` on the
+for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
+`205`, the submit done with nothing to draw) is `corten:error` on the
 form (it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
 corten-ui's `Toaster` quiet), and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:

@@ -45,6 +45,7 @@ const shadowing = [
   "toggleAttribute",
   "addEventListener",
   "removeEventListener",
+  "reset",
 ];
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
@@ -1882,6 +1883,83 @@ async function run(browser) {
     keyed.ended && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
     `${keyed.sent}; ended: ${keyed.ended}; error: ${keyed.status}`,
   );
+
+  // A 204 or 205 with none of Corten's headers took the write and has nothing to draw (RFC 9110,
+  // 15.3.5 and 15.3.6; #1258): no corten:error, and the submit that waited goes, under the key the
+  // answer renewed. A 205 resets the form only when nothing waits: the second submit goes with the
+  // values it was pressed with, and its own 205 then resets the form, keeping the renewed key.
+  const keyField = `<input type="hidden" name="submit" data-submit value="${zero}">`;
+  const queueFields = () =>
+    page.evaluate(() => ({
+      n: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=n]"))?.value,
+      key: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=submit]"))?.value,
+    }));
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  for (const status of [204, 205]) {
+    queueAnswer = { status, body: "" };
+    // Ended once the waiting submit's own answer is in and the form is no longer busy.
+    const quiet = await queueCase(queueForm("post", keyField), async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null);
+    const [first, second] = quiet.sent.split(",").map((s) => s.split(" ")[2]);
+    const left = await queueFields();
+    check(
+      `a submit that waited for a bare ${status} goes out after it under a new key, with no corten:error${status === 205 ? ", and the last 205 resets the form" : ""}`,
+      quiet.ended &&
+        quiet.status === null &&
+        quiet.busy === "true" &&
+        quiet.sent.split(",").length === 2 &&
+        quiet.sent.startsWith("POST 1 ") &&
+        quiet.sent.includes(",POST 2 ") &&
+        first === zero &&
+        uuid.test(second ?? "") &&
+        left.n === (status === 205 ? "1" : "2") &&
+        uuid.test(left.key ?? "") &&
+        left.key !== second,
+      `${quiet.sent}; ended: ${quiet.ended}; error: ${quiet.status}; left ${JSON.stringify(left)}`,
+    );
+  }
+  // With nothing waiting, a 205 resets the form that sent it to the markup's values, and the key
+  // the answer renewed stays. A form the user changed after it was sent keeps their work, as it
+  // does against a patch. The form has a control named reset, so `form.reset` is that control and
+  // the form's own method has to be reached through its prototype.
+  for (const edited of [false, true]) {
+    queueSent = [];
+    queueAnswered = 0;
+    queueAnswer = { status: 205, body: "" };
+    /** @type {() => void} */
+    let pressed = () => {};
+    queuePressed = new Promise((resolve) => (pressed = resolve));
+    await page.evaluate((form) => {
+      document.getElementById("queue-box")?.remove();
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}</div>`));
+      const w = /** @type {any} */ (window);
+      w.__queueCase?.abort();
+      w.__queueCase = new AbortController();
+      w.__queueError = null;
+      document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
+    }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">`));
+    await page.fill("#queue-box [name=n]", "5");
+    await page.click("#queue-box button");
+    if (edited) await page.fill("#queue-box [name=n]", "6");
+    pressed();
+    const until = Date.now() + 6000;
+    while (!(queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
+    // Time for a corten:error to be heard, or a waiting submit to go.
+    await page.waitForTimeout(300);
+    const reset = await queueFields();
+    const error = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__queueCase.abort();
+      return /** @type {number | null} */ (w.__queueError);
+    });
+    check(
+      edited
+        ? "a bare 205 keeps a form the user changed after it was sent, with no corten:error"
+        : "a bare 205 with nothing waiting resets the form that sent it, keeps the key it renewed, and dispatches no corten:error",
+      queueSent.length === 1 && queueSent[0].startsWith("POST 5 ") && error === null && reset.n === (edited ? "6" : "1") && uuid.test(reset.key ?? ""),
+      `${queueSent.join()}; error: ${error}; left ${JSON.stringify(reset)}`,
+    );
+  }
+  queuePressed = Promise.resolve();
   await page.unroute("**/queue*");
   page.off("requestfailed", queueGaveUp);
   await page.evaluate(() => document.getElementById("queue-box")?.remove());
@@ -5429,25 +5507,30 @@ async function run(browser) {
         return send.call(this, body);
       };
     });
-  /** The form's corten:error once it is not busy, or after 8 s whatever it is, with the statuses loaded. */
-  const uploadEnded = () =>
+  /**
+   * The form's corten:error once it is not busy, or after 8 s whatever it is, with the statuses
+   * loaded and the files left in its input. `quiet`: an answer that dispatches none, so the form
+   * is read once the answer has loaded, it is not busy and 300 ms more have passed.
+   * @param {boolean} [quiet]
+   */
+  const uploadEnded = (quiet = false) =>
     page
       .waitForFunction(
-        () => {
+        (quiet) => {
           const w = /** @type {any} */ (window);
           const busy = document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null;
-          return w.__uploadError !== null && busy === null && { error: w.__uploadError, busy, loaded: w.__xhrStatus.join() };
+          return (quiet ? w.__xhrStatus.length > 0 : w.__uploadError !== null) && busy === null;
         },
-        null,
+        quiet,
         { timeout: 8000 },
       )
-      .then(
-        (handle) => handle.jsonValue(),
-        () =>
-          page.evaluate(() => {
-            const w = /** @type {any} */ (window);
-            return { error: w.__uploadError, busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, loaded: w.__xhrStatus.join() };
-          }),
+      .then(() => quiet && page.waitForTimeout(300), () => {})
+      .then(() =>
+        page.evaluate(() => {
+          const w = /** @type {any} */ (window);
+          const files = /** @type {HTMLInputElement | null} */ (document.querySelector("main input[type=file]"))?.files?.length ?? null;
+          return { error: w.__uploadError, busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, loaded: w.__xhrStatus.join(), files };
+        }),
       );
   /** Why the last answer could not be given, when the engine refused it (empty when it was given). */
   let unfulfilled = "";
@@ -5490,13 +5573,16 @@ async function run(browser) {
     redirectedIn && afterRedirect.error === null && afterRedirect.busy === null && afterRedirect.path === "/account",
     `${redirectedIn ? "" : "the page was not drawn again in 8 s; "}${JSON.stringify(afterRedirect)}`,
   );
-  // A bare 204 or 205, with none of Corten's headers, is an answer the runtime does not draw:
-  // corten:error with that status, not the 0 of a Response that could not be made. That is the
-  // runtime's behavior today; #1258 (a data-patch write answered 204 fires corten:error) will
-  // change what a 204 should do, and this check with it. A 304 is skipped where it cannot be
-  // given or XMLHttpRequest does not load it.
+  // A bare 204 or 205, with none of Corten's headers, took the write and has nothing to draw
+  // (#1258): no corten:error, and a 205 resets the form, so the file chosen is cleared. A bare 304
+  // is an answer the runtime does not draw: corten:error with that status, not the 0 of a Response
+  // that could not be made. A 304 is skipped where it cannot be given or XMLHttpRequest does not
+  // load it.
   for (const status of [204, 205, 304]) {
-    const bareName = `an upload answered with a bare ${status} dispatches corten:error with status ${status}, and the form is not busy`;
+    const quiet = status !== 304;
+    const bareName = quiet
+      ? `an upload answered with a bare ${status} dispatches no corten:error${status === 205 ? ", the form is reset" : ""}, and the form is not busy`
+      : `an upload answered with a bare ${status} dispatches corten:error with status ${status}, and the form is not busy`;
     // Playwright refuses a 304 there as a redirect, and the upload after the one it refused went
     // unanswered for 8 s in a run that tried it.
     if (status === 304 && engine === "webkit") {
@@ -5506,10 +5592,10 @@ async function run(browser) {
     await watchUpload();
     await page.route("**/avatar", (route) => answerUpload(route, status));
     await pressUpload();
-    const bare = await uploadEnded();
+    const bare = await uploadEnded(quiet);
     await page.unroute("**/avatar");
     if (status === 304 && bare.loaded !== "304") skip(bareName, `the engine's XMLHttpRequest did not load a 304: ${unfulfilled || `loaded ${bare.loaded || "nothing"}, corten:error ${bare.error}`}`);
-    else check(bareName, bare.error === status && bare.busy === null && bare.loaded === String(status), JSON.stringify(bare));
+    else check(bareName, bare.error === (quiet ? null : status) && bare.busy === null && bare.loaded === String(status) && (status !== 205 || bare.files === 0), JSON.stringify(bare));
   }
   // A status of 600 or more, which a browser may log as a failed resource.
   const beyondLogged = errors.length;

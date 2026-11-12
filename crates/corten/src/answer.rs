@@ -724,7 +724,10 @@ impl Answer for String {
 }
 
 /// A status and no body: `StatusCode::NO_CONTENT` for a write that has nothing to say. An error
-/// status is answered as any failure of the route is.
+/// status is answered as any failure of the route is. The runtime takes a `NO_CONTENT` or
+/// `RESET_CONTENT` answer to a `data-patch` form as done with nothing to draw: the page stays, with
+/// no `corten:error`, and a `RESET_CONTENT` also resets the form, as RFC 9110 15.3.6 asks, unless
+/// the user changed it after it was sent.
 impl Answer for StatusCode {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
