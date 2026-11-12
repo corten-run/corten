@@ -123,22 +123,23 @@ void main() {
   float edge = y < upper ? uStrata.x : (y < lower ? uStrata.y : uStrata.z);
   float row = y < upper ? 3.1 : (y < lower ? 14.6 : 27.3);
   float off = y - edge + (edge == uStrata.x ? 0.0 : (edge == uStrata.y ? LEAD : -LEAD));
+  float grit = grain(page);
   float drift = 0.0;
   float gone = step(0.0, off);
-  float eased = gone;
+  float soft = gone;
   float rim = 0.0;
-  if (abs(off) < SPAN + 100.0) {
+  if (abs(off) < SPAN + 70.0) {
     drift = (noise(vec2(page.x * 0.0052, row)) - 0.5) * 90.0 + (noise(vec2(page.x * 0.0155, row + 7.0)) - 0.5) * 40.0;
-    drift *= 1.0 - smoothstep(SPAN, SPAN + 100.0, abs(off));
+    drift *= 1.0 - smoothstep(SPAN, SPAN + 70.0, abs(off));
     float through = clamp((off + drift) * (0.5 / SPAN) + 0.5, 0.0, 1.0);
     float streak = square3(vec2(page.x * 0.019, page.y * 0.0021) + 11.0 + row);
-    float seed = clamp((turned4(page * 0.013 + 11.0 + row) * 0.36 + streak * 0.3 + grain(page) * 0.34 - 0.5) * 2.1 + 0.5, 0.0, 1.0);`,
+    float seed = clamp((turned4(page * 0.013 + 11.0 + row) * 0.36 + streak * 0.3 + grit * 0.34 - 0.5) * 2.1 + 0.5, 0.0, 1.0);`,
   // What thins is the layer above, but under the steel: there it is the far side's rust.
   `    float left = edge == uStrata.z ? through : 1.0 - through;
     float stays = smoothstep(0.0, 0.14, left * 1.14 - seed);
     gone = edge == uStrata.z ? stays : 1.0 - stays;
     rim = stays * (1.0 - stays) * 4.0;
-    eased = smoothstep(0.0, 1.0, through);
+    soft = smoothstep(0.25, 0.75, through);
   }
   float toOxide = edge == uStrata.x ? gone : step(uStrata.x, y);
   float toSteel = edge == uStrata.y ? gone : step(uStrata.y, y);
@@ -146,26 +147,25 @@ void main() {
   float inPatina = 1.0 - toOxide + toFar;
   float inOxide = toOxide * (1.0 - toSteel);
   float inSteel = toSteel * (1.0 - toFar);`,
-  // The same without the specks: how much of each layer's relief a pixel has. It is all the
-  // GPU's slope is taken from, since a slope taken across a speck's edge would change as the
-  // page moves.
-  `  float easedOxide = edge == uStrata.x ? eased : toOxide;
-  float easedSteel = edge == uStrata.y ? eased : toSteel;
-  float easedFar = edge == uStrata.z ? eased : toFar;
-  float nearPatina = 1.0 - easedOxide + easedFar;
-  float nearOxide = easedOxide * (1.0 - easedSteel);
-  float nearSteel = easedSteel * (1.0 - easedFar);`,
+  // The same without the specks, eased over the middle half of the stretch: how much of each
+  // layer's relief a pixel has. It is all the GPU's slope is taken from, since a slope taken
+  // across a speck's edge would change as the page moves.
+  `  float softOxide = edge == uStrata.x ? soft : toOxide;
+  float softSteel = edge == uStrata.y ? soft : toSteel;
+  float softFar = edge == uStrata.z ? soft : toFar;
+  float nearPatina = 1.0 - softOxide + softFar;
+  float nearOxide = softOxide * (1.0 - softSteel);
+  float nearSteel = softSteel * (1.0 - softFar);`,
   // Rust is a crust of grains, not a smooth film: the grit is its grains, and the broader
   // patches of the patina and the oxide are read through coordinates the noise itself has
   // pushed about, so a patch's edge is ragged where plain noise would round it into a blob.
   // The grit is read again a pixel across and a pixel down, for the light.
-  `  float grit = grain(page);
-  vec2 gritOn = vec2(grit);
+  `  vec2 gritOn = vec2(grit);
   float mottle = 0.5;
   float fine = 0.5;
   float tone = 0.5;
   vec2 warped = page;
-  if (nearPatina + nearOxide > 0.0) {
+  if (inPatina + inOxide + nearPatina + nearOxide > 0.0) {
     gritOn = vec2(grain(page + vec2(1.0 / uScale, 0.0)), grain(page + vec2(0.0, 1.0 / uScale)));
     warped += (vec2(noise(page * 0.011 + 40.0), noise(page * 0.011 + 90.0)) - 0.5) * 24.0;
     float blotch = turned4(warped * 0.0021);
@@ -199,7 +199,7 @@ void main() {
   float scratch = 0.0;
   float coarse = 0.5;`,
   // The steel's relief: the coarser of the wheel's hairlines, and a few scratches at a slant.
-  `  if (nearSteel > 0.0) {
+  `  if (inSteel + nearSteel > 0.0) {
     coarse = hairline(vec2(page.x * 0.016 + 40.0, page.y * 0.46 + 9.0));
     vec2 across = vec2(dot(page, vec2(0.93, 0.37)), dot(page, vec2(-0.37, 0.93)));
     vec2 back = vec2(dot(page, vec2(0.81, -0.59)), dot(page, vec2(0.59, 0.81)));
@@ -329,23 +329,25 @@ void main() {
   float shine = pow(clamp(dot(reflect(-light, normal), vec3(0.0, 0.0, 1.0)), 0.0, 1.0), mix(22.0, 9.0, inSteel));
   vec3 shaded = body * (0.56 + 0.16 * inPatina + 0.2 * lit + 0.5 * lit * reach);
   shaded += mix(vec3(1.0, 0.93, 0.84), vec3(0.8, 0.88, 1.0), inSteel) * shine * metal * (0.25 + 0.75 * reach);
-  if (inSteel > 0.0) {`,
+  float typed = max(inSteel, smoothstep(uStrata.y, uStrata.y + INSET, y) * (1.0 - smoothstep(uStrata.z - INSET, uStrata.z, y)));`,
+  // What only the steel and its section need is one branch. As two, a GPU's compiler took the
+  // second for small enough to run for every pixel on the plate, which cost a rusted frame a
+  // tenth more.
+  `  if (typed > 0.0) {`,
   // Hairlines throw the light out across themselves: a bar of it stands over the pointer,
   // narrow along the grain and long across it, and each hairline takes it or does not.
   `    vec3 between = normalize(light + vec3(0.0, 0.0, 1.0));
     vec2 spread = between.xy / (vec2(0.075, 0.42) * between.z);
     float bar = exp(-dot(spread, spread));
-    shaded += vec3(0.78, 0.86, 1.0) * bar * (0.035 + 0.2 * brushed * brushed + 0.25 * scratch) * inSteel;
-  }`,
+    shaded += vec3(0.78, 0.86, 1.0) * bar * (0.035 + 0.2 * brushed * brushed + 0.25 * scratch) * inSteel;`,
   // Small type is set straight on the plate in the steel's section, so the light there stops
   // short of the type's. The luminance is sRGB's own, and a color is dimmed along that curve,
   // so what is drawn has exactly the luminance asked for. The bound is whole over the section
   // but for its first and last INSET pixels, which its padding keeps clear of type, whichever
-  // layer is drawn there: rust that reaches into the section is in the steel's shade. Outside the section it holds as far as the steel reaches. A strike's
-  // glow, below, is not held to it: it is over in four and a half seconds.
-  `  float typed = max(inSteel, smoothstep(uStrata.y, uStrata.y + INSET, y) * (1.0 - smoothstep(uStrata.z - INSET, uStrata.z, y)));
-  if (typed > 0.0) {
-    vec3 lifted = (shaded + 0.055) * (1.0 / 1.055);
+  // layer is drawn there: rust that reaches into the section is in the steel's shade. Outside
+  // the section it holds as far as the steel reaches. A strike's glow, below, is not held to
+  // it: it is over in four and a half seconds.
+  `    vec3 lifted = (shaded + 0.055) * (1.0 / 1.055);
     float glare = dot(pow(lifted, vec3(2.4)), vec3(0.2126, 0.7152, 0.0722));
     if (glare > KNEE) {
       float eased = KNEE + (CEILING - KNEE) * (1.0 - exp((KNEE - glare) / (CEILING - KNEE)));`,
