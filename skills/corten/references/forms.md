@@ -260,8 +260,8 @@ A bare `204` (`StatusCode::NO_CONTENT`) or `205` is a write done with nothing to
 `corten:error`, the page stays, and the waiting press goes; a `205` also resets the form (firing
 `reset`, not `input`) unless the user changed a field after it was sent, a control was added
 to the form since, or the user pressed again with other values.
-A refusal (409, 410), a 5xx, an answer the runtime does not draw, a redirect or no answer drops
-it, and the user sends it again. Steps that
+A refusal (409, 410), a 5xx, another answer the runtime does not draw, a redirect or no answer
+drops it, and the user sends it again. Steps that
 each count (a count's + and -) keep their own ordered queue in the component's script.
 
 The handler answers a failed check with `req.invalid`. It replies 422 with the form as a patch for
