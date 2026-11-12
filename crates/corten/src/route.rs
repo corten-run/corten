@@ -24,9 +24,10 @@
 //! A link never opens another page than the one its values name, so a value the path cannot
 //! carry is refused as it is written: `.` or `..`, which a browser resolves away (`%2e` too), a
 //! `{*rest}` value with such a segment, and an empty value where the router has no segment for it.
-//! A debug build panics, naming the route and the field; a release build writes `%FF` after the
-//! value, which the route answers with a 400 (docs/design.md#limit-path-values). A value that only
-//! contains dots is written as it is.
+//! A debug build panics, naming the route by its module path and the field; a release build
+//! writes `%FF` after the value, which the route answers with a 400, and logs it once for each
+//! route and field (docs/design.md#limit-path-values). A value that only contains dots is
+//! written as it is.
 //!
 //! A parameter may be followed by plain text in its segment, a file's extension: `{page}.xml`.
 //! A request whose segment does not end in the text, or is only the text, is a 404 before the
@@ -4683,10 +4684,11 @@ pub mod __private {
     // the text impls, which take `Segment` itself, are found before the one for `&Segment`.
     pub struct Segment<'a, T: ?Sized>(pub &'a T);
 
-    /// A path parameter of a route: the route's and the field's names, for the error a value its
-    /// path cannot carry is, and where it sits (`PLACE`, one of [`place`]), which decides those
-    /// values (docs/design.md#limit-path-values). The place is a constant of the type, so each
-    /// parameter's link compiles in only its own place's check.
+    /// A path parameter of a route: the route's path (`shop::url::Item`, its module and its name)
+    /// and the field's name, for the error a value its path cannot carry is, and where it sits
+    /// (`PLACE`, one of [`place`]), which decides those values (docs/design.md#limit-path-values).
+    /// The place is a constant of the type, so each parameter's link compiles in only its own
+    /// place's check.
     pub struct Param<const PLACE: u8> {
         pub route: &'static str,
         pub field: &'static str,
@@ -4731,14 +4733,18 @@ pub mod __private {
     /// A value the path cannot carry: a debug build panics, naming the route and the field; a
     /// release build writes `%FF` after the value ([`unreadable`]), so the link opens no other
     /// page, and logs that as an error the first time for each route and field, so a list that
-    /// links a stored value on every row and every render is one line, not one per link. It takes
-    /// the parameter by reference, a constant the derive writes, so a link's call to it is three
-    /// arguments and the link stays small enough to be inlined where it is written.
+    /// links a stored value on every row and every render is one line, not one per link. A
+    /// refusal is counted only when an error would be logged, so one written before the app's
+    /// subscriber is installed does not use up the line. The list of those logged is read before
+    /// it is written, so refusals of a route and field already logged do not wait on each other.
+    /// It takes the parameter by reference, a constant the derive writes, so a link's call to it
+    /// is three arguments and the link stays small enough to be inlined where it is written.
     #[cold]
     #[inline(never)]
     fn refuse<const PLACE: u8>(param: &Param<PLACE>, out: &mut String, start: usize) {
+        use std::sync::{PoisonError, RwLock};
         // One list for every place: a static in a generic function is not one per instance.
-        static LOGGED: std::sync::Mutex<Vec<(&str, &str)>> = std::sync::Mutex::new(Vec::new());
+        static LOGGED: RwLock<Vec<(&str, &str)>> = RwLock::new(Vec::new());
         let message = || {
             format!(
                 "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
@@ -4750,14 +4756,17 @@ pub mod __private {
         if cfg!(debug_assertions) {
             panic!("{}", message());
         }
-        let first = {
-            let mut logged = LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let first = !logged.contains(&(param.route, param.field));
-            if first {
-                logged.push((param.route, param.field));
-            }
-            first
-        };
+        let key = (param.route, param.field);
+        let first = tracing::enabled!(tracing::Level::ERROR)
+            && !LOGGED.read().unwrap_or_else(PoisonError::into_inner).contains(&key)
+            && {
+                let mut logged = LOGGED.write().unwrap_or_else(PoisonError::into_inner);
+                let first = !logged.contains(&key);
+                if first {
+                    logged.push(key);
+                }
+                first
+            };
         if first {
             tracing::error!("{} (logged once for this route and field)", message());
         }
@@ -5304,7 +5313,9 @@ mod tests {
                 }
                 (Err(panic), true) => {
                     let message = panic.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
-                    assert!(message.contains(&format!("a link to {named}")), "{named}: {message}");
+                    // The route is named by its module path, as the derive writes it.
+                    let named = format!("a link to {}::{named}", module_path!());
+                    assert!(message.contains(&named), "{named}: {message}");
                     assert!(message.contains("docs/design.md#limit-path-values"), "{message}");
                 }
                 (Ok(href), true) => panic!("a debug build refuses the link it would write as {release}, not {href}"),
@@ -5342,18 +5353,32 @@ mod tests {
         }
     }
 
-    /// Refused only by `a_link_a_release_build_refuses_is_logged_once`, which needs the first
-    /// refusal of its field in the process.
+    /// Two routes of one name in two modules, refused only by
+    /// `a_link_a_release_build_refuses_is_logged_once`, which needs the first refusals of their
+    /// fields in the process.
     #[cfg(not(debug_assertions))]
-    #[derive(corten::Route)]
-    #[route("/logged/{*path}")]
-    struct Logged {
-        path: String,
+    mod logged {
+        pub mod one {
+            #[derive(crate::Route)]
+            #[route("/logged/one/{*path}")]
+            pub struct Logged {
+                pub path: String,
+            }
+        }
+        pub mod two {
+            #[derive(crate::Route)]
+            #[route("/logged/two/{*path}")]
+            pub struct Logged {
+                pub path: String,
+            }
+        }
     }
 
     /// A release build does not panic on a value its path cannot carry, so it logs the refusal as
-    /// an error, naming the route and the field, beside the `%FF` it writes: once for the route
-    /// and field, though each link it refuses has its `%FF`.
+    /// an error, naming the route by its module path and the field, beside the `%FF` it writes:
+    /// once for each route and field, though each link it refuses has its `%FF`, and two routes
+    /// of one name in two modules once each. A refusal while no subscriber would log the error is
+    /// not counted, so it does not use up the line.
     #[cfg(not(debug_assertions))]
     #[test]
     fn a_link_a_release_build_refuses_is_logged_once() {
@@ -5372,22 +5397,38 @@ mod tests {
         let lines = Lines(Arc::default());
         let writer = lines.clone();
         let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-        let (refused, again, kept) = tracing::subscriber::with_default(subscriber, || {
-            (
-                Logged { path: "public/../private/x".into() }.href(),
-                Logged { path: "a/..".into() }.href(),
+        use logged::{one, two};
+        let unheard = tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+            one::Logged { path: "unheard/..".into() }.href()
+        });
+        assert_eq!(unheard, "/logged/one/unheard/..%FF");
+        let hrefs = tracing::subscriber::with_default(subscriber, || {
+            [
+                one::Logged { path: "public/../private/x".into() }.href(),
+                one::Logged { path: "a/..".into() }.href(),
+                two::Logged { path: "b/./c".into() }.href(),
+                two::Logged { path: "..".into() }.href(),
                 Item { id: "a.b" }.href(),
-            )
+            ]
         });
         assert_eq!(
-            (refused.as_str(), again.as_str(), kept.as_str()),
-            ("/logged/public/..%FF/private/x", "/logged/a/..%FF", "/items/a.b")
+            hrefs,
+            [
+                "/logged/one/public/..%FF/private/x",
+                "/logged/one/a/..%FF",
+                "/logged/two/b/.%FF/c",
+                "/logged/two/..%FF",
+                "/items/a.b"
+            ]
         );
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert_eq!(logged.lines().count(), 1, "{logged}");
-        assert!(logged.contains("ERROR"), "{logged}");
-        assert!(logged.contains("a link to Logged cannot carry path = \"public/../private/x\""), "{logged}");
-        assert!(logged.contains("logged once for this route and field"), "{logged}");
-        assert!(logged.contains("docs/design.md#limit-path-values"), "{logged}");
+        // One line for each route, for the first value refused while the subscriber listened.
+        assert_eq!(logged.lines().count(), 2, "{logged}");
+        for (line, (module, value)) in logged.lines().zip([("one", "public/../private/x"), ("two", "b/./c")]) {
+            let named = format!("a link to {}::logged::{module}::Logged cannot carry path = {value:?}", module_path!());
+            assert!(line.contains("ERROR") && line.contains(&named), "{named}: {line}");
+            assert!(line.contains("logged once for this route and field"), "{line}");
+            assert!(line.contains("docs/design.md#limit-path-values"), "{line}");
+        }
     }
 }

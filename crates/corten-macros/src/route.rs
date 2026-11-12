@@ -183,9 +183,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                     _ if first && n == 1 => "EDGE",
                     _ => "INNER",
                 };
+                // The route is named by its module path (`shop::url::Item`), so two routes of one
+                // name in two modules are logged apart when a value is refused.
                 body.extend(q(
                     &format!(
-                        "(&::corten::route::__private::Segment(&self.__A0)).__segment(&::corten::route::__private::Param::<{{ ::corten::route::__private::place::{place} }}> {{ route: __A1, field: __A2 }}, __OUT);"
+                        "(&::corten::route::__private::Segment(&self.__A0)).__segment(&::corten::route::__private::Param::<{{ ::corten::route::__private::place::{place} }}> {{ route: ::core::concat!(::core::module_path!(), \"::\", __A1), field: __A2 }}, __OUT);"
                     ),
                     &[
                         proc_macro::TokenTree::Ident(field.ident.clone()).into(),

@@ -2908,11 +2908,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
     `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
     written as they are by a `#[derive(Route)]` link: a debug build panics when the link is
-    written, naming the route and the field, and a release build writes `%FF` after the value
-    (`/items/..%FF`, `/files/public/..%FF/private/x`, `/%FF/posts`), which no browser resolves
-    and the route answers with a 400, since no parameter reads a value that is not UTF-8, and logs
-    that as an error the first time for each route and field in the process, so a list that links
-    a stored value on every row is one line, not one per link and render. The link opens no other
+    written, naming the route by its module path (`shop::url::Item`) and the field, and a release
+    build writes `%FF` after the value (`/items/..%FF`, `/files/public/..%FF/private/x`,
+    `/%FF/posts`), which no browser resolves and the route answers with a 400, since no parameter
+    reads a value that is not UTF-8, and logs that as an error the first time for each route and
+    field in the process, so a list that links a stored value on every row is one line, not one
+    per link and render. Only a refusal written while a subscriber would log the error counts as
+    that time, so one before the app installs its subscriber does not use it up; a subscriber
+    that drops the event by something other than its level and target (its message, a span) still
+    counts it. Later refusals of a route and field read the list of those logged and do not wait
+    on each other. The link opens no other
     page or file either way. A route that starts with a `{*rest}` refuses a dot segment after the
     value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
     browser resolves: the refusal is kept, since it costs nothing where no value has such a
