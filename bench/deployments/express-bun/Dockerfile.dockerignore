@@ -1,0 +1,13 @@
+**
+!bench/
+!bench/fullstack/
+!bench/fullstack/apps/
+!bench/fullstack/apps/express/
+!bench/fullstack/apps/express/package.json
+!bench/fullstack/apps/express/server.mjs
+!bench/fullstack/apps/express/lib/**
+!bench/fullstack/apps/express/views/**
+!bench/fullstack/apps/express/static/**
+!bench/deployments/
+!bench/deployments/express-bun/
+!bench/deployments/express-bun/identity.mjs
