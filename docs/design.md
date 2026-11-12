@@ -2522,65 +2522,89 @@ rules something out.
     `09a9cd5d6`, and the step's cases run in its tests.
 
 43. <a id="choice-data-on-single-quoted"></a>**`data-on` is a single-quoted attribute, so the JSON of
-    a handler's arguments keeps its quotes, and a script's data stays a handler argument however
-    large it is.** A script gets what it works on through its handler's arguments
-    ([Rule 3](#rule-handler-arguments)), so a set of a few hundred records it searches or sorts in
-    the browser is a `ToJson` argument, typed by its generated declaration and checked at the call.
-    In a double-quoted attribute each quote of its JSON was `&quot;`, six bytes for one: 300
-    products, 51,073 bytes of JSON, made an attribute of 96,130 bytes, 88% over the JSON
-    ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
-    `data_on` writes the attribute between `'`, and a JSON argument has only `&`, `'`, `<` and `>`
-    written as entities (`json_attr`; a string argument, `json_str`, the same). `<` and `>` need
-    none in an attribute, but the server's own readers of its markup (a page's parts, a patch's
-    checks) find tags by them. The same 300 products are 51,130 bytes, 0.1% over the JSON, and
-    compressed with zstd 5,302 bytes against 6,265, with brotli 6,170 against 7,378. The `data-on`
-    format, the runtime's parser and the typing are unchanged: the browser gives the parser the
-    same string from either attribute, and only the server's text of it changed. Parsing such a
-    page took the three engines 10 to 23% of the time it did (Chromium 391 µs against 1,738,
-    Firefox 190 against 1,450, WebKit 330 against 3,220, the medians of 7 runs of 100
-    `DOMParser` parses); getting the value back, the runtime's parse of the argument and
-    `JSON.parse`, is the same in both (753 and 781 µs in Chromium). The server writes it in about
-    half the time (136 µs against 266, the medians of five runs of 2,000 renders), and a component
-    with two small handler calls costs 2,445 instructions to draw against 2,696, since a quote is
-    no longer six bytes to write. Card-market's item page stays 8,818 bytes, and 3 bytes more with
-    zstd (2,181) and 4 more with brotli (2,364); the seller desk at 100 rows is 610 bytes smaller
-    (78,704). Neither page's render time moved by more than runs of one build differ by. The
-    single quote is HTML's own attribute syntax, and `data-on` is a format only Corten's server
-    and runtime read, so it needs no standard ([Rule 10](#rule-standard-formats)); a data block
-    would have been a second such format.
-    Not chosen: the issue's `<script type="application/json">` block with an id that a handler
-    argument would name. It costs the same bytes (51,204 for the 300 products, with `<` as
-    `\u003c`), and a page with it parsed in about the same time (546 µs in Chromium, 180 in
-    Firefox, 460 in WebKit) and gave the value back faster (289 µs in Chromium against 753, 470 in
-    Firefox against 800, 330 in WebKit against 740), since `JSON.parse` reads the block's text with
-    no walk of the attribute first. But it is a second way for data to reach a script beside its
-    arguments, a change to the wire format and the runtime, and blocks a patch has to carry with
-    the elements that name them, for a saving of about half a millisecond on 50 KB of data. Also
-    not chosen: a block the app writes itself (a way around the typed call, and markup a view
-    would have to keep in step with the script); leaving the attribute double-quoted (88% more
-    bytes for a large argument, and a parse four to ten times slower).
+    a handler's arguments keeps its quotes.** A script gets what it works on through its handler's
+    arguments ([Rule 3](#rule-handler-arguments)), so a set of a few hundred records it searches or
+    sorts in the browser is a `ToJson` argument, typed by its generated declaration and checked at
+    the call. `data_on` writes the attribute between `'`, and a JSON argument has only `&`, `'`, `<`
+    and `>` written as entities (`json_attr`; a string argument, `json_str`, the same). `<` and `>`
+    need none in an attribute, but the server's own readers of its markup (a page's parts, a
+    patch's checks) find tags by them, and those that read attributes (`html::start_tags`, for a
+    patch's ids and `corten dev`'s checks of `data-vars` and hints) read a quoted value to its own
+    quote, so text in a handler's JSON is never taken for an attribute. The `data-on` format, the
+    runtime's parser and the typing are unchanged: the browser gives the parser the same string
+    from either attribute, and only the server's text of it changed. The single quote is HTML's
+    own attribute syntax, and `data-on` is a format only Corten's server and runtime read, so it
+    needs no standard ([Rule 10](#rule-standard-formats)).
+
+    Double-quoted, each quote of the JSON was `&quot;`, five bytes more, so a value grew by five
+    times its share of quotes: 300 products, 51,073 bytes of JSON of which 9,000 (17.6%) are
+    quotes, made an attribute of 96,130 bytes, 88% over the JSON, and records with longer values
+    have fewer quotes for their size and grew less (about 55% in
+    [#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+    Single-quoted, the same products are 51,130 bytes, 0.1% over the JSON, and 5,302 bytes with
+    zstd against 6,265, 6,170 with brotli against 7,378. The server writes the attribute in about
+    half the time (141 µs against 274), and a component with two small handler calls costs 2,445
+    instructions to draw against 2,696, since a quote is no longer six bytes to write. Card-market's
+    item page stays 8,818 bytes, and 3 bytes more with zstd (2,181) and 4 more with brotli (2,364);
+    the seller desk at 100 rows is 610 bytes smaller (78,704). Neither page's render time moved by
+    more than runs of one build differ by. In the browser, parsing a page with the 300 products and
+    getting the value back (the runtime's parse of the argument, which ends in `JSON.parse`) took
+    Chromium 0.80 to 0.92 ms, Firefox 0.76 to 0.94 and WebKit 1.08 to 1.34, against 2.01 to 2.28,
+    1.97 to 2.18 and 3.34 to 4.35 double-quoted: the parse is five to eleven times faster and the
+    value back the same.
+
+    Not chosen here, and left open: the issue's `<script type="application/json">` block with an
+    id that a handler argument would name. On Value 1 it wins for the pages it serves. End to end
+    it took Chromium 0.56 to 0.69 ms, Firefox 0.70 to 0.73 and WebKit 0.84 to 1.00, 0.06 to 0.34 ms
+    less than the single-quoted attribute: its page parses a little slower (Chromium 374 to 415 µs
+    against 235 to 323), but `JSON.parse` reads its text with no walk of an attribute first (182 to
+    276 µs against 564 to 598), and that part grows with the data. The server writes it in 55 µs
+    against 141, since only `<` is escaped (as `\u003c`). Its page is 63 bytes larger (51,193), 56
+    with zstd and 64 with brotli, which a 1.6 Mbit/s link takes about 0.3 ms to carry. What it
+    costs every page is a reader in the runtime: 128 bytes, 41 with gzip and 45 with brotli for the
+    least one (an argument kind for a block's id in `on.js`, and `getElementById` and `JSON.parse`
+    where an argument is resolved), downloaded once a release, since the runtime's URL is
+    versioned and `immutable`, and nothing on a load. A patch that redraws an element whose
+    handler names a block carries the block too, as a top-level element with its id, the bytes the
+    attribute would have had, or the handler reads the old data. So the few pages that hand a
+    script tens of kilobytes would be a fraction of a millisecond faster, and every user would pay
+    41 bytes a release. The block is also a second way for data to reach a script beside its
+    arguments (Values 5 and 6), which ranks below performance at the user's end, so that does not
+    decide against it. The two changes do not exclude each other: a block would carry the large
+    values and `data-on` everything else a page has (formats, messages, a component's small
+    arguments), single-quoted either way, so this Choice is taken on its own and the issue stays open
+    for the block. Also not chosen: a block the app writes itself (a way around the typed call, and
+    markup a view would have to keep in step with the script); leaving the attribute double-quoted
+    (88% more bytes for a large argument, and a parse five to eleven times slower).
 
     Stands on: measured (`json_argument_cost` in `crates/corten/src/script/tests.rs`, five runs of
-    2,000 renders on each build, once; callgrind on `what_a_handler_call_costs` at 200 and 1,200
-    renders, two runs of each build alternated; `render_cost` in `examples/card-market` and
-    `examples/seller-desk`, three runs of each build alternated; the parse and the value in
-    Chromium, Firefox and WebKit, seven runs of 100 `DOMParser` parses of a page with each form of
-    the same 300 products, once, not committed); platform (an HTML attribute value between `'` holds `"` as it is, and the
-    browser gives a script the decoded value either way; a `type="application/json"` script is a
-    data block, which a CSP's `script-src` does not block, checked in the three engines under the
-    watchlist's policy); reasoned (the parser reads the attribute's decoded value, the same string
-    in either form, so nothing on the client changes); value (a script's data is a typed argument,
-    the one way a script is given anything, Values 4 and 5, with no new concept, Values 6, and a
-    page costs the user about what its data does, Values 1).
+    2,000 renders of each form, once; `bench/browser/data-on-cost.mjs` on the pages that test
+    writes, eight runs of 100 `DOMParser` parses and 100 value reads of each form in Chromium,
+    Firefox and WebKit, the forms alternated, twice; the block's reader, `npm run build:js` with it
+    added to the runtime, once; callgrind on `what_a_handler_call_costs` at 200 and 1,200 renders,
+    two runs of each build alternated; `render_cost` in `examples/card-market` and
+    `examples/seller-desk`, three runs of each build alternated, and card-market's again, eight of
+    each); platform (an HTML attribute value between `'` holds `"` as it is, and the browser gives
+    a script the decoded value either way; a `type="application/json"` script is a data block,
+    which a CSP's `script-src` does not block, checked in the three engines under the watchlist's
+    policy); reasoned (the parser reads the attribute's decoded value, the same string in either
+    form, so nothing on the client changes; a block a handler names by id is on the page only if
+    the patch that redraws the handler brings it); value (a page costs the user about what its data
+    does, Values 1, with no new concept, Values 6; a block's speed for large data outranks its
+    second way, Values 5, so this Choice does not decide the issue).
 
-    Revisit when: an app's script reads a value large enough that getting it back from `data-on`
-    shows in a profile (a data block gave it back two to three times faster), or something outside
-    Corten has to read `data-on`, which [Rule 10](#rule-standard-formats) keeps internal.
+    Revisit when: the issue's data block is taken up (it gave the 300 products back 0.06 to
+    0.34 ms sooner end to end, and the gap grows with the data): `data-on` stays single-quoted for
+    every other argument and the block gets a Choice of its own; or something outside Corten has
+    to read `data-on`, which [Rule 10](#rule-standard-formats) keeps internal.
 
-    Last checked: 2026-11-12, `json_argument_cost`, callgrind (valgrind 3.19.0) and `render_cost`
-    on `194f5179` and the change, and card-market's `render_cost` again on `80dbd7db` and its merge
-    into the change, `7f34dea8` (five runs of each build alternated); 2026-11-11, the parse, the
-    value and the CSP in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+    Last checked: 2026-11-12, `json_argument_cost` and the three engines' parse and value back on
+    `7564cdc4` (Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, Playwright 1.64.1), and the
+    block's reader on `ab020512`; 2026-11-12, callgrind (valgrind 3.19.0) and `render_cost` on
+    `194f5179` against the change, `fb22d82d`; 2026-11-12, card-market's `render_cost` again on
+    `80dbd7db` against its merge into the change, `7f34dea8` (eight runs of each build alternated,
+    five with main first and three with the change first); 2026-11-11, the CSP in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
 ## Rules
 
