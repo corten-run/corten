@@ -2930,16 +2930,18 @@ by design; where it is known, a limit says what would lift it or why it is so.
     decoded from a segment can hold `../` anyway (`..%2F`), so it would not make a parameter safe
     to use as a file path; an app that does that checks the value itself. Writing a link pays
     inside the pass that already encodes each value, which also says whether the value has a dot,
-    so a whole-segment value pays a comparison of its length. Counted with callgrind in a release
-    build (1,000 and 11,000 links of one route, the difference over 10,000), at `9aee73ad` against
-    `a7e02c39`, a link costs: `/items/{id}` 120 instructions against 117, `/{user}/posts` 128
-    against 131, `/feeds/{name}.xml` 125 against 121, three parameters (one a `u32`, checked on
-    what its `Display` wrote) 525 against 506, and `/files/{*path}` with a 29-byte value 178
-    against 170 without a dot and 270 against 170 with one (`sum.md`): whether a dot starts a
-    segment depends on the bytes beside it, which that pass does not keep, so a `{*rest}` value
-    with a dot is read again, eight bytes at a time. Where a page writes a link into an attribute,
-    the check made the link too large to be inlined there at `9aee73ad`, which cost the item
-    page's `render_cost` run about 27M instructions of 28,365M; at `ce50dab8`, which checks a
-    value of two bytes or fewer out of line, it is inlined again and the run counts 28,367.6M
-    against 28,362.6M to 28,366.9M over four runs at `194f5179`. An app whose slugs, names or file keys come
-    from people refuses these values where it stores them, so its links never reach the check.
+    so a whole-segment value pays a comparison of its length, and one of two bytes or fewer a look
+    at its first byte. Counted with callgrind in a release build (1,000 and 11,000 links of one
+    route, the difference over 10,000), at `b849003f` against `80dbd7db`, a link costs:
+    `/items/{id}` 120 instructions against 117, `/{user}/posts` 128 against 131, `/{lang}/news`
+    with `en` 114 against 113, `/feeds/{name}.xml` 125 against 121, three parameters (one a
+    `u32`, checked on what its `Display` wrote) 525 against 506, and `/files/{*path}` with a
+    29-byte value 178 against 170 without a dot and 270 against 170 with one (`sum.md`): whether a
+    dot starts a segment depends on the bytes beside it, which that pass does not keep, so a
+    `{*rest}` value with a dot is read again, eight bytes at a time. Where a page writes a link
+    into an attribute, the check made the link too large to be inlined there at `9aee73ad`, which
+    cost the item page's `render_cost` run about 27M instructions of 28,365M; checking a value of
+    two bytes or fewer out of line (`ce50dab8`) inlines it again, and at `b849003f` the run counts
+    28,358.0M, 28,367.5M and 28,365.0M against 28,360.7M, 28,366.7M and 28,364.8M at `80dbd7db`.
+    An app whose slugs, names or file keys come from people refuses these values where it stores
+    them, so its links never reach the check.
