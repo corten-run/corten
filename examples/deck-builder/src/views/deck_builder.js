@@ -383,19 +383,19 @@ export function answered(event, parts) {
   const s = kept();
   s.sending = false;
   say(parts, "");
-  if (event.outcome === "saved") {
+  if (event.outcome === "Saved") {
     const sent = s.unanswered.find((u) => u.draft === event.draft);
     if (sent && event.version >= s.version) {
       known(s, parts, sent.deck, s.generation, event.version);
       s.saved = sent.history;
     }
     s.unanswered = [];
-  } else if (event.outcome === "refused") {
+  } else if (event.outcome === "Refused") {
     s.unanswered = [];
     s.undo = s.saved.undo.slice();
     s.redo = s.saved.redo.slice();
     draw(s, parts, new Map(s.base));
-  } else if (event.outcome === "stale") {
+  } else if (event.outcome === "Stale") {
     // More than this send unanswered: this one went with the key of one whose answer was lost.
     s.unsure = event.unsure && s.unanswered.length > 1;
     s.unanswered = [];

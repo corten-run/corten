@@ -29,6 +29,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
+  `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
+  `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
+  `@scope (.list)` matched no element and every rule in it was dead, and it compiled. Under a
+  root at the top of the file that names one of its classes, rules start anywhere (`:scope`,
+  `li`), since they match only under the root; under any other root
+  (`@scope ([data-theme="dark"])`) each rule starts at one of the classes, as before. `@scope`
+  with no root, a pseudo-element in the root or limit, or another prelude, each of which the
+  browser drops or scopes outside the component, does not compile
+  ([#1237 A component stylesheet's @scope prelude is copied unprefixed, so @scope (.list) matches nothing and its rules never apply, and it compiles](https://github.com/corten-run/corten/issues/1237)).
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
   longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
   traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and
@@ -77,6 +87,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
   header names
   ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
+- `examples/deck-builder`'s `DeckAnswered`, the pattern the scripts guide shows for learning a
+  `data-patch` submit's outcome, carries it as `SaveOutcome`, an enum that derives `ToJson`, in
+  place of a `String`: `answered` takes it and the builder's branches compare its declared names,
+  so a renamed or misspelled outcome fails the build or `tsc` instead of leaving a refused save
+  not rolled back. The page as loaded is a variant of its own, `Loaded`, for which no event is sent
+  ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
 
