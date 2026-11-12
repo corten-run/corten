@@ -41,8 +41,14 @@ page, since what it shows working is the browser's and HTTP's own, with Corten's
 
 The plate behind the page is one fragment shader on a fixed canvas (`src/world.js`): weathered
 patina, the oxide under it, bare steel with the temper colors heat leaves next to a rusting
-layer, and patina again on the far side, with the tagline stamped into the surface. It is drawn
-again only when the page scrolls, the pointer moves, a plate is struck or the window changes.
+layer, and patina again on the far side, with the tagline stamped into the surface. The patina
+is drawn after photographs of weathering steel: a fine grain of newer rust on an orange-brown
+ground, in bands down the plate. When the page opens the plate weathers as such a plate does
+over a few years, in five and a half seconds: grey mill scale, rust in specks along the runs
+rain takes, the whole plate bright and uneven, then deeper and more even. The bare steel is
+ground along the plate, and throws the pointer's light out in a bar across its hairlines. It is
+drawn again only when the page scrolls, the pointer moves, a plate is struck or the window
+changes.
 
 A pixel pays for the layer it is in: every texture read names its level, so each layer's
 branch is one the GPU can skip. Frames that come late lower the plate's resolution, and where
