@@ -1103,8 +1103,9 @@ function readPartsAgain(main) {
 }
 
 /**
- * A field's state as text: what the user has (or, with `initial`, what the markup set; a file
- * input's is its first file's name). Buttons and hidden inputs are not fields here: undefined.
+ * A field's state as text: what the user has (or, with `initial`, what the markup set). A file
+ * input's is each file's name, size and time, so another file of the same name is a change, as
+ * it is in a pending submit's key. Buttons and hidden inputs are not fields here: undefined.
  * @param {Element} f @param {boolean} [initial] @returns {string | undefined}
  */
 function stateOf(f, initial) {
@@ -1123,6 +1124,7 @@ function stateOf(f, initial) {
   if (f instanceof HTMLTextAreaElement) return initial ? f.defaultValue : f.value;
   if (!(f instanceof HTMLInputElement) || /^(hidden|submit|button|reset|image)$/.test(f.type)) return;
   if (/^(checkbox|radio)$/.test(f.type)) return String(initial ? f.defaultChecked : f.checked);
+  if (f.type === "file" && !initial) return Array.from(f.files ?? [], (file) => `${file.name}\0${file.size}\0${file.lastModified}`).join("\0");
   return initial ? f.defaultValue : f.value;
 }
 
@@ -2965,9 +2967,11 @@ async function send(form, submitter, sends) {
       if (res.status === 204 || res.status === 205) {
         // Done, with nothing to draw (RFC 9110, 15.3.5): the page stays and a waiting submit goes.
         // A 205 also asks for the form as it came (15.3.6), unless the user changed a field since
-        // it was sent (a control added since counts) or pressed again with other values: their
-        // work is kept, as against a patch.
-        if (res.status === 205 && pending.next === undefined && Array.from(formProperty(form, "elements")).every((f) => sent.has(f) && stateOf(f) === sent.get(f))) formCall(form, "reset");
+        // it was sent (a control added since counts, and so does text a number or date input
+        // cannot read, whose value is "") or pressed again with other values: their work is kept,
+        // as against a patch.
+        const unchanged = (/** @type {Element} */ f) => sent.has(f) && stateOf(f) === sent.get(f) && !(/** @type {HTMLInputElement} */ (f).validity?.badInput);
+        if (res.status === 205 && pending.next === undefined && Array.from(formProperty(form, "elements")).every(unchanged)) formCall(form, "reset");
         renew();
       } else {
         renew();

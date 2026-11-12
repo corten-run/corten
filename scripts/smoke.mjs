@@ -1924,9 +1924,19 @@ async function run(browser) {
   // has a new key after (the reset comes before the key is renewed, so this does not see the reset
   // leave a key alone: a hidden input's value is its attribute, which a reset keeps). A form the
   // user changed after it was sent keeps their work, as it does against a patch, and so does one a
-  // control was added to. The form has a control named reset, so `form.reset` is that control and
-  // the form's own method has to be reached through its prototype.
-  for (const change of ["none", "edited", "added"]) {
+  // control was added to: a hidden input too, which has no state of its own the reset could be
+  // seen to change. So does another file of the same name chosen while the write is out (its size
+  // differs), and text a number input cannot read, whose value is "" as an empty field's is. The
+  // form has a control named reset, so `form.reset` is that control and the form's own method has
+  // to be reached through its prototype.
+  /** Sets the queue form's file to one named card.png, of `text`. @param {string} text */
+  const pickQueueFile = (text) =>
+    page.evaluate((text) => {
+      const files = new DataTransfer();
+      files.items.add(new File([text], "card.png", { type: "image/png", lastModified: 1 }));
+      /** @type {HTMLInputElement} */ (document.querySelector("#queue-box [name=f]")).files = files.files;
+    }, text);
+  for (const change of ["none", "edited", "added", "hidden", "file", "unreadable"]) {
     queueSent = [];
     queueAnswered = 0;
     queueAnswer = { status: 205, body: "" };
@@ -1941,35 +1951,53 @@ async function run(browser) {
       w.__queueCase = new AbortController();
       w.__queueError = null;
       document.addEventListener("corten:error", (e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status), { signal: w.__queueCase.signal });
-    }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">`));
+    }, queueForm("post", `${keyField}<input type="hidden" name="reset" value="x">${change === "file" ? '<input type="file" name="f">' : change === "unreadable" ? '<input type="number" name="q">' : ""}`));
     await page.fill("#queue-box [name=n]", "5");
+    if (change === "file") await pickQueueFile("first");
     await page.click("#queue-box button");
     if (change === "edited") await page.fill("#queue-box [name=n]", "6");
     if (change === "added") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input name="extra">')));
+    if (change === "hidden") await page.evaluate(() => document.querySelector("#queue-box form")?.insertAdjacentHTML("beforeend", __html('<input type="hidden" name="tag" value="a">')));
+    if (change === "file") await pickQueueFile("another picture");
+    if (change === "unreadable") {
+      await page.focus("#queue-box [name=q]");
+      await page.keyboard.type("1e");
+    }
     pressed();
     const until = Date.now() + 6000;
     while (!(queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null) && Date.now() < until) await page.waitForTimeout(50);
     // Time for a corten:error to be heard, or a waiting submit to go.
     await page.waitForTimeout(300);
     const reset = await queueFields();
+    // What the case says it changed is still there: the second file, and the number input's text.
+    const other = await page.evaluate(() => ({
+      file: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=f]"))?.files?.[0]?.size,
+      bad: /** @type {HTMLInputElement | null} */ (document.querySelector("#queue-box [name=q]"))?.validity.badInput,
+    }));
     const error = await page.evaluate(() => {
       const w = /** @type {any} */ (window);
       w.__queueCase.abort();
       return /** @type {number | null} */ (w.__queueError);
     });
+    /** @type {Record<string, string>} */
+    const keeps = {
+      edited: "a form the user changed after it was sent",
+      added: "a form a control was added to after it was sent",
+      hidden: "a form a hidden input was added to after it was sent",
+      file: "a form whose file was swapped for another of the same name after it was sent",
+      unreadable: "a form whose number input was given text it cannot read after it was sent",
+    };
     check(
-      change === "edited"
-        ? "a bare 205 keeps a form the user changed after it was sent, with no corten:error"
-        : change === "added"
-          ? "a bare 205 keeps a form a control was added to after it was sent, with no corten:error"
-          : "a bare 205 with nothing waiting resets the form that sent it, gives it a new key, and dispatches no corten:error",
+      change === "none" ? "a bare 205 with nothing waiting resets the form that sent it, gives it a new key, and dispatches no corten:error" : `a bare 205 keeps ${keeps[change]}, with no corten:error`,
       queueSent.length === 1 &&
         queueSent[0].startsWith("POST 5 ") &&
         error === null &&
         reset.n === (change === "none" ? "1" : change === "edited" ? "6" : "5") &&
         uuid.test(reset.key ?? "") &&
-        reset.key !== zero,
-      `${queueSent.join()}; error: ${error}; left ${JSON.stringify(reset)}`,
+        reset.key !== zero &&
+        (change !== "file" || other.file === "another picture".length) &&
+        (change !== "unreadable" || other.bad === true),
+      `${queueSent.join()}; error: ${error}; left ${JSON.stringify({ ...reset, ...other })}`,
     );
   }
   // A press with other values while a write is out waits, and the write's 205 does not reset the
@@ -4103,9 +4131,14 @@ async function run(browser) {
   );
   const errorsBeforeUpload = errors.length;
   let uploadStatus = 422;
-  await page.route("**/upload-test", (route) =>
-    route.fulfill({ status: uploadStatus, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: part(uploadStatus === 422 ? ' class="refused"' : ' class="taken"') }),
-  );
+  let uploadTaken = ' class="taken"';
+  /** @type {Promise<void>} */
+  let uploadHeld = Promise.resolve();
+  await page.route("**/upload-test", async (route) => {
+    const body = part(uploadStatus === 422 ? ' class="refused"' : uploadTaken);
+    await uploadHeld;
+    await route.fulfill({ status: uploadStatus, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body }).catch(() => {});
+  });
   await page.setInputFiles("#upload [name=photo]", { name: "card.png", mimeType: "image/png", buffer: Buffer.from("png") });
   const chosenFiles = () => page.evaluate(() => Array.from(/** @type {HTMLInputElement} */ (document.querySelector("#upload [name=photo]")).files ?? [], (f) => f.name).join());
   await page.click("#upload button");
@@ -4121,6 +4154,32 @@ async function run(browser) {
   await page.click("#upload button");
   await page.waitForSelector("#upload-part.taken", { timeout: 4000 }).catch(() => {});
   const takenFiles = await chosenFiles();
+  // A file is told by its name, size and time, as a pending submit's key tells it: another file of
+  // the same name chosen while the answer that takes the first is on its way is the user's new
+  // choice and stays, where the same file chosen again goes with the answer.
+  /** Sets the input's file to card.png of `text`, last modified at 1. @param {string} text */
+  const pickPhoto = (text) =>
+    page.evaluate((text) => {
+      const files = new DataTransfer();
+      files.items.add(new File([text], "card.png", { type: "image/png", lastModified: 1 }));
+      /** @type {HTMLInputElement} */ (document.querySelector("#upload [name=photo]")).files = files.files;
+    }, text);
+  /** Sends card.png, picks `then` while the answer is held, and gives the file left after it. @param {string} then @param {string} marker */
+  const pickedWhileOut = async (then, marker) => {
+    uploadTaken = ` class="${marker}"`;
+    /** @type {() => void} */
+    let answer = () => {};
+    uploadHeld = new Promise((resolve) => (answer = resolve));
+    await pickPhoto("png");
+    await page.click("#upload button");
+    await pickPhoto(then);
+    answer();
+    await page.waitForSelector(`#upload-part.${marker}`, { timeout: 4000 }).catch(() => {});
+    return page.evaluate(() => Array.from(/** @type {HTMLInputElement} */ (document.querySelector("#upload [name=photo]")).files ?? [], (f) => `${f.name} ${f.size}`).join());
+  };
+  const otherKept = await pickedWhileOut("another png", "taken-other");
+  const sameTaken = await pickedWhileOut("png", "taken-same");
+  uploadHeld = Promise.resolve();
   await page.unroute("**/upload-test");
   await page.evaluate(() => document.querySelector("#upload")?.remove());
   // The refusal is a 422 on purpose; the browser logs that as a failed resource.
@@ -4129,6 +4188,11 @@ async function run(browser) {
     "a patch keeps a file input's chosen files until the answer that took them",
     refusedFiles === "card.png" && markedInvalid === "true" && liveFiles === "card.png" && takenFiles === "",
     JSON.stringify({ refusedFiles, markedInvalid, liveFiles, takenFiles }),
+  );
+  check(
+    "the answer that took a file keeps another of the same name chosen while it was on its way, and takes the same file chosen again",
+    otherKept === "card.png 11" && sameTaken === "",
+    JSON.stringify({ otherKept, sameTaken }),
   );
 
   // A current nav link is brought into view in the box that scrolls it (a nav row wider than the

@@ -67,8 +67,15 @@ Corten is pre-1.0, so any minor version may change the API.
   with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
   no longer shows its failed text for a write that succeeded, and a submit pressed while it was
   out is sent, where before it was dropped. A `205` also resets the form (firing `reset`), unless
-  the user changed a field after it was sent or pressed again with other values
+  the user changed a field after it was sent (another file of the same name, or text a number
+  input cannot read, among them), a control was added to the form since, or the user pressed again
+  with other values
   ([#1258 A data-patch write answered 204, which the server doc gives for a write with nothing to say, fires corten:error and drops the queued submit](https://github.com/corten-run/corten/issues/1258)).
+  corten-ui's `NumberField` and `ComboBox` follow a form reset, which sends no `input`: a
+  button at the bound the reset puts back is disabled again, and the option marked as the value
+  is the select's. A file input's files are told by each one's name, size and time there and when
+  a patch answers: another file of the same name, chosen while the answer that takes the first is
+  on its way, stays chosen, where before it was taken with the answer.
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so

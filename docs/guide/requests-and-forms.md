@@ -711,10 +711,15 @@ nothing to draw (RFC 9110, 15.3.5 and 15.3.6): the page stays as it is, the form
 after any whole answer below 500, a submit that waited goes, and nothing says it failed. A `205`
 asks the client to put the form back as it came, so the runtime resets it, a GET's form too,
 unless the user changed a field after it was sent or pressed again with other values while it
-was out: their work is kept, as against a patch. The runtime sees a change only in what the
-browser reads as a field's value (an input, a `<select>`, a `<textarea>`) and in a control added
-to the form since it was sent; a form-associated custom element's state or an `<output>` that
-changed is reset without being noticed. The reset is the browser's `form.reset()`, which fires
+was out: their work is kept, as against a patch. A change is a control whose state is not the
+one it was sent with: a `<select>`'s chosen options, a `<textarea>`'s text, a checkbox's or
+radio's checkedness, a file input's files by each one's name, size and last-modified time (so
+another file of the same name is a change), and any other input's value (a hidden input, a button
+and an image input have none here); a number or date input holding text the browser cannot read
+(`validity.badInput`, whose value is `""` as an empty one's is) is a change too. So is a control
+added to the form since it was sent, a hidden input among them. A control removed since is not
+counted, and a form-associated custom element's state or an `<output>` that changed is reset
+without being noticed. The reset is the browser's `form.reset()`, which fires
 `reset` on the form and no `input` or `change`, so a script that mirrors a field's value from its
 input events listens for `reset` too. A browser without JavaScript stays on the page for either
 and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`.
@@ -745,8 +750,8 @@ message. A row with an id is found by it, so focus lands on its list, not on ano
 then goes on from the start of the list. A file input keeps the files the user chose, which markup cannot
 give back, so a refusal can redraw the input with `aria-invalid` and its message and the files
 are still there to send again; only a successful answer to the form that sent them takes them
-(found by first file name, so files chosen again under the same name while it was on its way go
-too). What the user opened stays open: a `<dialog>` (modal again if it
+(found by each file's name, size and last-modified time, so another file of the same name chosen
+while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
 the server sent open and now sends closed closes. A dialog the server draws `open` is open but not
