@@ -21,6 +21,11 @@ Corten is pre-1.0, so any minor version may change the API.
   ranges. A one-droplet round runs, reports and compares as before, and a split round compares
   only with one split the same way
   ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
+- The marketplace alert-form check saves the exact submitted case, POST status and response,
+  current message and original timeout when the result message does not arrive. The
+  React Router timeout from r19 remains unconfirmed as an adapter defect
+  ([#1251 Benchmark r19: React Router fixture correctness times out waiting for an alert-form message](https://github.com/corten-run/corten/issues/1251)).
+
 - `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
   (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
   the scheme in any case, one or more spaces, the token trimmed, and `None` for no
