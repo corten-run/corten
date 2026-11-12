@@ -100,6 +100,128 @@ public sealed class MarketplaceTests
             });
     }
 
+    [Fact]
+    public async Task AcceptedFormsPersistWithIsolatedReadbackAndConcurrentAppends()
+    {
+        var upstream = new Upstream();
+        using var app = new App(upstream);
+        using var client = app.CreateClient(new() { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        using var other = app.CreateClient(new() { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        var parser = new HtmlParser();
+        var concurrent = false;
+        async Task<JsonElement> Read(HttpClient browser)
+        {
+            var beforeRead = upstream.Requests;
+            using var response = await browser.GetAsync("/api/alerts");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            Assert.False(response.Headers.Contains("Set-Cookie"));
+            // Other concurrent requests can fetch records; no single-threaded read may do so.
+            if (!concurrent) Assert.Equal(beforeRead, upstream.Requests);
+            return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
+        }
+        async Task<string> Token(HttpClient browser, string locale)
+        {
+            var doc = parser.ParseDocument(await browser.GetStringAsync($"/marketplace/{locale}/item_1"));
+            return doc.QuerySelector("input[name=__RequestVerificationToken]")!.GetAttribute("value")!;
+        }
+        Task<HttpResponseMessage> Post(HttpClient browser, string locale, string token, string email, string price, string id = "item_1", string? origin = null, string? site = null)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, $"/marketplace/{locale}/{id}")
+            {
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["__RequestVerificationToken"] = token, ["email"] = email, ["target_price"] = price
+                })
+            };
+            if (origin is not null) request.Headers.Add("Origin", origin);
+            if (site is not null) request.Headers.Add("Sec-Fetch-Site", site);
+            return browser.SendAsync(request);
+        }
+        Assert.Empty((await Read(client)).EnumerateArray());
+        const string chosen = "0000000000000000000000000000000000000000000000000000000000000000";
+        client.DefaultRequestHeaders.Add("Cookie", "marketplace-alerts=" + chosen);
+        Assert.Empty((await Read(client)).EnumerateArray());
+        var invalidKey = await Token(client, "en-US");
+        using var invalidFresh = await Post(client, "en-US", invalidKey, "bad", "1");
+        Assert.Equal(HttpStatusCode.OK, invalidFresh.StatusCode);
+        Assert.DoesNotContain(invalidFresh.Headers.TryGetValues("Set-Cookie", out var cookies) ? cookies : [],
+            cookie => cookie.StartsWith("marketplace-alerts="));
+        Assert.Empty((await Read(client)).EnumerateArray());
+        var expected = new List<object>();
+        foreach (var locale in new[] { "en-US", "fr-FR", "de-DE" })
+        {
+            var token = await Token(client, locale);
+            var email = locale + "@example.test";
+            using var accepted = await Post(client, locale, token, email, locale == "en-US" ? "1234.50" : "1234,50");
+            Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+            if (expected.Count == 0)
+            {
+                var cookie = Assert.Single(accepted.Headers.GetValues("Set-Cookie"), value => value.StartsWith("marketplace-alerts="));
+                Assert.Contains("httponly", cookie.ToLowerInvariant());
+                Assert.Contains("secure", cookie.ToLowerInvariant());
+                Assert.Contains("samesite=lax", cookie.ToLowerInvariant());
+                Assert.DoesNotContain("=" + chosen, cookie);
+                client.DefaultRequestHeaders.Remove("Cookie");
+            }
+            expected.Add(new { item_id = "item_1", email, target_minor = 123450 });
+            Assert.Equal(JsonSerializer.Serialize(expected), (await Read(client)).GetRawText());
+            foreach (var (badEmail, badPrice) in new[] { ("", ""), ("bad", "1"), (email, "0"), (email, "NaN") })
+            {
+                using var invalid = await Post(client, locale, token, badEmail, badPrice);
+                Assert.Equal(HttpStatusCode.OK, invalid.StatusCode);
+                Assert.Equal(JsonSerializer.Serialize(expected), (await Read(client)).GetRawText());
+            }
+        }
+        var key = await Token(client, "en-US");
+        using var noToken = await Post(client, "en-US", "", "reject@example.test", "1");
+        Assert.Equal(HttpStatusCode.BadRequest, noToken.StatusCode);
+        using var crossSite = await Post(client, "en-US", key, "reject@example.test", "1", origin: "https://attacker.test");
+        Assert.Equal(HttpStatusCode.Forbidden, crossSite.StatusCode);
+        using var fetchSite = await Post(client, "en-US", key, "reject@example.test", "1", site: "cross-site");
+        Assert.Equal(HttpStatusCode.Forbidden, fetchSite.StatusCode);
+        upstream.Status = HttpStatusCode.NotFound;
+        using var missing = await Post(client, "en-US", key, "reject@example.test", "1", "missing");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        upstream.Status = HttpStatusCode.OK;
+        Assert.Equal(JsonSerializer.Serialize(expected), (await Read(client)).GetRawText());
+        Assert.Empty((await Read(other)).EnumerateArray());
+        var otherKey = await Token(other, "en-US");
+        using var otherPost = await Post(other, "en-US", otherKey, "other@example.test", "2");
+        Assert.Equal(HttpStatusCode.OK, otherPost.StatusCode);
+        Assert.Equal(1, (await Read(other)).GetArrayLength());
+        var emails = Enumerable.Range(0, 24).Select(i => $"concurrent-{i}@example.test").ToArray();
+        concurrent = true;
+        await Task.WhenAll(emails.Select(async email =>
+        {
+            using var response = await Post(client, "en-US", key, email, "3.25");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var snapshot = (await Read(client)).EnumerateArray().ToArray();
+            Assert.Equal(snapshot.Length, snapshot.Select(row => row.GetProperty("email").GetString()).Distinct().Count());
+            Assert.All(snapshot.Skip(expected.Count), row => Assert.Equal(325, row.GetProperty("target_minor").GetInt64()));
+        }));
+        concurrent = false;
+        var rows = await Read(client);
+        Assert.Equal(expected.Count + emails.Length, rows.GetArrayLength());
+        Assert.Equal(emails.Order(), rows.EnumerateArray().Skip(expected.Count).Select(row => row.GetProperty("email").GetString()).Order());
+        Assert.Equal(rows.GetRawText(), (await Read(client)).GetRawText());
+        for (var count = 1; count <= 2; count++)
+        {
+            using var repeated = await Post(client, "en-US", key, "repeat@example.test", "4");
+            Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+            var after = await Read(client);
+            Assert.Equal(rows.GetArrayLength() + count, after.GetArrayLength());
+            Assert.Equal("repeat@example.test", after.EnumerateArray().Last().GetProperty("email").GetString());
+            Assert.Equal(400, after.EnumerateArray().Last().GetProperty("target_minor").GetInt64());
+        }
+        using var largest = await Post(client, "en-US", key, "large@example.test", decimal.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(HttpStatusCode.OK, largest.StatusCode);
+        var largestRow = (await Read(client)).EnumerateArray().Last();
+        Assert.Equal("large@example.test", largestRow.GetProperty("email").GetString());
+        Assert.Equal("7922816251426433759354395033500", largestRow.GetProperty("target_minor").GetRawText());
+        Assert.Equal(1, (await Read(other)).GetArrayLength());
+    }
+
     [Theory]
     [InlineData("/api/catalog/record_1")]
     [InlineData("/api/marketplace/item_1")]

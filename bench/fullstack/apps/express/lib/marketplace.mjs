@@ -50,17 +50,22 @@ export function targetAmount(locale, text) {
   return Number.isFinite(amount) && amount > 0 && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
 }
 
-export function alertMessage(locale, title, email, target) {
+export function alertResult(locale, title, email, target) {
   const f = formatters(locale);
-  if (!email.includes("@")) return f.labels.invalid_email;
+  if (!email.includes("@")) return { message: f.labels.invalid_email, targetMinor: null };
   const amount = targetAmount(locale, target);
-  if (amount === null) return f.labels.invalid_price;
+  if (amount === null) return { message: f.labels.invalid_price, targetMinor: null };
   const replacements = { email, title, price: f.money.format(amount) };
-  return f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name) => replacements[name]);
+  return { message: f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name) => replacements[name]),
+    targetMinor: Math.round(amount * 100) };
+}
+
+export function alertMessage(locale, title, email, target) {
+  return alertResult(locale, title, email, target).message;
 }
 
 /** What the page shows, formatted for this request. */
-export function pageModel(locale, record, query, form) {
+export function pageModel(locale, record, query, form, message = form ? alertMessage(locale, record.title, form.email, form.target) : "") {
   const f = formatters(locale);
   const money = (minor) => (minor === null ? "\u2014" : f.money.format(minor / 100));
   const path = marketplacePath(locale, record.id);
@@ -81,7 +86,7 @@ export function pageModel(locale, record, query, form) {
     contents: record.contents.map((row) => ({ ...row, quantityText: f.count.format(row.quantity) })),
     included: record.included_in.map((row) => ({ ...row, quantityText: f.count.format(row.quantity) })),
     email: form?.email ?? "", target: form?.target ?? "",
-    message: form ? alertMessage(locale, record.title, form.email, form.target) : "",
+    message,
   };
 }
 
