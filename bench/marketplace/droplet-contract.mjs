@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { parsePart, partName, splitApps } from "./run-contract.mjs";
 
 export const nightly = Object.freeze({ passes: 3, duration: 15, warmup: 10, rate: 150 });
 export function officialRound(round) {
@@ -15,17 +16,24 @@ export function parseDropletArgs(args) {
     else if (["--ssh-key", "--state-dir"].includes(flag)) {
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${flag} needs a value`);
       options[flag === "--ssh-key" ? "sshKey" : "stateDir"] = value;
+    } else if (flag === "--droplets") {
+      // A round split across n droplets started together (#816); 1 is the whole round on one.
+      const value = args[++i]; assert.match(value ?? "", /^[1-9]\d*$/, "--droplets needs a count");
+      if (Number(value) > 1) { splitApps(Number(value)); options.droplets = Number(value); }
     } else throw new Error(`unknown option ${flag}`);
   }
   assert.ok(options.stateDir, "--state-dir is required (durable launcher state, outside the checkout)");
   assert.ok(options.collect ? !options.detach && !options.plan : options.detach || options.plan, "use --detach to launch, or --collect");
+  assert.ok(!(options.collect && seen.has("--droplets")), "--collect reads the split from the state directory's split.json; omit --droplets");
   assert.ok(options.collect || /^\d+$/.test(options.sshKey ?? ""), "--ssh-key needs a DigitalOcean key id");
   return options;
 }
 export function validateState(s, round) {
   officialRound(round);
+  // One droplet's part of a split round (#816) is named for it: corten-marketplace-r17-d2.
+  const part = s.part === undefined ? null : parsePart(s.part);
   assert.equal(s.round, round); assert.equal(s.workload, "marketplace-v2");
-  assert.equal(s.name, `corten-marketplace-${round}`); assert.equal(s.unit, `${s.name}.service`);
+  assert.equal(s.name, `corten-marketplace-${partName(round, part)}`); assert.equal(s.unit, `${s.name}.service`);
   assert.match(s.tag, /^corten-marketplace-run-[a-f0-9]{16}$/);
   assert.match(s.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(s.options, nightly);
@@ -48,8 +56,8 @@ export function terminalUnit(output) {
   assert.equal(fields.Restart, "no", "unexpected restart policy; refusing collection and deletion");
   return ["inactive", "failed"].includes(fields.ActiveState);
 }
-export function safeArchive(entries, verbose, round) {
-  const root = `repo/bench/marketplace/results/${officialRound(round)}`;
+export function safeArchive(entries, verbose, round, part = null) {
+  const root = `repo/bench/marketplace/results/${officialRound(round)}${part ? `/d${parsePart(part).index}` : ""}`;
   for (const entry of entries.trim().split(/\r?\n/)) {
     assert.ok(entry && !/[\\:]/.test(entry) && !entry.startsWith("/") && !entry.split("/").some((s) => s === ".." || s === "."), "unsafe archive member");
     assert.ok(["run.log", "host.txt", "exit-code"].includes(entry) || entry === root || entry.startsWith(`${root}/`), `unexpected archive member ${entry}`);
@@ -58,13 +66,16 @@ export function safeArchive(entries, verbose, round) {
 }
 export function remoteFiles(s) {
   validateState(s, s.round);
+  // A part of a split round (#816) runs its share (run.mjs --part) into results/<round>/d<k>.
+  const results = `repo/bench/marketplace/results/${s.round}${s.part ? `/d${s.part.index}` : ""}`;
+  const part = s.part ? ` --part ${s.part.index}/${s.part.of}` : "";
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
 test -f exit-code || systemctl show ${s.unit} --value --property=ExecMainStatus > exit-code
 files=(run.log exit-code)
 test ! -f host.txt || files+=(host.txt)
-test ! -d repo/bench/marketplace/results/${s.round} || files+=(repo/bench/marketplace/results/${s.round})
+test ! -d ${results} || files+=(${results})
 tar -czf results.tgz.tmp "\${files[@]}"
 mv results.tgz.tmp results.tgz
 `;
@@ -94,11 +105,11 @@ test "$(nproc)" -ge 8
 timeout 900 npm ci --no-audit --no-fund
 node bench/marketplace/fixtures.mjs
 export MARKETPLACE_APP_CPUS=1 MARKETPLACE_API_CPUS=2-3 MARKETPLACE_LOAD_CPUS=4-7
-node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}
-node bench/marketplace/report.mjs bench/marketplace/results/${s.round}/summary.json > /bench/report.md
+node bench/marketplace/run.mjs ${s.round}${part} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}
+node bench/marketplace/report.mjs ${results.slice("repo/".length)}/summary.json > /bench/report.md
 `;
   const unit = `[Unit]
-Description=Localized marketplace ${s.round}, twenty apps, three passes
+Description=Localized marketplace ${s.part ? `${s.round} d${s.part.index} of ${s.part.of}, ${splitApps(s.part.of)[s.part.index - 1].length} apps` : `${s.round}, twenty apps`}, three passes
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -111,4 +122,55 @@ TimeoutStopSec=120
 KillMode=control-group
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: unit };
+}
+
+/**
+ * A split round's plan (#816), split.json in the launcher's state directory, written once before
+ * any droplet: the measured commit and tree, decided once for every droplet, and each droplet's
+ * name and apps. Each droplet's launcher state is d<k>/state.json beside it.
+ */
+export function validatePlan(plan, round) {
+  officialRound(round);
+  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "options", "parts", "round", "tree", "workload"], "unexpected split plan fields");
+  assert.equal(plan.workload, "marketplace-v2"); assert.equal(plan.round, round);
+  assert.match(plan.commit, /^[a-f0-9]{40}$/); assert.match(plan.tree, /^[a-f0-9]{40}$/);
+  assert.deepEqual(plan.options, nightly);
+  const shares = splitApps(plan.droplets);
+  assert.deepEqual(plan.parts, shares.map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })), "split plan parts are not the split of the apps");
+  return plan;
+}
+export function splitPlan(round, droplets, commit, tree, createdAt = new Date().toISOString()) {
+  return validatePlan({ workload: "marketplace-v2", round, droplets, commit, tree, createdAt, options: nightly,
+    parts: splitApps(droplets).map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })) }, round);
+}
+/**
+ * The exit code of a split round's collection from each droplet's (#816). Each is a collect()
+ * code (0 done, 1 partial, 3 still running), 2 for a collection error, or "missing" for a part
+ * that was never created. A collection error or a leftover droplet is 2, like one droplet's; any
+ * other code but 0, 1 or 3 is passed on; then 3 while any still runs; then 1 when any is partial
+ * or missing. 0 only when every droplet finished, was collected and deleted: the round can merge.
+ * @param {(number | "missing")[]} codes @param {number} leftovers droplets reported by leftoverDroplets
+ */
+export function splitExit(codes, leftovers = 0) {
+  if (leftovers || codes.includes(2)) return 2;
+  const other = codes.find((c) => ![0, 1, 3, "missing"].includes(c));
+  if (other !== undefined) return Number.isSafeInteger(other) && other > 0 ? other : 2;
+  if (codes.includes(3)) return 3;
+  if (codes.includes(1) || codes.includes("missing")) return 1;
+  return 0;
+}
+/**
+ * Droplets named for this round's parts (corten-marketplace-<round>-d*) that no live part state
+ * owns: an extra or duplicate, one for a part never reserved, or one still listed after its
+ * part's deletion was confirmed. Each is reported, never deleted: it is not proven to be ours.
+ * @param {object[]} droplets doctl's list @param {object} plan @param {(object | null)[]} states d1 first
+ */
+export function leftoverDroplets(droplets, plan, states) {
+  const prefix = `corten-marketplace-${plan.round}-d`;
+  return droplets.filter((d) => typeof d.name === "string" && d.name.startsWith(prefix)).filter((d) => {
+    const k = plan.parts.findIndex((p) => p.name === d.name);
+    const s = states[k];
+    if (k === -1 || !s || s.destroyedAt) return true;
+    return !(s.id ? String(d.id) === s.id : d.tags?.includes(s.tag));
+  });
 }

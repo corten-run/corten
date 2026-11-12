@@ -35,15 +35,57 @@ export function roundIdentity(round) {
   assert.equal(round, `${round[0]}${number}`, "round identity must be canonical, with no whitespace or padding");
   return { kind: round[0] === "r" ? "official" : "development", number };
 }
+// A round split across droplets started together (#816): every droplet runs Corten, the subject,
+// and axum + Maud, the anchor, so each app has a Corten measured on its own machine, and the
+// anchor's ratio to Corten shows whether the droplets' machines differ by more than the noise.
+export const anchors = ["corten", "axum-maud"];
+// At most one non-anchor app per droplet.
+export const maxDroplets = apps.length - anchors.length;
+/**
+ * The apps each droplet of a round split n ways measures, in catalog order: both anchors on every
+ * droplet, the other apps dealt round-robin in catalog order, so each app runs on exactly one.
+ * @param {number} n droplets, 2 to maxDroplets
+ * @returns {string[][]} one list per droplet, d1 first
+ */
+export function splitApps(n) {
+  assert.ok(Number.isSafeInteger(n) && n >= 2 && n <= maxDroplets, `a round splits across 2 to ${maxDroplets} droplets`);
+  const shares = Array.from({ length: n }, () => new Set(anchors));
+  apps.filter((app) => !anchors.includes(app)).forEach((app, i) => shares[i % n].add(app));
+  return shares.map((share) => apps.filter((app) => share.has(app)));
+}
+/**
+ * One droplet's part of a split round, from run.mjs --part k/n or saved state: {index: k, of: n}.
+ * @param {string | {index: number, of: number}} value
+ */
+export function parsePart(value) {
+  const part = typeof value === "string" ? (() => {
+    assert.match(value, /^[1-9]\d*\/[1-9]\d*$/, "--part needs k/n, for example 2/3");
+    const [index, of] = value.split("/").map(Number);
+    return { index, of };
+  })() : value;
+  assert.deepEqual(Object.keys(part ?? {}).sort(), ["index", "of"], "a part is {index, of}");
+  splitApps(part.of);
+  assert.ok(Number.isSafeInteger(part.index) && part.index >= 1 && part.index <= part.of, `part ${part.index} of ${part.of} does not exist`);
+  return { index: part.index, of: part.of };
+}
+// The name of a round's part: r17-d2, or the round itself when it is not split.
+export const partName = (round, part) => (part ? `${round}-d${part.index}` : round);
 export function parseArgs(args, inventory) {
   const identity = roundIdentity(args[0]);
-  const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...args.slice(1)], inventory);
+  // --part k/n measures one droplet's share of a split round (#816); it sets the apps itself.
+  const at = args.indexOf("--part", 1);
+  const part = at === -1 ? null : parsePart(args[at + 1] ?? "");
+  const rest = at === -1 ? args.slice(1) : [...args.slice(1, at), ...args.slice(at + 2)];
+  assert.ok(!part || !rest.includes("--part"), "duplicate option --part");
+  assert.ok(!part || !rest.includes("--apps"), "--part sets the apps; do not also pass --apps");
+  const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...rest], inventory);
+  if (part) options.apps = splitApps(part.of)[part.index - 1];
   if (identity.kind === "official") {
-    assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all twenty apps; use wN for development");
+    if (!part) assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all twenty apps; use wN for development");
     assert.equal(options.passes, 3, "official rounds require three passes");
     assert.equal(options.checkOnly, false, "use wN for check-only development");
   }
-  return { ...options, round: args[0] };
+  return { ...options, round: args[0], ...(part ? { part } : {}) };
 }
 // A phase as measured, with what the app could not serve under its profile (#1128): requests
 // that failed (any answer but a 200) or timed out, and fixed-rate iterations k6 could not start,

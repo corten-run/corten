@@ -91,6 +91,56 @@ passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstrea
 and load-generator CPUs 4-7. These are short measurement windows: publish medians and ranges,
 not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
+### Splitting a round across droplets
+
+A round's wall time grows with every app, so it can be split across droplets started together
+([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)):
+
+```sh
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --plan
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+```
+
+`--plan` prints the split, each droplet's remote files and every command, calling neither
+`git`, `doctl` nor `ssh`. Every droplet runs Corten and axum + Maud (the anchors) beside its
+share of the other apps, dealt round-robin in catalog order, as an ordinary c-8 round of those
+apps (`run.mjs rN --part k/n`, into `results/rN/d<k>`). Each droplet gates its own apps, both
+sources and all twelve browser profiles, before its own load; the gate checks each app against
+the contract, not against Corten, so it needs no other droplet. A droplet whose gate fails
+fails the round, as one app's failure fails an unsplit round, though other droplets may already
+have measured.
+
+The launcher checks the clean checkout, that no benchmark droplet exists and the account's
+droplet limit (`doctl account get`) once, then writes `split.json` (commit, tree and each
+droplet's apps) and refuses another launch from that state directory, or from a different tree.
+It creates every droplet before starting any round, so the rounds start within minutes of each
+other; each droplet has its own `d<k>/` state, known_hosts and evidence. A signal (SIGINT,
+SIGTERM, SIGHUP or Ctrl-Break) stops the launch between steps, and the launcher then says what
+each droplet is left doing: a started round keeps running until stopped (it prints the `ssh`
+command), a droplet created but not started is billed until deleted (it prints the `doctl`
+command).
+
+`--collect` collects each droplet on its own and deletes each one that finished, so a slow
+droplet does not keep a finished one billed. The round is finished only when every droplet has
+been: exit 3 while any runs, 2 for a collection error on any droplet (a failed delete
+included) or for a leftover droplet named `corten-marketplace-rN-d*` that no live part owns,
+which is reported with its delete command, never deleted. Exit 1 means a droplet did not finish
+its part; 0 means every droplet finished and was deleted, and the parts merged into
+`round/rN/` in the state directory (`summary.json`, `split.json` and each droplet's `d<k>/`).
+
+The merged summary is a round of all twenty apps, each from the droplet that measured it, with
+each droplet's CPU model, tools and anchors in `split`. Its report gives every table a Droplet
+column and both anchors on every droplet, and each app's req/s and CPU us/request as a ratio to
+the Corten on its own droplet beside the raw numbers. Raw numbers across droplets carry any
+difference between their machines; compare apps on different droplets by those ratios. A
+Between droplets section lists each droplet's CPU and checks axum + Maud's ratio to Corten on
+each: where two droplets' ratio ranges over the passes do not overlap, the rule this README uses
+for every range, the stage is flagged ("d1 and d2 differ"). The anchors' raw spread across
+droplets is shown as information, with a note when it passes the noise. `compare.mjs` compares
+a split round only with one split the same way, each droplet's host and images equal to the
+baseline's same droplet, and Corten's rows are d1's.
+
 For local development, `wN` remains the development identity:
 
 ```sh

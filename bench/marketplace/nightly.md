@@ -99,6 +99,34 @@ commits main moved. On uncertainty inspect the reservation and owned host, never
 If unit is running, keep running. If terminal, collect partial data. If missing, preserve the
 host and report the provisioning error rather than guessing deletion is safe.
 
+## Split Rounds
+
+A round may be split across droplets started together with `--droplets <n>`
+([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816));
+the [marketplace README](README.md#splitting-a-round-across-droplets) describes the split, the
+merge and the check. The nightly default stays one droplet until a split round has been run and
+validated with Todd's approval. When splitting, check `--plan` first, then launch with the same
+state directory rules as above:
+
+```sh
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <saved-key-id> --state-dir <round-control-directory> --detach
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+```
+
+Each droplet is a dedicated c-8 with the same pinning, passes, windows and rate. The launch
+checks the account's droplet limit before it writes `split.json`, and `--collect` needs no
+`--droplets`: it reads the plan. Exit codes are as above, for the round: 3 while any droplet
+runs (finished droplets are already collected and deleted), 2 for a collection error on any
+droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
+deleted), 1 when a droplet did not finish its part, 0 when every droplet finished, was deleted
+and merged into `round/rN/` in the state directory. Import that merged folder, not a droplet's
+`d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is left doing;
+stop a started round with the `ssh` command it prints, then collect, and delete a droplet that
+never started with the `doctl` command it prints. A split round compares only with a round split
+the same way, droplet by droplet; its report's Between droplets section flags stages where
+axum + Maud's ratio to Corten differs between droplets, and a flagged stage is reported, not
+hidden.
+
 ## Finished Results
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:

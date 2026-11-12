@@ -20,8 +20,9 @@ const cpus = cpuSettings(process.env);
 const runId = `marketplace-${options.round}-${randomBytes(5).toString("hex")}`;
 const network = `${runId}-net`;
 const label = "run.corten.marketplace";
-const folder = join(here, "results", options.round);
-mkdirSync(join(here, "results"), { recursive: true });
+// One droplet's part of a split round (#816) writes results/<round>/d<k>; the collector merges them.
+const folder = options.part ? join(here, "results", options.round, `d${options.part.index}`) : join(here, "results", options.round);
+mkdirSync(dirname(folder), { recursive: true });
 // Atomic reservation: another invocation or an old failed run cannot be overwritten.
 mkdirSync(folder);
 const summary = { schema: resultSchema, workload, round: options.round, runId, options, startedAt: new Date().toISOString(), complete: false, checksPassed: false, failures: [], cleanupFailures: [], apps: {}, host: { hostname: hostname(), platform: platform(), release: release() },

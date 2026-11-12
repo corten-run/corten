@@ -31,8 +31,6 @@ export const compiledFirst = ["corten", "leptos", "topcoat", "axum-maud", "gin",
  * with the production profile, never enter the defaults tier's trend. A step run on its own (one
  * app measured again, a matrix alone) may use another name, as the defaults tier's experiments do,
  * but never writes the matched tier's numbers into an r<n> round or the defaults' into an m<n>.
- * A droplet of a split round (droplet.mjs --droplets) is named for its round, `<round>-d<k>`, and
- * belongs to that round's tier.
  * @param {string} round
  * @param {string} tier "defaults" or "matched"
  * @param {{ full?: boolean }=} options full: run-all.mjs, summarize.mjs and droplet.mjs, which
@@ -40,11 +38,11 @@ export const compiledFirst = ["corten", "leptos", "topcoat", "axum-maud", "gin",
  */
 export const roundNameError = (round, tier, { full = false } = {}) => {
   if (tier === "matched") {
-    if (/^m\d+(-d\d+)?$/.test(round)) return null;
-    if (full || /^r\d+(-d\d+)?$/.test(round)) return `a matched-tier round is named m<n> (m1), not ${round}, so the defaults tier's trend (r<n>) never reads it`;
+    if (/^m\d+$/.test(round)) return null;
+    if (full || /^r\d+$/.test(round)) return `a matched-tier round is named m<n> (m1), not ${round}, so the defaults tier's trend (r<n>) never reads it`;
     return null;
   }
-  return /^m\d+(-d\d+)?$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
+  return /^m\d+$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
 };
 
 /**
