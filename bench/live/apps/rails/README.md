@@ -40,7 +40,9 @@ Supported explicit bounds: queue 2/history 4, or queue 1024/history 1025. Peaks 
 updated at mutation time. Inventory includes retained client rows, replay copies,
 in-flight work, native worker-pool size and actual Ruby CPU/GC counters. Native
 socket bytes are not observable through Action Cable's public API and are marked
-unknown, not zero. This does not establish load readiness, a TCP slow-reader bound,
+unknown (`null`), not zero. Per-consumer cleanup requires explicit numeric zeroes
+or absence from the complete native consumer inventory; unknown counters cannot
+prove release. This does not establish load readiness, a TCP slow-reader bound,
 multi-node behavior, authentication, or process-restart durability. Controls are
 unauthenticated synthetic-data endpoints, not a deployment security policy.
 

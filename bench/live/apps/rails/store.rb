@@ -254,7 +254,7 @@ module NativeStore
           retainedClientRows: @clients.values.sum { |c| c[:rows].size }, retainedClients: @clients.size, retainedClientLimit: 16,
           stagedClientRows: @clients.values.sum { |c| c[:pending] ? c[:pending][:rows].size : 0 }, stagedStatesLimitPerClient: 1,
           nativeActionCableWorkerPool: ActionCable.server.config.worker_pool_size,
-          nativeSocketBufferBytes: "not-observable-through-ActionCable-public-API" } }
+          nativeSocketBufferBytes: nil } }
     end
   end
 end
