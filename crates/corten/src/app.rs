@@ -647,7 +647,8 @@ impl<M: Middleware> App<M> {
     ///
     /// Under the prefix every failure is an RFC 9457 Problem Details document
     /// (`application/problem+json`, `{"title","status","detail"}`), whatever the
-    /// client accepts, and an unknown URL or a wrong method there is a JSON 404 or 405. There is no
+    /// client accepts, and an unknown URL, a wrong method or a method no route in the app has
+    /// there is a JSON 404, 405 or 501. There is no
     /// shell and no nonce; the deadline, the request signal,
     /// compression and the same-origin check on writes stay. See [`crate::api`]. `"/"` makes the
     /// whole app an API (Corten's own routes, like the health checks, keep their behavior).
@@ -1170,7 +1171,8 @@ impl<M: Middleware> App<M> {
         let prefixes: Vec<&str> =
             self.areas.iter().map(|area| area.prefix).chain(self.apis.iter().map(|(mount, ..)| mount.prefix.as_str())).collect();
         // Nor is its path routed again elsewhere (the app's routes and an area's share a path as
-        // one route): a method the unstaged route lacks would get its 405 there, with no stage.
+        // one route): a method the unstaged route lacks would get its 405 (or the router's 501)
+        // there, with no stage.
         let all_written: Vec<&str> = (self.pages.iter().map(|(p, _)| *p))
             .chain(self.areas.iter().flat_map(|area| area.pages.iter().map(|(p, _)| *p)))
             .chain(self.api_paths.iter().copied())

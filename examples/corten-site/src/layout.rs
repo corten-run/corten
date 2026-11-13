@@ -143,7 +143,7 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
             ("Not available", "Check your connection and try again.")
         }
         Failure::Rejected { .. } => ("Not accepted", "What was sent is not what this address takes. Go back and try again."),
-        Failure::WrongMethod | Failure::Failed { .. } | Failure::Panicked { .. } => {
+        Failure::WrongMethod | Failure::UnknownMethod | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Try again in a moment.")
         }
     };
