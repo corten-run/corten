@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, readdirSync, lstatSync, appendFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,13 +18,14 @@ export function sourceFiles(base = adapter) {
   return ["package.json", "server.mjs", ...["lib", "views", "static"].flatMap(walk)].sort()
     .map((path) => ({ path, sha256: sha256(readFileSync(join(base, path))) }));
 }
-export function command(executable, args, { log, timeoutMs = 120000, cwd = root } = {}) {
+export function command(executable, args, { log, stdoutFile, stderrFile, timeoutMs = 120000, cwd = root } = {}) {
+  for (const path of [stdoutFile, stderrFile]) if (path) writeFileSync(path, "");
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", expired = false;
     const timer = setTimeout(() => { expired = true; child.kill(); }, timeoutMs);
-    child.stdout.on("data", (part) => { stdout += part; if (log) appendFileSync(log, part); });
-    child.stderr.on("data", (part) => { stderr += part; if (log) appendFileSync(log, part); });
+    child.stdout.on("data", (part) => { stdout += part; if (log) appendFileSync(log, part); if (stdoutFile) appendFileSync(stdoutFile, part); });
+    child.stderr.on("data", (part) => { stderr += part; if (log) appendFileSync(log, part); if (stderrFile) appendFileSync(stderrFile, part); });
     child.once("error", (error) => { clearTimeout(timer); reject(error); });
     child.once("close", (code) => {
       clearTimeout(timer);
@@ -34,6 +35,16 @@ export function command(executable, args, { log, timeoutMs = 120000, cwd = root 
   });
 }
 export const docker = (args, options) => command("docker", args, options);
+export async function ownedInspector(args, task, { timeoutMs = 120000 } = {}) {
+  const name = `${task}-inspector-${randomBytes(6).toString("hex")}`;
+  try {
+    return await docker(["run", "--rm", "--name", name, "--network", "none", "--cpus", "1", "--memory", "512m", "--pids-limit", "128",
+      "--label", "agent.owner=codex", "--label", `agent.task=${task}`, ...args], { timeoutMs });
+  } finally {
+    try { await docker(["rm", "-f", "-v", name], { timeoutMs: 15000 }); }
+    catch (error) { if (!/No such container:/i.test(error.message)) throw error; }
+  }
+}
 export function verifyIdentity(node, bun, sources, manifest) {
   assert.equal(bun.versions.bun, pins.bunVersion, "wrong Bun runtime");
   assert.ok(!node.versions.bun, "Node baseline must execute Node, not Bun");
@@ -48,10 +59,9 @@ export function verifyIdentity(node, bun, sources, manifest) {
   assert.equal(node.dependenciesSha256, bun.dependenciesSha256, "runtime dependency trees differ");
   assert.equal(node.lockSha256, bun.lockSha256, "runtime dependency locks differ");
 }
-export async function inspectIdentities(image, task) {
+export async function inspectIdentities(image, task, options) {
   const identities = {};
-  for (const runtime of ["node", "bun"]) identities[runtime] = JSON.parse(await docker(["run", "--rm", "--network", "none", "--cpus", "1", "--memory", "512m",
-    "--label", "agent.owner=codex", "--label", `agent.task=${task}`, image, runtime, "/qualification/identity.mjs"]));
+  for (const runtime of ["node", "bun"]) identities[runtime] = JSON.parse(await ownedInspector([image, runtime, "/qualification/identity.mjs"], task, options));
   return identities;
 }
 export async function build(out, task) {

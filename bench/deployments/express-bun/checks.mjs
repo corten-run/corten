@@ -13,11 +13,17 @@ export async function waitFor(check, message, timeout = 3000) {
 }
 export async function upstream(records, observe) {
   const originals = { catalog: catalogServer(records.catalog), marketplace: marketplaceServer(records.marketplace) };
-  let fault = null, reads = 0;
+  let fault = null, reads = 0, requests = 0, unavailable = false;
   const calls = [], held = new Set();
   const server = createServer((req, res) => {
+    requests++;
     const match = /^\/(catalog|marketplace)\/records\/([^/?]+)/.exec(req.url);
     if (match) reads++;
+    if (unavailable) {
+      observe({ kind: "fixture-upstream-attempt", path: req.url, method: req.method, status: 503 });
+      res.writeHead(503, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      return res.end('{"error":"fixture upstream unavailable"}');
+    }
     if (!fault || !match) return originals[req.url.includes("marketplace") ? "marketplace" : "catalog"].emit("request", req, res);
     const call = { path: req.url, closed: false }; calls.push(call);
     res.once("close", () => { call.closed = true; held.delete(res); observe({ kind: "fault-upstream-closed", path: req.url }); });
@@ -33,9 +39,21 @@ export async function upstream(records, observe) {
   await new Promise((resolve) => server.listen(0, "0.0.0.0", resolve));
   return { url: `http://127.0.0.1:${server.address().port}`, port: server.address().port, calls,
     reads: () => reads,
+    requests: () => requests,
+    unavailable(value) { const previous = unavailable; unavailable = value; return previous; },
     fault(value) { fault = value; for (const response of held) response.destroy(); held.clear(); },
     async close() { for (const response of held) response.destroy(); server.closeAllConnections(); await new Promise((done) => server.close(done)); for (const original of Object.values(originals)) original.closeAllConnections(); },
   };
+}
+export async function fixtureIndependent(api, observe, scope, action) {
+  const before = api.requests(), previous = api.unavailable(true);
+  try { return await action(); }
+  finally {
+    api.unavailable(previous);
+    const attempts = api.requests() - before;
+    observe({ kind: "fixture-source-independence", scope, upstreamStatus: 503, attempts });
+    assert.equal(attempts, 0, "fixture check contacted upstream while unavailable");
+  }
 }
 export async function read(base, path, observe, { method = "GET", headers = {}, body, timeout = 14000 } = {}) {
   const response = await fetch(base + path, { method, headers: { "accept-encoding": "identity", ...headers }, body, redirect: "manual", signal: AbortSignal.timeout(timeout) });
@@ -70,7 +88,10 @@ export function invalidRecords(kind, record) {
 export async function checkHttp({ base, source, profile, records, upstream: api, observe, test }) {
   for (const kind of ["catalog", "marketplace"]) {
     const id = kind === "catalog" ? "record_1" : "item_1", path = `/api/${kind}/${id}`;
-    await test(`${kind}/all-500-json-and-source`, async () => checkJsonApp({ payload: kind === "catalog" ? "catalog-v1" : "marketplace-v2", base, records: records[kind], source, upstream: api.url, observe }));
+    await test(`${kind}/all-500-json-and-source`, async () => {
+      const action = () => checkJsonApp({ payload: kind === "catalog" ? "catalog-v1" : "marketplace-v2", base, records: records[kind], source, upstream: api.url, observe });
+      return source === "fixture" ? fixtureIndependent(api, observe, `${kind}/json`, action) : action();
+    });
     await test(`${kind}/headers-head-method-errors`, async () => {
       const success = await read(base, path, observe); assert.equal(success.status, 200); assert.equal(success.headers["cache-control"], "no-store");
       const head = await read(base, path, observe, { method: "HEAD" }); assert.equal(head.status, 200); assert.equal(head.body, "");

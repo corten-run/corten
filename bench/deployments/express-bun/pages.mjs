@@ -4,11 +4,12 @@ import { expectedArticle, representativeIds, filterPrefixes } from "../../catalo
 import { snapshotArticle } from "../../catalog/check.mjs";
 import { snapshotPage, comparePage, submitAlert, navigationFinished } from "../../marketplace/check.mjs";
 import { labels } from "../../marketplace/records.mjs";
-import { read } from "./checks.mjs";
+import { read, fixtureIndependent } from "./checks.mjs";
 import { verifyAlertRows } from "./alerts.mjs";
 
 // Only observers and independent oracles are shared. Express still renders every document.
-export async function checkPages({ base, source, records, upstream, browser, observe, test, out }) {
+export async function checkPages({ base, source, records, upstream, browser, observe, test: recordTest, out }) {
+  const test = (name, action) => recordTest(name, source === "fixture" ? () => fixtureIndependent(upstream, observe, name, action) : action);
   const capture = async (page, kind, record, locale, options = {}) => {
     const actual = await page.evaluate(kind === "catalog" ? snapshotArticle : snapshotPage);
     observe({ kind: "dom", workload: kind, path: new URL(page.url()).pathname + new URL(page.url()).search, locale, options, actual, html: await page.content() });

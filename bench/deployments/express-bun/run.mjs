@@ -27,6 +27,7 @@ export function options(args) {
 export const cellKeys = () => ["node", "bun"].flatMap((runtime) => ["fixture", "api"].flatMap((source) => ["default", "matched"].map((profile) => `${runtime}-${source}-${profile}`)));
 export function expectedChecks(source) {
   const names = ["native-form-cross-site-and-errors", "production-profile-cache-security-compression", "persisted-alerts/http-session-and-rejections"];
+  if (source === "fixture") names.push("fixture/source-independence");
   for (const kind of ["catalog", "marketplace"]) {
     names.push(`${kind}/all-500-json-and-source`, `${kind}/headers-head-method-errors`);
     if (source === "api") {
@@ -41,6 +42,10 @@ export function expectedChecks(source) {
     for (const locale of ["en-US", "fr-FR", "de-DE"]) names.push(`marketplace/${locale}/browser-js-${js}`);
   }
   return names.sort();
+}
+export async function captureLogs(name, out, key) {
+  const log = join(out, `${key}.log`); writeFileSync(log, "");
+  await docker(["logs", name], { log, stdoutFile: join(out, `${key}.stdout.log`), stderrFile: join(out, `${key}.stderr.log`) });
 }
 export function summarize(cells) {
   const passed = (key) => {
@@ -83,7 +88,7 @@ export async function run(args) {
   const stop = async () => {
     if (!current) return;
     const { name, key } = current;
-    await cleanup(`logs-${key}`, async () => writeFileSync(join(config.out, `${key}.log`), await docker(["logs", name])));
+    await cleanup(`logs-${key}`, () => captureLogs(name, config.out, key));
     await cleanup(`container-${key}`, () => docker(["rm", "-f", "-v", name])); current = null;
   };
   try {
@@ -101,6 +106,8 @@ export async function run(args) {
     for (const key of cellKeys()) {
       if (interrupted) { result.cells[key].reason = "interrupted"; continue; }
       const [runtime, source, profile] = key.split("-"), name = `${task}-${key}`, cell = result.cells[key];
+      api.unavailable(source === "fixture");
+      const upstreamBefore = api.requests();
       current = { name, key }; let expired = false, timer, deadlineKill;
       const test = async (name, action) => {
         if (expired || interrupted) { cell.tests.push({ name, outcome: "not-run", reason: interrupted ? "interrupted" : "cell-deadline" }); return; }
@@ -123,9 +130,15 @@ export async function run(args) {
         await checkHttp({ base, source, profile, records, upstream: api, observe, test });
         await checkAlerts({ base, source, upstream: api, observe, test });
         await checkPages({ base, source, records, upstream: api, browser, observe, test, out });
+        if (source === "fixture") await test("fixture/source-independence", async () => {
+          const attempts = api.requests() - upstreamBefore;
+          observe({ kind: "fixture-source-independence", scope: "complete-cell-including-startup", upstreamStatus: 503, attempts });
+          assert.equal(attempts, 0, "fixture cell contacted upstream while unavailable");
+          return { upstreamStatus: 503, attempts };
+        });
         cell.outcome = !expired && cell.tests.length > 0 && cell.tests.every((test) => test.outcome === "passed") ? "passed" : "failed";
       } catch (error) { cell.outcome = "failed"; cell.reason = error.message; }
-      finally { clearTimeout(timer); await deadlineKill; api.fault(null); await stop(); }
+      finally { clearTimeout(timer); await deadlineKill; api.fault(null); api.unavailable(false); await stop(); }
       console.log(`${key}: ${cell.outcome}; ${cell.tests.filter((t) => t.outcome === "passed").length}/${cell.tests.length} checks passed`);
       writeFileSync(join(config.out, `${key}.json`), JSON.stringify(cell, null, 2) + "\n");
     }

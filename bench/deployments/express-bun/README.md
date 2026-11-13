@@ -20,7 +20,7 @@ are evidence for their explicit cases, not a blanket compatibility certification
 From the repository root, with Docker and the repository's Playwright installed:
 
 ```sh
-node --test bench/deployments/express-bun/run.test.mjs
+node --test bench/deployments/express-bun/run.test.mjs bench/deployments/express-bun/regressions.test.mjs
 node bench/deployments/express-bun/run.mjs local
 ```
 
@@ -46,6 +46,8 @@ as its metadata. Docker's content-addressed build cache remains usable, but no
 earlier correctness result is reused. The standalone `build(out, task)` export
 in `build.mjs` creates an image and writes `build.json`; its caller owns cleanup.
 The runner removes the image it builds after the checks, including failing runs.
+Identity inspectors have unique owned container names and explicit removal in a
+`finally` block, including when the attached Docker CLI times out.
 
 Each app has a one-CPU, 512-MiB, 128-PID budget, only a loopback-published port, and
 a 180-second per-cell bound. The fixture upstream is local; no cloud service or
@@ -60,6 +62,9 @@ Per-cell JSON, container logs, `raw.ndjson`, screenshots and fixture files remai
 in the output directory. Raw output contains real HTTP responses and browser DOM
 captures, including failed probes. Synthetic session tokens are hashed in HTTP
 header observations. The source tree must remain unchanged during the run.
+Each cell's `.log` combines both Docker log streams; `.stdout.log` and `.stderr.log`
+also retain the full streams separately, without trimming trailing bytes. Their
+interleaving in `.log` is observation order, not an assertion about server write order.
 
 Checks cover all 500 JSON records in each contract; source counters and mutation;
 native HEAD/method/error/cache behavior; redirect and upstream failure rejection;
@@ -67,6 +72,10 @@ malformed and out-of-contract records; whole-read deadlines and real caller-abor
 socket closure; cross-site writes; matched cache/security/compression; representative
 catalog pages and filtering; marketplace pages in all three locales; native GET and
 POST forms with scripts enabled and disabled; and persisted `/api/alerts` readback.
+Fixture cells keep the controlled upstream unavailable (503) from before app startup
+through all checks. JSON sweeps and each browser case additionally assert zero upstream
+attempts, including non-record requests; a whole-cell check includes startup and forms.
+An API relay that falls back to fixtures after a failed upstream request still fails.
 Alert checks include exact minor units, invalid/rejected-write non-mutation,
 caller-chosen-cookie refusal, independent sessions and concurrent established-session
 appends. The store remains the native process-local store, not durable storage.
@@ -74,8 +83,11 @@ appends. The store remains the native process-local store, not durable storage.
 The shared record/browser modules are **offline oracles only**. They are not copied
 into the app image. Additional malformed-source probes include Unicode scalar
 robustness beyond the current shared record validator; failures are retained, not
-silently called workload passes. Existing shared adapter deficiencies affect both
-runtimes and must be fixed in their owning lane, not patched here.
+silently called workload passes. Exact keys, requested IDs and unique marketplace row
+IDs come from existing record oracles, but these malformed-source injections and the
+apparatus's required 5xx rejection are not automatically common group requirements.
+The parent must reconcile rejection policy across peers; this lane does not change apps
+or shared contracts to impose stricter schemas on only one contender.
 
 `functionalPassed` requires every explicit check to pass; equal failures do not
 establish parity. `readyForMeasurement` and `readyForLoad` always remain false.
@@ -89,3 +101,20 @@ Parent integration: retain this as `express-bun-normal`, alongside the Node Expr
 baseline in the deployment catalog. Add the focused test command to the parent's
 checks and bind any later group receipt to the full image/source/options/contract
 identity. This narrower result is not a whole-group qualification or review receipt.
+
+## Bounded regression probes
+
+```sh
+node bench/deployments/express-bun/verify-fixes.mjs regressions
+```
+
+This command accepts the same round/output/dependency-root options and always builds
+the native image from the checkout. It is not the eight-cell qualification runner.
+It checks a hanging named inspector's timeout cleanup, complete stdout/stderr logs
+from a failing native process, and Node/Bun fixture claims against actual fixture and
+API sources. Each runtime/source probe checks both 500-record JSON sweeps and native
+catalog/marketplace browser forms without JavaScript. API-source negative controls
+must be rejected as fixture claims. It retains `regressions.json`, raw output and
+screenshots, removes owned containers/images, and reports remaining owned resources.
+App budgets are one CPU, 512 MiB and 128 PIDs; each source probe is bounded at 120 seconds.
+These are correctness regressions only, with no performance or candidate-readiness claim.
