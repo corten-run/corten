@@ -141,10 +141,17 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     componentSource: `function M({record:r,locale:l}){${prefix}const submit=${handlerSource};return null}`,
     recordId: "item_2", locale: "fr-FR", action: base + "/marketplace/fr-FR/item_2", base, basis: "mounted-react-onSubmit-and-owning-fiber-props" });
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`)]).path, "/api/marketplace/item_2");
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, ";;const unused=[];")])?.path,
+    "/api/marketplace/item_2", "Empty statements and unrelated declarations are supported");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>r.id);')])?.path,
     "/api/marketplace/item_2", "An unrelated nested callback cannot shadow the mounted handler's props");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>{const alias=r;return alias.id;});')])?.path,
     "/api/marketplace/item_2", "An alias of an unrelated callback parameter is not an escape of the component prop");
+  await t.test("unsupported concise component execution", () => {
+    const observed = candidate(`async e=>fetch(${endpoint},{method:"POST"})`);
+    observed.componentSource = `({record:r,locale:l})=>(retain(r),${observed.handlerSource})`;
+    assert.equal(discoverReactEndpoint([observed]), null);
+  });
   for (const [name, handler, prefix] of [
     ["handler parameter", `async r=>fetch(${endpoint},{method:"POST"})`],
     ["destructured parameter", `async ({r})=>fetch(${endpoint},{method:"POST"})`],
@@ -160,6 +167,15 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     ["component array escape", `async e=>{box[0].id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const box=[r];"],
     ["component assigned alias", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "let alias;alias=r;"],
     ["component call escape", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const alias=identity(r);"],
+    ["standalone array retention", `async e=>{box[0].id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const box=[];box.push(r);"],
+    ["standalone function retention", `async e=>{box[0].id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const box=[];const retain=value=>box.push(value);retain(r);"],
+    ["void statement retention", `async e=>fetch(${endpoint},{method:"POST"})`, "void retain(r);"],
+    ["conditional component statement", `async e=>fetch(${endpoint},{method:"POST"})`, "if(ready)retain(r);"],
+    ["loop component statement", `async e=>fetch(${endpoint},{method:"POST"})`, "for(const value of values)retain(value);"],
+    ["nested component block", `async e=>fetch(${endpoint},{method:"POST"})`, "{retain(r);}"],
+    ["labeled component statement", `async e=>fetch(${endpoint},{method:"POST"})`, "label:retain(r);"],
+    ["try component statement", `async e=>fetch(${endpoint},{method:"POST"})`, "try{retain(r)}finally{}"],
+    ["unknown standalone statement without visible prop argument", `async e=>fetch(${endpoint},{method:"POST"})`, "retain();"],
     ["component closure escape", `async e=>{alias().id="item_1";return fetch(${endpoint},{method:"POST"})}`, "function alias(){return r;}"],
     ["component field escape", `async e=>{new Alias().record.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "class Alias{record=r}"],
     ["prop passed to unknown call", `async e=>{e(r);return fetch(${endpoint},{method:"POST"})}`],
@@ -202,7 +218,7 @@ test("row7: mounted component aliases fail closed while the actual handler POST 
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
-    for (const mode of ["alias", "container", "native"]) await t.test(mode, async () => {
+    for (const mode of ["alias", "container", "push", "retain", "native"]) await t.test(mode, async () => {
       await page.goto(url); requests.length = 0;
       await page.evaluate((mode) => {
         function Alias({ record: r, locale: l }) {
@@ -216,7 +232,18 @@ test("row7: mounted component aliases fail closed while the actual handler POST 
         function Native({ record: r, locale: l }) {
           return async e => fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' });
         }
-        const component = mode === "alias" ? Alias : mode === "container" ? Container : Native;
+        function Push({ record: r, locale: l }) {
+          const box = [];
+          box.push(r);
+          return async e => { box[0].id = "item_1"; return fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' }); };
+        }
+        function Retain({ record: r, locale: l }) {
+          const box = [];
+          const retain = value => box.push(value);
+          retain(r);
+          return async e => { box[0].id = "item_1"; return fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' }); };
+        }
+        const component = { alias: Alias, container: Container, push: Push, retain: Retain, native: Native }[mode];
         const props = { record: { id: "item_2" }, locale: "fr-FR" }, form = document.querySelector("form");
         form.__reactProps$control = { onSubmit: component(props) };
         form.__reactFiber$control = { type: component, memoizedProps: props };

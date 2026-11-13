@@ -29,10 +29,20 @@ function functionNode(source) {
   return ts.isFunctionExpression(expression) || ts.isArrowFunction(expression) ? expression : null;
 }
 
+function supportedComponentBody(body) {
+  if (!ts.isBlock(body)) return false;
+  // This is a declaration-and-render reader, not a component interpreter.
+  // In particular, arbitrary executable statements can retain a prop without
+  // leaving any reference in the declaration/handler trees we can resolve.
+  const statements = body.statements.filter((node) => !ts.isEmptyStatement(node));
+  return statements.length > 0 && ts.isReturnStatement(statements.at(-1))
+    && statements.slice(0, -1).every(ts.isVariableStatement);
+}
+
 export function discoverReactEndpoint(candidates) {
   for (const candidate of candidates) {
     const component = functionNode(candidate.componentSource), parsedHandler = functionNode(candidate.handlerSource);
-    if (!component || !parsedHandler || !component.parameters[0]) continue;
+    if (!component || !parsedHandler || !component.parameters[0] || !supportedComponentBody(component.body)) continue;
     const matches = [];
     const findHandler = (node) => {
       if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.getText() === candidate.handlerSource) matches.push(node);

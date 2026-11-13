@@ -115,6 +115,12 @@ Object references retained by component-scope initializers, assignments, closure
 are also unsupported, even when the alias is only mutated inside the submit handler. Discovery
 does not substitute the sampled prop ID after that reference has escaped. Unrelated lexically
 shadowed objects are not treated as aliases of the component prop.
+The owning component must have a block body with a limited statement grammar: variable
+declarations, optional empty statements, then one terminal return. Standalone calls (including calls without
+a visible prop argument), branches, loops, nested executable blocks, labels, try statements,
+and other statement kinds are unsupported. In particular, passing a record to `box.push(r)`
+or `retain(r)` as a standalone statement cannot bypass the retained-reference check. This is
+a syntax boundary, not a call-name allowlist or an attempt to interpret unknown callees.
 
 For API-source actions that issue native marketplace requests, a completed upstream request is
 not enough: a phase must contain a successful HTTP 200 read for that action's requested record.
@@ -131,8 +137,8 @@ the callback must create a fresh binding with the new registration's own `once` 
 
 `node --test bench/fullstack-browser/row7.test.mjs` provides bounded Chromium regression controls
 for suppressed abort delivery, requested/wrong/missing record reads across all eleven phases,
-mounted React parameter shadowing, component-alias/container escapes and native socket receipt
-mutations. The Next source positive also executes the repository's actual submit function in
+mounted React parameter shadowing, component-alias/container/standalone-call escapes and native
+socket receipt mutations. The Next source positive also executes the repository's actual submit function in
 Chromium and compares its independently received POST path, method and fields. Its test-only
 closure setup is not a compiled Next deployment or new contender evidence. These are apparatus
 tests, not new contender evidence; historical saved observations are not rewritten.
