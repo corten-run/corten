@@ -68,7 +68,7 @@ test("a recipe built from a Dockerfile stage names one its Dockerfile has", () =
 });
 
 test("the source image starts from the toolchain and copies the context", () => {
-  assert.equal(sourceDockerfile("nextjs"), 'FROM node:24-bookworm-slim\nENV NEXT_TELEMETRY_DISABLED="1"\nWORKDIR /app\nCOPY . .\n');
+  assert.equal(sourceDockerfile("nextjs"), 'FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\nENV NEXT_TELEMETRY_DISABLED="1"\nWORKDIR /app\nCOPY . .\n');
   assert.equal(contextOf("corten"), ".");
   assert.equal(contextOf("nextjs"), "bench/fullstack/apps/nextjs");
   assert.match(sourceDockerfile("gin"), /^FROM bb-tools-gin\nRUN apk add [^\n]+\nWORKDIR \/src\nCOPY \. \.\n$/);

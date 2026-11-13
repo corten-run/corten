@@ -45,7 +45,7 @@ const htmx = (/** @type {string} */ dest) => `--checksum=sha256:d6fdc75f204e6bde
 const hostTarget = '--target "$(rustc -vV | sed -n "s/^host: //p")"';
 
 const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */ env) => ({
-  tools: "node:24-bookworm-slim",
+  tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
   context: "",
   workdir: "/app",
   env,
@@ -150,7 +150,7 @@ export const recipes = {
     ra: { at: 'name="title" value=(&item.|title)>', expect: "title" },
   },
   "axum-maud": {
-    tools: "rust:1-bookworm",
+    tools: "rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31",
     context: "",
     workdir: "/src",
     deps: `cargo fetch --locked ${hostTarget}`,
@@ -231,7 +231,7 @@ export const recipes = {
     edit: "templates/item.html",
   },
   express: {
-    tools: "node:24-bookworm-slim",
+    tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
     context: "",
     workdir: "/app",
     env: { NODE_ENV: "production" },

@@ -60,7 +60,7 @@ for (const name of appsArg.split(",")) {
     const client = spawn("docker", ["run", "--rm", "--name", clientName, "--network", network, ...loadCpus, "--ulimit", "nofile=1048576:1048576", "-v", `${here}:/live`,
       "-e", `BASE=http://${container}:8080`, "-e", `STREAM=${app.path}`, "-e", `TRANSPORT=${app.transport}`, "-e", `WS_PORT=${app.wsPort ?? 8080}`,
       "-e", `PUBLISH=http://${container}:8080/live/publish`, "-e", `CLIENTS=${clients}`, "-e", `WORKERS=${process.env.BENCH_LIVE_WORKERS ?? 4}`, "-e", `RATE=${rate}`, "-e", `SECONDS=${seconds}`,
-      "-e", `OUT=/live/${out}`, "node:24-bookworm-slim", "node", "/live/client.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
+      "-e", `OUT=/live/${out}`, "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/live/client.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
     let connectedMiB = null;
     let sampler = null;
     let buffer = "";
