@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import ts from "typescript";
-import { bindingFunctionText, bindingHash, indexBindingArtifact } from "./binding-artifact.mjs";
+import { bindingFunctionText, bindingHash, indexBindingArtifact, bindingFunctionLocation } from "./binding-artifact.mjs";
+import { handlerIntrinsics, validateBindingIdentities } from "./binding-intrinsics.mjs";
 
 const scalar = (type = "unknown", value) => ({ kind: "scalar", type, ...(value === undefined ? {} : { value }) });
 const nil = { kind: "null" };
@@ -57,6 +58,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
     assert.equal(bindingFunctionText(root), candidate.componentSource);
     assert.equal(bindingFunctionText(mounted), candidate.handlerSource);
     assert.equal(receipt.recordId, candidate.recordId); assert.equal(receipt.locale, candidate.locale);
+    validateBindingIdentities(receipt, candidate.base);
     const frames = new Map(receipt.frames.map((f) => [f.function, f]));
     assert.equal(frames.size, receipt.frames.length, "Duplicate function scope frame");
     const scripts = new Map(receipt.scripts.map((s) => [s.scriptId, s]));
@@ -65,8 +67,21 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       const script = scripts.get(frame.location?.scriptId);
       assert.ok(script && script.sha256 === index.scripts.get(script.path)?.sha256, "Callable script hash is not artifact-bound");
       assert.equal(index.locate(script.path, frame.location.lineNumber, frame.location.columnNumber).id, frame.function, "Scope frame/function location mismatch");
+      const expected = bindingFunctionLocation(index.functions.get(frame.function));
+      assert.equal(frame.location.lineNumber, expected.lineNumber, "Native function line differs");
+      assert.equal(frame.location.columnNumber, expected.columnNumber, "Native function column differs");
     }
     assert.ok(frames.has(root.id) && frames.has(mounted.id), "Mounted function native locations unavailable");
+    const intrinsicBinding = (value, name) => {
+      assert.ok(value?.kind === "intrinsic" && value.name === name && Number.isInteger(value.identity)
+        && receipt.intrinsicIdentities[value.identity]?.label === name, `Unproved lexical intrinsic binding ${name}`);
+    };
+    const inspectTransport = (node) => {
+      if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && ts.isIdentifier(node.expression) && handlerIntrinsics.includes(node.expression.text))
+        intrinsicBinding(frames.get(mounted.id).bindings[node.expression.text], node.expression.text);
+      ts.forEachChild(node, inspectTransport);
+    };
+    inspectTransport(mounted.node);
     const modules = new Map();
     const cachedValues = [];
     const importTarget = (entry, name) => {
@@ -105,6 +120,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       }
       if (value.kind === "object" || value.kind === "borrowed") return { ...value, fields: Object.fromEntries(Object.entries(value.fields).map(([k, v]) => [k, decode(v)])) };
       if (value.kind === "array") return { ...value, items: value.items.map(decode) };
+      if (value.kind === "intrinsic") intrinsicBinding(value, value.name);
       if (["scalar", "null", "intrinsic", "cache", "intl"].includes(value.kind)) return { ...value };
       return { kind: "unknown" };
     };

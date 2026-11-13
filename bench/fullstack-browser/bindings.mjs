@@ -1,7 +1,8 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
-import { createBindingArtifact, indexBindingArtifact, bindingHash } from "./binding-artifact.mjs";
+import { createBindingArtifact, indexBindingArtifact, bindingHash, bindingFunctionLocation } from "./binding-artifact.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
+import { handlerIntrinsics, requiredBindingIdentities } from "./binding-intrinsics.mjs";
 
 // Read the real mounted React handler and owning component. This does not invoke
 // either function, attach an enhancement, or infer a binding from a sent POST.
@@ -120,10 +121,15 @@ function syntaxEffects(candidate) {
   const root = functions.find((f) => f.node.getText() === candidate.componentSource);
   const handler = functions.find((f) => f.node.getText() === candidate.handlerSource);
   if (!root || !handler) return { outcome: "unknown", reason: "Unsupported syntax control" };
-  const frames = [root, handler].map((f) => ({ function: f.id, location: { scriptId: "syntax", ...Object.fromEntries(Object.entries(f.script.file.getLineAndCharacterOfPosition(f.start)).map(([k, v]) => [k === "line" ? "lineNumber" : "columnNumber", v])) }, bindings: {} }));
+  const frames = [root, handler].map((f) => ({ function: f.id, location: { scriptId: "syntax", ...bindingFunctionLocation(f) }, bindings: {} }));
+  // Synthetic facts belong only to these syntax controls, never to production
+  // observation or a returned native proof.
+  const intrinsicIdentities = requiredBindingIdentities.map((label, i) => ({ label, observed: `-1.1.${i + 1}`, snapshot: `-1.1.${i + 1}` }));
+  frames[1].bindings = Object.fromEntries(handlerIntrinsics.map((name) => [name, { kind: "intrinsic", name, identity: requiredBindingIdentities.indexOf(name) }]));
   return checkBindingEffects(candidate, artifact, { schema: "native-binding-links/v1", artifactSha256: artifact.sha256,
     component: root.id, handler: handler.id, recordId: candidate.recordId, locale: candidate.locale, frames,
-    scripts: [{ scriptId: "syntax", path: root.script.path, sha256: root.script.sha256 }], intrinsicIdentities: [],
+    realmObjectId: "-1.1.100", executionContextId: 1,
+    scripts: [{ scriptId: "syntax", path: root.script.path, sha256: root.script.sha256, executionContextId: 1, url: new URL(root.script.path, candidate.base).href }], intrinsicIdentities,
     props: { kind: "borrowed", fields: { record: { kind: "borrowed", fields: { id: { kind: "scalar", type: "string" } } }, locale: { kind: "scalar", type: "string" } } } });
 }
 

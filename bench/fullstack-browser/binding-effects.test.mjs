@@ -13,6 +13,7 @@ import { BindingLinkObserver } from "./binding-links.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
 import { discoverReactEndpoint, replayBindingProof } from "./bindings.mjs";
 import { nativeForm } from "./observe.mjs";
+import { requiredBindingIdentities } from "./binding-intrinsics.mjs";
 
 const compilerOptions = { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext };
 function nativeScripts(mode = "native") {
@@ -87,12 +88,82 @@ test("linked emitted Next helpers retain the native positive and reject effectfu
           assert.equal(replayBindingProof(discovered, changed), false, "Changed emitted bytes cannot replay a positive proof");
           const unrelated = structuredClone(observed.receipt); unrelated.handler = unrelated.component;
           assert.equal(checkBindingEffects(observed.candidate, artifact, unrelated).outcome, "unknown", "Another callable cannot replace the mounted handler link");
+          const missingIntrinsics = structuredClone(discovered); missingIntrinsics.bindingProof.links.intrinsicIdentities = [];
+          assert.equal(replayBindingProof(missingIntrinsics, artifact), false, "Deleting the native identity evidence must invalidate replay");
+          const movedRealm = structuredClone(discovered);
+          movedRealm.bindingProof.links.scripts.forEach((s) => { s.executionContextId += 1000; });
+          assert.equal(replayBindingProof(movedRealm, artifact), false, "Executed script realm cannot be relabeled");
         }
         if (mode === "substituted") assert.equal(observed.candidate.componentSource, captures[0].candidate.componentSource);
         if (mode === "native") {
           const form = await nativeForm(page, { form: { method: "POST", action: "/marketplace/fr-FR/item_2", fields: ["email", "target_price"] } }, "nextjs", true, cdp);
           assert.equal(form.bindingObservation.outcome, "proved", form.bindingObservation.reason);
           assert.equal(replayBindingProof(form.enhancement, artifact), true, "Production nativeForm integration must preserve the linked positive");
+        }
+      } finally { await observer.close(); await context.close(); }
+    });
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+});
+
+test("linked native transport and array allocation controls cannot borrow intrinsic identity", { timeout: 30000 }, async (t) => {
+  let mode, scripts, browser;
+  const requests = [], server = createServer((req, res) => {
+    const script = scripts.find((s) => s.path === req.url);
+    if (script) { res.setHeader("content-type", "text/javascript"); res.end(script.source); }
+    else if (req.url.startsWith("/api/")) { requests.push(req.url); res.end("accepted"); }
+    else { res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>'); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (mode of ["redirecting-fetch", "array-species", "species-accessor", "ordinary"]) await t.test(mode, async () => {
+      const transport = mode === "redirecting-fetch" ? 'import {fetch} from "/network.mjs";' : "";
+      scripts = [
+        { path: "/component.mjs", source: `${transport}import {jsx} from "/runtime.mjs";export function M({record:r,locale:l}){const rows=r.rows.slice(0);return jsx("form",{onSubmit:async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}});}` },
+        { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
+        { path: "/network.mjs", source: 'export function fetch(path,options){return globalThis.fetch(path.replace("item_2","item_1"),options)}' },
+      ];
+      requests.length = 0;
+      const artifact = createBindingArtifact({ ...identity, scripts }), context = await browser.newContext(), page = await context.newPage();
+      const observer = new BindingLinkObserver(await context.newCDPSession(page), artifact); await observer.enable();
+      try {
+        await page.goto(base);
+        await page.evaluate(async (mode) => {
+          const { M } = await import("/component.mjs"), props = { record: { id: "item_2", rows: [1] }, locale: "fr-FR" };
+          if (mode === "array-species") Array.prototype.constructor = {
+            [Symbol.species]: class extends Array { constructor(length) { super(length); document.addEventListener("submit", () => { props.record.id = "item_1"; }, { capture: true, once: true }); } },
+          };
+          if (mode === "species-accessor") Object.defineProperty(Array, Symbol.species, { configurable: true, get() {
+            globalThis.speciesReads = (globalThis.speciesReads ?? 0) + 1;
+            document.addEventListener("submit", () => { props.record.id = "item_1"; }, { capture: true, once: true }); return Array;
+          } });
+          const tree = M(props), form = document.querySelector("form"), handler = tree.props.onSubmit;
+          form.__reactProps$control = { onSubmit: handler }; form.__reactFiber$control = { type: M, memoizedProps: props };
+          form.addEventListener("submit", (event) => { globalThis.controlOutcome = handler(event); });
+        }, mode);
+        const speciesCount = async () => (await observer.cdp.send("Runtime.evaluate", { expression: "globalThis.speciesReads", returnByValue: true })).result.value;
+        const beforeSpecies = mode === "species-accessor" ? await speciesCount() : null;
+        const observed = await observer.capture("form", page.url());
+        if (mode === "species-accessor") assert.equal(await speciesCount(), beforeSpecies, "Observation must not invoke the replaced allocation getter");
+        const discovered = observed.outcome === "observed" ? discoverReactEndpoint([observed.candidate], observed.linked) : null;
+        await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
+        assert.deepEqual(requests, [`/api/marketplace/${mode === "ordinary" ? "item_2" : "item_1"}?locale=fr-FR`]);
+        if (mode === "ordinary") {
+          assert.equal(observed.outcome, "observed", observed.reason);
+          assert.equal(discovered?.path, "/api/marketplace/item_2"); assert.equal(replayBindingProof(discovered, artifact), true);
+          const mutate = (change, reason) => {
+            const saved = structuredClone(discovered); change(saved.bindingProof.links); assert.equal(replayBindingProof(saved, artifact), false, reason);
+          };
+          mutate((links) => { links.intrinsicIdentities = []; }, "Deleting every native intrinsic identity invalidates the simple positive");
+          for (const label of requiredBindingIdentities)
+            mutate((links) => { links.intrinsicIdentities = links.intrinsicIdentities.filter((r) => r.label !== label); }, `Missing mandatory identity ${label}`);
+          mutate((links) => { links.scripts.forEach((s) => { s.executionContextId += 1; }); }, "Relabeled native contexts");
+          mutate((links) => { links.frames.forEach((f) => { f.location.columnNumber += 1; }); }, "Shifted native function locations");
+          mutate((links) => { delete links.realmObjectId; }, "Missing native realm anchor");
+          mutate((links) => { links.frames.find((f) => f.function === links.handler).bindings.fetch.identity = 0; }, "Wrong lexical transport identity edge");
+        } else {
+          assert.equal(discovered, null, `${mode} must not attest the native endpoint`);
+          if (observed.outcome === "observed") assert.equal(checkBindingEffects(observed.candidate, artifact, observed.receipt).outcome, "unknown");
         }
       } finally { await observer.close(); await context.close(); }
     });

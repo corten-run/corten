@@ -65,3 +65,9 @@ export function indexBindingArtifact(artifact) {
 export function bindingFunctionText(entry) {
   return entry.node.getText(entry.script.file).replace(/^export\s+(?:default\s+)?/, "");
 }
+
+export function bindingFunctionLocation(entry) {
+  const offset = ts.isArrowFunction(entry.node) ? entry.start : entry.node.parameters.pos - 1;
+  const { line, character } = entry.script.file.getLineAndCharacterOfPosition(offset);
+  return { lineNumber: line, columnNumber: character };
+}

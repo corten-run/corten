@@ -115,7 +115,12 @@ bytes extracted from the stopped immutable image, with image/source identity and
 `binding-links.mjs` records CDP function locations, exact executed-script correspondence and
 descriptor-only native lexical edges. Getters, proxies, bound functions, foreign/evaluated
 scripts and unavailable links remain unknown. Candidate/helper functions are never called by
-discovery. Identity comparisons use only a harness-authored reference equality operation.
+discovery. Harness-authored reference equality compares identities. Array allocation checks also
+use the document-start native descriptor intrinsic, without invoking an application accessor.
+The array constructor and species getter must retain their native identities; checking `slice`
+alone cannot prove allocation effects. Every supported transport intrinsic used by the mounted
+handler must resolve through its actual lexical scope to the captured native intrinsic, not an
+imported same-name function.
 
 `binding-effects.mjs` checks the linked component's declarations and entire render expression,
 including all prop/child siblings, operands, branches and invoked local callbacks. Calls must
@@ -130,8 +135,11 @@ arbitrary JavaScript, bundler loaders and framework internals are not inferred p
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
-identity, rather than trusting `proved` or a stored endpoint. All browser `.mjs` producer/checker
-files enter the existing runner-file source closure automatically. Missing historical receipts
+identity, rather than trusting `proved` or a stored endpoint. Native replay requires the
+complete mandatory intrinsic inventory, per-binding identity edges, a same-realm object anchor,
+script realm/origin correspondence and canonical emitted function locations. Deleting identity
+observations or relabeling realms/locations cannot retain a positive receipt. All browser `.mjs`
+producer/checker files enter the existing runner-file source closure automatically. Missing historical receipts
 remain unqualified and saved evidence is not rewritten. Unknown production-bundle effects stay
 explicit blockers; the apparatus ESM/JSX adapter is not a React runtime purity contract.
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property

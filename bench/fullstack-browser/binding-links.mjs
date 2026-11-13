@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { bindingFunctionText, bindingHash, indexBindingArtifact } from "./binding-artifact.mjs";
 import { effectFreeNames } from "./binding-effects.mjs";
+import { bindingRealm } from "./binding-intrinsics.mjs";
 const observers = new WeakMap();
 export async function observeBindingLinks(cdp, selector, base) {
   return observers.get(cdp)?.capture(selector, base) ?? { outcome: "unknown", reason: "Immutable emitted binding artifact/native observer unavailable" };
@@ -11,7 +12,9 @@ export async function observeBindingLinks(cdp, selector, base) {
 // Retain identities/descriptors, not just names or Function#toString spellings.
 export function installBindingIntrinsics() {
   const descriptor = Object.getOwnPropertyDescriptor, values = {
-    Map, URLSearchParams, FormData, String, encodeURIComponent, Intl, fetch,
+    Map, Array, URLSearchParams, FormData, String, encodeURIComponent, Intl, fetch,
+    "Array.species": descriptor(Array, Symbol.species).get,
+    OwnDescriptor: descriptor, SpeciesKey: Symbol.species,
     NumberFormat: Intl.NumberFormat, PluralRules: Intl.PluralRules,
     StringPrototype: String.prototype, SearchPrototype: URLSearchParams.prototype,
     ObjectPrototypeKeys: JSON.stringify(Object.getOwnPropertyNames(Object.prototype).sort()),
@@ -60,12 +63,13 @@ export class BindingLinkObserver {
         assert.ok(d?.value && !d.get && !d.set, `Unknown/accessor binding ${name}`); return d.value;
       };
       const global = await cdp.send("Runtime.evaluate", { expression: "globalThis", objectGroup: group, silent: true });
+      const realm = bindingRealm(global.result.objectId);
       const box = await data(global.result.objectId, "__cortenBindingIntrinsics$v1"), snapshot = await properties(box.objectId);
       const intrinsic = new Map(snapshot.result.filter((p) => p.value?.objectId).map((p) => [p.name, p.value]));
       const same = async (a, b, label) => {
         if (!a?.objectId || !b?.objectId) return false;
         const answer = await cdp.send("Runtime.callFunctionOn", { objectId: a.objectId,
-          functionDeclaration: "function(other){return this===other}", arguments: [{ objectId: b.objectId }], returnByValue: true, silent: true });
+          functionDeclaration: "function(a,b){return a===b}", arguments: [{ objectId: a.objectId }, { objectId: b.objectId }], returnByValue: true, silent: true });
         if (answer.result?.value !== true || answer.exceptionDetails) return false;
         identities.push({ label, observed: a.objectId, snapshot: b.objectId }); return true;
       };
@@ -73,8 +77,21 @@ export class BindingLinkObserver {
         const d = (await properties(object.objectId)).result.find((p) => p.name === key);
         assert.ok(d && (!d.set || d.set.type === "undefined") && await same(accessor ? d.get : d.value, intrinsic.get(expected), expected), `Changed intrinsic ${expected}`);
       };
-      for (const name of ["Map", "URLSearchParams", "FormData", "String", "encodeURIComponent", "Intl", "fetch"])
+      for (const name of ["Map", "Array", "URLSearchParams", "FormData", "String", "encodeURIComponent", "Intl", "fetch"])
         assert.ok(await same(await data(global.result.objectId, name), intrinsic.get(name), name), `Changed global intrinsic ${name}`);
+      assert.ok(await same(await data(intrinsic.get("Array").objectId, "prototype"), intrinsic.get("ArrayPrototype"), "ArrayPrototype"), "Changed native array prototype");
+      assert.ok(await same(await data(intrinsic.get("ArrayPrototype").objectId, "constructor"), intrinsic.get("Array"), "Array.constructor"), "Changed array allocation constructor");
+      assert.ok(await same(intrinsic.get("ObjectPrototype"), intrinsic.get("ObjectPrototype"), "ObjectPrototype"), "Native plain-data prototype unavailable");
+      // CDP materializes some native accessor values instead of exposing their
+      // descriptor. Call only the captured native descriptor intrinsic, never a
+      // candidate getter, to distinguish it from a replaced species accessor.
+      const species = await cdp.send("Runtime.callFunctionOn", { objectId: intrinsic.get("OwnDescriptor").objectId,
+        functionDeclaration: "function(target,key){return this(target,key)}",
+        arguments: [{ objectId: intrinsic.get("Array").objectId }, { objectId: intrinsic.get("SpeciesKey").objectId }], silent: true, objectGroup: group });
+      assert.ok(!species.exceptionDetails && species.result?.objectId, "Array allocation descriptor unavailable");
+      const speciesFields = (await properties(species.result.objectId)).result;
+      assert.ok(speciesFields.find((p) => p.name === "set")?.value?.type === "undefined"
+        && await same(speciesFields.find((p) => p.name === "get")?.value, intrinsic.get("Array.species"), "Array.species"), "Changed array allocation species");
       for (const name of ["NumberFormat", "PluralRules"])
         assert.ok(await same(await data(intrinsic.get("Intl").objectId, name), intrinsic.get(name), name), `Changed Intl constructor ${name}`);
       const objectKeys = (await properties(intrinsic.get("ObjectPrototype").objectId)).result.map((p) => p.name).sort();
@@ -94,6 +111,7 @@ export class BindingLinkObserver {
         let script = checkedScripts.get(location.scriptId);
         if (!script) {
           const native = this.scripts.get(location.scriptId); assert.ok(native?.url, "Unobserved/evaluated callable script");
+          assert.equal(native.executionContextId, realm.context, "Callable is from another native realm");
           const url = new URL(native.url); assert.equal(url.origin, new URL(base).origin);
           const source = (await cdp.send("Debugger.getScriptSource", { scriptId: location.scriptId })).scriptSource;
           const emitted = index.scripts.get(url.pathname);
@@ -115,11 +133,11 @@ export class BindingLinkObserver {
         if (["string", "number", "boolean"].includes(remote.type)) return { kind: "scalar", type: remote.type };
         if (remote.type === "function") {
           for (const key of ["Map", "URLSearchParams", "FormData", "String", "encodeURIComponent", "fetch"])
-            if (await same(remote, intrinsic.get(key), key)) return { kind: "intrinsic", name: key };
+            if (await same(remote, intrinsic.get(key), key)) return { kind: "intrinsic", name: key, identity: identities.length - 1 };
           assert.ok(!borrowed, "Callable inside borrowed application data"); return locate(remote);
         }
         assert.equal(remote.type, "object"); assert.ok(remote.objectId && remote.subtype !== "proxy", "Unknown/proxied native binding");
-        if (await same(remote, intrinsic.get("Intl"), "Intl")) return { kind: "intrinsic", name: "Intl" };
+        if (await same(remote, intrinsic.get("Intl"), "Intl")) return { kind: "intrinsic", name: "Intl", identity: identities.length - 1 };
         assert.ok(!active.has(remote.objectId), "Cyclic/aliased native data graph unsupported"); active.add(remote.objectId);
         try {
           const result = await properties(remote.objectId), prototype = result.internalProperties?.find((p) => p.name === "[[Prototype]]")?.value;
@@ -208,7 +226,8 @@ export class BindingLinkObserver {
         void remote;
       }
       const receipt = { schema: "native-binding-links/v1", artifactSha256: this.artifact.sha256, component: owner.function, handler: handler.function,
-        recordId: id, locale, props, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
+        recordId: id, locale, props, realmObjectId: global.result.objectId, executionContextId: realm.context,
+        frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
       return { candidate, receipt, linked: { artifact: this.artifact, receipt }, outcome: "observed" };
     } catch (error) { return { outcome: "unknown", reason: error.message }; }
     finally { await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }); }
