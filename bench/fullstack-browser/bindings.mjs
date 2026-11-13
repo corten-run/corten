@@ -29,6 +29,29 @@ function functionNode(source) {
   return ts.isFunctionExpression(expression) || ts.isArrowFunction(expression) ? expression : null;
 }
 
+function renderExpression(node) {
+  if (!node) return false;
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isIdentifier(node)
+    || ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
+  if (ts.isParenthesizedExpression(node)) return renderExpression(node.expression);
+  if (ts.isPropertyAccessExpression(node)) return !node.questionDotToken && renderExpression(node.expression);
+  if (ts.isElementAccessExpression(node)) return !node.questionDotToken && renderExpression(node.expression) && renderExpression(node.argumentExpression);
+  if (ts.isCallExpression(node) || ts.isNewExpression(node)) return !(node.flags & ts.NodeFlags.OptionalChain)
+    && renderExpression(node.expression) && (node.arguments ?? []).every(renderExpression);
+  if (ts.isArrayLiteralExpression(node)) return node.elements.every(renderExpression);
+  if (ts.isObjectLiteralExpression(node)) return node.properties.every((property) => ts.isPropertyAssignment(property)
+    ? (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) || ts.isNumericLiteral(property.name)) && renderExpression(property.initializer)
+    : ts.isShorthandPropertyAssignment(property) ? !property.objectAssignmentInitializer : ts.isSpreadAssignment(property) && renderExpression(property.expression));
+  if (ts.isSpreadElement(node)) return renderExpression(node.expression);
+  if (ts.isConditionalExpression(node)) return [node.condition, node.whenTrue, node.whenFalse].every(renderExpression);
+  if (ts.isBinaryExpression(node)) return !ts.isAssignmentOperator(node.operatorToken.kind)
+    && node.operatorToken.kind !== ts.SyntaxKind.CommaToken && renderExpression(node.left) && renderExpression(node.right);
+  if (ts.isPrefixUnaryExpression(node)) return [ts.SyntaxKind.ExclamationToken, ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)
+    && renderExpression(node.operand);
+  return false;
+}
+
 function supportedComponentBody(body) {
   if (!ts.isBlock(body)) return false;
   // This is a declaration-and-render reader, not a component interpreter.
@@ -36,7 +59,26 @@ function supportedComponentBody(body) {
   // leaving any reference in the declaration/handler trees we can resolve.
   const statements = body.statements.filter((node) => !ts.isEmptyStatement(node));
   return statements.length > 0 && ts.isReturnStatement(statements.at(-1))
-    && statements.slice(0, -1).every(ts.isVariableStatement);
+    && renderExpression(statements.at(-1).expression) && statements.slice(0, -1).every(ts.isVariableStatement);
+}
+
+function directHandlerBinding(handler, component) {
+  let value = handler;
+  while (ts.isParenthesizedExpression(value.parent)) value = value.parent;
+  const parent = value.parent;
+  if (ts.isReturnStatement(parent)) return parent.expression === value && parent.parent === component.body;
+  if (ts.isVariableDeclaration(parent)) return ts.isIdentifier(parent.name) && parent.initializer === value && parent.parent.parent.parent === component.body;
+  if (!ts.isPropertyAssignment(parent) || parent.initializer !== value || parent.name.text !== "onSubmit") return false;
+  for (let node = parent.parent; node && node !== component; node = node.parent)
+    if (ts.isReturnStatement(node)) return node.parent === component.body;
+  return false;
+}
+
+function invokedExpression(node) {
+  while (ts.isParenthesizedExpression(node.parent)) node = node.parent;
+  const parent = node.parent;
+  return (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === node
+    || ts.isTaggedTemplateExpression(parent) && parent.tag === node;
 }
 
 export function discoverReactEndpoint(candidates) {
@@ -55,7 +97,9 @@ export function discoverReactEndpoint(candidates) {
     // function between it and the mounted handler needs independent bindings.
     let nestedOwner = false;
     for (let node = handler.parent; node && node !== component; node = node.parent) if (ts.isFunctionLike(node)) nestedOwner = true;
-    if (nestedOwner || component.asteriskToken || handler.asteriskToken || component.parameters[0].initializer || component.parameters[0].dotDotDotToken) continue;
+    if (nestedOwner || !directHandlerBinding(handler, component) || component.asteriskToken || handler.asteriskToken
+      || component.parameters[0].initializer || component.parameters[0].dotDotDotToken
+      || handler.parameters.some((p) => !ts.isIdentifier(p.name) || p.initializer || p.dotDotDotToken)) continue;
     const native = { record: { id: candidate.recordId }, locale: candidate.locale }, variables = new Map();
     const parameter = component.parameters[0].name;
     if (ts.isIdentifier(parameter)) variables.set(parameter.text, native);
@@ -66,7 +110,7 @@ export function discoverReactEndpoint(candidates) {
     const bindsName = (name, text) => ts.isIdentifier(name) ? name.text === text
       : (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) && name.elements.some((e) => ts.isBindingElement(e) && bindsName(e.name, text));
     const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
-    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent"].includes(name);
+    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
     const bindingScope = (node) => {
       if (ts.isFunctionExpression(node)) return node;
       if (ts.isCatchClause(node.parent)) return node.parent;
@@ -76,19 +120,38 @@ export function discoverReactEndpoint(candidates) {
         if (ts.isFunctionLike(parent) || !functionScoped && ts.isBlock(parent)) return parent;
       return component;
     };
-    const shadows = [];
+    const shadows = [], declarations = [];
     const inspectDeclarations = (node) => {
-      if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node)) && node.name
-        && node !== component.parameters[0]) {
+      if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node)) && node.name) {
+        declarations.push(node);
         const bindings = (name) => {
           if (ts.isIdentifier(name)) { if (protectedName(name.text)) shadows.push(node); }
           else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) for (const binding of name.elements) if (ts.isBindingElement(binding)) bindings(binding.name);
         };
-        bindings(node.name);
+        if (node !== component.parameters[0]) bindings(node.name);
       }
       ts.forEachChild(node, inspectDeclarations);
     };
     inspectDeclarations(component);
+    let handlerValue = handler;
+    while (ts.isParenthesizedExpression(handlerValue.parent)) handlerValue = handlerValue.parent;
+    if (ts.isVariableDeclaration(handlerValue.parent)) {
+      const binding = handlerValue.parent;
+      let escaped = false;
+      const references = (node) => {
+        if (ts.isIdentifier(node) && node.text === binding.name.text && node !== binding.name
+          && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+          && !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+          && !declarations.some((d) => d !== binding && bindsName(d.name, node.text) && within(node, bindingScope(d)))) {
+          // A handler value may be returned or installed as onSubmit, not
+          // aliased, captured by another closure, or consumed by a factory.
+          if (ts.isVariableDeclaration(node.parent) || !directHandlerBinding(node, component)) escaped = true;
+        }
+        ts.forEachChild(node, references);
+      };
+      references(component.body);
+      if (escaped) continue;
+    }
     const evaluate = (node) => {
       if (ts.isStringLiteralLike(node)) return node.text;
       if (ts.isIdentifier(node) && variables.has(node.text)) {
@@ -134,33 +197,51 @@ export function discoverReactEndpoint(candidates) {
           && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) && writesBinding(node.operand)
         || ts.isDeleteExpression(node) && writesBinding(node.expression)
         || (ts.isForInStatement(node) || ts.isForOfStatement(node)) && writesBinding(node.initializer)) mutated = true;
-      // Supported property reads do not retain the prop object. Other uses in
-      // the handler or a component-scope retained reference are unsupported.
-      if ((within(node, handler) || retainedReference(node))
+      // Reading a field is not the same operation as invoking it with the prop
+      // as receiver. No method name, inherited or app-defined, is assumed pure.
+      const parent = node.parent, receiver = parent && (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
+        && parent.expression === node && invokedExpression(parent);
+      if ((within(node, handler) || retainedReference(node) || receiver)
         && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isParenthesizedExpression(node))) {
-        const parent = node.parent, propertyName = ts.isPropertyAccessExpression(parent) && parent.name === node
+        const propertyName = ts.isPropertyAccessExpression(parent) && parent.name === node
           || ts.isPropertyAssignment(parent) && parent.name === node
           || (ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isFunctionLike(parent) || ts.isClassDeclaration(parent)) && parent.name === node;
         const value = propertyName ? undefined : evaluate(node);
-        if (value && typeof value === "object" && !(ts.isPropertyAccessExpression(parent) && parent.expression === node
+        if (value && typeof value === "object" && !(ts.isPropertyAccessExpression(parent) && parent.expression === node && !receiver
           && (["id", "record", "locale"].includes(parent.name.text) || !within(node, handler))) && !ts.isParenthesizedExpression(parent)) mutated = true;
       }
       ts.forEachChild(node, inspectBindings);
     };
     inspectBindings(component);
+    const eventName = handler.parameters[0]?.name.text;
+    const eventField = (node, field) => ts.isPropertyAccessExpression(node) && !node.questionDotToken
+      && ts.isIdentifier(node.expression) && node.expression.text === eventName && node.name.text === field;
+    const prefixDeclaration = (node) => {
+      if (!ts.isIdentifier(node.name) || !node.initializer) return false;
+      const value = node.initializer;
+      return typeof evaluate(value) === "string" || ts.isNumericLiteral(value)
+        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)
+        || ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "FormData"
+          && value.arguments?.length === 1 && eventField(value.arguments[0], "currentTarget");
+    };
+    const prefixStatement = (node) => ts.isEmptyStatement(node)
+      || ts.isVariableStatement(node) && node.declarationList.declarations.every(prefixDeclaration)
+      || ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && !(node.expression.flags & ts.NodeFlags.OptionalChain)
+        && node.expression.arguments.length === 0 && eventField(node.expression.expression, "preventDefault");
     const unconditional = (call) => {
       for (let node = call; node !== handler; node = node.parent) {
         const parent = node.parent;
         const supported = parent && (parent === handler || ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent)
-          || ts.isCallExpression(parent) && !(parent.flags & ts.NodeFlags.OptionalChain) || ts.isBlock(parent) || ts.isExpressionStatement(parent)
+          || ts.isBlock(parent) || ts.isExpressionStatement(parent)
           || ts.isReturnStatement(parent) || ts.isVariableDeclaration(parent) || ts.isVariableDeclarationList(parent) || ts.isVariableStatement(parent)
-          || ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.CommaToken || ts.isTryStatement(parent) && node === parent.tryBlock);
+          || ts.isTryStatement(parent) && node === parent.tryBlock);
         if (!supported) return false;
+        if (ts.isVariableDeclarationList(parent) && parent.declarations.slice(0, parent.declarations.indexOf(node)).some((d) => !prefixDeclaration(d))) return false;
         if (ts.isBlock(parent)) {
-          // No control-flow interpretation: a prior return/throw/branch/loop
-          // makes reachability unsupported rather than a guessed executed call.
+          // Only modeled pre-fetch effects are supported. In particular an
+          // unknown alias write, getter read, helper call or await is not pure.
           const index = parent.statements.indexOf(node);
-          if (index >= 0 && parent.statements.slice(0, index).some((s) => !ts.isExpressionStatement(s) && !ts.isVariableStatement(s) && !ts.isEmptyStatement(s))) return false;
+          if (index >= 0 && parent.statements.slice(0, index).some((s) => !prefixStatement(s))) return false;
         }
       }
       return true;
