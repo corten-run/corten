@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
@@ -350,10 +350,14 @@ test("boundary collection uses real Docker fields and refuses absent, duplicated
 
 test("an observed clock rollback inside a real boundary read cannot be sorted away", async () => {
   const now = Date.now;
-  const clock = [3000, 2000];
-  Date.now = () => clock.shift();
+  const folder = mkdtempSync(join(tmpdir(), "mixed-boundary-")), path = join(folder, "resource-after.json");
   try {
-    await assert.rejects(resourceBoundary(async () => JSON.stringify({ Name: "app", CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }),
-      ["app"]), /clock moved backwards during collection/);
-  } finally { Date.now = now; }
+    for (const times of [[3000, 2000], [9000, 1000]]) {
+      const clock = [...times], raw = JSON.stringify({ Name: "app", CPUPerc: "1%", MemUsage: "1MiB / 1GiB" });
+      Date.now = () => clock.shift();
+      await assert.rejects(resourceBoundary(async () => raw, ["app"],
+        (receipt) => writeFileSync(path, JSON.stringify(receipt))), /clock moved backwards during collection/);
+      assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { startedUnixMs: times[0], receivedUnixMs: times[1], raw });
+    }
+  } finally { Date.now = now; rmSync(folder, { recursive: true, force: true }); }
 });

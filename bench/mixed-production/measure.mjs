@@ -143,7 +143,8 @@ export async function measureNativeGroup(context) {
       }
       const participantsBefore = { app: await participant(name, imageId, "app"), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
       sampler = sampleStats(Object.values(names), join(dir, "stats.log"), seconds + options.tailSeconds + 15);
-      const beforeBoundary = await resourceBoundary(docker, Object.values(names));
+      const beforeBoundary = await resourceBoundary(docker, Object.values(names),
+        (receipt) => record(join(dir, "resource-before.json"), receipt));
       const before = await counters(names), hostStart = performance.now();
       record(join(dir, "go.json"), { go: true });
       const until = Date.now() + (seconds + options.tailSeconds + 10) * 1000;
@@ -161,7 +162,8 @@ export async function measureNativeGroup(context) {
       await sleep(options.cleanupMs);
       const finalUpstreamLedger = await control(`http://127.0.0.1:${port}`, token, "ledger");
       record(join(dir, "final-upstream-ledger.json"), { admission, ledger: finalUpstreamLedger });
-      const after = await counters(names), afterBoundary = await resourceBoundary(docker, Object.values(names));
+      const after = await counters(names), afterBoundary = await resourceBoundary(docker, Object.values(names),
+        (receipt) => record(join(dir, "resource-after.json"), receipt));
       record(join(dir, "resource-boundaries.json"), { before: beforeBoundary, after: afterBoundary });
       stats = await sampler.stop(); sampler = null;
       const hostElapsedMs = performance.now() - hostStart;

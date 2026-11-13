@@ -32,10 +32,11 @@ export function coveredSamples(samples, window) {
 
 // Use real Docker reads for the two boundary receipts; the shared streaming
 // sampler still supplies the intervening samples. No interpolated samples.
-export async function resourceBoundary(docker, names) {
+export async function resourceBoundary(docker, names, onReceipt = () => {}) {
   const startedUnixMs = Date.now();
   const raw = await docker(["stats", "--no-stream", "--format", "{{json .}}", ...names], { timeout: 10000 });
   const receivedUnixMs = Date.now(), samples = {};
+  onReceipt({ startedUnixMs, receivedUnixMs, raw });
   assert.ok(Number.isSafeInteger(startedUnixMs) && Number.isSafeInteger(receivedUnixMs)
     && receivedUnixMs >= startedUnixMs, "resource boundary clock moved backwards during collection");
   for (const line of raw.trim().split(/\r?\n/)) {
