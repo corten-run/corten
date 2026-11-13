@@ -95,6 +95,10 @@ matrix over real HTTP in both profile environments; setup is in that app's READM
 
 ## Unreleased
 
+- Document the native MVC/RestClient page request-lifetime limit with real-socket
+  probes, without changing runtime, adding a response heartbeat or inventing a
+  timeout solely to satisfy the mixed workload gate.
+
 - Validate complete marketplace POST source records with strict native Jackson
   parsing, requested-ID/unique-row checks and existing numeric contract bounds.
   Reject structurally unparseable fixtures at startup rather than losing evidence
@@ -104,3 +108,30 @@ matrix over real HTTP in both profile environments; setup is in that app's READM
   atomic appends and cross-site write rejection.
 - Complete native template rendering before committing an accepted alert so a
   failed render cannot mutate the session store.
+
+## Page Request Lifetime Limit
+
+The representative remains Spring MVC/Thymeleaf on Tomcat with blocking RestClient
+and the JDK HTTP request factory. [Spring documents that Servlet does not notify
+an application when a remote client leaves](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-async.html#webmvc-ann-async-disconnects)
+before subsequent I/O discovers it. Registering an async listener or returning a
+`Callable`/`WebAsyncTask` alone does not supply a pre-response disconnect signal.
+Sending heartbeat HTML or committing a 200 before the real page exists would alter
+the native page/error contract, not satisfy cancellation.
+
+An interrupted [JDK HttpClient send attempts to cancel the exchange](https://docs.oracle.com/en/java/javase/25/docs/api/java.net.http/java/net/http/HttpClient.html#send(java.net.http.HttpRequest,java.net.http.HttpResponse.BodyHandler)),
+but this synchronous MVC request has no disconnect notification to trigger that
+interruption while it is blocked upstream. No interruption/cancellation capability
+is claimed merely from the client API's existence. A reactive WebFlux deployment
+would be a different native stack; adding WebClient inside MVC would not remove
+the Servlet notification limitation.
+
+The real-socket probe in `../fastapi/page-lifetime.test.mjs` checks all locales with
+both profile environment values (this app has no separate matched configuration).
+It captures upstream counters before cleaning up failed probes. Pending work after
+client abort fails the gate. Its twelve-second client guard expiring without a
+native response also fails the gate and establishes only that observation window,
+not absence of every possible later timeout. The marketplace source configures no
+explicit request/read deadline;
+no arbitrary new shared timeout or native async-controller conversion is added here.
+The existing production representative remains unqualified for the mixed lifetime gate.

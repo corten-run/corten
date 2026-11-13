@@ -8,9 +8,48 @@ A route class on these two endpoints catches Pydantic serialization failures aft
 handler returns and raises the same generic native JSON 502. Successful records still use
 FastAPI's response model and Pydantic serializer, without a replacement renderer.
 
-Only these JSON reads own a ten-second whole-operation deadline and a disconnect watcher that
+These JSON reads own a ten-second whole-operation deadline and a disconnect watcher that
 cancels the HTTPX read, including an in-flight body. HTTPX's existing inactivity timeouts remain.
-Page localization, forms, legacy items, and default/matched production middleware are unchanged.
+Their implementation and error semantics are unchanged by the marketplace page lifetime fix below.
+
+## Marketplace page request lifetime
+
+Marketplace GET/POST source reads now also belong to the native ASGI request.
+`app/page_read.py` waits for the source and `Request.receive()`'s `http.disconnect`,
+cancels the losing task, and joins both tasks before returning. Cancelling HTTPX's
+awaited read closes the actual upstream connection, including an unfinished body.
+POST finishes its native form read before starting the receive listener, so it does
+not race the form parser or discard fields. Templates, localized validation, session
+stores, scripts, workers, loops and production commands are unchanged.
+
+The existing marketplace client's ten-second budget now bounds the entire source
+read, not only socket inactivity. Transport timeouts and whole-read expiry return
+native generic 504 errors rather than 502. This covers a held header and a body that
+keeps trickling without completing. It is a source-read deadline, not a new deadline
+for form uploads or CPU-bound template rendering. JSON endpoints, catalog/legacy
+pages, and their existing policies are not changed.
+
+`python -m unittest app.test_page_read` checks task cleanup on disconnect, expiry
+and outer cancellation. `page-lifetime.test.mjs` uses a real upstream and client
+socket, all three locales, and the ordinary default/matched production commands:
+
+```sh
+PAGE_FRAMEWORK=fastapi PAGE_IMAGE=record-fastapi node --test page-lifetime.test.mjs
+```
+
+It observes the upstream before aborting the real client 50 ms later, requires
+actual upstream cancellation within 500 ms, and checks deadline statuses and
+upstream counters independently. The body probe trickles bytes to distinguish an
+operation deadline from an inactivity timeout. Failed-probe cleanup happens only
+after counters are captured. Per-operation source IDs prevent late cleanup-induced
+retries from being attributed to a later probe. Its twelve-second client guard is
+a test bound, not a native deadline, and cannot qualify a timed-out request.
+
+The same probe accepts `PAGE_FRAMEWORK=django|spring` and the respective `PAGE_IMAGE`.
+Django also requires `PAGE_MATCHED_IMAGE` built with `--build-arg PROFILE=matched`.
+Spring uses the same native MVC configuration for both environment values. The
+probe fails rather than skipping remaining WSGI/MVC cancellation limitations;
+see those apps' scoped docs. This is functional evidence, not mixed/load qualification.
 
 With `requirements.txt` installed, run `python -m unittest app.test_marketplace` from this directory.
 From the repository root:
@@ -138,6 +177,10 @@ on failures, recovery and valid boundary values. It does not run the JSON matrix
 or change its readiness gates.
 
 ### Unreleased
+
+- Own marketplace page source reads with native ASGI disconnect cancellation and
+  the existing ten-second budget, including trickling bodies; return native 504 on
+  source timeout without changing JSON reads or production runtime settings.
 
 - Persist native session-isolated marketplace alerts and expose independent JSON
   readback without changing the unresolved FastAPI load behavior or server settings.

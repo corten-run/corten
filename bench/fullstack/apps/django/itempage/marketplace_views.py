@@ -1,8 +1,8 @@
 from urllib.parse import urlencode
 
-from requests import RequestException
+from requests import RequestException, Timeout
 
-from django.http import Http404, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
@@ -18,7 +18,13 @@ def show(request, locale, record_id):
         return HttpResponseForbidden("Forbidden")
     if locale not in LABELS:
         return HttpResponseBadRequest("Unsupported locale")
-    record = source.get(record_id)
+    try:
+        record = source.get(record_id)
+    except Timeout:
+        # The existing Requests inactivity timeout closes its upstream connection.
+        # This is not a WSGI disconnect signal or a whole-operation deadline.
+        return HttpResponse("Record source timed out", status=504, content_type="text/plain",
+            headers={"Cache-Control": "private, no-store"})
     if record is None:
         raise Http404
     if request.method == "POST":

@@ -18,6 +18,7 @@ from .alerts import Alert, COOKIE, LIFETIME, store as alerts
 from .items import ItemView, alert_message, fetch_item, shelf
 from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, source as marketplace_source
 from .record_json import RecordJsonRoute, read_record
+from .page_read import read_page_record
 
 # The matched tier's production profile (bench/fullstack/README.md, "The matched tier"), from
 # FastAPI's, Starlette's and uvicorn's own middleware and settings (the end of this file and the
@@ -98,7 +99,9 @@ async def marketplace(request: Request, locale: str, record_id: str):
         return PlainTextResponse("Unsupported locale", status_code=400)
     if request.method == "POST" and cross_site(request):
         return PlainTextResponse("Forbidden", status_code=403)
-    record = await marketplace_source.get(record_id)
+    # Finish the native form read before a disconnect listener consumes receive().
+    form = await request.form() if request.method == "POST" else {}
+    record = await read_page_record(request, marketplace_source, record_id)
     if record is None:
         raise HTTPException(status_code=404)
     if request.method == "POST":
@@ -115,7 +118,6 @@ async def marketplace(request: Request, locale: str, record_id: str):
     listings.sort(key=lambda row: (row.price_minor is None, (row.price_minor or 0) * (-1 if order == "desc" else 1)))
     path = marketplace_path(locale, record_id)
     summary = record.summary
-    form = await request.form() if request.method == "POST" else {}
     email, target = str(form.get("email", "")), str(form.get("target_price", ""))
     message, minor = fmt.validate_alert(email, target, record.title) if request.method == "POST" else ("", None)
     response = templates.TemplateResponse(request, "marketplace.html", {
