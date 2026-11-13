@@ -752,6 +752,58 @@ refused. A click that Playwright's Firefox acknowledges late on a loaded Windows
 known ([CONTRIBUTING.md](../../../CONTRIBUTING.md#checks)), and the workstation was loaded.
 Four runs say that no limit acted in them, not that none ever does in this test.
 
+The handover was rehearsed at `7af97547d` in containers and not on a droplet: two of Ubuntu
+24.04 with systemd as their first process and sshd, each handed by a script what `main.tf`
+hands a droplet, the same host key among it, and a third that holds the site's name and
+sends ports 22, 80 and 443 on to one of them, which stands in for the address. The first
+machine held a self-signed certificate laid out as certbot keeps one, with an account and a
+renewal file beside it, and a release shipped by `release.sh`; Let's Encrypt's names led
+nowhere, so a machine that asked for a certificate failed. `relay.sh` ran in a fourth
+container, as the apply runs it. In two whole replacements, the first before the tar was
+sent as gzip and the second as it is now, it ended 152 and 118 seconds after the new machine
+was made, most of that the machine installing its packages, and the address was moved then:
+of 203 and 170 requests a second apart, one and none went unanswered, the one as the rig's
+address moved, which says nothing of DigitalOcean's. The
+new machine had the same certificate and key, the account and the renewal file, the release
+owned by `deploy` and served under the unit's sandbox, one line in root's `authorized_keys`,
+no log from certbot, and nothing left of what it was sent; its boot unit finished once the
+address was there, and a deploy to it by the deploy key was served. On a machine that is set
+up the handover key was refused `take`, any other command, a terminal and a forwarded port,
+and did not sign in as `deploy`. Cut short at each tenth of its length and one
+byte from its end, what `give` writes was refused by `take` ten times of ten, with nothing
+kept; the same tar without gzip, cut between two files, was read by tar as whole both times
+tried, which is why it is sent as gzip.
+
+The cases that follow were run before the tar was sent as gzip, which changed two lines of
+`handover.sh` and nothing they turn on. With no key, with a key the serving machine does not
+know, and with the site stopped, the relay said so and ended well, and the address moved
+first; what such a machine then does is as it was before, and was not run again. With a
+`sleep` that does not wait, so its tries ran out, it ended in failure, the address stayed and
+none of 21 requests went unanswered; run again for the same machine once that served, it
+handed nothing over a second time and ended well. A new machine given no names that
+redirect, where the certificate held one, served
+with the certificate it was handed and, once the address was there, asked for another, which
+in this rig fails: the site went on answering meanwhile. That step has not been run against
+a server that issues. The order the apply keeps was tried in OpenTofu 1.13.9 with
+`terraform_data` standing in for the droplet and the address, wired as they are in
+`main.tf`: the new one made, the relay run, the address changed, the old one removed; and
+where the relay failed, the address unchanged, the new one kept, and the relay run again by
+the next apply. `bootstrap.sh`, against the stand-in for `gh`, made the three keys for a
+repository with nothing, kept them on a second run, made the handover key alone for a
+repository that had the other two, and made both its halves again where one was missing.
+The workflow's step that plans and applies was run from its own text with a stand-in for
+`tofu`: it passed the option that replaces the machine when asked to, said how many
+requests went unanswered when the apply ended well and when it failed (6 of 6 for a name
+that does not answer as the site), and left nothing asking afterwards.
+
+What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
+root in by a key (a droplet that does not is one that hands nothing over, or takes nothing,
+and the relay says which), the relay from a runner, how long a reserved address takes to
+move and whether a request in flight is lost to it, and a renewal on a machine that was
+handed its certificate. The machine serving when this was merged was made before there was
+a handover, so the first replacement after it moves the address first; the one after that
+is the first to be handed anything, and its run's count is the first measure of the move.
+
 Among what has still not run on a real machine: an apply that fails once begun or a droplet
 that cannot be made, a first deploy that fails, a put-back of the release before, a machine
 that freezes during a ship or never answers the workflow, a name that reaches the machine
