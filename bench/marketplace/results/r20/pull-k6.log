@@ -1,0 +1,18 @@
+docker.io/grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e: Pulling from grafana/k6
+4f4fb700ef54: Pulling fs layer
+2b28f25602d4: Pulling fs layer
+699240e0b337: Pulling fs layer
+55afa1ecc21d: Pulling fs layer
+4f4fb700ef54: Download complete
+2b28f25602d4: Download complete
+55afa1ecc21d: Download complete
+44136fa355b3: Already exists
+935631f8a8f2: Download complete
+2b28f25602d4: Pull complete
+55afa1ecc21d: Pull complete
+699240e0b337: Download complete
+4f4fb700ef54: Pull complete
+699240e0b337: Pull complete
+Digest: sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e
+Status: Downloaded newer image for grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e
+docker.io/grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e

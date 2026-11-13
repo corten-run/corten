@@ -1,0 +1,242 @@
+warn: Microsoft.AspNetCore.DataProtection.Repositories.FileSystemXmlRepository[60]
+      Storing keys in a directory '/root/.aspnet/DataProtection-Keys' that may not be persisted outside of the container. Protected data will be unavailable when container is destroyed. For more information go to https://aka.ms/aspnet/dataprotectionwarning
+warn: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[35]
+      No XML encryptor configured. Key {60648720-422e-43e7-af9b-7f1098c79b4c} may be persisted to storage in unencrypted form.
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://[::]:8080
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /app
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 503 (Service Unavailable).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at ItemPage.Pages.MarketplaceModel.Render(String locale, String id, Boolean post) in /src/Pages/Marketplace.cshtml.cs:line 21
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Convert[T](Object taskAsObject)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Execute(Object receiver, Object[] arguments)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeHandlerMethodAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeNextPageFilterAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Rethrow(PageHandlerExecutedContext context)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeInnerFilterAsync()
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 503 (Service Unavailable).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at Program.<>c.<<<Main>$>b__0_11>d.MoveNext() in /src/Program.cs:line 94
+      --- End of stack trace from previous location ---
+         at Microsoft.AspNetCore.Http.RequestDelegateFactory.ExecuteTaskResult[T](Task`1 task, HttpContext httpContext)
+         at Microsoft.AspNetCore.Diagnostics.StatusCodePagesMiddleware.Invoke(HttpContext context)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Threading.Tasks.TaskCanceledException: The request was canceled due to the configured HttpClient.Timeout of 10 seconds elapsing.
+       ---> System.TimeoutException: The operation was canceled.
+       ---> System.Threading.Tasks.TaskCanceledException: The operation was canceled.
+       ---> System.IO.IOException: Unable to read data from the transport connection: Operation canceled.
+       ---> System.Net.Sockets.SocketException (125): Operation canceled
+         --- End of inner exception stack trace ---
+         at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+         at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource<System.Int32>.GetResult(Int16 token)
+         at System.Net.Http.HttpConnection.SendAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+         --- End of inner exception stack trace ---
+         at System.Net.Http.HttpConnection.SendAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+         at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
+         at System.Net.Http.DiagnosticsHandler.SendAsyncCore(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+         at Microsoft.Extensions.Http.Logging.LoggingHttpMessageHandler.<SendCoreAsync>g__Core|4_0(HttpRequestMessage request, Boolean useAsync, CancellationToken cancellationToken)
+         at Microsoft.Extensions.Http.Logging.LoggingScopeHttpMessageHandler.<SendCoreAsync>g__Core|4_0(HttpRequestMessage request, Boolean useAsync, CancellationToken cancellationToken)
+         at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
+         --- End of inner exception stack trace ---
+         --- End of inner exception stack trace ---
+         at System.Net.Http.HttpClient.HandleFailure(Exception e, Boolean telemetryStarted, HttpResponseMessage response, CancellationTokenSource cts, CancellationToken cancellationToken, CancellationTokenSource pendingRequestsCts)
+         at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 37
+         at ItemPage.Pages.MarketplaceModel.Render(String locale, String id, Boolean post) in /src/Pages/Marketplace.cshtml.cs:line 21
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Convert[T](Object taskAsObject)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Execute(Object receiver, Object[] arguments)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeHandlerMethodAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeNextPageFilterAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Rethrow(PageHandlerExecutedContext context)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeInnerFilterAsync()
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6BS" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6BT" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6BV" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C0" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C1" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C2" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C3" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C4" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C5" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C6" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C7" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C8" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6C9" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CA" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CB" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CC" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CD" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CE" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CF" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CG" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CH" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CI" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CJ" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CK" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CL" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CM" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CN" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CO" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CP" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CQ" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CR" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CS" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CT" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CU" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6CV" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D0" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D1" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D2" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D3" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D4" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D5" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D6" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D7" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D8" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6D9" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6DA" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6DB" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6DC" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6DD" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6BU" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QO0TL6DE" rejected because the maximum number of concurrent connections has been reached.
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 503 (Service Unavailable).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at ItemPage.Pages.MarketplaceModel.Render(String locale, String id, Boolean post) in /src/Pages/Marketplace.cshtml.cs:line 21
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Convert[T](Object taskAsObject)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Execute(Object receiver, Object[] arguments)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeHandlerMethodAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeNextPageFilterAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Rethrow(PageHandlerExecutedContext context)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeInnerFilterAsync()
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 302 (Found).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at ItemPage.Pages.MarketplaceModel.Render(String locale, String id, Boolean post) in /src/Pages/Marketplace.cshtml.cs:line 21
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Convert[T](Object taskAsObject)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.ExecutorFactory.GenericTaskHandlerMethod.Execute(Object receiver, Object[] arguments)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeHandlerMethodAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeNextPageFilterAsync()
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Rethrow(PageHandlerExecutedContext context)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure.PageActionInvoker.InvokeInnerFilterAsync()
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 503 (Service Unavailable).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at Program.<>c.<<<Main>$>b__0_11>d.MoveNext() in /src/Program.cs:line 94
+      --- End of stack trace from previous location ---
+         at Microsoft.AspNetCore.Http.RequestDelegateFactory.ExecuteTaskResult[T](Task`1 task, HttpContext httpContext)
+         at Microsoft.AspNetCore.Diagnostics.StatusCodePagesMiddleware.Invoke(HttpContext context)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+fail: Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware[1]
+      An unhandled exception has occurred while executing the request.
+      System.Net.Http.HttpRequestException: Response status code does not indicate success: 302 (Found).
+         at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+         at ItemPage.MarketplaceSource.Get(String id) in /src/MarketplaceSource.cs:line 39
+         at Program.<>c.<<<Main>$>b__0_11>d.MoveNext() in /src/Program.cs:line 94
+      --- End of stack trace from previous location ---
+         at Microsoft.AspNetCore.Http.RequestDelegateFactory.ExecuteTaskResult[T](Task`1 task, HttpContext httpContext)
+         at Microsoft.AspNetCore.Diagnostics.StatusCodePagesMiddleware.Invoke(HttpContext context)
+         at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)

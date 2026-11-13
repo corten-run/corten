@@ -4,6 +4,7 @@
 #include <unicode/plurrule.h>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,7 @@ class Format {
   std::string count(const Json::Value &value) const;
   std::string rating(const Json::Value &hundredths) const;
   std::string listings(const Json::Value &value, const Json::Value &words) const;
-  std::string alert(const std::string &title, const std::string &email, const std::string &target, const Json::Value &words) const;
+  std::string alert(const std::string &title, const std::string &email, const std::string &target, const Json::Value &words, std::optional<int64_t> *minor = nullptr) const;
  private:
   icu::Locale locale_;
   icu::number::LocalizedNumberFormatter money_, count_, rating_;

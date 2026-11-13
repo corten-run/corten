@@ -22,12 +22,14 @@ async fn main() {
         .route("/api/items/{id}", axum::routing::get(item_page_leptos::app::item_json))
         .route("/api/catalog/{id}", axum::routing::get(item_page_leptos::catalog_page::catalog_json))
         .route("/api/marketplace/{id}", axum::routing::get(item_page_leptos::marketplace_page::marketplace_json))
+        .route("/api/alerts", axum::routing::get(item_page_leptos::alerts::read))
         .route("/marketplace/{locale}/{id}", axum::routing::post(item_page_leptos::marketplace_page::marketplace_post))
         .merge(live::routes())
         .leptos_routes(&leptos_options, routes, {
             let options = leptos_options.clone();
             move || shell(options.clone())
-        });
+        })
+        .route_layer(axum::middleware::from_fn(item_page_leptos::marketplace_page::marketplace_action_guard));
     // The profile's cache policy is the pages' and the JSON's, not the static files' (the fallback
     // serves those).
     let app = if item_page_leptos::app::matched() {
