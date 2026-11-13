@@ -111,6 +111,10 @@ props establish the receipt; a sent POST is not used to invent a positive bindin
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property
 and destructuring writes), intervening function scopes, conditional/unreachable or uncalled
 nested fetches, duplicate method properties and option spreads are unsupported, not inferred POSTs.
+Object references retained by component-scope initializers, assignments, closures or class fields
+are also unsupported, even when the alias is only mutated inside the submit handler. Discovery
+does not substitute the sampled prop ID after that reference has escaped. Unrelated lexically
+shadowed objects are not treated as aliases of the component prop.
 
 For API-source actions that issue native marketplace requests, a completed upstream request is
 not enough: a phase must contain a successful HTTP 200 read for that action's requested record.
@@ -127,7 +131,10 @@ the callback must create a fresh binding with the new registration's own `once` 
 
 `node --test bench/fullstack-browser/row7.test.mjs` provides bounded Chromium regression controls
 for suppressed abort delivery, requested/wrong/missing record reads across all eleven phases,
-mounted React parameter shadowing and native socket receipt mutations. These are apparatus
+mounted React parameter shadowing, component-alias/container escapes and native socket receipt
+mutations. The Next source positive also executes the repository's actual submit function in
+Chromium and compares its independently received POST path, method and fields. Its test-only
+closure setup is not a compiled Next deployment or new contender evidence. These are apparatus
 tests, not new contender evidence; historical saved observations are not rewritten.
 
 The initial response is parsed again in a separate script-disabled browser context from its

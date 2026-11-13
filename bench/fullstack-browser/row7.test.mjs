@@ -143,6 +143,8 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`)]).path, "/api/marketplace/item_2");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>r.id);')])?.path,
     "/api/marketplace/item_2", "An unrelated nested callback cannot shadow the mounted handler's props");
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>{const alias=r;return alias.id;});')])?.path,
+    "/api/marketplace/item_2", "An alias of an unrelated callback parameter is not an escape of the component prop");
   for (const [name, handler, prefix] of [
     ["handler parameter", `async r=>fetch(${endpoint},{method:"POST"})`],
     ["destructured parameter", `async ({r})=>fetch(${endpoint},{method:"POST"})`],
@@ -152,6 +154,14 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     ["destructured reassignment", `async e=>{({record:r}=e);return fetch(${endpoint},{method:"POST"})}`],
     ["array reassignment", `async e=>{[r]=e;return fetch(${endpoint},{method:"POST"})}`],
     ["mutable object alias", `async e=>{const alias=r;alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`],
+    ["component object alias", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const alias=r;"],
+    ["parenthesized component alias", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const alias=(r);"],
+    ["component container escape", `async e=>{box.record.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const box={record:r};"],
+    ["component array escape", `async e=>{box[0].id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const box=[r];"],
+    ["component assigned alias", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "let alias;alias=r;"],
+    ["component call escape", `async e=>{alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "const alias=identity(r);"],
+    ["component closure escape", `async e=>{alias().id="item_1";return fetch(${endpoint},{method:"POST"})}`, "function alias(){return r;}"],
+    ["component field escape", `async e=>{new Alias().record.id="item_1";return fetch(${endpoint},{method:"POST"})}`, "class Alias{record=r}"],
     ["prop passed to unknown call", `async e=>{e(r);return fetch(${endpoint},{method:"POST"})}`],
     ["named function shadow", `async function r(e){return fetch(${endpoint},{method:"POST"})}`],
     ["uncalled nested function", `async e=>{const unused=()=>fetch(${endpoint},{method:"POST"});}`],
@@ -184,7 +194,47 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
   } finally { if (browser) await browser.close(); await close(server); }
 });
 
-test("row7: the repository's native Next marketplace handler remains supported", () => {
+test("row7: mounted component aliases fail closed while the actual handler POST remains observable", { timeout: 30000 }, async (t) => {
+  const requests = [], server = createServer((req, res) => {
+    if (req.url.startsWith("/api/")) requests.push({ path: req.url, method: req.method });
+    res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>');
+  }), url = await listen(server); let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    for (const mode of ["alias", "container", "native"]) await t.test(mode, async () => {
+      await page.goto(url); requests.length = 0;
+      await page.evaluate((mode) => {
+        function Alias({ record: r, locale: l }) {
+          const alias = r;
+          return async e => { alias.id = "item_1"; return fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' }); };
+        }
+        function Container({ record: r, locale: l }) {
+          const box = { record: r };
+          return async e => { box.record.id = "item_1"; return fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' }); };
+        }
+        function Native({ record: r, locale: l }) {
+          return async e => fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' });
+        }
+        const component = mode === "alias" ? Alias : mode === "container" ? Container : Native;
+        const props = { record: { id: "item_2" }, locale: "fr-FR" }, form = document.querySelector("form");
+        form.__reactProps$control = { onSubmit: component(props) };
+        form.__reactFiber$control = { type: component, memoizedProps: props };
+      }, mode);
+      const candidates = await page.locator("form").evaluate(reactHandlerSources);
+      const discovered = discoverReactEndpoint(candidates);
+      // Invoke the mounted native function even when static discovery rejects it.
+      // Keep the server receipt independent of discovery and check both outcomes.
+      await page.evaluate(() => document.querySelector("form").__reactProps$control.onSubmit({}));
+      assert.deepEqual(requests, [{ path: `/api/marketplace/${mode === "native" ? "item_2" : "item_1"}?locale=fr-FR`, method: "POST" }]);
+      assert.equal(candidates[0].recordId, "item_2", "Discovery captured props before the native handler mutated the record");
+      if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
+      else assert.equal(discovered, null, "An escaped prop reference is unsupported, not an invented endpoint");
+    });
+  } finally { if (browser) await browser.close(); await close(server); }
+});
+
+test("row7: the repository's native Next marketplace handler remains supported", { timeout: 30000 }, async () => {
   const source = readFileSync(new URL("../fullstack/apps/nextjs/lib/marketplace-page.tsx", import.meta.url), "utf8");
   const emitted = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const file = ts.createSourceFile("native-next.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
@@ -194,6 +244,38 @@ test("row7: the repository's native Next marketplace handler remains supported",
   const observed = { handlerSource: handler.getText(), componentSource: component.getText().replace(/^export /, ""), recordId: "item_2", locale: "fr-FR",
     action: "http://local/marketplace/fr-FR/item_2", base: "http://local", basis: "source-control-only-not-a-mounted-capture" };
   assert.equal(discoverReactEndpoint([observed])?.path, "/api/marketplace/item_2");
+  const requests = [], server = createServer(async (req, res) => {
+    if (req.url.startsWith("/api/")) {
+      let body = ""; for await (const chunk of req) body += chunk;
+      requests.push({ path: req.url, method: req.method, body: Object.fromEntries(new URLSearchParams(body)) });
+      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ message: "native accepted" }));
+    } else {
+      res.setHeader("content-type", "text/html");
+      res.end('<form action="/marketplace/fr-FR/item_2"><input name="email" value="native@example.test"><input name="target_price" value="1,25"></form><p></p>');
+    }
+  }), url = await listen(server); let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage(); await page.goto(url);
+    await page.evaluate(({ componentSource, handlerSource }) => {
+      // Test-only closure construction from the repository source. Discovery
+      // itself still parses, never invokes or evaluates, these functions.
+      const record = { id: "item_2" }, locale = "fr-FR", form = document.querySelector("form");
+      const component = new Function(`return (${componentSource})`)();
+      const handler = new Function("record", "locale", "setSubmitted", `return (${handlerSource})`)(record, locale,
+        (message) => { document.querySelector("p").textContent = message; });
+      form.__reactProps$control = { onSubmit: handler };
+      form.__reactFiber$control = { type: component, memoizedProps: { record, locale } };
+    }, observed);
+    const candidates = await page.locator("form").evaluate(reactHandlerSources);
+    assert.equal(discoverReactEndpoint(candidates)?.path, "/api/marketplace/item_2");
+    await page.evaluate(() => {
+      const form = document.querySelector("form");
+      return form.__reactProps$control.onSubmit({ currentTarget: form, preventDefault() {} });
+    });
+    assert.deepEqual(requests, [{ path: "/api/marketplace/item_2?locale=fr-FR", method: "POST", body: { email: "native@example.test", target_price: "1,25" } }]);
+    assert.equal(await page.locator("p").textContent(), "native accepted");
+  } finally { if (browser) await browser.close(); await close(server); }
 });
 
 test("row7: actual socket receipts require unique ordered bounded native clocks", { timeout: 30000 }, async (t) => {

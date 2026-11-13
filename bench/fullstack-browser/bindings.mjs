@@ -55,11 +55,34 @@ export function discoverReactEndpoint(candidates) {
     }
     const bindsName = (name, text) => ts.isIdentifier(name) ? name.text === text
       : (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) && name.elements.some((e) => ts.isBindingElement(e) && bindsName(e.name, text));
+    const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
+    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent"].includes(name);
+    const bindingScope = (node) => {
+      if (ts.isFunctionExpression(node)) return node;
+      if (ts.isCatchClause(node.parent)) return node.parent;
+      const functionScoped = ts.isParameter(node) || ts.isVariableDeclaration(node)
+        && ts.isVariableDeclarationList(node.parent) && !(node.parent.flags & ts.NodeFlags.BlockScoped);
+      for (let parent = node.parent; parent; parent = parent.parent)
+        if (ts.isFunctionLike(parent) || !functionScoped && ts.isBlock(parent)) return parent;
+      return component;
+    };
+    const shadows = [];
+    const inspectDeclarations = (node) => {
+      if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node)) && node.name
+        && node !== component.parameters[0]) {
+        const bindings = (name) => {
+          if (ts.isIdentifier(name)) { if (protectedName(name.text)) shadows.push(node); }
+          else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) for (const binding of name.elements) if (ts.isBindingElement(binding)) bindings(binding.name);
+        };
+        bindings(node.name);
+      }
+      ts.forEachChild(node, inspectDeclarations);
+    };
+    inspectDeclarations(component);
     const evaluate = (node) => {
       if (ts.isStringLiteralLike(node)) return node.text;
       if (ts.isIdentifier(node) && variables.has(node.text)) {
-        for (let parent = node.parent; parent && parent !== component; parent = parent.parent)
-          if (ts.isCatchClause(parent) && parent.variableDeclaration && bindsName(parent.variableDeclaration.name, node.text)) return undefined;
+        if (shadows.some((declaration) => bindsName(declaration.name, node.text) && within(node, bindingScope(declaration)))) return undefined;
         return variables.get(node.text);
       }
       if (ts.isParenthesizedExpression(node)) return evaluate(node.expression);
@@ -73,9 +96,7 @@ export function discoverReactEndpoint(candidates) {
       }
       return undefined;
     };
-    const urls = [], fetches = [], shadows = [];
-    const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
-    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent"].includes(name);
+    const urls = [], fetches = [];
     const writesBinding = (node) => {
       while (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isParenthesizedExpression(node)) node = node.expression;
       if (ts.isIdentifier(node)) return protectedName(node.text);
@@ -86,6 +107,16 @@ export function discoverReactEndpoint(candidates) {
       if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind)) return writesBinding(node.left);
       return false;
     };
+    const retainedReference = (node) => {
+      // A component-local alias can be captured by the handler even though its
+      // declaration is outside the handler body. Do not attempt alias/escape
+      // analysis through initializers, assignments or another closure.
+      for (let parent = node.parent; parent && parent !== component; parent = parent.parent) {
+        if (ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionLike(parent) || ts.isPropertyDeclaration(parent)
+          || ts.isBinaryExpression(parent) && ts.isAssignmentOperator(parent.operatorToken.kind)) return true;
+      }
+      return false;
+    };
     let mutated = false;
     const inspectBindings = (node) => {
       if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind) && writesBinding(node.left)
@@ -93,23 +124,16 @@ export function discoverReactEndpoint(candidates) {
           && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) && writesBinding(node.operand)
         || ts.isDeleteExpression(node) && writesBinding(node.expression)
         || (ts.isForInStatement(node) || ts.isForOfStatement(node)) && writesBinding(node.initializer)) mutated = true;
-      if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node)) && node.name
-        && node !== component.parameters[0]) {
-        const bindings = (name) => {
-          if (ts.isIdentifier(name)) { if (protectedName(name.text)) shadows.push(node); }
-          else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) for (const binding of name.elements) if (ts.isBindingElement(binding)) bindings(binding.name);
-        };
-        bindings(node.name);
-      }
-      // The small evaluator cannot follow escaped object aliases or calls that
-      // can mutate a prop. Only its supported property reads may consume one.
-      if (within(node, handler) && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isParenthesizedExpression(node))) {
+      // Supported property reads do not retain the prop object. Other uses in
+      // the handler or a component-scope retained reference are unsupported.
+      if ((within(node, handler) || retainedReference(node))
+        && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isParenthesizedExpression(node))) {
         const parent = node.parent, propertyName = ts.isPropertyAccessExpression(parent) && parent.name === node
           || ts.isPropertyAssignment(parent) && parent.name === node
           || (ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isFunctionLike(parent) || ts.isClassDeclaration(parent)) && parent.name === node;
         const value = propertyName ? undefined : evaluate(node);
         if (value && typeof value === "object" && !(ts.isPropertyAccessExpression(parent) && parent.expression === node
-          && ["id", "record", "locale"].includes(parent.name.text)) && !ts.isParenthesizedExpression(parent)) mutated = true;
+          && (["id", "record", "locale"].includes(parent.name.text) || !within(node, handler))) && !ts.isParenthesizedExpression(parent)) mutated = true;
       }
       ts.forEachChild(node, inspectBindings);
     };
@@ -144,15 +168,6 @@ export function discoverReactEndpoint(candidates) {
       ts.forEachChild(node, visit);
     };
     visit(handler.body);
-    const bindingScope = (node) => {
-      if (ts.isFunctionExpression(node)) return node;
-      if (ts.isCatchClause(node.parent)) return node.parent;
-      const functionScoped = ts.isParameter(node) || ts.isVariableDeclaration(node)
-        && ts.isVariableDeclarationList(node.parent) && !(node.parent.flags & ts.NodeFlags.BlockScoped);
-      for (let parent = node.parent; parent; parent = parent.parent)
-        if (ts.isFunctionLike(parent) || !functionScoped && ts.isBlock(parent)) return parent;
-      return component;
-    };
     const shadowed = shadows.some((node) => fetches.some((call) => within(call, bindingScope(node))));
     if (urls.length !== 1 || shadowed || mutated) continue;
     let url, action;
