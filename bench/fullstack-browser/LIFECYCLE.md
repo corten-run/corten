@@ -94,11 +94,25 @@ actual journals and keep intact native redirect/parser/preload cases positive.
 Reconciliation is bidirectional: every completed HTTP document and parser inventory also
 needs its unique matching native commit. Empty commit streams cannot classify no-JS work.
 A redirect continuation requires its preceding dispatch under the same request/frame/loader/
-resource identity; its redirect status alone cannot supply a deleted predecessor. Mandatory
-dispatch, response, terminal and parser fields and their observation ordering are checked.
+resource identity and the actual CDP `redirectResponse` URL hash, public path/scheme and status.
+The hash binds the complete URL without retaining its query or headers. Reused IDs and a
+continuation's status alone cannot identify an immediate predecessor: deleting a middle hop
+leaves unknown coverage and does not assign its redirect outcome to an earlier URL. Missing
+new identity/timing receipts in historical journals stay unknown; no saved journal is upgraded.
+Mandatory dispatch, response, terminal and parser fields and their observation ordering are checked.
 Observed stylesheet/image/script-preload declarations require matching native dispatches;
 coalesced declarations may share an observed request, but deleted asset streams remain unknown.
 Unobserved or cross-origin asset coverage is not invented from a DOM declaration.
+
+Initial and terminal CDP `Performance.getMetrics` Timestamp samples retain their host round-trip
+bounds. Native request/response/terminal timestamps must lie inside that monotonic interval and
+the initial host/native clock-offset envelope. Each continuation must not precede its predecessor
+dispatch. Native response timing retains `requestTime` and `receiveHeadersEnd`; the observed
+header completion must follow dispatch and precede transfer finish or redirect continuation.
+`responseReceived.timestamp` is notification time, which Chromium can report after native
+`loadingFinished.timestamp`; it is not substituted for the actual header-completion timestamp.
+Its own native time still must follow dispatch and header completion and precede its bounded
+host delivery. No arbitrary clock epsilon or missing-timing fallback supplies proof.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.

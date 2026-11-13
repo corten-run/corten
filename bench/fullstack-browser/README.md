@@ -258,6 +258,11 @@ Completed HTTP documents and observed parser inventories must also match native 
 the reverse direction. Empty commit streams, orphan redirect continuations, missing mandatory
 native fields and declared assets without matching dispatch coverage remain unknown. These
 checks neither reconstruct deleted observations nor change the strict oracle or 240 profiles.
+Redirect links additionally retain the actual predecessor response's complete-URL hash, public
+path/scheme/status and native header timing. A reused request ID cannot bridge a deleted middle
+hop. Bounded native-clock samples and response header/terminal timing reject reversed or future
+native timestamps independently of host receipt order. Historical journals lacking these new
+receipts remain unknown without rewriting their saved captures.
 
 For a retained same-realm root, `retired.mjs` freshly extracts text, rows, forms and component
 IDs from that actual detached node. It never reattaches the root or copies the previous page

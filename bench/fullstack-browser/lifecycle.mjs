@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { createHash } from "node:crypto";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
 
 function address(value) {
@@ -9,6 +10,8 @@ const targetInfo = (t) => ({ target: t.targetId, context: t.browserContextId ?? 
   opener: t.openerId ?? null, openerFrame: t.openerFrameId ?? null, ...address(t.url) });
 const notFound = (message) => /Protocol error \(Runtime\.evaluate\): (?:uniqueContextId not found|Cannot find context with specified (?:unique )?id)$/.test(message ?? "");
 const sameOrigin = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };
+const urlHash = (value) => typeof value === "string" ? createHash("sha256").update(value).digest("hex") : null;
+const responseTiming = (r) => r?.timing ? { requestTime: r.timing.requestTime, receiveHeadersEnd: r.timing.receiveHeadersEnd } : null;
 async function boundedSend(session, method, params, timeoutMs = 1000) {
   let timer;
   try { return await Promise.race([session.send(method, params), new Promise((_, reject) => {
@@ -47,12 +50,13 @@ export class PlatformLifecycle {
     cdp.on("Network.webSocketHandshakeResponseReceived", (e) => record("Network.webSocketHandshakeResponseReceived", { request: e.requestId, at: e.timestamp, status: e.response.status }));
     cdp.on("Network.webSocketClosed", (e) => record("Network.webSocketClosed", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.requestWillBeSent", (e) => {
-      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, ...address(e.request.url),
+      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, ...address(e.request.url), urlSha256: urlHash(e.request.url),
         document: address(e.documentURL), sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
-          request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null });
+          request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null,
+        redirectResponse: e.redirectResponse ? { ...address(e.redirectResponse.url), urlSha256: urlHash(e.redirectResponse.url), status: e.redirectResponse.status, timing: responseTiming(e.redirectResponse) } : null });
     });
     cdp.on("Network.responseReceived", (e) => record("Network.responseReceived", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, status: e.response.status, at: e.timestamp,
-      mime: e.response.mimeType ?? null, hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
+      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
     cdp.on("Network.loadingFinished", (e) => record("Network.loadingFinished", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.loadingFailed", (e) => record("Network.loadingFailed", { request: e.requestId, at: e.timestamp, canceled: e.canceled === true, errorText: e.errorText, blockedReason: e.blockedReason ?? null }));
     for (const event of ["Target.targetCreated", "Target.targetInfoChanged"]) targets?.on(event, ({ targetInfo: t }) => record(event, targetInfo(t)));
@@ -80,7 +84,17 @@ export class PlatformLifecycle {
     }
   }
   async startObservation() {
+    await boundedSend(this.cdp, "Performance.enable");
+    await this.sampleNativeClock("initial");
     await this.inventory("initial"); this.boundaries.startedAt = performance.now();
+  }
+  async sampleNativeClock(phase) {
+    const startedAt = performance.now();
+    try {
+      const { metrics } = await boundedSend(this.cdp, "Performance.getMetrics");
+      const at = metrics.find((m) => m.name === "Timestamp")?.value ?? null;
+      this.events.push({ event: "native-clock-sample", phase: `${phase}-native-clock`, startedAt, receivedAt: performance.now(), at });
+    } catch (error) { this.observationFailures.push({ phase: `${phase}-native-clock`, at: performance.now(), error: error.message }); }
   }
   markApplicationStart() { this.boundaries.applicationStartedAt = performance.now(); }
   recordDocument(dom, resources) {
@@ -94,6 +108,7 @@ export class PlatformLifecycle {
     this.boundaries.terminalStartedAt = performance.now();
     await new Promise((resolve) => setTimeout(resolve, observationMs));
     for (const realm of new Set(realms)) await this.probeRealm(realm);
+    await this.sampleNativeClock("terminal");
     await this.inventory("terminal"); this.boundaries.endedAt = performance.now();
   }
   async bindRealm(realm) {
@@ -142,11 +157,35 @@ export class PlatformLifecycle {
   async close() { if (this.targets) await this.targets.detach(); }
 }
 
+function redirectTerminal(prior, continuation) {
+  const d = prior?.dispatch, r = continuation.redirectResponse;
+  // The request ID is deliberately reused by CDP. Only the actual redirect
+  // response identifies which URL immediately preceded this continuation.
+  if (!d || prior.response || prior.terminal || d.frame !== continuation.frame || d.loader !== continuation.loader || d.type !== continuation.type
+    || !r || !/^[a-f0-9]{64}$/.test(d.urlSha256 ?? "") || r.urlSha256 !== d.urlSha256 || r.scheme !== d.scheme || r.path !== d.path
+    || r.status !== continuation.redirectStatus || !Number.isInteger(r.status) || r.status < 300 || r.status >= 400
+    || !Number.isFinite(d.at) || !Number.isFinite(continuation.at) || continuation.at < d.at) return null;
+  return { event: "native-redirect", status: r.status, receivedAt: continuation.receivedAt, at: continuation.at, response: structuredClone(r) };
+}
+
 function networkCoverage(journal, requests) {
   const reasons = [], events = journal.events, b = journal.boundaries ?? {};
   const text = (value) => typeof value === "string" && value.length > 0;
   const path = (value) => text(value) && value.startsWith("/");
   const finite = (value) => Number.isFinite(value) && value >= 0;
+  const clocks = events.filter((e) => e.event === "native-clock-sample"), initial = clocks.filter((e) => e.phase === "initial-native-clock"), terminal = clocks.filter((e) => e.phase === "terminal-native-clock");
+  const clock = initial[0], end = terminal[0];
+  const validClocks = initial.length === 1 && terminal.length === 1 && [clock, end].every((e) => finite(e.at) && finite(e.startedAt) && finite(e.receivedAt) && e.startedAt <= e.receivedAt)
+    && clock.receivedAt <= b.startedAt && end.startedAt >= b.terminalStartedAt && end.receivedAt <= b.endedAt && clock.at <= end.at;
+  if (!validClocks) reasons.push("Bounded native monotonic-clock observations unavailable");
+  const withinNativeClock = (e) => validClocks && finite(e.at) && e.at >= clock.at && e.at <= end.at
+    // A CDP timestamp cannot be later than delivery on the host. The initial
+    // round trip supplies a conservative clock-offset envelope, not an epsilon.
+    && e.at <= clock.at + (e.receivedAt - clock.startedAt) / 1000;
+  const headersAt = (response) => {
+    const timing = response?.timing;
+    return finite(timing?.requestTime) && finite(timing?.receiveHeadersEnd) ? timing.requestTime + timing.receiveHeadersEnd / 1000 : null;
+  };
   if (journal.coverage?.pageFrames !== true || journal.coverage?.pageNetwork !== true
     || !["Page", "Network"].every((domain) => events.some((e) => e.event === "domain-enabled" && e.domain === domain && e.receivedAt <= b.startedAt))) reasons.push("Native Page/Network domain coverage unavailable");
   if (!Number.isFinite(b.startedAt) || !Number.isFinite(b.endedAt) || b.endedAt < b.startedAt
@@ -155,17 +194,21 @@ function networkCoverage(journal, requests) {
     if (![d.request, d.frame, d.loader, d.type].every(text) || !text(d.method) || !/^[A-Z!#$%&'*+.^_`|~-]+$/.test(d.method)
       || !["http:", "https:"].includes(d.scheme) || !path(d.path) || !["http:", "https:"].includes(d.document?.scheme) || !path(d.document?.path)
       || typeof d.sameDocumentOrigin !== "boolean" || !text(d.initiator?.type) || typeof d.initiator?.sameDocumentOrigin !== "boolean"
-      || !finite(d.at) || !finite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt
+      || !withinNativeClock(d) || !finite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt
       || !(d.redirectStatus === null || Number.isInteger(d.redirectStatus) && d.redirectStatus >= 300 && d.redirectStatus < 400)) reasons.push(`Request ${d.request} lacks mandatory native dispatch fields`);
     if (!t || !finite(t.receivedAt) || t.receivedAt < d.receivedAt || t.receivedAt > b.endedAt
-      || t.event !== "native-redirect" && (!finite(t.at) || t.at < d.at)) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
+      || !withinNativeClock(t) || t.at < d.at) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
     if (t?.event === "Network.loadingFailed" && (typeof t.canceled !== "boolean" || typeof t.errorText !== "string"
       || !(t.blockedReason === null || text(t.blockedReason)))) reasons.push(`Request ${d.request} lacks native failure fields`);
-    if (t?.event === "native-redirect" && !(t.status >= 300 && t.status < 400)) reasons.push(`Request ${d.request} lacks a valid redirect receipt`);
+    if (t?.event === "native-redirect" && (!(t.status >= 300 && t.status < 400) || headersAt(t.response) === null
+      || headersAt(t.response) < d.at || headersAt(t.response) > t.at)) reasons.push(`Request ${d.request} lacks a valid timed redirect receipt`);
     if (t?.event === "Network.loadingFinished" && !r) reasons.push(`Request ${d.request} lacks its native response receipt`);
     if (r && (r.frame !== d.frame || r.loader !== d.loader || r.type !== d.type || !Number.isInteger(r.status) || r.status < 100 || r.status > 599
-      || !finite(r.at) || r.at < d.at || !finite(r.receivedAt) || typeof r.hasCsp !== "boolean" || typeof r.mime !== "string"
+      || !withinNativeClock(r) || r.at < d.at || !finite(r.receivedAt) || typeof r.hasCsp !== "boolean" || typeof r.mime !== "string"
       || r.receivedAt < d.receivedAt || r.receivedAt > (t?.receivedAt ?? b.endedAt))) reasons.push(`Request ${d.request} has unmatched response identity/status/order`);
+    // responseReceived.timestamp is notification time and can follow the native
+    // transfer finish. Actual response header timing must precede that finish.
+    if (r && (headersAt(r) === null || headersAt(r) < d.at || headersAt(r) > r.at || headersAt(r) > t?.at)) reasons.push(`Request ${d.request} lacks consistent native response/terminal timing`);
   }
   // Page commits are independent positive receipts: deleting the entire Network
   // stream cannot turn an observed HTTP navigation into empty-network success.
@@ -318,9 +361,10 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
       const prior = requests.get(e.request);
       if (!prior && e.redirectStatus !== null) unknown("Orphan native redirect continuation lacks its predecessor dispatch");
       if (prior && (!e.redirectStatus || prior.terminal)) unknown("Reused request ID lacks native redirect binding");
-      if (prior && (prior.response || prior.dispatch.frame !== e.frame || prior.dispatch.loader !== e.loader || prior.dispatch.type !== e.type)) unknown("Native redirect predecessor identity/state differs from continuation");
+      const redirect = prior && redirectTerminal(prior, e);
+      if (prior && !redirect) unknown("Native redirect predecessor response identity/clock/state differs from continuation");
       const row = { dispatch: e, response: null, terminal: null }; requests.set(e.request, row); result.requests.push(row);
-      if (prior && e.redirectStatus) prior.terminal = { event: "native-redirect", status: e.redirectStatus, receivedAt: e.receivedAt };
+      if (redirect) prior.terminal = redirect;
       if (destruction && e.frame === old.frame && e.loader === old.loader && e.receivedAt > destruction.receivedAt) { failed = true; unknown("Old-loader request dispatched after realm destruction"); }
     }
     if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(e.event)) {
@@ -366,8 +410,9 @@ export function classifyNoJSRequests(journal) {
       const previous = latest.get(event.request);
       if (!previous && event.redirectStatus !== null) result.reasons.push("Orphan native redirect continuation lacks its predecessor dispatch");
       if (previous && (!event.redirectStatus || previous.terminal)) result.reasons.push("Reused request ID lacks native redirect binding");
-      if (previous && (previous.response || previous.dispatch.frame !== event.frame || previous.dispatch.loader !== event.loader || previous.dispatch.type !== event.type)) result.reasons.push("Native redirect predecessor identity/state differs from continuation");
-      if (previous && event.redirectStatus) previous.terminal = { event: "native-redirect", status: event.redirectStatus, receivedAt: event.receivedAt };
+      const redirect = previous && redirectTerminal(previous, event);
+      if (previous && !redirect) result.reasons.push("Native redirect predecessor response identity/clock/state differs from continuation");
+      if (redirect) previous.terminal = redirect;
       const row = { dispatch: event, response: null, terminal: null, classification: "unknown", proof: null };
       result.requests.push(row); latest.set(event.request, row);
     }
