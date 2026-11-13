@@ -88,7 +88,9 @@ From then on a change on `main` under `infra/`, or to `provision.sh`, `nginx.con
 file, is applied by the workflow. The Site workflow does not run for a change to those files
 and this guide alone. A merge that also changes the site starts both, and that Site run may
 ship to the machine being replaced or fail against the new one while it sets itself up: the
-run the `Site machine` workflow starts afterwards is the one that ships. A droplet is never
+run the `Site machine` workflow starts afterwards ships whatever became of the first (where
+the first reached the new machine, as on `cd3f67f43`, the second ships the same commit again
+and the service restarts once more). A droplet is never
 changed in place. A change to anything it is handed, a comment in one
 of those files included, makes a new droplet, moves the address to it once it exists, and
 removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
@@ -98,16 +100,21 @@ and also while the service is down.
 
 The site is down from the move until that release is served. That is the time a machine takes
 to install its packages and get a certificate, and then a whole run of the Site workflow, which
-tests and builds before it ships. For the first machine made for corten.run (one run, on
-`a7bbe4cc9`, with the name already at DigitalOcean's servers) the machine answered under its
-certificate 1 min 42 s after the apply ended, and the Site run started then had shipped and
-checked the release 1 min 54 s after that. For the first replacement (one run, on `cd3f67f43`)
-the machine answered under its certificate 1 min 22 s after the apply ended, and the site was
-down about two minutes: between 1 min 51 s and 2 min 7 s from the address moving to the page
-being answered. That was shorter than the sum above because the merge had started a Site run
-of its own, which had built its release by then and shipped it 6 s after the machine answered;
-where a merge starts none, the wait is for the run the workflow starts, as with the first
-machine. The old machine
+waits for a runner and tests and builds before it ships. For the first machine made for
+corten.run (one run, on `a7bbe4cc9`, with the name already at DigitalOcean's servers) the
+machine answered under its certificate 1 min 42 s after the apply ended, and the Site run
+started then had shipped and checked the release 1 min 53 s after that, 4 s of it waiting for
+a runner. For the first replacement (one run, on `cd3f67f43`) the machine answered 1 min 22 s
+after the apply ended, and the Site run started then was answered by its release 4 min 6 s
+after that, 6 min 7 s after the address began to move: it waited 14 s behind another Site run
+and 2 min 38 s for a runner, and was answered 1 min 14 s after it had one. The site was down
+for about two of those six minutes, and that by chance. The merge had changed the site too,
+so a Site run of its own had started; it waited 2 min 54 s for a runner, finished building 3 s
+before the workflow first saw the machine answer, and was answered by its release 2 min 7 s
+after the address began to move and 1 min 51 s after it had moved. With the 4 s wait of the
+first machine's run it would have shipped to the old machine before the move. So reckon on
+the machine's minute and a half and a Site run, of which the wait for a runner is the part
+that moves. The old machine
 and its certificate are gone by then, and Let's Encrypt issues the same names five
 certificates a week: a sixth replacement inside a week leaves the site down until its limit
 allows another (with names that redirect, a machine asks for two, one for the site's name and
@@ -153,9 +160,12 @@ back only itself. The machine says which name it waits for, or why a certificate
 Taking the names on runs `provision.sh` a second time, which writes the deploy key's file,
 the deploy's `sudo` rule and the service's environment file again: a deploy that reaches the
 machine in the instant of one of those writes can fail, and is run again. That has not been
-seen; where the names are there already, the second run is over well before the first release
-is built. After an apply the workflow asks the machine for each name, for twenty minutes in
-all where it made the machine, and fails where one does not send its visitors to the site.
+seen. Where the names are there already, the second run is over well before the Site run the
+workflow starts has built its release; a Site run the merge started itself can have built
+its own by then, as on `cd3f67f43`, where it shipped within half a minute of the machine
+taking `www` on, and passed. After an apply the workflow asks the machine for each name, for
+twenty minutes in all where it made the machine, and fails where one does not send its
+visitors to the site.
 Twenty minutes is by reckoning a little more than one new try takes, not a time that was
 waited out: a run can end red for a name the machine takes on minutes later, and the machine
 goes on trying either way. Changing the list replaces the droplet on the next apply.
@@ -365,8 +375,9 @@ machine's, and read low with the server at that limit. Of such a limit the page 
 the standard library counts: where that is fewer CPUs than the machine has, that the server is
 held to them (a quota's whole CPUs, rounded down and never fewer than one), and no limit of
 memory. Under the service file's sandbox, in the container with systemd described below, both
-gauges are there, so the unit does not keep the server from `/proc/stat` or `/proc/meminfo`; it
-has not run on a real machine.
+gauges are there, so the unit does not keep the server from `/proc/stat` or `/proc/meminfo`. On
+the droplets the unit runs and the Site workflow reads a patch from the live stream; whether
+both gauges are there was not looked at.
 
 The workflow's ship step was rehearsed against a container running sshd, with the `deploy` user
 made by `provision.sh`'s own lines and a stand-in for `systemctl`: a first deploy, a second of
@@ -486,17 +497,21 @@ at the bucket, with a key that could not make one.
 
 The same day the merge of `cd3f67f43` replaced that droplet, with `SITE_REDIRECTS` naming
 `www.corten.run` (one run, read from the workflows' logs). The plan was two to add, one to
-change and one to destroy. The new droplet was made in 33 seconds, the address moved to it in
-the 16 seconds after, the record for `www` was made, and the old droplet was gone 23 seconds
-after the move, the apply ending 39 seconds after the address began to move. The machine answered 502
-under the site's name 1 min 22 s after the apply ended (the step asks each 20 seconds). The
-Site run the merge itself had started shipped then and was answered by the page as that
-commit 6 seconds later, and the step said `www` sends its visitors to the site on its second
-ask, 20 seconds after the first answer. The Site run the workflow started was answered as the
-same commit.
+change and one to destroy. By tofu's own count the new droplet was made in 33 seconds, the
+address moved to it in the 15 after, the record for `www` was made, and the old droplet was
+gone 22 seconds after the move; the apply ended 39 seconds after the address began to move.
+The step saw the machine answer 502 under the site's name 1 min 22 s after the apply ended
+(it asks each 20 seconds, so the machine may have answered sooner). The Site run the merge
+itself had started was shipping then and was answered by the page as that commit 6 seconds
+later, and the step said `www` sends its visitors to the site on its second ask, 20 seconds
+after the first answer. The Site run the workflow started shipped the same commit again and
+was answered as it 4 min 6 s after the machine's first answer; the times above say where
+those minutes went.
 
-Still not run on a real machine: a put-back of the release before, a name that reaches the
-machine late or is refused its certificate, and a renewal. Which of `boot.sh`'s two ways ended
-its wait on either droplet was not looked at, so whether a droplet can reach its own reserved
-address from inside is still not known, nor whether the two metadata paths
-(`reserved_ip/ipv4/active` and `ip_address`) answer as `boot.sh` reads them.
+Still not run on a real machine, among what this guide describes: an apply that fails once
+begun or a droplet that cannot be made, a put-back of the release before, a machine that
+freezes during a ship, a name that reaches the machine late or is refused its certificate, a
+renewal, and `hold.mjs` and nginx's limits. Which of `boot.sh`'s two ways ended its wait on either droplet
+was not looked at, so whether a droplet can reach its own reserved address from inside is
+still not known, nor whether the two metadata paths (`reserved_ip/ipv4/active` and
+`ip_address`) answer as `boot.sh` reads them.
