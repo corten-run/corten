@@ -38,6 +38,9 @@ test("dispatch evaluation: every fetch argument and option must be supported", a
     ["URLSearchParams shadow", '{method:"POST",body:new URLSearchParams({email:"safe"})}', "", "", 'const URLSearchParams=unknown;'],
     ["FormData extra arguments", '{method:"POST",body:new FormData(e.currentTarget,unknown())}'],
     ["FormData wrong event", '{method:"POST",body:new FormData(unknown.currentTarget)}'],
+    ["FormData absence unavailable in body", '{method:"POST",body:new FormData(e.currentTarget)}'],
+    ["FormData absence unavailable in prefix", '{method:"POST",body:form}', "", 'const form=new FormData(e.currentTarget);'],
+    ["FormData absence unavailable in search record", '{method:"POST",body:new URLSearchParams({email:String(form.get("email")??"")})}', "", 'const form=new FormData(e.currentTarget);'],
     ["form get extra arguments", '{method:"POST",body:String(form.get("email",unknown()))}', "", 'const form=new FormData(e.currentTarget);'],
     ["String extra arguments", '{method:"POST",body:String("safe",unknown())}'],
     ["search extra arguments", '{method:"POST",body:new URLSearchParams({email:"safe"},unknown())}'],
@@ -55,8 +58,6 @@ test("dispatch evaluation: every fetch argument and option must be supported", a
   for (const [name, body, prefix = ""] of [
     ["literal body", '"safe"'],
     ["scalar local", 'value', 'const value="safe";'],
-    ["native form", 'form', 'const form=new FormData(e.currentTarget);'],
-    ["native search record", 'new URLSearchParams({email:String(form.get("email")??""),target_price:String(form.get("target_price")??"")})', 'e.preventDefault();const form=new FormData(e.currentTarget);'],
     ["native search literal", 'new URLSearchParams("email=safe")'],
   ]) await t.test(name, () => assert.equal(discoverReactEndpoint([candidate(`fetch(${endpoint},{method:"POST",body:${body}})`, prefix)])?.path, "/api/marketplace/item_2"));
 });
@@ -75,4 +76,24 @@ test("native array descriptors require complete bounded own indexes", async (t) 
     ["huge length", [length(2 ** 32 - 1)]], ["fractional length", [length(1.5)]],
     ["unproved length", [{ ...length(0), isOwn: false }]], ["named property", [length(1), entry("extra")]],
   ]) await t.test(name, () => assert.throws(() => denseBindingEntries(descriptors)));
+});
+
+test("array effects never substitute another element for a missing or unresolved index", async (t) => {
+  for (const [name, expression, supported] of [
+    ["own index", 'rows[0]', true],
+    ["absent dense index", 'rows[1]', false],
+    ["absent large index", 'rows[99]', false],
+    ["empty slice", 'rows.slice(0,0)[0]', false],
+    ["past-end slice", 'rows.slice(1)[0]', false],
+    ["retained slice index", 'rows.slice(0,1)[0]', true],
+    ["filtered-out index", 'rows.filter(value=>false)[0]', false],
+    ["retained filter index", 'rows.filter(value=>true)[0]', true],
+    ["uncertain filter index", 'rows.filter(value=>value.startsWith(l))[0]', false],
+    ["uncertain filter sliced index", 'rows.filter(value=>value.startsWith(l)).slice(0,1)[0]', false],
+  ]) await t.test(name, () => {
+    const observed = candidate(`fetch(${endpoint},{method:"POST"})`, "", `const rows=["safe"];const value=${expression};`);
+    const result = discoverReactEndpoint([observed]);
+    if (supported) assert.equal(result?.path, "/api/marketplace/item_2");
+    else assert.equal(result, null);
+  });
 });

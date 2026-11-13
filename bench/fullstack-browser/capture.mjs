@@ -4,7 +4,7 @@ import { candidates, sha256 } from "./contract.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
-import { replayBindingProof } from "./bindings.mjs";
+import { replayActionBinding } from "./binding-window.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
 
 const keys = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
@@ -42,7 +42,7 @@ export function projectCase(cell, profile, app, settings, bindingArtifact = null
     validateBindingArtifact(bindingArtifact);
     assert.equal(e?.bindingArtifact?.sha256, bindingArtifact.sha256, "Case/code artifact correspondence missing");
     for (const row of e.steps.filter((r) => r.action.input))
-      assert.ok(replayBindingProof(row.formBefore?.enhancement, bindingArtifact), "Native Next binding effects do not replay from emitted bytes/native links");
+      assert.ok(replayActionBinding(row.formBefore?.enhancement, bindingArtifact, e, row, profile.key), "Native Next binding effects do not replay from emitted bytes/action-bound native links");
   }
   const requests = reconcileRequests(e ?? {});
   assert.equal(requests.outcome, "reconciled", requests.reasons.join("; "));

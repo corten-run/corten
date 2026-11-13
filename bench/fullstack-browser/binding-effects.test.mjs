@@ -9,7 +9,7 @@ import ts from "typescript";
 import { chromium } from "@playwright/test";
 import { records } from "../marketplace/fixtures.mjs";
 import { createBindingArtifact, bindingHash, validateBindingArtifact } from "./binding-artifact.mjs";
-import { BindingLinkObserver } from "./binding-links.mjs";
+import { BindingLinkObserver, observeFormConstruction } from "./binding-links.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
 import { discoverReactEndpoint, replayBindingProof } from "./bindings.mjs";
 import { nativeForm } from "./observe.mjs";
@@ -29,6 +29,37 @@ function nativeScripts(mode = "native") {
   ];
 }
 const identity = { imageId: `sha256:${bindingHash("test-only-native-emitter-not-an-image")}`, sourceCommit: "0".repeat(40) };
+
+test("native FormData absence inventory includes synchronous property, ancestor and window callbacks", { timeout: 30000 }, async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const mode of ["absent", "form property", "form attribute", "ancestor", "document", "window"]) await t.test(mode, async () => {
+      const context = await browser.newContext(), page = await context.newPage();
+      try {
+        await page.setContent('<article><form><input name="email" value="safe"></form></article>');
+        await page.evaluate((mode) => {
+          globalThis.formDataCalls = 0;
+          const callback = () => { globalThis.formDataCalls++; };
+          if (mode === "form property") document.querySelector("form").onformdata = callback;
+          if (mode === "form attribute") document.querySelector("form").setAttribute("onformdata", "globalThis.formDataCalls++");
+          if (mode === "ancestor") document.querySelector("article").addEventListener("formdata", callback);
+          if (mode === "document") document.addEventListener("formdata", callback);
+          if (mode === "window") window.addEventListener("formdata", callback);
+        }, mode);
+        const cdp = await context.newCDPSession(page), group = "form-construction-control";
+        try {
+          const document = await cdp.send("DOM.getDocument", { depth: 0 });
+          const window = (await cdp.send("Runtime.evaluate", { expression: "globalThis", objectGroup: group })).result;
+          const observed = await observeFormConstruction(cdp, document.root.nodeId, window, group);
+          assert.equal(observed.outcome, mode === "absent" ? "absent" : "present");
+          assert.equal(await page.evaluate(() => globalThis.formDataCalls), 0, "Native listener inventory never executes callbacks");
+          const calls = await page.evaluate(() => { new FormData(document.querySelector("form")); return globalThis.formDataCalls; });
+          assert.equal(calls, mode === "absent" ? 0 : 1, "The native constructor invokes formdata callbacks synchronously");
+        } finally { await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }); await cdp.detach(); }
+      } finally { await context.close(); }
+    });
+  } finally { await browser.close(); }
+});
 
 test("binding artifact commits to exact emitted bytes and identity", () => {
   const artifact = createBindingArtifact({ ...identity, scripts: nativeScripts() });
@@ -228,7 +259,8 @@ test("linked whole-render effects reject sibling, initializer and callback reten
 });
 
 test("native dispatch evaluation rejects unmodeled option work and sparse props without executing them", { timeout: 60000 }, async (t) => {
-  const cases = ["body call", "body await", "option accessor", "extra argument", "nested field", "file field", "changed form get", "dictionary iterator", "sparse leading", "sparse trailing", "sparse all holes", "dense"];
+  const cases = ["body call", "body await", "option accessor", "extra argument", "nested field", "file field", "changed form get", "dictionary iterator",
+    "formdata property", "formdata ancestor", "formdata window", "formdata body", "custom control", "native form", "native body", "sparse leading", "sparse trailing", "sparse all holes", "dense"];
   let scripts, browser;
   const requests = [], server = createServer((req, res) => {
     const script = scripts.find((s) => s.path === req.url);
@@ -245,8 +277,9 @@ test("native dispatch evaluation rejects unmodeled option work and sparse props 
         : mode === "option accessor" ? '{method:"POST",headers:({get value(){return stop()}}).value}'
         : mode === "nested field" ? '{method:"POST",body:new URLSearchParams({email:stop()})}'
         : mode === "dictionary iterator" ? '{method:"POST",body:new URLSearchParams({email:"safe"})}'
-        : ["file field", "changed form get"].includes(mode) ? '{method:"POST",body:new URLSearchParams({email:String(form.get("email")??"")})}' : '{method:"POST"}';
-      const prefix = ["file field", "changed form get"].includes(mode) ? "const form=new FormData(e.currentTarget);" : "";
+        : ["formdata body", "native body"].includes(mode) ? '{method:"POST",body:new FormData(e.currentTarget)}'
+        : ["file field", "changed form get", "custom control", "native form"].includes(mode) || mode.startsWith("formdata ") ? '{method:"POST",body:new URLSearchParams({email:String(form.get("email")??"")})}' : '{method:"POST"}';
+      const prefix = mode !== "formdata body" && (["file field", "changed form get", "custom control", "native form"].includes(mode) || mode.startsWith("formdata ")) ? "const form=new FormData(e.currentTarget);" : "";
       scripts = [
         { path: "/component.mjs", source: `import {jsx} from "/runtime.mjs";const stop=()=>{globalThis.argumentCalls++;throw Error("local control stopped before dispatch")};export function M({record:r,locale:l}){const rows=r.rows.map(value=>value);return jsx("form",{onSubmit:async e=>{e.preventDefault();${prefix}return fetch("/api/marketplace/"+r.id+"?locale="+l,${options}${mode === "extra argument" ? ",stop()" : ""});}});}` },
         { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
@@ -261,6 +294,11 @@ test("native dispatch evaluation rejects unmodeled option work and sparse props 
           if (mode === "file field") document.querySelector('[name="email"]').type = "file";
           if (mode === "changed form get") FormData.prototype.get = function () { globalThis.argumentCalls++; throw Error("local replacement stopped before dispatch"); };
           if (mode === "dictionary iterator") Object.prototype[Symbol.iterator] = function* () { globalThis.argumentCalls++; throw Error("local dictionary iterator stopped before dispatch"); };
+          const formElement = document.querySelector("form"), onFormData = () => { globalThis.argumentCalls++; };
+          if (["formdata property", "formdata body"].includes(mode)) formElement.onformdata = onFormData;
+          if (mode === "formdata ancestor") document.body.addEventListener("formdata", onFormData);
+          if (mode === "formdata window") window.addEventListener("formdata", onFormData);
+          if (mode === "custom control") formElement.append(document.createElement("unknown-control"));
           const { M } = await import("/component.mjs"), rows = mode === "sparse leading" ? [, "safe"]
             : mode === "sparse trailing" ? ["safe", ,] : mode === "sparse all holes" ? new Array(2) : ["safe"];
           const props = { record: { id: "item_2", rows }, locale: "fr-FR" }, tree = M(props), form = document.querySelector("form"), handler = tree.props.onSubmit;
@@ -273,14 +311,14 @@ test("native dispatch evaluation rejects unmodeled option work and sparse props 
         if (mode.startsWith("sparse") || ["changed form get", "dictionary iterator"].includes(mode)) assert.equal(observed.outcome, "unknown", "Unproved native array/method must be rejected before effect proof");
         else assert.equal(observed.outcome, "observed", observed.reason);
         await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
-        if (mode === "dense" || mode.startsWith("sparse") || mode === "file field") {
+        if (["dense", "file field", "custom control", "native form", "native body"].includes(mode) || mode.startsWith("sparse") || mode.startsWith("formdata ")) {
           assert.deepEqual(requests, ["/api/marketplace/item_2?locale=fr-FR"]);
-          assert.equal(await page.evaluate(() => globalThis.argumentCalls), 0);
+          assert.equal(await page.evaluate(() => globalThis.argumentCalls), mode.startsWith("formdata ") ? 1 : 0);
         } else {
           assert.deepEqual(requests, []);
           assert.equal(await page.evaluate(() => globalThis.argumentCalls), 1, "The actual handler stopped in argument evaluation before native dispatch");
         }
-        if (mode !== "dense") assert.equal(discovered, null);
+        if (!["dense", "native form", "native body"].includes(mode)) assert.equal(discovered, null);
         else { assert.equal(discovered?.path, "/api/marketplace/item_2"); assert.equal(replayBindingProof(discovered, artifact), true); }
       } finally { await observer.close(); await context.close(); }
     });

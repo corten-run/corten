@@ -293,7 +293,19 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
       if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
         return datum(node.left, locals) === "scalar" && datum(node.right, locals) === "scalar" ? "scalar" : undefined;
       if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "FormData"
-        && node.arguments?.length === 1 && eventField(node.arguments[0], "currentTarget")) return "formData";
+        && node.arguments?.length === 1 && eventField(node.arguments[0], "currentTarget")) {
+        const receipt = linked?.receipt.formConstruction;
+        if (!receipt || receipt.outcome !== "absent" || !Number.isFinite(receipt.startedAt) || !Number.isFinite(receipt.finishedAt)
+          || receipt.startedAt > receipt.finishedAt || !Number.isInteger(receipt.form) || receipt.form <= 0
+          || !Array.isArray(receipt.targets) || receipt.targets.length !== 2
+          || receipt.targets[0].kind !== "document-tree" || receipt.targets[1].kind !== "window"
+          || receipt.targets.some((t) => !Array.isArray(t.listeners) || t.listeners.length)
+          || !Array.isArray(receipt.controls) || !receipt.controls.length || receipt.controls.length > 128
+          || !receipt.controls.some((c) => c.backendNodeId === receipt.form && c.name === "form")
+          || receipt.controls.some((c) => !Number.isInteger(c.backendNodeId) || c.backendNodeId <= 0
+            || typeof c.name !== "string" || !c.name || c.name.includes("-") || c.customized !== false || c.shadow !== false)) return undefined;
+        return "formData";
+      }
       if (ts.isCallExpression(node) && !node.questionDotToken && node.arguments.length === 1) {
         if (ts.isIdentifier(node.expression) && node.expression.text === "String" && datum(node.arguments[0], locals) === "scalar") return "scalar";
         if (ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken && node.expression.name.text === "get"

@@ -147,10 +147,10 @@ export function nativeDOM() {
       turbo: form.closest("[data-turbo]")?.getAttribute("data-turbo") !== "false", encoding: form.enctype,
       updatePath: updateURL?.origin === location.origin ? updateURL.pathname : null } : null };
 }
-export async function nativeForm(page, native, app, js, cdp, inspect = true) {
+export async function nativeForm(page, native, app, js, cdp, inspect = true, bindingWindow = null) {
   const form = native.form;
   if (form && js && inspect && app === "nextjs") {
-    const observed = await observeBindingLinks(cdp, ".marketplace__alert form", page.url());
+    const observed = await observeBindingLinks(cdp, ".marketplace__alert form", page.url(), bindingWindow);
     const diagnostics = [];
     form.enhancement = observed.outcome === "observed" ? discoverReactEndpoint([observed.candidate], observed.linked, diagnostics) : null;
     form.bindingObservation = { outcome: form.enhancement ? "proved" : "unknown", reason: form.enhancement ? null

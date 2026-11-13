@@ -158,10 +158,19 @@ FormData and native URLSearchParams with fully checked scalar record fields. For
 are tracked by lexical declaration, and `get` requires its document-start native identity plus
 an independently inventoried string-valued form control. File/custom/unknown fields cannot be
 assumed scalar. No option expression is executed to prove it benign.
+Native FormData construction also requires a bounded CDP absence inventory for synchronous
+`formdata` callbacks throughout the document tree and Window, including event-handler properties.
+Custom elements, customized built-ins and application shadow roots in associated controls are
+unsupported. A present callback stays unknown; constructors are not executed to test purity.
+Missing native construction evidence also rejects source-only FormData discovery. The native
+prefix/search-record and direct-body positives remain explicit Chromium controls.
 
 Native array capture requires a bounded own numeric length and every own data index exactly
 once. Leading, interior, trailing and all-hole arrays reject before effect analysis; absent
 indexes are never inferred from a hole-skipping iterator or silently lost during serialization.
+Numeric reads additionally require an own, known-position element. Out-of-range reads reject,
+including after exact slices or filters. Indexed reads from uncertain filtered/sorted alternatives
+reject rather than substituting the first possible element or consulting an inherited getter.
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
@@ -172,6 +181,16 @@ observations or relabeling realms/locations cannot retain a positive receipt. Al
 producer/checker files enter the existing runner-file source closure automatically. Missing historical receipts
 remain unqualified and saved evidence is not rewritten. Unknown production-bundle effects stay
 explicit blockers; the apparatus ESM/JSX adapter is not a React runtime purity contract.
+Structural effect replay alone cannot qualify a write. `binding-window.mjs` additionally requires
+each proof's capture ID and host/native-clock interval to match one pre-dispatch lifecycle journal
+receipt, the current case instance/action, independently observed mounted form backend-node ID,
+instrumentation realm/scope and native unique execution context/frame/browser target. The capture
+rechecks realm/scope and mounted form identity after its descriptor reads. A matching native POST
+must occur in that frame/loader between dispatch start and the action's DOM/resource observation.
+Missing, duplicate, stale or transplanted
+receipts reject in both strict projection and saved replay. Earlier intact proofs cannot attest a
+later guarded action. These are bounded observations, not independent source authentication or
+a guarantee about unobserved future state; existing qualification blockers are unchanged.
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property
 and destructuring writes), intervening function scopes, conditional/unreachable or uncalled
 nested fetches, duplicate method properties and option spreads are unsupported, not inferred POSTs.
@@ -249,6 +268,9 @@ test's child names are not independently selectable through a parent-matching No
 `binding-dispatch.test.mjs` supplies local argument/descriptor grammar controls, while the focused
 native-dispatch test in `binding-effects.test.mjs` confirms unknown option work is never executed
 by discovery, real argument failures prevent HTTP dispatch, and sparse native props reject.
+`binding-window.test.mjs` supplies receipt-only chronology/identity mutation controls, not a
+fabricated qualification capture. The ordinary production test also requires action-bound replay
+and rejects an intact earlier proof transplanted to the actual live guarded/no-POST action.
 
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That

@@ -12,6 +12,7 @@ import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
 import { BindingLinkObserver } from "./binding-links.mjs";
+import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -85,6 +86,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     timingScope: "Host-observed elapsed time including Playwright dispatch/polling. Visible-change is an upper bound, not a hydration or comparative speed claim.",
   } };
   const evidence = result.evidence;
+  evidence.bindingInstance = randomUUID();
   const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
@@ -138,9 +140,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
       const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
-      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input)); row.componentsBefore = nativeBefore.components;
+      if (app === "nextjs" && profile.js && step.input) row.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources,
+        { instance: evidence.bindingInstance, case: profile.key, action: step.id });
+      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input), row.bindingWindow); row.componentsBefore = nativeBefore.components;
+      if (row.bindingWindow) await finishBindingWindow(lifecycle, row.bindingWindow, row.formBefore?.enhancement);
       network.bindForm(row.formBefore);
       const at = performance.now();
+      row.dispatchStartedAt = at;
       const deadline = at + settings.actionTimeoutMs;
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
@@ -257,6 +263,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (lifecycle) try { await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] }); }
     catch (error) { evidence.failures.push(`Platform terminal observation: ${error.message}`); }
     evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
+    if (app === "nextjs" && profile.js) for (const row of evidence.steps.filter((r) => r.action.input)) {
+      if (!replayActionBinding(row.formBefore?.enhancement, bindingArtifact, evidence, row, profile.key)) {
+        evidence.functionalChecksPassed = false;
+        row.failures.push("Next binding proof lacks its native pre-dispatch observation window");
+        evidence.failures.push(`${row.action.id}: Next binding observation cannot replay`);
+      }
+    }
     if (evidence.platformLifecycle) {
       evidence.platformRetirementProofs = evidence.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id,
         proof: validatePlatformRetirement(evidence.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));

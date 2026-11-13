@@ -16,7 +16,7 @@ import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
-import { replayBindingProof } from "./bindings.mjs";
+import { replayActionBinding, validateBindingWindow } from "./binding-window.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
 const hash = /^[a-f0-9]{64}$/, commitId = /^[a-f0-9]{40}$/;
@@ -270,6 +270,10 @@ function observationTiming(e, block) {
 
 function receiptChronology(e, windows, block) {
   const origin = e.clock.startedAt, missing = (v) => v === null || v === undefined;
+  for (const row of e.steps.filter((r) => r.formBefore?.enhancement?.bindingProof)) {
+    if (!validateBindingWindow(row.formBefore.enhancement, e, row, row.bindingWindow?.case))
+      block("Binding observation does not match its native pre-dispatch chronology");
+  }
   let latest = origin;
   const time = (v, label, required = true, application = true) => {
     if (missing(v)) { if (required) block(`Missing ${label} timestamp`); return null; }
@@ -460,7 +464,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
         if (app === "nextjs" && profile.js) {
           const artifact = summary.bindingArtifacts?.[app];
           if (artifact) same(e.bindingArtifact, { sha256: artifact.sha256, imageId: artifact.imageId, sourceCommit: artifact.sourceCommit }, "Native case/code artifact identity differs");
-          if (!artifact || !replayBindingProof(enhancement, artifact)) {
+          if (!artifact || !replayActionBinding(enhancement, artifact, e, row, profile.key)) {
             block("Next emitted-code/native-binding effect proof unavailable or inconsistent");
             need(!e.functionalChecksPassed && row.failures.length, "Stored Next native pass lacks replayable binding effects");
           }

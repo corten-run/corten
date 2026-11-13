@@ -17,6 +17,11 @@ import { createBindingArtifact, indexBindingArtifact, bindingHash } from "./bind
 import { replayBindingProof } from "./bindings.mjs";
 import { emittedModules } from "./binding-modules.mjs";
 import { nativeForm } from "./observe.mjs";
+import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
+import { PlatformLifecycle } from "./lifecycle.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
 
 // Only the ordinary case uses unchanged image bytes. Intercepted emitted-bundle
 // controls have separate, explicitly synthetic identities and never qualify an
@@ -102,6 +107,7 @@ test("production Next: immutable native page links and independently POSTs reque
     for (const mode of modes) await t.test(mode, { timeout: mode === "ordinary" ? 60000 : 30000 }, async () => {
     const activeArtifact = controlArtifact(artifact, originalLinks, mode);
     const context = await browser.newContext(), page = await context.newPage(), posts = [], errors = [];
+    await context.addInitScript(installResourceObserver);
     if (mode !== "ordinary") await page.route("**/_next/static/chunks/*.js", async (route) => {
       const script = activeArtifact.scripts.find((s) => s.path === new URL(route.request().url()).pathname);
       if (script) await route.fulfill({ status: 200, contentType: "text/javascript", body: script.source }); else await route.continue();
@@ -109,10 +115,20 @@ test("production Next: immutable native page links and independently POSTs reque
     page.on("pageerror", (e) => errors.push(e.message));
     page.on("request", (r) => { if (r.method() === "POST") posts.push({ method: r.method(), path: new URL(r.url()).pathname, query: new URL(r.url()).search, input: r.postData() }); });
     const cdp = await context.newCDPSession(page), observer = new BindingLinkObserver(cdp, activeArtifact); await observer.enable();
+    const lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: true });
+    const resources = new ResourceAudit(page, cdp, true, lifecycle);
+    const evidence = { bindingInstance: randomUUID(), clock: { startedAt: performance.now() }, steps: [] };
+    await lifecycle.enable(); await lifecycle.enableDomains(); await lifecycle.startObservation(); lifecycle.markApplicationStart();
     try {
       await page.goto(base + "/marketplace/fr-FR/item_2");
       await page.waitForFunction(() => window.next?.router?.isReady === true);
-      const observed = await observer.capture(".marketplace__alert form", page.url());
+      const row = { action: { id: "ordinary-submit" }, at: performance.now() - evidence.clock.startedAt };
+      evidence.steps.push(row);
+      if (mode === "ordinary") row.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources,
+        { instance: evidence.bindingInstance, case: "production-native-control", action: row.action.id });
+      const observed = await observer.capture(".marketplace__alert form", page.url(), row.bindingWindow);
+      row.formBefore = { enhancement: observed.outcome === "observed" ? discoverReactEndpoint([observed.candidate], observed.linked) : null };
+      if (row.bindingWindow) await finishBindingWindow(lifecycle, row.bindingWindow, row.formBefore.enhancement);
       const effects = observed.outcome === "observed" ? checkBindingEffects(observed.candidate, activeArtifact, observed.receipt) : observed;
       if (mode === "ordinary") originalLinks = observed.receipt;
       if (mode === "ordinary") {
@@ -125,10 +141,12 @@ test("production Next: immutable native page links and independently POSTs reque
         writeFileSync(path + "artifact.json", JSON.stringify(artifact)); writeFileSync(path + "observed.json", JSON.stringify(observed));
       }
       const form = page.locator(".marketplace__alert form");
+      row.dispatchStartedAt = performance.now();
       await form.locator('[name="email"]').fill("binding-native@example.test");
       await form.locator('[name="target_price"]').fill("1,25");
       const response = page.waitForResponse((r) => r.request().method() === "POST");
       await form.locator('button[type="submit"]').click(); assert.equal((await response).status(), 200);
+      row.resourcesAtDOM = await resources.checkpoint();
       const positive = ["ordinary", "renamed safe helper"].includes(mode);
       assert.deepEqual(posts.map(({ method, path, query }) => ({ method, path, query })), [{ method: "POST", path: `/api/marketplace/${positive ? "item_2" : "item_1"}`, query: "?locale=fr-FR" }]);
       assert.deepEqual(errors, []);
@@ -140,6 +158,22 @@ test("production Next: immutable native page links and independently POSTs reque
         assert.equal(discovered?.path, "/api/marketplace/item_2");
         assert.equal(replayBindingProof(discovered, activeArtifact), true);
         if (mode === "ordinary") {
+          await lifecycle.finishObservation({ observationMs: 0 }); evidence.platformLifecycle = lifecycle.snapshot();
+          assert.equal(replayActionBinding(discovered, activeArtifact, evidence, row, "production-native-control"), true, "Actual production dispatch has its own native capture window");
+          const reject = (change) => {
+            const copy = structuredClone(evidence); change(copy, copy.steps[0]);
+            assert.equal(replayActionBinding(copy.steps[0].formBefore.enhancement, activeArtifact, copy, copy.steps[0], "production-native-control"), false);
+          };
+          reject((e) => { e.bindingInstance = randomUUID(); });
+          reject((e, r) => { r.action.id = "later-submit"; });
+          reject((e, r) => { r.at = r.dispatchStartedAt - e.clock.startedAt; });
+          reject((e, r) => { r.bindingWindow.form.backendNodeId++; });
+          reject((e, r) => { r.bindingWindow.resources.scope += "-other"; });
+          reject((e, r) => { r.bindingWindow.native.uniqueId += "-other"; });
+          reject((e) => { e.platformLifecycle.events = e.platformLifecycle.events.filter((r) => r.event !== "binding-observation"); });
+          reject((e) => { e.platformLifecycle.events.push(structuredClone(e.platformLifecycle.events.find((r) => r.event === "binding-observation"))); });
+          reject((e) => { e.steps.push(structuredClone(e.steps[0])); });
+          reject((e, r) => { r.dispatchStartedAt = r.bindingWindow.startedAt; });
           const mutate = (change) => { const saved = structuredClone(discovered); change(saved.bindingProof.links); assert.equal(replayBindingProof(saved, activeArtifact), false); };
           mutate((links) => { links.hooks[1].current = true; });
           mutate((links) => { links.hooks[0].reducer = links.hooks[0].target; });
@@ -163,15 +197,26 @@ test("production Next: immutable native page links and independently POSTs reque
             while (!fiber.memoizedProps?.record) fiber = fiber.return;
             fiber.memoizedState.next.memoizedState.current = true;
           });
-          const guarded = await observer.capture(".marketplace__alert form", page.url());
+          const guardRow = { action: { id: "guarded-submit" }, at: performance.now() - evidence.clock.startedAt };
+          evidence.steps.push(guardRow);
+          guardRow.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources,
+            { instance: evidence.bindingInstance, case: "production-native-control", action: guardRow.action.id });
+          const guarded = await observer.capture(".marketplace__alert form", page.url(), guardRow.bindingWindow);
           assert.equal(guarded.outcome, "observed", guarded.reason);
           assert.equal(guarded.receipt.hooks[1].current, true);
           assert.equal(discoverReactEndpoint([guarded.candidate], guarded.linked), null, "A live set pending ref must not attest unconditional dispatch");
+          await finishBindingWindow(lifecycle, guardRow.bindingWindow, null);
+          guardRow.dispatchStartedAt = performance.now();
           await form.locator('button[type="submit"]').click(); await page.waitForTimeout(250);
+          guardRow.resourcesAtDOM = await resources.checkpoint();
           assert.equal(posts.length, 1, "The actual native guard returns without a POST");
+          await lifecycle.finishObservation({ observationMs: 0 }); evidence.platformLifecycle = lifecycle.snapshot();
+          guardRow.formBefore = { enhancement: structuredClone(discovered) };
+          assert.equal(replayBindingProof(guardRow.formBefore.enhancement, activeArtifact), true, "An intact earlier proof still structurally replays: the former gap");
+          assert.equal(replayActionBinding(guardRow.formBefore.enhancement, activeArtifact, evidence, guardRow, "production-native-control"), false, "The earlier intact proof cannot attest the guarded action");
         }
       }
-    } finally { await observer.close(); await context.close(); }
+    } finally { await observer.close(); await context.close(); await lifecycle.close(); }
     });
   } finally {
     if (browser) await browser.close(); await owned.cleanup();

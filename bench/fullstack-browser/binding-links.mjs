@@ -5,7 +5,21 @@ import { effectFreeNames } from "./binding-effects.mjs";
 import { bindingRealm } from "./binding-intrinsics.mjs";
 import { emittedModules, reactContract } from "./binding-modules.mjs";
 import ts from "typescript";
+import { performance } from "node:perf_hooks";
 const observers = new WeakMap();
+export async function observeFormConstruction(cdp, documentNode, windowObject, group) {
+  const startedAt = performance.now();
+  const documentObject = (await cdp.send("DOM.resolveNode", { nodeId: documentNode, objectGroup: group })).object;
+  assert.ok(documentObject?.objectId && windowObject?.objectId, "Native form event targets unavailable");
+  const targets = [];
+  for (const [kind, objectId, depth] of [["document-tree", documentObject.objectId, -1], ["window", windowObject.objectId, 0]]) {
+    const { listeners } = await cdp.send("DOMDebugger.getEventListeners", { objectId, depth, pierce: true });
+    assert.ok(Array.isArray(listeners) && listeners.length <= 8192, "Native form event inventory unavailable/exceeds bound");
+    targets.push({ kind, listeners: listeners.filter((l) => l.type === "formdata").map((l) => ({ type: l.type,
+      useCapture: l.useCapture, backendNodeId: l.backendNodeId ?? null, scriptId: l.scriptId, lineNumber: l.lineNumber, columnNumber: l.columnNumber })) });
+  }
+  return { startedAt, finishedAt: performance.now(), outcome: targets.every((t) => t.listeners.length === 0) ? "absent" : "present", targets };
+}
 // CDP own descriptors, not a JS sparse array: array iteration skips holes.
 export function denseBindingEntries(descriptors) {
   const lengths = descriptors.filter((p) => p.name === "length"), length = lengths[0];
@@ -22,8 +36,8 @@ export function denseBindingEntries(descriptors) {
     const row = indexed.get(String(i)); assert.ok(row, "Sparse native array unsupported"); return row;
   });
 }
-export async function observeBindingLinks(cdp, selector, base) {
-  return observers.get(cdp)?.capture(selector, base) ?? { outcome: "unknown", reason: "Immutable emitted binding artifact/native observer unavailable" };
+export async function observeBindingLinks(cdp, selector, base, window = null) {
+  return observers.get(cdp)?.capture(selector, base, window) ?? { outcome: "unknown", reason: "Immutable emitted binding artifact/native observer unavailable" };
 }
 
 // Installed by the harness before application scripts, not supplied by the page.
@@ -56,10 +70,17 @@ export function installBindingIntrinsics() {
 }
 
 export class BindingLinkObserver {
-  constructor(cdp, artifact) { this.cdp = cdp; this.artifact = artifact; this.scripts = new Map(); this.failures = []; }
+  constructor(cdp, artifact) { this.cdp = cdp; this.artifact = artifact; this.scripts = new Map(); this.contexts = new Map(); this.failures = []; }
   async enable() {
     this.onScript = (row) => this.scripts.set(row.scriptId, { scriptId: row.scriptId, url: row.url, executionContextId: row.executionContextId });
     this.cdp.on("Debugger.scriptParsed", this.onScript);
+    this.onContext = ({ context }) => this.contexts.set(context.id, { uniqueId: context.uniqueId, frame: context.auxData?.frameId, default: context.auxData?.isDefault === true });
+    this.onDestroyed = (e) => this.contexts.delete(e.executionContextId);
+    this.onCleared = () => this.contexts.clear();
+    this.cdp.on("Runtime.executionContextCreated", this.onContext);
+    this.cdp.on("Runtime.executionContextDestroyed", this.onDestroyed);
+    this.cdp.on("Runtime.executionContextsCleared", this.onCleared);
+    await this.cdp.send("Runtime.enable");
     await this.cdp.send("Page.enable");
     await this.cdp.send("Debugger.enable");
     this.init = (await this.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(${installBindingIntrinsics.toString()})()` })).identifier;
@@ -68,12 +89,16 @@ export class BindingLinkObserver {
   async close() {
     observers.delete(this.cdp);
     if (this.onScript) this.cdp.off("Debugger.scriptParsed", this.onScript);
+    for (const [event, listener] of [["Runtime.executionContextCreated", this.onContext], ["Runtime.executionContextDestroyed", this.onDestroyed], ["Runtime.executionContextsCleared", this.onCleared]])
+      if (listener) this.cdp.off(event, listener);
     if (this.init) await this.cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: this.init });
     // Other lifecycle observers own the CDP session; do not disable their domains.
   }
-  async capture(selector, base) {
-    const group = `binding-links-${randomUUID()}`, cdp = this.cdp;
+  async capture(selector, base, window = null) {
+    const group = `binding-links-${randomUUID()}`, cdp = this.cdp, startedAt = performance.now();
     try {
+      const nativeClock = async () => (await cdp.send("Performance.getMetrics")).metrics.find((m) => m.name === "Timestamp")?.value;
+      const nativeStartedAt = window ? await nativeClock() : null;
       const index = indexBindingArtifact(this.artifact), functions = new Map(), checkedScripts = new Map(), pending = [], identities = [];
       const modules = emittedModules(index), callableInstances = new Map();
       let nodes = 0;
@@ -88,6 +113,17 @@ export class BindingLinkObserver {
       };
       const global = await cdp.send("Runtime.evaluate", { expression: "globalThis", objectGroup: group, silent: true });
       const realm = bindingRealm(global.result.objectId);
+      const context = this.contexts.get(realm.context);
+      const readScope = async () => {
+        const answer = await cdp.send("Runtime.evaluate", { expression: "({realm:globalThis.__fullstackBrowserAudit?.checkpoint()?.realm,scope:globalThis.__fullstackBrowserAudit?.checkpoint()?.scope})",
+          uniqueContextId: context.uniqueId, returnByValue: true, silent: true });
+        assert.ok(!answer.exceptionDetails, "Binding resource identity unavailable"); return answer.result.value;
+      };
+      if (window) {
+        assert.ok(context?.default && context.uniqueId && context.uniqueId === window.native.uniqueId && context.frame === window.native.frame
+          && realm.context === window.native.context, "Binding native unique context changed");
+        assert.deepEqual(await readScope(), { realm: window.resources.realm, scope: window.resources.scope }, "Binding resource scope changed");
+      }
       const box = await data(global.result.objectId, "__cortenBindingIntrinsics$v1"), snapshot = await properties(box.objectId);
       const intrinsic = new Map(snapshot.result.filter((p) => p.value?.objectId).map((p) => [p.name, p.value]));
       const same = async (a, b, label) => {
@@ -311,6 +347,19 @@ export class BindingLinkObserver {
         const supported = ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(row.nodeName) && !(row.nodeName === "INPUT" && get("type")?.toLowerCase() === "file");
         Object.defineProperty(formDataFields, name, { value: supported && formDataFields[name] !== "unknown" ? "string" : "unknown", enumerable: true, configurable: true });
       }
+      const constructionControls = [];
+      const descendantsForConstruction = new Set((await cdp.send("DOM.querySelectorAll", { nodeId: found.nodeId, selector: "*" })).nodeIds);
+      const associatedForConstruction = formId ? (await cdp.send("DOM.querySelectorAll", { nodeId: document.root.nodeId, selector: "[form]" })).nodeIds : [];
+      const constructionNodes = new Set([found.nodeId, ...descendantsForConstruction, ...associatedForConstruction]);
+      assert.ok(constructionNodes.size <= 128, "Native form construction control inventory exceeds supported bound");
+      for (const nodeId of constructionNodes) {
+        const row = (await cdp.send("DOM.describeNode", { nodeId, depth: 0 })).node, attrs = row.attributes ?? [], formAt = attrs.indexOf("form");
+        if (nodeId !== found.nodeId && formAt >= 0 && attrs[formAt + 1] !== formId) continue;
+        constructionControls.push({ backendNodeId: row.backendNodeId, name: row.localName, customized: attrs.includes("is"),
+          shadow: Boolean(row.shadowRoots?.some((root) => root.shadowRootType !== "user-agent")) });
+      }
+      const formConstruction = { ...await observeFormConstruction(cdp, document.root.nodeId, global.result, group),
+        form: constructionControls[0].backendNodeId, controls: constructionControls };
       const actionAt = attributes.indexOf("action"), action = new URL(actionAt >= 0 ? attributes[actionAt + 1] : base, base).href;
       const candidate = { handlerSource: bindingFunctionText(submit), componentSource: bindingFunctionText(root), recordId: id, locale,
         action, base, basis: "mounted-react-emitted-module-and-native-scope-links" };
@@ -344,7 +393,21 @@ export class BindingLinkObserver {
       }
       const receipt = { schema: "native-binding-links/v1", artifactSha256: this.artifact.sha256, component: owner.function, handler: handler.function,
         recordId: id, locale, props, realmObjectId: global.result.objectId, executionContextId: realm.context,
-        formDataFields, hooks, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
+        formConstruction, formDataFields, hooks, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
+      if (window) {
+        assert.equal(formConstruction.form, window.form.backendNodeId, "Binding mounted form changed");
+        const currentDocument = await cdp.send("DOM.getDocument", { depth: 0 });
+        const currentForm = await cdp.send("DOM.querySelector", { nodeId: currentDocument.root.nodeId, selector });
+        assert.equal((await cdp.send("DOM.describeNode", { nodeId: currentForm.nodeId, depth: 0 })).node.backendNodeId,
+          window.form.backendNodeId, "Binding form replaced during capture");
+        assert.deepEqual(this.contexts.get(realm.context), context, "Binding context changed during capture");
+        assert.deepEqual(await readScope(), { realm: window.resources.realm, scope: window.resources.scope }, "Binding resource scope changed during capture");
+        const nativeFinishedAt = await nativeClock();
+        receipt.observation = { id: randomUUID(), window: window.id, instance: window.instance, case: window.case, action: window.action,
+          startedAt, finishedAt: performance.now(), nativeStartedAt, nativeFinishedAt,
+          context: realm.context, uniqueId: context.uniqueId, frame: context.frame, realm: window.resources.realm, scope: window.resources.scope,
+          form: formConstruction.form };
+      }
       return { candidate, receipt, linked: { artifact: this.artifact, receipt }, outcome: "observed" };
     } catch (error) { return { outcome: "unknown", reason: error.message }; }
     finally { await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }); }

@@ -22,7 +22,7 @@ const truth = (v) => {
 function join(a, b) {
   if (!a || !b) return { kind: "unknown" };
   if (a.kind !== b.kind) return { kind: "union", alternatives: [a, b] };
-  if (a.kind === "array") return { kind: "array", fresh: a.fresh && b.fresh, items: [...a.items, ...b.items] };
+  if (a.kind === "array") return { kind: "array", fresh: a.fresh && b.fresh, indexExact: false, items: [...a.items, ...b.items] };
   if (a.kind === "object" || a.kind === "borrowed") return { kind: a.kind, fields: Object.fromEntries([...new Set([...Object.keys(a.fields), ...Object.keys(b.fields)])].map((k) => [k, join(a.fields[k] ?? nil, b.fields[k] ?? nil)])) };
   if (a.kind === "scalar") return scalar(a.type === b.type ? a.type : "unknown", a.value === b.value ? a.value : undefined);
   return JSON.stringify(a) === JSON.stringify(b) ? a : { kind: "unknown" };
@@ -163,7 +163,10 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       if (["__proto__", "prototype", "constructor"].includes(key)) fail("Unsupported prototype property");
       if (["object", "borrowed"].includes(object.kind)) return object.fields[key] ?? nil;
       if (object.kind === "array" && key === "length") return scalar("number");
-      if (object.kind === "array" && /^\d+$/.test(key)) return object.items[Number(key)] ?? object.items[0] ?? { kind: "unknown" };
+      if (object.kind === "array" && /^(?:0|[1-9]\d*)$/.test(key)) {
+        if (object.indexExact === false || !Object.hasOwn(object.items, key)) fail("Unproved own array index/inherited lookup");
+        return object.items[Number(key)];
+      }
       if (object.kind === "intrinsic" && object.name === "Intl" && ["NumberFormat", "PluralRules"].includes(key)) return { kind: "intrinsic", name: `Intl.${key}` };
       return fail(`Unproved property receiver ${object.kind}.${key}`);
     };
@@ -419,11 +422,19 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         if (ts.isPropertyAccessExpression(callee) && !callee.questionDotToken) {
           const receiver = expression(callee.expression, env, entry), method = callee.name.text;
           if (receiver.kind === "array" && ["map", "filter", "slice", "sort"].includes(method)) {
-            if (method === "slice") { if (!args.every(primitive)) fail("Unproved slice coercion"); return { ...receiver, fresh: true }; }
+            if (method === "slice") {
+              if (args.length > 2 || !args.every((v) => v.kind === "scalar" && v.type === "number" && Number.isSafeInteger(v.value))) fail("Unproved slice bounds/coercion");
+              return { ...receiver, fresh: true, items: receiver.indexExact === false ? receiver.items : receiver.items.slice(...args.map((v) => v.value)) };
+            }
             if (args.length !== 1 || args[0].kind !== "function" || method === "sort" && !receiver.fresh) fail("Unproved array callback/freshness");
-            const items = receiver.items.length ? receiver.items : [{ kind: "unknown" }];
-            const output = items.map((item) => invoke(args[0], method === "sort" ? [item, item] : [item, scalar("number")]));
-            return { kind: "array", fresh: true, items: method === "map" ? output : receiver.items };
+            const output = receiver.items.map((item) => invoke(args[0], method === "sort" ? [item, item] : [item, scalar("number")]));
+            if (method === "filter") {
+              const known = output.every((v) => truth(v) !== null);
+              return { kind: "array", fresh: true, indexExact: receiver.indexExact !== false && known,
+                items: receiver.items.filter((_, i) => truth(output[i]) !== false) };
+            }
+            return { kind: "array", fresh: true, indexExact: method !== "sort" && receiver.indexExact !== false,
+              items: method === "map" ? output : receiver.items };
           }
           if (receiver.kind === "scalar" && receiver.type === "string" && method === "startsWith" && args.length === 1 && primitive(args[0])) return scalar("boolean");
           if (receiver.kind === "intl" && ["format", "select"].includes(method) && args.length === 1 && primitive(args[0])) return scalar("string");
