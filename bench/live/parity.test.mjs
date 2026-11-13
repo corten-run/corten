@@ -84,6 +84,35 @@ test("Topcoat registration binds its native wire without upgrading historical in
   assert.doesNotMatch(manifest, /^opt-level\s*=\s*[01]\s*$/m);
 });
 
+test("Topcoat shared wire binding retains native resume and overflow resources", () => {
+  const region = "0123456789abcdef0123456789abcdef";
+  const resources = { subscriptions: 1, connections: 1, pendingTasks: 1, queueLimit: 2,
+    queueEvents: 0, queuePeak: 0, historyLimit: 4, historyEvents: 0, historyPeak: 0 };
+  const frame = (message, snapshot = false) => {
+    const slot = Buffer.from(JSON.stringify(message)).toString("base64");
+    let html = `<section id="native-screen" data-through="0" data-serial="${message.serial}"><output id="native-message" data-message="${slot}" hidden=""></output></section>`;
+    if (snapshot) html = `<!--::topcoat::region::start(${region})-->${html}<!--::topcoat::region::end(${region})-->`;
+    return { kind: "native-websocket-received", requestId: "socket-1", response: { opcode: 1,
+      payloadData: JSON.stringify({ run: 1, frame: { t: snapshot ? "snapshot" : "swap", region, html } }) } };
+  };
+  const ready = { kind: "ready", serial: 1, from: 0, status: "accepted", resources };
+  const saturated = { ...resources, queueEvents: 2, queuePeak: 2 };
+  const overflow = { kind: "overflow", serial: 2, outcome: "resnapshot", resources: saturated };
+  const network = [frame(ready, true), frame(overflow)];
+  assert.deepEqual(wireResumes(network, "topcoat-live"), [{ from: 0, status: "accepted" }]);
+  assert.deepEqual(wireResources(network, "topcoat-live"), [resources, saturated]);
+  for (const invalid of [{ ...ready, from: -1 }, { ...ready, status: "invented" },
+    { ...ready, resources: undefined }, { ...ready, resources: { ...resources, subscriptions: -1 } }]) {
+    assert.throws(() => wireResumes([frame(invalid, true)], "topcoat-live"));
+  }
+  for (const invalid of [{ ...overflow, outcome: "drop" }, { ...overflow, resources: undefined },
+    { ...overflow, resources: { ...saturated, queueEvents: 0 } }]) {
+    assert.throws(() => wireResources([frame(ready, true), frame(invalid)], "topcoat-live"));
+  }
+  assert.deepEqual(wireResumes([{ kind: "request", body: JSON.stringify(ready) }], "topcoat-live"), []);
+  assert.deepEqual(wireResources([{ kind: "request", body: JSON.stringify(overflow) }], "topcoat-live"), []);
+});
+
 test("native Feed limits require an explicit equal-work alternative, never a hidden default", () => {
   assert.equal(workloadFor().eventCount, 24);
   assert.equal(settingsFor("live-delivery", "slow-reader").queueLimit, 2);

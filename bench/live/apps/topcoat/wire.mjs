@@ -50,9 +50,28 @@ function messages(network) {
       assert.equal(new Set(s.rows.map(row => row.id)).size, s.rows.length);
       assert.deepEqual(s.work, { reads: 1, rows: s.rows.length });
       assert.equal(s.through, through);
-    } else assert.ok(['ready', 'overflow'].includes(message.kind), 'unknown native diagnostic kind');
+    } else {
+      assert.ok(['ready', 'overflow'].includes(message.kind), 'unknown native diagnostic kind');
+      const resources = message.resources;
+      assert.ok(resources && typeof resources === 'object' && !Array.isArray(resources), 'native resource envelope missing');
+      for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueLimit', 'queueEvents', 'queuePeak',
+        'historyLimit', 'historyEvents', 'historyPeak']) {
+        assert.ok(Number.isSafeInteger(resources[key]) && resources[key] >= 0, `invalid native resource ${key}`);
+      }
+      if (message.kind === 'ready') {
+        assert.ok(Number.isSafeInteger(message.from) && message.from >= 0, 'native resume cursor required');
+        assert.ok(['accepted', 'expired'].includes(message.status), 'native resume status required');
+      } else {
+        assert.equal(message.outcome, 'resnapshot');
+        assert.ok(resources.queueEvents > 0, 'native overflow must retain queue saturation');
+      }
+    }
     return [message];
   });
 }
 export const wireEvents = network => messages(network).filter(m => m.kind === 'event').map(m => m.event);
 export const wireSnapshots = network => messages(network).filter(m => m.kind === 'snapshot').map(m => m.snapshot);
+export const wireResumes = network => messages(network).filter(m => m.kind === 'ready')
+  .map(({ from, status }) => ({ from, status }));
+export const wireResources = network => messages(network).filter(m => ['ready', 'overflow'].includes(m.kind))
+  .map(m => m.resources);
