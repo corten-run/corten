@@ -2711,7 +2711,7 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
 | `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
-| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed`, and the router's turned into another status, or given a body, by a middleware keeps what the middleware wrote | 501 |
+| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed`; the router's turned into another status, or given a body that is not plain text, by a middleware keeps what the middleware wrote, a plain-text body is `Rejected` with status 501, and an empty body of unknown size (a wrapping or streaming middleware) is sent as a bare 501 | 501 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
@@ -2734,8 +2734,11 @@ method, as it is for a method the app does implement. Only a request that reache
 of Corten's own code when measured, [design Choice 25](../design.md#choice-axum-router), Stands on). Such a 501 is a
 refusal of a method the app does not implement, not a failure: Corten does not log it as an
 error. Scanners send `PROPFIND`, `TRACE` and made-up methods to any site, so these raise a
-proxy's or a CDN's 5xx rate. A CDN's stock 5xx alert cannot tell them apart; one built from
-access logs leaves out `status = 501 AND method not in the app's served methods` (the methods
+proxy's or a CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+`HandleTransientHttpError`, .NET's standard resilience handler) retries them unless told not
+to. CloudFront's stock `5xxErrorRate` and Cloudflare's error-rate notifications cannot tell them
+apart, since neither filters by method (Cloudflare's Monitors may; the deploy guide says what to
+check); an alert built from access logs leaves out `status = 501 AND method not in the app's served methods` (the methods
 its routes name, with `GET`, `HEAD` and `OPTIONS`), which hides neither a handler's `501` to
 a method it serves nor any other 5xx. An app with an `any` route answers no such `501` and
 leaves nothing out ([Deploying](deploy.md#monitoring)).

@@ -421,10 +421,13 @@ pub enum Failure {
     WrongMethod,
     /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
     /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): the router's
-    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this, and only while a middleware
-    /// has not turned it into another status or given it a body of its own; a `501` a handler or
-    /// a middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is
-    /// [`Failure::Failed`].
+    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this, and only while its body is
+    /// still empty with a size known to be zero and a middleware has not turned it into another
+    /// status. A middleware's body that is not plain text is kept as written; a plain-text one is
+    /// [`Failure::Rejected`] with status 501, as a handler's plain-text `501` is; an empty body
+    /// of unknown size (a wrapping or streaming middleware) is sent as a bare 501 with no error
+    /// page. A `501` a handler or a middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the
+    /// bare status) is [`Failure::Failed`].
     UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
@@ -2696,7 +2699,8 @@ async fn page_or_error<S: crate::app::Steps>(
     let empty_error = res.body().size_hint().exact() == Some(0);
     // The router's mark counts only while its empty `501` is still the answer: a middleware that
     // turned it into another status, or wrote a body of its own, answered it itself, and that
-    // answer is kept as on the JSON path.
+    // answer is kept as on the JSON path (a plain-text body as a rejection, below; an empty one of
+    // unknown size as it is).
     let cause = res
         .extensions()
         .get::<Cause>()

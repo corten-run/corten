@@ -212,13 +212,18 @@ scanner's made-up method) with `501 Not Implemented`, as RFC 9110 9.1 says, at a
 ([Error pages](app.md#error-pages)). It is a refusal, not a failure: the app does not log it as an
 error. A scan therefore raises a proxy's or a CDN's 5xx rate.
 
-A CDN's stock 5xx alert cannot leave these out. CloudFront's `5xxErrorRate` metric has no
-dimension but `DistributionId` and `Region`
+CloudFront's stock 5xx metric cannot leave these out: `5xxErrorRate` has no dimension but
+`DistributionId` and `Region`, so a CloudWatch alarm on it counts every `501`
 ([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
 and Cloudflare's Origin Error Rate alert filters only by domain and sensitivity, its Advanced
 Error Rate alert by status code and IP address
 ([Platform Notifications](https://developers.cloudflare.com/notifications/notification-available/));
-none of them filters by method. An alert that leaves these out is built from the access logs,
+none of these filters by method. Cloudflare's Monitors run a SQL query with filters by field
+([Monitors](https://developers.cloudflare.com/notifications/monitors/)) and may be a built-in way
+to filter by method, but whether their `events.httpRequests` dataset carries the method is not
+said on the pages read here; check its columns
+([Datasets](https://developers.cloudflare.com/analytics/sql-api/datasets/)) before relying on it.
+Otherwise an alert that leaves these out is built from the access logs,
 which carry the method and the status (CloudFront's `cs-method` and `sc-status`,
 [Standard logging reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logs-reference.html);
 Cloudflare Logpush's `ClientRequestMethod` and `EdgeResponseStatus` or `OriginResponseStatus`,
@@ -231,7 +236,14 @@ Both halves matter. Nothing on the wire marks the router's `501` apart from anot
 handler's or a middleware's `501` has no `Allow` either, so leaving out every `501` would also
 hide the app's own: a handler's `Error` at 501 is a failure, logged as an error as any 5xx
 `Error` is. And leaving out every 5xx to a method outside the list would hide more than the
-router's answer, such as a middleware's `503` given before routing. With both, the filter hides
-only a `501` to a method no route serves, which only the router or a middleware answers; a list
-that falls behind a new route hides that route's `501`s, never its `500`s. An app with a route
-that takes every method (`any`, a relay) answers no such `501`, so it leaves nothing out.
+router's answer, such as a maintenance middleware's `503`, which can answer any method. With
+both, the filter hides only a `501` to a method no route serves, which only the router or a
+middleware answers; a list that falls behind a new route hides that route's `501`s, never its
+`500`s. An app with a route that takes every method (`any`, a relay) answers no such `501`, so
+it leaves nothing out.
+
+A client that retries every 5xx by default retries these `501`s too, where it did not retry the
+`405` an older Corten answered: Polly's `HandleTransientHttpError` and the retry of .NET's
+standard resilience handler (Microsoft.Extensions.Http.Resilience) both handle any status of 500
+or more. Each takes a setting for which answers to retry; a client of the app that sends a method
+no route serves can leave 501 out of it.

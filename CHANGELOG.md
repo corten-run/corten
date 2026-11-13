@@ -271,9 +271,11 @@ Corten is pre-1.0, so any minor version may change the API.
   server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
   it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
   where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
-  CDN's 5xx rate. The app does not log it as an error. A CDN's stock 5xx alert (CloudFront's
-  `5xxErrorRate`, Cloudflare's error-rate alerts) cannot leave it out, since none filters by
-  method; the deploy guide says how to build one from access logs that leaves out
+  CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+  `HandleTransientHttpError`, .NET's standard resilience handler) retries it. The app does not
+  log it as an error. CloudFront's `5xxErrorRate` and Cloudflare's error-rate notifications
+  cannot leave it out, since neither filters by method (Cloudflare's Monitors may, not verified
+  here); the deploy guide says how to build one from access logs that leaves out
   `status = 501 AND method not in the app's served methods`, which hides neither the app's own
   501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
   to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
@@ -283,7 +285,9 @@ Corten is pre-1.0, so any minor version may change the API.
   (the authority form a client sends), which names no path. A browser gets the error page as the
   new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
   page waits for the layout's reads (only the router's 501 is, while it is still its empty 501: a
-  middleware that turns it into another status, or gives it a body, keeps what it wrote; a 501 a handler
+  middleware that turns it into another status, or gives it a body that is not plain text, keeps
+  what it wrote, a plain-text body is `Failure::Rejected` with status 501 for a browser and JSON
+  for an API's client, and an empty body of unknown size is sent as a bare 501; a 501 a handler
   or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
   `Failure::Failed`), and
   an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
@@ -292,7 +296,7 @@ Corten is pre-1.0, so any minor version may change the API.
   within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
   fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
   355 to 481 more as a 501, which allocates the router's marker
-  ([design Choice 25](docs/design.md#choice-axum-router), step 1)
+  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
   ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a

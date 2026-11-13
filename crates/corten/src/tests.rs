@@ -13629,7 +13629,7 @@ mod layout_reads {
     /// logged.
     #[cfg(feature = "log")]
     #[tokio::test]
-    async fn the_routers_501_is_not_logged_as_an_error() {
+    async fn a_501_status_alone_is_not_logged_as_an_error() {
         let lines = Lines(Arc::default());
         let writer = lines.clone();
         let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
