@@ -165,7 +165,7 @@ qualification contract; retain original cgroup responses bound to participant ID
 at both boundaries, and full restart observations. Also retain credential-safe native
 response/extraction evidence that independently binds normalized page/JSON/state
 facts, without generating expected markup or trusting supplied success flags.
-Producer checkpoint `77c3fe982` adds preliminary sidecars but is not consumed or
+The preliminary producer sidecars are not consumed or
 admitted by this v1 verifier; schema/acceptance extensions require separate review.
 Do not persist session cookies
 or CSRF values, manufacture missing observations, or relabel old v1 summaries as

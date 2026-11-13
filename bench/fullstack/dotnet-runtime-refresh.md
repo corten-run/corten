@@ -22,7 +22,7 @@ There was one comment. Independently fetched official metadata before changing p
 | `mcr.microsoft.com/dotnet/runtime-deps:11.0.0` | `sha256:6d3e208d8f5ba599ad9e80c615b5c1a2e355fd903f585cb07342dde29441675a` |
 
 SDK `dotnet --info`: SDK 11.0.100, MSBuild 18.12.2-1.26529.118,
-host/runtime 11.0.0, commit `297acf930f`, Ubuntu 26.04, linux-x64.
+host/runtime 11.0.0, upstream .NET runtime commit 297acf930f, Ubuntu 26.04, linux-x64.
 The Razor production image independently reports Microsoft.AspNetCore.App and
 Microsoft.NETCore.App 11.0.0, with no SDK installed.
 
@@ -37,8 +37,8 @@ integration are outside this patch.
 
 The tracked app directory Git tree IDs after the refresh are:
 
-- `apps/aspnet`: `b19919a90e2882ebca953c95e29e4c63e6dd217b`.
-- `apps/aspnet-aot`: `1dfaf09ec662f02fa210b243f84d8ab07ad7105e`.
+- `apps/aspnet`: `git-tree:b19919a90e2882ebca953c95e29e4c63e6dd217b`.
+- `apps/aspnet-aot`: `git-tree:1dfaf09ec662f02fa210b243f84d8ab07ad7105e`.
 
 Actual production image IDs, built from each app's normal Dockerfile with `--pull`:
 
@@ -104,8 +104,8 @@ asset substitutions, not production qualifications. No meta configuration was
 added to the app. `csp-control.json` retains all three cases and identical policies.
 
 The old base and .NET 11 branch have identical `Program.cs` blob
-`1f476cddbd9365794889306baf5136126c7c2d46` and layout blob
-`a22579d36843b71664f886b4be194debfb2d5082`; all pages and browser scripts are
+`git-blob:1f476cddbd9365794889306baf5136126c7c2d46` and layout blob
+`git-blob:a22579d36843b71664f886b4be194debfb2d5082`; all pages and browser scripts are
 unchanged. The original image's htmx asset SHA-256 is
 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`,
 the old base's exact Docker pin. The fullstack README's matched-tier ASP.NET
@@ -123,11 +123,10 @@ matched the owner's pin:
 No extra app workaround, CSP relaxation, htmx asset edit or markup edit is part
 of this .NET branch.
 
-A separate ignored production build context combines runtime commit
-`166b5437a35ca4b288f83aeac22277ac01bab1ce` with only the ASP.NET asset delta
-from `57764546bcc860aad36de48ca8245ca393306020` and the inherited-boost layout
-from `90aa7e2885d82a35cd0a28ede7c8813b38fc32a5`. Its layout is exactly the
-owner's blob `c079a5291f94f6e8987bc3fac1acb6b2f5b7dc2a`. The normal production
+A separate ignored production build context combines the runtime trees above
+with only the ASP.NET htmx 4 asset delta and inherited-boost layout from the
+htmx refresh. Its layout is exactly the
+owner's blob `git-blob:c079a5291f94f6e8987bc3fac1acb6b2f5b7dc2a`. The normal production
 Dockerfile built successfully using SDK 11.0.100 and ASP.NET 11.0.0 at the same
 MCR digests above; no old runtime was built. Control image:
 `sha256:354441ea169b84cbe5e18a6f43a4aa6d9eead7fbd2218b3171b5e33fd3fae31f`.
@@ -172,13 +171,10 @@ container. This harness race is not an application result.
 
 ## Separate Native Live Patch
 
-The native-live pin refresh is separate commit
-`24258f52e6aa4a874264e8d31363be0e28786e2f`, exactly one commit above parent
-`ff99dc292cd6b16acca56797ac431e9a77cb369e`. Apply that single commit or its
-one-commit format-patch, not the parent branch's unrelated history.
+The native-live pin refresh is a separate two-file patch.
 Only `bench/live/apps/aspnet/Dockerfile` and `LiveParity.csproj` change:
 SDK 11.0.100, ASP.NET 11.0.0, target net11.0. Program.cs remains blob
-`0b1a2d8564411d5c56213e58f78a590fdbc47fc1` from the parent.
+`git-blob:0b1a2d8564411d5c56213e58f78a590fdbc47fc1` from the parent.
 
 An isolated SDK 11.0.100 Release publish passed. Its generated runtimeconfig
 requires net11.0, Microsoft.NETCore.App 11.0.0 and Microsoft.AspNetCore.App 11.0.0.
