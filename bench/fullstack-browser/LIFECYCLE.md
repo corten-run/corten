@@ -62,3 +62,43 @@ zeros. Any lingering/unowned process, worker network work, same-realm post-retir
 DOM mutation or pending upstream work still blocks the relevant proof. Timing must end before
 harness teardown. No such variant is implemented or accepted here; the parent owns a separate
 shared-contract change and independent review.
+
+Complete target discovery starting before app execution, with no worker target in the app's
+browser context throughout the interval, could establish that worker-network coverage is not
+applicable. That is different from assuming unknown workers are absent. Existing targets,
+unknown browser-context ownership, discovery gaps and targets without terminal receipts need
+an explicit outcome; a persistent framework worker is not an automatic exemption. A final
+target inventory and peer-side stream/socket receipts are additional evidence endpoints, not
+currently implemented journal coverage.
+
+## No-JS request boundary
+
+The unchanged oracle currently requires every no-JS request to have transport `document`.
+Real no-JS Chromium also makes parser stylesheet requests and reports intentionally blocked
+script/module preloads. The raw ledger preserves resource type, content type, native failure,
+CSP/DOM preload evidence and completion; the strict exporter does not delete these requests.
+Thus admitting platform-destroyed retirement alone will not resolve this second mismatch.
+
+A separately reviewed request variant should distinguish native document navigation/form
+POSTs, parser assets and application fetch/router requests. All no-JS workload actions still
+need native documents and no application JS transport. Parser assets require actual resource
+and document/stylesheet provenance; intentionally disabled script preloads require the existing
+strict script-disabled/CSP/preload proof, not a general aborted-request exception. Keep every
+failed/unfinished request in the complete ledger, with its native outcome, and explicitly
+reject unrelated aborts, missing document errors, unbound data fetches and body-capture errors.
+
+## Bounded native observations
+
+`work/lifecycle/w25/summary.json` records four fixture profiles and 44 actual actions against
+clean Nuxt/React Router images built at `f1974c056`. Both React Router profiles and Nuxt mobile
+no-JS passed functional checks, not qualification. Nuxt JS retained a build-manifest request
+that did not complete within the action deadline. Its retired native form also issued an
+actual POST `/api/marketplace/item_1` during the detached event probe (status 200); the ledger
+retained one listener and one pending task. This is post-retirement application work to review
+at `bench/fullstack/apps/nuxt/app/pages/marketplace/[locale]/[id].vue` (`submitAlert`), separate
+from document-level framework infrastructure and the full-navigation contract boundary.
+
+The journal's old-unique-context probes observed context-not-found while DOM/resource/event
+probe fields for destroyed realms remained unavailable. `captures/manifest.json` validates all
+ten strict files with all 24 profiles retained; none is a fully captured passing group. No
+full matrix, comparative timing, readiness waiver or shared-oracle edit was performed.
