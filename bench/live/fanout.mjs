@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { verifyMeasurementBindings } from "./measurement.mjs";
 import { createLiveWorkload, liveSnapshot } from "../workloads/live.mjs";
-import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { wireEvents, wireSnapshots, verifyWireCapture } from "./wire.mjs";
+import { captureHttp, captureHtml } from "./native-http.mjs";
 import { verifyResources, verifyResourceBounds, verifyResourceLifecycle } from "./resources.mjs";
 
 export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile/v1", clients: [1, 2, 4],
@@ -71,6 +72,7 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
     for (const [i, r] of b.records.entries()) assert.ok(Number.isFinite(r.at) && r.at >= 0
       && (!i || r.at >= b.records[i - 1].at), "browser observation clock regressed");
     verifyResources(b.records, b.network, wire);
+    verifyWireCapture(b.network, b.records, wire);
     verifyResourceLifecycle(b.records, a.clients, a.settings);
     assert.deepEqual(b.failures, []);
     const events = b.records.filter((r) => r.kind === "event");
@@ -166,11 +168,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       for (const [event, kind] of [["Network.eventSourceMessageReceived", "native-sse"], ["Network.webSocketFrameReceived", "native-websocket-received"],
         ["Network.webSocketFrameSent", "native-websocket-sent"], ["Network.webSocketCreated", "native-websocket-created"], ["Network.loadingFinished", "received-bytes"]]) cdp.on(event, (e) => network.push({ kind, ...e }));
       page.on("pageerror", (e) => failures.push(e.message));
-      page.on("request", (r) => network.push({ kind: "request", method: r.method(), url: r.url(), body: r.postData() }));
-      page.on("response", (r) => {
-        const observation = { kind: "response", url: r.url(), status: r.status(), headers: r.headers() }; network.push(observation);
-        if (r.headers()["content-type"]?.includes("application/json")) pending.push(r.text().then((body) => { observation.body = body; }, (error) => { observation.bodyError = error.message; }));
-      });
+      captureHttp(page, network, pending, wire);
       await page.goto(base); await page.waitForFunction(() => !!window.liveApp);
       await page.evaluate((s) => window.liveApp.setup(s), settings);
       await page.evaluate(() => {
@@ -225,7 +223,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
     for (const r of readers) {
       await Promise.all(r.pending);
       browsers.push({ ...await r.page.evaluate(() => ({ records: window.liveApp.records, frames: window.livePaint.frames, timeOrigin: performance.timeOrigin })),
-        identity: r.identity, network: r.network, failures: r.failures, html: await r.page.content(), version: browser.version(),
+        identity: r.identity, network: r.network, failures: r.failures, html: await captureHtml(r.page, wire), version: browser.version(),
         costs: { performance: await r.cdp.send("Performance.getMetrics"), dom: await r.cdp.send("Memory.getDOMCounters") } });
     }
     return { clients, configuration, workload, settings, resources: { attached, delivered, released }, resourceObservations,
@@ -233,7 +231,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
   } catch (error) {
     error.evidence = { workload, settings, browsers: await Promise.all(readers.map(async (r) => ({
       network: r.network, failures: r.failures, records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []),
-      html: await r.page.content().catch(() => ""),
+      html: await captureHtml(r.page, wire).catch(() => ""),
     }))) };
     throw error;
   } finally { clearTimeout(deadline); await Promise.all(contexts.map((c) => c.close())); }

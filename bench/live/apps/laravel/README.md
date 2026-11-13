@@ -1,0 +1,107 @@
+# Native Laravel live recovery
+
+Independent Laravel/Livewire/Reverb implementation of the synthetic recoverable
+live workload. Shared-runner registration is separate from campaign admission,
+a performance result or full-group readiness.
+The fullstack Laravel marketplace application remains separate.
+Automatic reconnect has passed native wire/DOM/cleanup proof, but one unchanged
+2000ms deadline rerun missed its bound. That sensitivity remains open; a passing
+rerun is not a waiver. The original German marketplace finding is also open.
+
+## Native Path
+
+- Installed Livewire's ESM runtime, native component actions, Blade rendering,
+  keyed rows and Livewire morphing own the DOM. The browser bridge never renders
+  rows or imports the workload/oracle. Its observations read the actual DOM.
+- Installed Echo/Pusher use an actual Reverb WebSocket and channel. Every event
+  input crosses Reverb before the native Livewire action renders it. Native
+  subscription acknowledgements and server open/close callbacks supply lifecycle
+  evidence, not a second WebSocket implementation or EventSource substitute.
+- FrankenPHP/Octane and Reverb are separate processes. Laravel file-cache locks
+  protect cross-process synthetic state. Broadcast HTTP runs outside the state
+  lock; a separate publication lock preserves publisher/broadcast ordering.
+- Browser actions wait for the actual publisher HTTP acknowledgement before
+  asking Livewire to morph a delivery. Concurrent publishers are serialized.
+- Native state has acknowledged state plus at most one staged candidate. ACK,
+  reconnect and resnapshot compare actual DOM cursor/count/row-count with those
+  candidates. Snapshots preserve only observed applied effects, never turn source
+  rows into effects, and cannot accept arbitrary counters. Repeated ACKs do not
+  release unconsumed credit. Packets must match the original staged native
+  delivery; resumed readers have distinct identities so superseded packets cannot
+  mutate the new reader.
+- The actual automatic native subscription callback resumes from the current
+  observed cursor after initialization. Expired history and gaps resnapshot.
+  Resume reconciles staged DOM evidence before replaying events strictly after
+  that cursor. Re-rendering and acknowledging the already observed cursor first
+  added two unnecessary native Livewire HTTP requests on the recovery path.
+  Native duplicate controls still traverse Reverb and Livewire and suppress effects.
+
+## Bounds And Cleanup
+
+The two supported queue/history profiles are 2/4 and 1024/1025. Each reader has
+one inflight event, one bounded replay copy and one overflow notification; history
+and queue peaks are reported. There are at most 16 native connections/channels
+and retained clients. Configuration accepts at most 1000 initial rows; the tested
+workload uses five identities. These are synthetic application-state bounds, not
+a claim that all framework/socket buffers or arbitrary source growth are bounded.
+
+Random locked component identities isolate cookie-sharing tabs. Disconnect waits
+for that consumer's native reader/socket/task/queue release. Detach also forgets
+its retained candidate state. Unknown counts cannot establish zero resources.
+Aggregate resources and per-consumer resources are both checked by the tests.
+`nativeSocketBufferBytes` is explicitly null because Reverb's public API does not
+expose it. PHP memory/rusage and the native process inventory are observations,
+not an aggregate RSS measurement of all workers.
+
+Synthetic `/parity/*` controls are intentionally unauthenticated. Real Livewire
+actions retain native CSRF, locked properties and signed component snapshots;
+cross-site writes are rejected. This is a local benchmark app, not a production
+deployment or public service.
+
+## Verification
+
+From the repository root, build this directory's Dockerfile and run the image
+locally. Against its base URL:
+
+```sh
+docker build -t native-laravel-live:current bench/live/apps/laravel
+node --test bench/live/apps/laravel/test/wire.mjs
+node bench/live/apps/laravel/test/native-limits.mjs BASE
+node bench/live/apps/laravel/test/browser.mjs BASE
+node bench/live/apps/laravel/test/adversarial.mjs BASE
+node bench/live/apps/laravel/test/browser.mjs BASE native-feed normal,expired-cursor,slow-reader
+```
+
+Run `php test/store.php` and `php test/broker.php` inside the production image
+(mount the local `test/` directory when testing an already-built image).
+Test-only Event faking is confined to the store unit suite. The broker unit suite
+uses the installed native channel manager/server with a low-level socket double
+and checks actual pre-allocation bounds; the browser cap probe uses real sockets.
+Browser tests otherwise use real Reverb,
+Livewire HTTP, native morphs, HTTP writes/ACKs and independent DOM/oracle checks.
+`wire.mjs` extracts original native packets without sorting or manufacturing
+events. Browser raw receipts omit signed Livewire snapshots and CSRF material.
+
+See [test/receipts/README.md](test/receipts/README.md) for actual commands, results,
+fault controls, the preserved failed routed-close proof and limits. No shared
+runner, workload validator, original assertion or original deadline was changed.
+The shared runner registers this port as `laravel-livewire`. It retains native
+Livewire HTTP calls/effects and raw Reverb frames, binds their request/socket
+identities and origins to the inspected container, and checks both against actual
+DOM observations. Reverb overflow resources remain original wire evidence.
+Only reusable signed component snapshots, CSRF values and cookies are omitted;
+original-body digests/byte counts and unmodified effect HTML/dispatches remain.
+Historical captured inventories are not upgraded by registration.
+
+Production inputs were checked against official Packagist, npm, PHP, FrankenPHP,
+Node and Docker metadata on 2026-11-13: Laravel 13.42.0, Livewire 4.4.8, Reverb
+1.13.0, Octane 2.24.0, PHP 8.5.12, FrankenPHP 1.13.5, Node 26.13.1, Echo 2.6.3
+and Pusher 8.6.0. The new image needs its own checks; old-image passes do not apply.
+
+## Unreleased
+
+Completed the scaffold's native client/asset integration, staged recovery,
+publisher-ACK ordering, native lifecycle/resource reporting and app-local proofs.
+No general failed-Livewire-HTTP retry behavior or load/campaign qualification is
+claimed. Fresh independent review and the full repository check matrix remain
+outside this bounded owned-path checkpoint.

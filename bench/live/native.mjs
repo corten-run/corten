@@ -14,6 +14,13 @@ const legacyPorts = Object.freeze({
 
 // These are separate application ports, not historical price-forwarding endpoints.
 export const nativePorts = Object.freeze({ ...legacyPorts,
+  rails: { directory: "rails", transport: "Rails Turbo keyed DOM / Action Cable / bounded acknowledged reader queues",
+    image: "cb-parity-live-rails", wire: "rails-action-cable", wireModule: "./apps/rails/wire.mjs" },
+  phoenix: { directory: "phoenix", transport: "Phoenix LiveView keyed DOM / native Channels / bounded acknowledged reader queues",
+    image: "cb-parity-live-phoenix", wire: "phoenix-liveview", wireModule: "./apps/phoenix/wire.mjs" },
+  laravel: { directory: "laravel", transport: "Laravel Livewire native actions and Blade morphs / Echo Pusher Reverb / bounded acknowledged reader queues",
+    image: "cb-parity-live-laravel", wire: "laravel-livewire", wireModule: "./apps/laravel/wire.mjs",
+    topology: "FrankenPHP Octane two workers and Reverb; file cache and native broker HTTP; no shared renderer", buildTimeoutMs: 900000 },
   drogon: { directory: "drogon", transport: "Drogon WebSocketController / bounded acknowledged reader queues / browser WebSocket",
     image: "cb-parity-live-drogon", wire: "drogon-live", wireModule: "./apps/drogon/wire.mjs" },
   leptos: { directory: "leptos", transport: "Leptos hydrated keyed For / Axum SSE / Tokio bounded mpsc",

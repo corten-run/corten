@@ -11,13 +11,15 @@ import { liveCaptureSchema, liveContracts, validateLiveCapture } from "../worklo
 import { contractSha256, selectedApps } from "../workloads/registry.mjs";
 import { coverage } from "../workloads/evidence.mjs";
 import { inventory, nativePorts, portFor, scenarios, settingsFor, workloadFor } from "./native.mjs";
-import { wireEvents, wireSnapshots, wireResumes } from "./wire.mjs";
+import { wireEvents, wireSnapshots, wireResumes, verifyWireCapture } from "./wire.mjs";
+import { captureHttp, captureHtml } from "./native-http.mjs";
 import { negativeRequests, verifyIdentity, verifyScenario } from "./admission.mjs";
 import { inspectFormat, kernelCommand } from "./measurement.mjs";
 import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout } from "./fanout.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
+const nativeInstanceFormat = '{"Id":{{json .Id}},"Image":{{json .Image}},"NetworkSettings":{"Ports":{{json .NetworkSettings.Ports}}}}';
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function command(program, args, options = {}) {
@@ -64,14 +66,7 @@ export async function browserJourney(browser, base, workload, settings, port = {
     cdp.on("Network.webSocketFrameSent", (e) => network.push({ kind: "native-websocket-sent", ...e }));
     cdp.on("Network.webSocketCreated", (e) => network.push({ kind: "native-websocket-created", ...e }));
     cdp.on("Network.loadingFinished", (e) => network.push({ kind: "received-bytes", ...e }));
-    page.on("request", (r) => network.push({ kind: "request", at: performance.now(), method: r.method(), url: r.url(), body: r.postData() }));
-    page.on("response", (r) => {
-      const observation = { kind: "response", at: performance.now(), url: r.url(), status: r.status(), headers: r.headers() };
-      network.push(observation);
-      if (r.headers()["content-type"]?.includes("application/json")) {
-        observations.push(r.text().then((body) => { observation.body = body; }, (error) => { observation.bodyError = error.message; }));
-      }
-    });
+    captureHttp(page, network, observations, port.wire);
     page.on("pageerror", (e) => failures.push(e.message));
     const configured = await context.request.post(`${base}/parity/configure`, { data: { initial: workload.initial, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit } });
     assert.equal(configured.status(), 200, "native configure failed");
@@ -130,7 +125,7 @@ export async function browserJourney(browser, base, workload, settings, port = {
     const capture = { schema: liveCaptureSchema, contract: liveContracts[settings.group], records: await page.evaluate(() => window.liveApp.records) };
     const summary = validateLiveCapture(workload, capture, settings);
     assert.ok(wireEvents(network, port.wire).length > 0, "no actual native browser transport evidence");
-    return { configuration, controls, capture, summary, network, failures, html: await page.content(),
+    return { configuration, controls, capture, summary, network, failures, html: await captureHtml(page, port.wire),
       browser: { version: browser.version(), userAgent: await page.evaluate(() => navigator.userAgent) },
       browserCosts: { performance: await cdp.send("Performance.getMetrics"), dom: await cdp.send("Memory.getDOMCounters") },
       costs: await page.evaluate(() => ({ resources: performance.getEntriesByType("resource").map((r) => r.toJSON()),
@@ -138,7 +133,7 @@ export async function browserJourney(browser, base, workload, settings, port = {
   } catch (error) {
     error.evidence = { capture: { schema: liveCaptureSchema, contract: liveContracts[settings.group],
       records: page ? await page.evaluate(() => window.liveApp?.records ?? []).catch(() => []) : [] }, network, failures,
-      html: page ? await page.content().catch(() => "") : "" };
+      html: page ? await captureHtml(page, port.wire).catch(() => "") : "" };
     throw error;
   } finally { clearTimeout(deadline); await context.close(); }
 }
@@ -158,6 +153,19 @@ export function verifyArtifact(artifact, expected) {
   assert.equal(artifact.provenance.nativePort, nativePorts[expected.app]?.transport);
   assert.deepEqual(artifact.provenance.container, { nanoCpus: 1000000000, memory: 1073741824, memorySwap: 1073741824 }, "unreviewed native deployment budget");
   assert.equal(artifact.configuration.framework, expected.app);
+  if (port.wire === "laravel-livewire") {
+    const inspected = JSON.parse(artifact.provenance.instance.stdout);
+    assert.equal(inspected.Id, artifact.provenance.containerId);
+    assert.equal(inspected.Image, artifact.provenance.imageId);
+    const binding = inspected.NetworkSettings.Ports["8080/tcp"][0];
+    assert.equal(binding.HostIp, "127.0.0.1");
+    const origin = `http://127.0.0.1:${binding.HostPort}`;
+    for (const record of artifact.network.filter(record => ["request", "response", "native-livewire-response"].includes(record.kind))) {
+      assert.equal(new URL(record.url).origin, origin, "native HTTP origin differs from inspected container");
+    }
+    assert.deepEqual(artifact.provenance.instance.args, ["inspect", "--format", nativeInstanceFormat, artifact.provenance.containerId]);
+    assert.equal(artifact.provenance.instance.status, 0);
+  }
   assert.deepEqual(artifact.controls.map((r) => r.status), profile === "native-feed" ? [400, 400, 400, 400] : [400], "negative native publication control missing");
   assert.deepEqual(artifact.controls.map((r) => r.request), negativeRequests(artifact.workload, profile), "negative native publication control requests differ");
   assert.equal(artifact.provenance.sourceSha256, hash(JSON.stringify(artifact.provenance.sourceHashes)));
@@ -166,6 +174,7 @@ export function verifyArtifact(artifact, expected) {
   const summary = validateLiveCapture(artifact.workload, artifact.capture, artifact.settings);
   verifyScenario(artifact.capture.records, artifact.settings, wireResumes(artifact.network, port.wire));
   assert.deepEqual(artifact.summary, summary, "saved aggregate does not match raw capture");
+  verifyWireCapture(artifact.network, artifact.capture.records, port.wire);
   const received = wireEvents(artifact.network, port.wire);
   assert.ok(received.length > 0, "missing native browser evidence");
   assert.deepEqual(artifact.capture.records.filter((r) => r.kind === "event").map((r) => r.event), received,
@@ -208,7 +217,8 @@ export async function run({ group, out, apps: requested, build = false, round, p
     oracle: hash(await readFile(join(here, "../workloads/live.mjs"))),
     native: hash(await readFile(join(here, "native.mjs"))), wire: hash(await readFile(join(here, "wire.mjs"))),
     fanout: hash(await readFile(join(here, "fanout.mjs"))), resources: hash(await readFile(join(here, "resources.mjs"))),
-    admission: hash(await readFile(join(here, "admission.mjs"))), measurement: hash(await readFile(join(here, "measurement.mjs"))) };
+    admission: hash(await readFile(join(here, "admission.mjs"))), measurement: hash(await readFile(join(here, "measurement.mjs"))),
+    nativeHttp: hash(await readFile(join(here, "native-http.mjs"))) };
   const plan = { schema: "native-live-plan/v2", group, round: round ?? basename(out), startedAt: new Date().toISOString(), apps: selectedApps(group), requested: apps,
     profile, measurement: measure ? fanoutProfile : null,
     inventory: inventory(group, profile), workload, scenarios: scenarios(group), settings: scenarios(group).map((s) => settingsFor(group, s, profile)),
@@ -260,6 +270,8 @@ export async function run({ group, out, apps: requested, build = false, round, p
         assert.ok(up, "native app did not start within 15s");
         const provenance = { commit, diffSha256: hash(diff), code, contractSha256: contractSha256(group), sourceHashes, sourceSha256, imageSourceSha256,
           imageId, containerId: inspect.Id, nativePort: port.transport,
+          ...(port.wire === "laravel-livewire" ? { instance: { args: ["inspect", "--format", nativeInstanceFormat, inspect.Id], status: 0,
+            stdout: command("docker", ["inspect", "--format", nativeInstanceFormat, inspect.Id]) } } : {}),
           processTopology: port.topology ?? "one application process; no broker, database or shared renderer",
           processInventory: command("docker", ["top", name, "-eo", "pid,ppid,comm"]), container: {
             nanoCpus: inspect.HostConfig.NanoCpus, memory: inspect.HostConfig.Memory, memorySwap: inspect.HostConfig.MemorySwap,

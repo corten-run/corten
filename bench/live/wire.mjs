@@ -9,6 +9,10 @@ for (const port of Object.values(nativePorts)) if (port.wireModule) {
   bindings.set(port.wire, binding);
 }
 
+export function verifyWireCapture(network, records, wire) {
+  bindings.get(wire)?.verifyCapture?.(network, records);
+}
+
 export function wireResumes(network, wire = "event-sse") {
   if (bindings.has(wire)) {
     assert.equal(typeof bindings.get(wire).wireResumes, "function", "native resume wire binding required");
