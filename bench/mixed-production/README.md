@@ -183,6 +183,8 @@ the latter includes native discovery, CSRF, readbacks, parsing and observation o
 The existing cgroup v2 reader supplies CPU before/after deltas for app, injector and generator;
 the existing Docker stats sampler supplies timestamped CPU/memory samples. Missing or
 backwards counters, stopped/restarted/OOM participants and missing memory samples fail closed.
+Failed cleanup also blocks admission; a prior participant is never silently left running
+while the next candidate is timed.
 The shared sampler timestamps receipt, not the daemon's sampling clock. Buffered samples can
 share a timestamp; the metrics preserve and count collisions, require an observed clock span
 and reject backwards clocks rather than inventing sample spacing.
@@ -193,8 +195,10 @@ not prove saturation or turn observed throughput into capacity.
 
 `MIXED_PRODUCTION_APP_CPUS`, `MIXED_PRODUCTION_LOAD_CPUS` and
 `MIXED_PRODUCTION_API_CPUS` reuse existing disjoint CPU-set validation (quotas 1/4/2). Without
-explicit placement, observations stay diagnostic and `comparisonEligible` stays false. Three
-or more complete passes and every observed gate are required for comparison eligibility.
+explicit placement, observations stay diagnostic and `comparisonEligible` stays false.
+CPU-headroom denominators honor the smaller of quota and explicit CPU-set width, never the
+nominal quota alone when placement is narrower.
+Three or more complete passes and every observed gate are required for comparison eligibility.
 Explicit placement still does not establish an otherwise quiet or dedicated host. Do not
 publish comparative throughput claims from a concurrently loaded workstation.
 
@@ -265,3 +269,9 @@ reached the shorter diagnostic client deadline. The Corten build from `7e4bbfe` 
 the bounded native build window and stayed image-unavailable, not unsupported. These are
 functional observations of those exact commits, not production qualification or proof of
 all storage invariants. Later native fixes must be rebuilt and rechecked.
+
+Compiled-port round `w11`, built from `bd475eff`, observed Gin 50/53 and Drogon 47/53,
+including all 18 native POST/readback cases per app. Gin cancelled upstream correctly but
+returned 502 for all three native deadlines. Drogon left upstream work pending after abort
+and returned 200 after all three 40-second deadline holds. Topcoat exceeded the bounded
+build window and remained image-unavailable. No candidate was dropped or timed as qualified.

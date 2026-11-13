@@ -8,7 +8,8 @@ import { createPlan } from "../workloads/mixed.mjs";
 import { control, expectedOutcome, sleep } from "./capture.mjs";
 import { loadCycle, loadPaths } from "./load-capture.mjs";
 import { loadUpstream } from "./load-upstream.mjs";
-import { deriveWindow } from "./metrics.mjs";
+import { deriveWindow, observedCpuCeiling } from "./metrics.mjs";
+import { cpuSettings } from "../catalog/contract.mjs";
 import { measureNativeGroup } from "./measure.mjs";
 
 const records = fixture(), plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
@@ -17,7 +18,7 @@ const settings = { completeDelayMs: 1, slowDelayMs: 50, cleanupMs: 1 };
 // Oracle test vectors only. These objects are never native app/benchmark receipts.
 async function vector(source, corrupt = false) {
   const states = new Map(), modes = new Map(), saved = [];
-  let active = 0, maximumActive = 0;
+  let active = 0, maximumActive = 0, unitClock = 0;
   const transport = {
     async discover(request) { return { client: request.client, source, locale: request.locale, itemId: request.itemId, method: "POST", action: request.formPage,
       contentType: "application/x-www-form-urlencoded", fields: ["email", "target_price"], transport: { secret: "PRIVATE-TRANSPORT" } }; },
@@ -46,7 +47,9 @@ async function vector(source, corrupt = false) {
     },
   };
   const captured = await loadCycle({ plan, records, app: "corten", source, settings, transport, injector,
-    save: async (request, value) => saved.push({ requestId: request.id, ...value }) });
+    // Unit metric vectors must not inherit a loaded host's process-start delay.
+    // The real native worker supplies its own actual performance.now() epoch.
+    now: () => ++unitClock, save: async (request, value) => saved.push({ requestId: request.id, ...value }) });
   captured.observations = saved.filter((s) => !s.incomplete);
   return { captured, maximumActive, saved };
 }
@@ -84,6 +87,16 @@ test("measurement rejects missing native inventory before any qualification, con
   let touched = false;
   await assert.rejects(measureNativeGroup({ summary: { inventory: ["corten", "express"] }, options: { apps: ["corten"] }, plan, records, captures: {},
     own: () => { touched = true; }, io: { command: () => { touched = true; } } }));
+  assert.equal(touched, false);
+});
+
+test("prior failed native cleanup blocks measurement even when unit oracle vectors are valid", async () => {
+  const fixture = (await goodVector()).captured.capture, api = (await vector("api")).captured.capture;
+  const capture = { ...fixture, results: plan.requests.map((r) => (r.source === "fixture" ? fixture : api).results[r.index]) };
+  let touched = false;
+  await assert.rejects(measureNativeGroup({ summary: { inventory: ["corten"], cleanupFailures: [{ name: "left-behind-native-app" }] },
+    options: { apps: ["corten"] }, plan, records, captures: { corten: capture },
+    own: () => { touched = true; }, io: { command: () => { touched = true; } } }), /unclean native participants/);
   assert.equal(touched, false);
 });
 
@@ -134,6 +147,17 @@ test("headroom, adequate repeated cycles and bounded drain are observed gates, n
   const y = await metricVector(); y.counters.load.after = 40e6; assert.equal(deriveWindow(y).eligible, false);
   assert.equal(deriveWindow(await metricVector(1)).eligible, false);
   const z = await metricVector(); z.window.elapsedMs = 20000; assert.equal(deriveWindow(z).eligible, false);
+});
+
+test("a narrower actual CPU placement cannot manufacture unused generator headroom", async () => {
+  const roles = cpuSettings({ CATALOG_APP_CPUS: "0", CATALOG_LOAD_CPUS: "1", CATALOG_API_CPUS: "2-3" });
+  assert.equal(observedCpuCeiling(roles.load), 1);
+  assert.equal(observedCpuCeiling({ quota: 4, cpuset: "1-3,5" }), 4);
+  assert.equal(observedCpuCeiling({ quota: 4, cpuset: null }), 4);
+  const input = await metricVector(); input.counters.load.after = input.counters.load.before + 8e6;
+  assert.equal(deriveWindow(input).eligible, true, "nominal four-CPU quota would show false headroom");
+  input.quotas.load = observedCpuCeiling(roles.load);
+  assert.equal(deriveWindow(input).eligible, false);
 });
 
 test("real concurrent upstream paths cannot change each other's fault mode or cancel an older read", async () => {

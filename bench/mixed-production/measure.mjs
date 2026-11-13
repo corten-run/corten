@@ -7,13 +7,14 @@ import { sampleStats } from "../catalog/stats.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { afterFunctionalGate, sha256, sleep } from "./capture.mjs";
-import { calibrationPolicy, deriveWindow } from "./metrics.mjs";
+import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
 
 export async function measureNativeGroup(context) {
   const { summary, options, folder, repo, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
     docker, io, own, remove, inspect, ready, save, captures } = context;
   // Recheck the entire unchanged native oracle at the measurement boundary.
   await afterFunctionalGate({ apps: options.apps, inventory: summary.inventory, plan, captures, records }, async () => {});
+  assert.equal(summary.cleanupFailures.length, 0, "unclean native participants block measurement");
   assert.ok(!summary.provenance.nativeSource.dirty && !await io.command("git", ["status", "--porcelain"]), "measurement needs clean committed native/harness sources");
   const cpus = cpuSettings(Object.fromEntries(["APP", "LOAD", "API"].map((role) => [`CATALOG_${role}_CPUS`, process.env[`MIXED_PRODUCTION_${role}_CPUS`]])));
   const root = join(folder, "measurement"); mkdirSync(root);
@@ -30,8 +31,13 @@ export async function measureNativeGroup(context) {
   const failure = (app, source, stage) => { result.failures.push({ app, source, stage }); save(); };
   const record = (path, value) => { writeFileSync(path, JSON.stringify(value, null, 2)); return { path: relative(folder, path).replaceAll("\\", "/"), sha256: sha256(readFileSync(path)) }; };
   const cleanup = async (names) => {
+    let failed = false;
     for (const name of names) try { await remove(name); }
-    catch { summary.cleanupFailures.push({ name }); }
+    catch { summary.cleanupFailures.push({ name }); failed = true; }
+    if (failed) {
+      result.complete = false; result.timingBlocked = true; result.comparisonEligible = false;
+      throw new Error("owned native participant cleanup failed");
+    }
   };
   const participant = async (name, imageId, role) => {
     const info = await inspect(name);
@@ -45,6 +51,7 @@ export async function measureNativeGroup(context) {
     "-v", `${folder}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json", "-e", `API_BASE=http://${up}:8080`,
     "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, ...env, imageId];
   async function runQualification(app, source) {
+    assert.equal(summary.cleanupFailures.length, 0, "unclean native participants block qualification");
     const dir = join(root, app, source, "qualification"); mkdirSync(dir, { recursive: true });
     const appName = `${runId}-q-${app}-${source}`, up = `${appName}-up`, worker = `${appName}-worker`;
     const probes = [], imageId = summary.apps[app].image.id;
@@ -78,6 +85,7 @@ export async function measureNativeGroup(context) {
     return Object.fromEntries(Object.keys(names).map((role, i) => [role, values[ids[i]]]));
   }
   async function runWindow(app, source, stage, pass) {
+    assert.equal(summary.cleanupFailures.length, 0, "unclean native participants block native windows");
     const dir = join(root, app, source, `${stage}-${pass}`); mkdirSync(dir, { recursive: true });
     const name = `${runId}-${stage}-${pass}-${app}-${source}`, up = `${name}-up`, worker = `${name}-worker`, imageId = summary.apps[app].image.id;
     const probes = [], names = { app: name, upstream: up, load: worker };
@@ -134,7 +142,7 @@ export async function measureNativeGroup(context) {
         requestArtifacts, warmupCaptures: warmups.map((_, i) => { const path = join(dir, `warmup_${i}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }),
         cycleCaptures: window.cycles.map((cycle) => { const path = join(dir, `cycle_${cycle.cycle}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }) };
       const artifact = record(join(dir, "receipt.json"), raw);
-      const metrics = deriveWindow({ ...raw, captures, warmups, plan, records, quotas: Object.fromEntries(Object.entries(cpus).map(([role, value]) => [role === "api" ? "upstream" : role, value.quota])), stage });
+      const metrics = deriveWindow({ ...raw, captures, warmups, plan, records, quotas: Object.fromEntries(Object.entries(cpus).map(([role, value]) => [role === "api" ? "upstream" : role, observedCpuCeiling(value)])), stage });
       return { outcome: metrics.eligible ? "measured" : "calibration-or-window-rejected", artifact, metrics, stats };
     } catch (error) {
       record(join(dir, "failure.json"), { schema: "mixed-native-stage-failure/v1", app, source, stage, pass, readiness: probes,

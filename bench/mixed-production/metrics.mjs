@@ -5,6 +5,19 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 
 export const calibrationPolicy = Object.freeze({ minimumSteadyCycles: 3, maximumDrainFraction: 0.25,
   maximumGeneratorCpuFraction: 0.7, maximumUpstreamCpuFraction: 0.7, maximumEventLoopLagP99Ms: 20 });
+
+// cpuSettings has already validated disjoint ranges. A narrower cpuset is also a
+// real CPU ceiling; the nominal quota alone must not manufacture spare headroom.
+export function observedCpuCeiling({ quota, cpuset }) {
+  assert.ok(Number.isFinite(quota) && quota > 0);
+  if (cpuset === null) return quota;
+  const count = cpuset.split(",").reduce((total, range) => {
+    const [first, last = first] = range.split("-").map(Number);
+    assert.ok(Number.isSafeInteger(first) && Number.isSafeInteger(last) && first >= 0 && last >= first);
+    return total + last - first + 1;
+  }, 0);
+  return Math.min(quota, count);
+}
 const percentile = (values, p) => {
   const sorted = values.toSorted((a, b) => a - b);
   return sorted.length ? sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)] : null;
@@ -58,7 +71,7 @@ export function deriveWindow({ window, captures, warmups, plan, records, source,
       && observed.every((s, i) => Number.isFinite(s.t) && (!i || s.t >= observed[i - 1].t)), "missing/unordered resource samples");
     const summary = summarizeSamples(observed), cpuUsec = c.after - c.before;
     assert.ok(Number.isFinite(quotas[role]) && quotas[role] > 0);
-    resources[role] = { ...summary, cpuUsec, sampleReceiptSpanMs: observed.at(-1).t - observed[0].t,
+    resources[role] = { ...summary, cpuUsec, cpuCeilingCores: quotas[role], sampleReceiptSpanMs: observed.at(-1).t - observed[0].t,
       sampleReceiptCollisions: observed.filter((s, i) => i && s.t === observed[i - 1].t).length,
       cpuPctOfQuota: 100 * cpuUsec / (window.elapsedMs * 1000 * quotas[role]),
       cpuUsecPerPrimaryOperation: cpuUsec / operations.length };
