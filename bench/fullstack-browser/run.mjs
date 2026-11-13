@@ -97,6 +97,35 @@ async function ready(base, path, interrupted) {
   throw new Error(`startup deadline: ${reason}`);
 }
 
+// Aggregate only after native/harness cleanup and unchanged-oracle export. A
+// selected subset completing is not a complete-group qualification.
+export function groupQualificationPassed(summary, reports) {
+  const empty = (value) => Array.isArray(value) && value.length === 0;
+  const fullRegistry = (value) => value && Object.keys(value).length === candidates.length && candidates.every((app) => Object.hasOwn(value, app));
+  const profiles = summary.effectivePlan?.cases;
+  if (summary.complete !== true || summary.code?.dirty !== false || !empty(summary.failures) || !empty(summary.cleanupFailures)
+    || !Array.isArray(profiles) || !profiles.length || new Set(profiles.map((p) => p.key)).size !== profiles.length
+    || !fullRegistry(summary.cells) || !fullRegistry(reports)
+    || summary.browser?.engine !== "chromium" || !summary.browser.version || !summary.browser.playwright
+    || !/^[a-f0-9]{64}$/.test(summary.browser.executableSha256 ?? "")) return false;
+  return candidates.every((app) => {
+    const image = summary.images?.[app], cells = summary.cells[app], report = reports[app], validation = report?.validation;
+    if (image?.imageSourceVerified !== true || image.builtCommit !== summary.code.commit || image.builtDirty !== "false"
+      || !Array.isArray(cells) || cells.length !== profiles.length || !empty(report?.diagnostics)
+      || validation?.functionalPassed !== true || validation.app !== app || validation.planSha256 !== summary.effectivePlan.sha256
+      || !Array.isArray(validation.cases) || validation.cases.length !== profiles.length) return false;
+    return profiles.every((profile) => {
+      const matches = cells.filter((cell) => cell.case === profile.key), checked = validation.cases.filter((cell) => cell.case === profile.key);
+      if (matches.length !== 1 || checked.length !== 1) return false;
+      const cell = matches[0], e = cell.evidence;
+      return cell.outcome === "captured" && cell.qualificationPassed === true
+        && e?.functionalChecksPassed === true && e.domChecksPassed === true && empty(e.failures) && empty(e.gaps)
+        && e.nativeCleanup?.outcome === "observed" && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
+        && checked[0].outcome === "captured" && checked[0].functionalPassed === true;
+    });
+  });
+}
+
 export async function run(args) {
   const options = Array.isArray(args) ? parseOptions(args) : args;
   assert.match(options.round ?? "", /^w[1-9]\d*$/);
@@ -217,13 +246,16 @@ export async function run(args) {
   finally {
     if (browser) try { await browser.close(); } catch (e) { summary.cleanupFailures.push(e.message); }
     summary.cleanupFailures.push(...await owned.cleanup());
+    let qualificationReports;
     try {
       const exported = exportBrowserCaptures(summary, records), captureDir = join(folder, "captures"); mkdirSync(captureDir);
       for (const [app, capture] of Object.entries(exported.captures)) writeFileSync(join(captureDir, `${app}.json`), JSON.stringify(capture, null, 2) + "\n");
       writeFileSync(join(captureDir, "manifest.json"), JSON.stringify(exported.manifest, null, 2) + "\n");
       summary.strictCaptureExport = { manifest: "captures/manifest.json", functionalPassed: Object.values(exported.manifest.reports).every((report) => report.validation.functionalPassed), readyForLoad: false };
+      qualificationReports = exported.manifest.reports;
     } catch (error) { summary.failures.push(`Strict capture export: ${error.message}`); }
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
+    summary.qualificationPassed = groupQualificationPassed(summary, qualificationReports);
     summary.finishedAt = new Date().toISOString(); save();
   }
   return summary;
