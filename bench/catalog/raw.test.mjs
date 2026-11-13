@@ -16,6 +16,7 @@ import { inspectCatalog } from "./report.mjs";
 import { rawSchema, replayCatalog, containerEvidence } from "./raw.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
+import { k6Image, k6Provenance } from "../load-tool.mjs";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
 function fixture() {
@@ -31,6 +32,8 @@ function fixture() {
     startedAt: "2026-11-07T16:00:00Z", finishedAt: "2026-11-07T22:00:00Z", fixtureSha256,
     savedEvidence: { schema: rawSchema, fixtureSha256 }, measurement: { encoding: "identity", fixedRate: options.rate, cpus: cpuSettings({}), appMemoryBytes: 2 ** 30 }, apps: {} };
   summary.tools = Object.fromEntries(["upstream", "checker", "k6"].map((name) => [name, { imageId }]));
+  summary.tools.k6 = k6Provenance({ Id: imageId, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
+    "k6 v2.4.0 (synthetic test executable, not a native measurement)");
   put("tools.json", summary.tools);
   put("fixture.json", fixtureText);
   put("cleanup.json", { runId: summary.runId, containers: [], networks: [] });
@@ -96,6 +99,17 @@ test("raw replay accepts the complete synthetic native matrix, not summary-only 
   assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true);
   assert.equal(inspectCatalog(f.summary, f.commit).baseline, true, "historical report still inspects summaries");
   f.files.clear(); assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+});
+
+test("native catalog qualification cannot invent a missing load-tool identity", () => {
+  for (const field of ["version", "versionOutput", "repoDigests", "platform", "image"]) {
+    const f = fixture();
+    delete f.summary.tools.k6[field];
+    f.put("tools.json", f.summary.tools);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, field);
+  }
+  const f = fixture(); f.summary.savedEvidence.schema = "catalog-saved-evidence/v1";
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /native raw evidence version/);
 });
 
 test("raw counter, samples, checks, cold, container, cleanup and exact aggregates cannot contradict the summary", () => {

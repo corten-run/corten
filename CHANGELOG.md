@@ -19,6 +19,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
+
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
   the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`
@@ -298,6 +304,17 @@ Corten is pre-1.0, so any minor version may change the API.
   355 to 481 more as a 501, which allocates the router's marker
   ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
   ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+- Pin the benchmark suites to one verified k6 release and record its actual
+  executable, immutable image and platform. Native saved replay requires this
+  identity, and legacy continuation/trends refuse incompatible or unidentified
+  tool boundaries instead of assigning new metadata to old measurements.
+
+- Refresh the JavaScript benchmark framework/compiler dependencies and retain
+  committed package locks in their production builds and build recipes. React
+  Router uses its current native Express dispatcher. Previous rounds are not
+  relabeled; version choices, checks and remaining transitive audit findings are
+  recorded in `bench/fullstack/refresh-js.md`.
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
