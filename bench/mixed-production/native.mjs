@@ -1,7 +1,7 @@
 // Native HTTP form transport. The browser parses captured app markup; it never renders
 // expectedPage/referenceHtml. Scripts are off, preserving each app's ordinary no-JS path.
 import { performance } from "node:perf_hooks";
-import { snapshotPage } from "../marketplace/check.mjs";
+import { snapshotMixedPage } from "./snapshot.mjs";
 import { sha256, sleep } from "./capture.mjs";
 
 const publicHeaders = ["content-type", "content-encoding", "cache-control", "vary", "content-security-policy", "x-content-type-options"];
@@ -105,9 +105,9 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
     } finally { await page.close(); }
   }
   return {
-    async discover(request, evidence) {
+    async discover(request, evidence, wire) {
       const context = await contextFor(request);
-      const response = await fetchNative(context, request.formPage, { headers: { accept: "text/html", "accept-encoding": request.acceptEncoding } });
+      const response = await fetchNative(context, request.formPage, { headers: { accept: "text/html", "accept-encoding": request.acceptEncoding, ...(wire ? { traceparent: wire.traceparent } : {}) } });
       evidence.stages.push(receipt(response, "form-discovery"));
       if (response.status !== 200 || response.contentType !== "text/html") return null;
       const form = await parse(context, response, request, (page) => page.evaluate(nativeForm));
@@ -116,10 +116,10 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
       return { client: request.client, source: request.source, locale: request.locale, itemId: request.itemId, method: "POST", action: action.pathname,
         contentType: form.contentType, fields: form.data.map(([name]) => name), transport: { context, url: action.href, data: form.data } };
     },
-    async readState(request, evidence, stage) {
+    async readState(request, evidence, stage, wire) {
       if (!readbackPath) return null;
       const context = await contextFor(request);
-      const response = await fetchNative(context, localURL(readbackPath, base).href, { headers: { accept: "application/json", "cache-control": "no-cache" } });
+      const response = await fetchNative(context, localURL(readbackPath, base).href, { headers: { accept: "application/json", "cache-control": "no-cache", ...(wire ? { traceparent: wire.traceparent } : {}) } });
       evidence.stages.push(receipt(response, `state-${stage}`));
       if (response.status !== 200 || response.contentType !== "application/json") return null;
       try {
@@ -129,9 +129,9 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
         return alerts;
       } catch { return null; }
     },
-    async send(request, binding, evidence, injector) {
+    async send(request, binding, evidence, injector, wire) {
       const context = await contextFor(request);
-      const headers = { accept: request.accept, "accept-encoding": request.acceptEncoding };
+      const headers = { accept: request.accept, "accept-encoding": request.acceptEncoding, ...(wire ? { traceparent: wire.traceparent } : {}) };
       let url = request.path, options = { method: request.method, headers };
       if (binding) {
         url = binding.transport.url;
@@ -193,7 +193,7 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
       if (visible.contentType !== "text/html" || ![200, 400, 422].includes(visible.status)) throw new Error("no visible native page");
       return parse(await contextFor(request), visible, request, async (page) => {
         evidence.redactedNativeDOM = await page.evaluate(redactedDocument);
-        return page.evaluate(snapshotPage);
+        return page.evaluate(snapshotMixedPage, { readPath: localURL(request.formPage ?? request.path, base).pathname });
       });
     },
     async close() { for (const context of contexts.values()) await context.close(); contexts.clear(); },

@@ -23,20 +23,20 @@ export async function loadCycle({ plan, records, app, source, transport, injecto
       let row = unsent(request), started = false, primaryStarted = null;
       try {
         const path = `/marketplace/records/${request.itemId}`;
-        await injector.begin(`prep_${request.id}`, "normal", 0, path);
+        const prepWire = await injector.begin(`prep_${request.id}`, "normal", 0, path);
         let binding, before = null;
         if (request.method === "POST") {
-          const form = await transport.discover(request, evidence);
-          if (form) { binding = bindNativeForm(request, form); before = await transport.readState(request, evidence, "before"); }
+          const form = await transport.discover(request, evidence, prepWire);
+          if (form) { binding = bindNativeForm(request, form); before = await transport.readState(request, evidence, "before", prepWire); }
           else { row = unsent(request, "unsupported"); evidence.gaps.push("native-form-unavailable"); }
           if (before === null) evidence.gaps.push("independent-alert-readback-unavailable");
         }
         if (request.method !== "POST" || binding) {
           const mode = request.category === "slow" ? request.variant : "normal";
-          await injector.begin(request.id, mode, request.category !== "slow" ? 0 : request.variant === "complete" ? settings.completeDelayMs : settings.slowDelayMs, path);
+          const primaryWire = await injector.begin(request.id, mode, request.category !== "slow" ? 0 : request.variant === "complete" ? settings.completeDelayMs : settings.slowDelayMs, path);
           started = true; primaryStarted = now();
           await save(request, { row: { ...unsent(request), outcome: "network-error", error: "network-error" }, evidence, incomplete: true });
-          const response = await transport.send(request, binding, evidence, injector), outcome = responseOutcome(request, response);
+          const response = await transport.send(request, binding, evidence, injector, primaryWire), outcome = responseOutcome(request, response);
           row = { request, outcome, status: response.status, error: response.error, contentType: response.contentType, contentEncoding: response.contentEncoding,
             upstream: null, page: null, record: null, form: binding?.evidence ?? null, state: null };
           if (["completed", "rejected"].includes(outcome)) try {
@@ -48,8 +48,8 @@ export async function loadCycle({ plan, records, app, source, transport, injecto
           do { observed = await injector.read(request.id); if (!observed.pending || Date.now() >= until) break; await sleep(20); } while (true);
           row.upstream = upstreamEvidence(observed, request); evidence.upstream = observed;
           if (request.method === "POST") {
-            await injector.begin(`state_${request.id}`, "normal", 0, path);
-            const after = await transport.readState(request, evidence, "after"), readback = await transport.readState(request, evidence, "readback");
+            const stateWire = await injector.begin(`state_${request.id}`, "normal", 0, path);
+            const after = await transport.readState(request, evidence, "after", stateWire), readback = await transport.readState(request, evidence, "readback", stateWire);
             if (before !== null && after !== null && readback !== null) row.state = { before, after, readback: { via: "independent-read", alerts: readback } };
           }
         }

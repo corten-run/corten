@@ -20,7 +20,8 @@ export function upstreamManifest(plan, source, startup, phases) {
       expected.push({ id: `${prefix}prep_${request.id}`, path, mode: "normal",
         requests: source === "api" && request.method === "POST" ? 1 : 0, cancelled: 0 });
       expected.push({ id: `${prefix}${request.id}`, path, mode: request.category === "slow" ? request.variant : "normal",
-        requests: source === "api" ? 1 : 0, cancelled: source === "api" && request.category === "slow" && ["cancel", "deadline"].includes(request.variant) ? 1 : 0,
+        requests: source === "api" ? request.method === "POST" ? rows.find((r) => r.requestId === request.id).upstream?.requests : 1 : 0,
+        minimumRequests: source === "api" ? 1 : 0, cancelled: source === "api" && request.category === "slow" && ["cancel", "deadline"].includes(request.variant) ? 1 : 0,
         receipt: rows.find((r) => r.requestId === request.id).upstream });
       if (request.method === "POST") expected.push({ id: `${prefix}state_${request.id}`, path, mode: "normal", requests: 0, cancelled: 0 });
     }
@@ -32,12 +33,15 @@ export function upstreamManifest(plan, source, startup, phases) {
 // Compare final live facts with every planned operation and its saved primary
 // observation. Never repair a capture by copying newer counters into its rows.
 export function reconcileLedger(ledger, manifest) {
-  const issues = [], cells = [], byId = new Map();
+  const issues = [], cells = [], byId = new Map(), traceIds = new Set();
   if (ledger?.schema !== "mixed-native-upstream-ledger/v1" || !ledger.sealed
     || !Number.isSafeInteger(ledger.sealedUnixMs) || !Number.isSafeInteger(ledger.snapshotUnixMs)
     || ledger.snapshotUnixMs < ledger.sealedUnixMs) issues.push("missing-final-sealed-upstream-ledger");
+  if (ledger?.wireIdentity !== "w3c-trace-id") issues.push("missing-immutable-wire-identity");
   if (!Array.isArray(ledger?.orphans) || ledger.orphans.length) issues.push("late-or-unattributed-upstream-work");
   for (const op of ledger?.operations ?? []) {
+    if (!/^[0-9a-f]{32}$/.test(op.traceId ?? "") || /^0+$/.test(op.traceId) || traceIds.has(op.traceId)) issues.push(`invalid-or-duplicate-trace:${op.id}`);
+    traceIds.add(op.traceId);
     if (byId.has(op.id)) issues.push(`duplicate-operation:${op.id}`);
     byId.set(op.id, op);
   }
@@ -48,11 +52,12 @@ export function reconcileLedger(ledger, manifest) {
       if (op.path !== expected.path || op.mode !== expected.mode) failed.push("operation-binding-changed");
       if (![op.requests, op.completed, op.cancelled, op.pending].every((n) => Number.isSafeInteger(n) && n >= 0)
         || op.pending !== 0 || op.completed + op.cancelled !== op.requests) failed.push("pending-or-unaccounted-work");
-      if (op.requests !== expected.requests || op.cancelled !== expected.cancelled
+      if (!Number.isSafeInteger(expected.requests) || expected.requests < (expected.minimumRequests ?? 0)
+        || op.requests !== expected.requests || op.cancelled !== expected.cancelled
         || op.completed !== expected.requests - expected.cancelled) failed.push("one-read-or-cancellation-contract-changed");
       const events = op.events;
       if (!Array.isArray(events) || events.length !== op.requests
-        || events.some((e) => e.method !== "GET" || e.path !== expected.path || !["completed", "cancelled"].includes(e.result))
+        || events.some((e) => e.traceId !== op.traceId || e.method !== "GET" || e.path !== expected.path || !["completed", "cancelled"].includes(e.result))
         || events.filter((e) => e.result === "completed").length !== op.completed
         || events.filter((e) => e.result === "cancelled").length !== op.cancelled) failed.push("invalid-final-events");
       if (Object.hasOwn(expected, "receipt") && (!expected.receipt || !Array.isArray(events)

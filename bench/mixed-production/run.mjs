@@ -9,9 +9,10 @@ import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
+import { buildInputPaths, sourceSnapshot, sourceAuditIdentity } from "./source-audit.mjs";
 
 export function parseArgs(args) {
-  const options = { round: args[0], apps: null, images: null, readbacks: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
+  const options = { round: args[0], apps: null, images: null, readbacks: null, nativeAudits: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
     measure: false, profile: "defaults", passes: 3, duration: 120, warmup: 15, calibration: 30, tailSeconds: 120, maxCycles: 16,
     requestTimeoutMs: 60000, completeDelayMs: 100, slowDelayMs: slowMs, cancelAfterMs: 50, cleanupMs: 500, startupTimeoutMs: 120000 };
   assert.match(options.round ?? "", /^w[1-9]\d*$/, "use a fresh local development identity wN");
@@ -22,8 +23,8 @@ export function parseArgs(args) {
     const flag = args[i++]; assert.ok(flag?.startsWith("--") && !seen.has(flag), "missing/duplicate option"); seen.add(flag);
     if (["--build", "--measure"].includes(flag)) { options[flag.slice(2)] = true; continue; }
     assert.ok(args[i] && !args[i].startsWith("--"), "option value required");
-    const key = flag === "--build-ref" ? "buildRef" : names[flag.slice(2)] ?? flag.slice(2); assert.ok(key !== "round" && Object.hasOwn(options, key), "unknown option");
-    options[key] = ["apps", "images", "readbacks", "buildRef", "profile"].includes(key) ? args[i++] : Number(args[i++]);
+    const key = flag === "--build-ref" ? "buildRef" : flag === "--native-audits" ? "nativeAudits" : names[flag.slice(2)] ?? flag.slice(2); assert.ok(key !== "round" && Object.hasOwn(options, key), "unknown option");
+    options[key] = ["apps", "images", "readbacks", "nativeAudits", "buildRef", "profile"].includes(key) ? args[i++] : Number(args[i++]);
   }
   if (options.apps) { options.apps = options.apps.split(","); assert.equal(new Set(options.apps).size, options.apps.length, "duplicate app"); }
   for (const key of ["seed", "clients", "repetitions", ...Object.values(names)]) assert.ok(Number.isSafeInteger(options[key]) && options[key] >= (key === "seed" ? 0 : 1), "positive integer settings required");
@@ -80,7 +81,7 @@ export async function run(args) {
   writeFileSync(join(folder, "plan.json"), JSON.stringify(plan, null, 2));
   writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
-  summary.provenance.harnessFiles = Object.fromEntries(["capture.mjs", "native.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
+  summary.provenance.harnessFiles = Object.fromEntries(["capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const own = async (args, name) => {
     active.add(name);
@@ -94,7 +95,7 @@ export async function run(args) {
     active.delete(name);
   };
   const fail = (app, source, stage) => { summary.failures.push({ app, source, stage }); save(); };
-  const ready = async (name, path, probes, role) => {
+  const ready = async (name, path, probes, role, wire) => {
     const info = await inspect(name), port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
     assert.ok(port, "private readiness port missing");
     const until = Date.now() + options.startupTimeoutMs;
@@ -102,7 +103,7 @@ export async function run(args) {
       if (io.interrupted) throw new Error("interrupted");
       try {
         const timeout = Math.max(1, Math.min(10000, until - Date.now()));
-        const r = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(timeout), redirect: "manual" });
+        const r = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(timeout), redirect: "manual", ...(wire ? { headers: { traceparent: wire.traceparent } } : {}) });
         const body = Buffer.from(await r.arrayBuffer());
         probes.push({ role, path, status: r.status, contentType: r.headers.get("content-type"), decodedBodyBytes: body.length, decodedBodySha256: sha256(body) });
         if (r.status === 200) return;
@@ -122,7 +123,7 @@ export async function run(args) {
   try {
     summary.provenance.commit = await io.command("git", ["rev-parse", "HEAD"]);
     summary.provenance.dirty = await io.command("git", ["status", "--porcelain"]);
-    summary.provenance.sharedFiles = Object.fromEntries(["bench/workloads/mixed.mjs", "bench/workloads/registry.mjs", "bench/marketplace/check.mjs", "bench/marketplace/records.mjs", "bench/marketplace/labels.json"].map((file) => [file, sha256(readFileSync(join(repo, file)))]));
+    summary.provenance.sharedFiles = Object.fromEntries(["bench/workloads/mixed.mjs", "bench/workloads/registry.mjs", "bench/json-api/contract.mjs", "bench/marketplace/check.mjs", "bench/marketplace/records.mjs", "bench/marketplace/labels.json"].map((file) => [file, sha256(readFileSync(join(repo, file)))]));
     let buildRoot = repo;
     const nativeSource = summary.provenance.nativeSource = { kind: "checkout", commit: summary.provenance.commit,
       dirty: summary.provenance.dirty.length > 0 };
@@ -149,6 +150,8 @@ export async function run(args) {
       if (io.interrupted) throw new Error("run interrupted");
       const entry = summary.apps[app];
       try {
+        const paths = (await io.command("git", ["ls-tree", "-r", "--name-only", nativeSource.commit, "--", ...buildInputPaths(app)])).split(/\r?\n/).filter(Boolean);
+        entry.buildInputs = sourceSnapshot(buildRoot, paths).sourceFiles;
         const tag = options.build ? `${runId}-${app}` : images[app] ?? `cb-marketplace-${app}`;
         if (options.build) {
           const context = app === "corten" ? buildRoot : join(buildRoot, "bench/fullstack/apps", app);
@@ -164,12 +167,15 @@ export async function run(args) {
             assert.equal(await io.command("git", ["rev-parse", "HEAD"]), summary.provenance.commit, "checkout changed during build");
             assert.equal(await io.command("git", ["status", "--porcelain"]), summary.provenance.dirty, "working tree changed during build");
           }
+          assert.deepEqual(sourceSnapshot(buildRoot, paths).sourceFiles, entry.buildInputs, "native build inputs changed during build");
         }
         const image = JSON.parse(await docker(["image", "inspect", tag]))[0];
         entry.image = { tag, id: image.Id, repoDigests: image.RepoDigests, bytes: image.Size,
           buildCommit: image.Config.Labels?.["run.corten.marketplace.commit"] ?? null,
           buildDirty: image.Config.Labels?.["run.corten.marketplace.dirty"] ?? null,
           profile: image.Config.Labels?.["run.corten.marketplace.profile"] ?? null };
+        writeFileSync(join(folder, `${app}-source-audit-request.json`), JSON.stringify({ schema: "mixed-native-source-audit-request/v1",
+          identity: sourceAuditIdentity(summary, app), sourceFiles: entry.buildInputs }, null, 2));
       } catch { fail(app, null, "native-image-unavailable"); entry.cells.forEach((cell) => cell.gaps = ["native-image-unavailable"]); continue; }
       for (const source of ["fixture", "api"]) {
         if (io.interrupted) throw new Error("run interrupted");
@@ -250,7 +256,7 @@ export async function run(args) {
           return;
         }
         const { measureNativeGroup } = await import("./measure.mjs");
-        summary.timing = await measureNativeGroup({ summary, options, folder, repo, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
+        summary.timing = await measureNativeGroup({ summary, options, folder, repo, nativeBuildRoot: buildRoot, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
           docker, io, own, remove, inspect, ready, save, captures });
         summary.readyForLoad = summary.timing.qualified && summary.timing.calibrated;
         summary.timingBlocked = summary.timing.timingBlocked;

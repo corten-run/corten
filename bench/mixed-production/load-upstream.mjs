@@ -1,8 +1,9 @@
-// Path-scoped observation lets independent native clients run concurrently without
-// forwarding benchmark IDs through an app or assigning expected work as observed work.
+// Immutable wire trace IDs separate concurrent and delayed native work. Paths
+// validate the selected record; they never determine an operation's identity.
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
 import { validateRecord } from "../marketplace/records.mjs";
 
 export function loadUpstream(records, token) {
@@ -10,7 +11,7 @@ export function loadUpstream(records, token) {
   const bodies = new Map(Object.entries(records).map(([id, record]) => {
     validateRecord(record, id); return [`/marketplace/records/${id}`, JSON.stringify(record, null, 2)];
   }));
-  const operations = new Map(), paths = new Map(), orphans = [];
+  const operations = new Map(), traces = new Map(), orphans = [];
   let sealedUnixMs = null;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://upstream");
@@ -21,7 +22,7 @@ export function loadUpstream(records, token) {
       if (req.method === "GET") {
         if (url.searchParams.get("id") === "orphans") return send(200, orphans);
         if (url.searchParams.get("id") === "ledger") return send(200, { schema: "mixed-native-upstream-ledger/v1",
-          sealed: sealedUnixMs !== null, sealedUnixMs, snapshotUnixMs: Date.now(), operations: [...operations.values()], orphans });
+          wireIdentity: "w3c-trace-id", sealed: sealedUnixMs !== null, sealedUnixMs, snapshotUnixMs: Date.now(), operations: [...operations.values()], orphans });
         const op = operations.get(url.searchParams.get("id")); return op ? send(200, op) : send(404, {});
       }
       if (req.method !== "POST") return send(405, {});
@@ -33,20 +34,22 @@ export function loadUpstream(records, token) {
           || !/^[a-zA-Z0-9_-]+$/.test(v.id) || operations.has(v.id) || !bodies.has(v.path)
           || !["normal", "complete", "cancel", "deadline"].includes(v.mode)
           || !Number.isSafeInteger(v.delayMs) || v.delayMs < 0 || v.delayMs > 120000) throw new Error();
-        const previous = paths.get(v.path);
-        if (previous?.pending) throw new Error(); // Never steal an in-flight native read's identity.
-        const op = { ...v, requests: 0, completed: 0, cancelled: 0, pending: 0, events: [] };
-        operations.set(v.id, op); paths.set(v.path, op); return send(200, {});
+        const traceId = randomBytes(16).toString("hex"), traceparent = `00-${traceId}-${randomBytes(8).toString("hex")}-00`;
+        const op = { ...v, traceId, requests: 0, completed: 0, cancelled: 0, pending: 0, events: [] };
+        operations.set(v.id, op); traces.set(traceId, op); return send(200, { traceparent });
       } catch { return send(400, {}); }
     }
-    const op = paths.get(url.pathname);
+    const match = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(req.headers.traceparent ?? "");
+    const traceId = match && !/^0+$/.test(match[1]) && !/^0+$/.test(match[2]) ? match[1] : null;
+    const op = traces.get(traceId);
     if (sealedUnixMs !== null) orphans.push({ method: req.method, path: url.pathname, at: new Date().toISOString(),
       reason: "after-seal", operationId: op?.id ?? null });
-    if (!op) {
-      if (sealedUnixMs === null) orphans.push({ method: req.method, path: url.pathname, at: new Date().toISOString() });
+    if (!op || op.path !== url.pathname) {
+      if (sealedUnixMs === null) orphans.push({ method: req.method, path: url.pathname, at: new Date().toISOString(),
+        reason: !traceId ? "missing-wire-identity" : !op ? "unknown-wire-identity" : "wire-path-mismatch", traceId });
       return send(503, {});
     }
-    const event = { method: req.method, path: url.pathname, startedAt: new Date().toISOString(), result: "pending" };
+    const event = { method: req.method, path: url.pathname, traceId, startedAt: new Date().toISOString(), result: "pending" };
     op.events.push(event); op.requests++; op.pending++;
     let timer;
     const finish = (result) => {

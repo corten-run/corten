@@ -4,6 +4,12 @@ import { memoryMiB } from "../catalog/stats.mjs";
 export const resourceCoveragePolicy = Object.freeze({ targetIntervalMs: 500, maximumGapMs: 1500,
   maximumBoundaryGapMs: 1500, maximumClockDriftMs: 100 });
 
+export function mergeResourceSamples(before, stream, after) {
+  for (const samples of [before, stream, after]) assert.ok(Array.isArray(samples) && samples.every((s, i) =>
+    Number.isFinite(s.t) && (!i || s.t >= samples[i - 1].t)), "resource stream clock moved backwards before merge");
+  return [...before, ...stream, ...after].toSorted((a, b) => a.t - b.t);
+}
+
 export function coveredSamples(samples, window) {
   const { startedUnixMs: start, finishedUnixMs: end, elapsedMs } = window;
   assert.ok([start, end].every(Number.isSafeInteger) && end > start

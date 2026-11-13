@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { cpuSettings } from "../catalog/contract.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
@@ -8,11 +8,12 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { afterFunctionalGate, sha256, sleep } from "./capture.mjs";
 import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
-import { resourceBoundary, resourceCoveragePolicy } from "./resources.mjs";
+import { resourceBoundary, resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
+import { sourceAuditIdentity, sourceSnapshot, verifySourceAudit } from "./source-audit.mjs";
 
 export async function measureNativeGroup(context) {
-  const { summary, options, folder, repo, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
+  const { summary, options, folder, repo, nativeBuildRoot, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
     docker, io, own, remove, inspect, ready, save, captures } = context;
   // Recheck the entire unchanged native oracle at the measurement boundary.
   await afterFunctionalGate({ apps: options.apps, inventory: summary.inventory, plan, captures, records }, async () => {});
@@ -25,13 +26,39 @@ export async function measureNativeGroup(context) {
     cpus, calibrationPolicy, resourceCoveragePolicy, interpretation: "Equal-plan closed-loop achieved load, not saturation/capacity; comparisons require explicit disjoint CPU placement and complete repeated native windows.",
     cells: Object.fromEntries(summary.inventory.map((app) => [app, Object.fromEntries(["fixture", "api"].map((source) => [source, {
       qualification: null, calibration: null, passes: Array.from({ length: options.passes }, (_, i) => ({ pass: i + 1, outcome: "not-run", metrics: null })),
-    }]))])), failures: [] };
-  summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
+    }]))])), sourceAudits: {}, failures: [] };
+  summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "source-audit.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
   const mount = ["-v", `${repo}:/src:ro`, "-v", `${realpathSync(join(repo, "node_modules"))}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
   const outputPath = (path) => `/out/${relative(folder, path).replaceAll("\\", "/")}`;
   const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
   const failure = (app, source, stage) => { result.failures.push({ app, source, stage }); save(); };
   const record = (path, value) => { writeFileSync(path, JSON.stringify(value, null, 2)); return { path: relative(folder, path).replaceAll("\\", "/"), sha256: sha256(readFileSync(path)) }; };
+  let receipts = [], invalidBundle = false;
+  if (options.nativeAudits) try {
+    const bundle = JSON.parse(readFileSync(resolve(repo, options.nativeAudits), "utf8"));
+    assert.equal(bundle.schema, "mixed-native-source-audits/v1"); assert.ok(Array.isArray(bundle.receipts));
+    assert.ok(bundle.receipts.every((r) => summary.inventory.includes(r.identity?.app)), "unexpected native audit candidate");
+    receipts = bundle.receipts;
+  } catch { invalidBundle = true; }
+  for (const app of summary.inventory) {
+    const cell = result.sourceAudits[app] = { eligible: false, failure: null };
+    try {
+      assert.ok(!invalidBundle, "invalid independent source audit bundle");
+      const entry = summary.apps[app], expected = sourceAuditIdentity(summary, app);
+      const snapshot = sourceSnapshot(nativeBuildRoot, entry.buildInputs.map((f) => f.path));
+      assert.deepEqual(snapshot.sourceFiles, entry.buildInputs, "native source changed after build");
+      const found = receipts.filter((r) => r.identity?.app === app);
+      assert.equal(found.length, 1, "exactly one independent native source audit required");
+      const verified = verifySourceAudit(found[0], expected, snapshot, entry.image);
+      cell.artifact = record(join(root, `${app}-source-audit.json`), { ...verified, receipt: found[0] });
+      cell.eligible = true;
+    } catch {
+      cell.failure = "missing-or-invalid-independent-native-source-audit";
+      for (const source of ["fixture", "api"]) result.failures.push({ app, source, stage: "native-source-audit" });
+    }
+  }
+  save();
+  if (!Object.values(result.sourceAudits).every((c) => c.eligible)) return result;
   const cleanup = async (names) => {
     let failed = false;
     for (const name of names) try { await remove(name); }
@@ -97,11 +124,11 @@ export async function measureNativeGroup(context) {
       await own(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
         "-e", `MIXED_CONTROL_TOKEN=${token}`, "-e", "MARKETPLACE_FIXTURE_PATH=/out/marketplace.json", nodeImage.Id, "node", "bench/mixed-production/load-upstream.mjs"], up);
       await ready(up, "/health", probes, "upstream");
-      // Readiness is preparation, but still gets a real path-scoped observation identity.
+      // Readiness is preparation and gets its own immutable wire identity.
       const { control } = await import("./capture.mjs");
       const port = (await inspect(up)).NetworkSettings.Ports["8080/tcp"][0].HostPort;
-      await control(`http://127.0.0.1:${port}`, token, "startup", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_1" });
-      await own(appArgs(name, source, up, imageId), name); await ready(name, "/marketplace/en-US/item_1", probes, "app");
+      const startupWire = await control(`http://127.0.0.1:${port}`, token, "startup", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_1" });
+      await own(appArgs(name, source, up, imageId), name); await ready(name, "/marketplace/en-US/item_1", probes, "app", startupWire);
       const startupObservation = await control(`http://127.0.0.1:${port}`, token, "startup");
       const seconds = stage === "calibration" ? options.calibration : options.duration;
       const settings = { plan, records, app, source, base: "http://127.0.0.1:8080", upstream: `http://${up}:8080`, readbackPath: readbacks[app] ?? "/api/alerts",
@@ -154,7 +181,7 @@ export async function measureNativeGroup(context) {
       const raw = { schema: "mixed-native-window-receipt/v1", app, source, stage, pass, planSha256: plan.sha256, imageId, nativeProfile: options.profile,
         hostElapsedMs, window, participantsBefore, participantsAfter, counters: Object.fromEntries(Object.keys(names).map((role) => [role, { before: before[role], after: after[role] }])),
         samples: Object.fromEntries(Object.entries(names).map(([role, n]) => [role,
-          [...beforeBoundary.samples[n], ...(sampled[n] ?? []), ...afterBoundary.samples[n]].toSorted((a, b) => a.t - b.t)])), readiness: probes,
+          mergeResourceSamples(beforeBoundary.samples[n], sampled[n] ?? [], afterBoundary.samples[n])])), readiness: probes,
         startupObservation, finalUpstreamLedger, admission, resourceBoundaries: { before: beforeBoundary, after: afterBoundary },
         upstreamReconciliation: reconcileLedger(finalUpstreamLedger, upstreamManifest(plan, source, startupObservation,
           [...warmups.map((c, i) => upstreamPhase("warmup", i, c.capture, source)), ...captures.map((c, i) => upstreamPhase("cycle", i, c.capture, source))])),

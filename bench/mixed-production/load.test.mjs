@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
 import { records as fixture } from "../marketplace/fixtures.mjs";
 import { expectedPage, labels } from "../marketplace/records.mjs";
 import { createPlan } from "../workloads/mixed.mjs";
@@ -13,6 +17,7 @@ import { cpuSettings } from "../catalog/contract.mjs";
 import { measureNativeGroup } from "./measure.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { coveredSamples, resourceBoundary, resourceCoveragePolicy } from "./resources.mjs";
+import { sourceSnapshot } from "./source-audit.mjs";
 
 const records = fixture(), plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
 const settings = { completeDelayMs: 1, slowDelayMs: 50, cleanupMs: 1 };
@@ -102,6 +107,29 @@ test("prior failed native cleanup blocks measurement even when unit oracle vecto
   assert.equal(touched, false);
 });
 
+test("missing independent source audit blocks qualification and all native clocks/containers despite passing semantic unit vectors", async () => {
+  const fixture = (await goodVector()).captured.capture, api = (await vector("api")).captured.capture;
+  const capture = { ...fixture, results: plan.requests.map((r) => (r.source === "fixture" ? fixture : api).results[r.index]) };
+  const repo = fileURLToPath(new URL("../../", import.meta.url)), base = tmpdir();
+  const folder = mkdtempSync(join(base, "review-source-gate-"));
+  let touched = false;
+  try {
+    const options = { apps: ["corten"], profile: "defaults", passes: 3, nativeAudits: null };
+    const summary = { inventory: ["corten"], cleanupFailures: [], options, provenance: { nativeSource: { commit: "a".repeat(40), dirty: false } },
+      contractSha256: "b".repeat(64), apps: { corten: { buildInputs: sourceSnapshot(repo, ["bench/marketplace/corten/src/main.rs"]).sourceFiles } } };
+    const result = await measureNativeGroup({ summary, options, folder, repo, nativeBuildRoot: repo, plan, records, captures: { corten: capture },
+      io: { command: async () => "" }, own: () => { touched = true; }, save: () => {} });
+    assert.equal(result.timingBlocked, true); assert.equal(result.sourceAudits.corten.eligible, false);
+    assert.equal(result.sourceAudits.corten.failure, "missing-or-invalid-independent-native-source-audit");
+    assert.equal(result.cells.corten.api.qualification, null); assert.equal(touched, false);
+    assert.deepEqual(result.failures.map((r) => r.source), ["fixture", "api"]);
+  } finally {
+    const rel = relative(realpathSync(base), realpathSync(folder));
+    assert.ok(rel.startsWith("review-source-gate-") && !rel.includes("/") && !rel.includes("\\"));
+    rmSync(folder, { recursive: true });
+  }
+});
+
 async function metricVector(cycles = 3) {
   const { captured } = await goodVector();
   const window = { schema: "mixed-native-window/v1", source: "fixture", complete: true, failure: null, orphans: [],
@@ -118,8 +146,8 @@ async function metricVector(cycles = 3) {
   // Unit ledger vectors, not observations of a native app. The real HTTP test
   // below builds its receipts only from the live server's control endpoint.
   input.admission = { nativePausedUnixMs: 110501, settleMs: 1 };
-  input.finalUpstreamLedger = { schema: "mixed-native-upstream-ledger/v1", sealed: true, sealedUnixMs: 110501, snapshotUnixMs: 110502, orphans: [],
-    operations: upstreamManifest(plan, "fixture", input.startupObservation, phases).map((op) => ({ id: op.id, path: op.path, mode: op.mode,
+  input.finalUpstreamLedger = { schema: "mixed-native-upstream-ledger/v1", wireIdentity: "w3c-trace-id", sealed: true, sealedUnixMs: 110501, snapshotUnixMs: 110502, orphans: [],
+    operations: upstreamManifest(plan, "fixture", input.startupObservation, phases).map((op, i) => ({ id: op.id, path: op.path, mode: op.mode, traceId: (i + 1).toString(16).padStart(32, "0"),
       requests: 0, completed: 0, cancelled: 0, pending: 0, events: [] })) };
   return input;
 }
@@ -212,13 +240,15 @@ test("real concurrent upstream paths cannot change each other's fault mode or ca
   const server = loadUpstream({ item_1: records.item_1, item_2: records.item_2 }, "test-private");
   server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await control(base, "test-private", "slow", { mode: "cancel", delayMs: 1000, path: "/marketplace/records/item_1" });
-    const pending = httpRequest(`${base}/marketplace/records/item_1`); pending.on("error", () => {}); pending.end();
+    const slow = await control(base, "test-private", "slow", { mode: "cancel", delayMs: 1000, path: "/marketplace/records/item_1" });
+    const pending = httpRequest(`${base}/marketplace/records/item_1`, { headers: slow }); pending.on("error", () => {}); pending.end();
     for (let i = 0; i < 100 && !(await control(base, "test-private", "slow")).pending; i++) await sleep(5);
-    await control(base, "test-private", "other", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_2" });
-    const r = await fetch(`${base}/marketplace/records/item_2`); assert.equal(r.status, 200); await r.arrayBuffer();
+    const other = await control(base, "test-private", "other", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_2" });
+    const r = await fetch(`${base}/marketplace/records/item_2`, { headers: other }); assert.equal(r.status, 200); await r.arrayBuffer();
     assert.equal((await control(base, "test-private", "slow")).pending, 1);
-    await assert.rejects(control(base, "test-private", "stolen", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_1" }));
+    const replacement = await control(base, "test-private", "replacement", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_1" });
+    assert.equal((await fetch(`${base}/marketplace/records/item_1`, { headers: replacement })).status, 200);
+    assert.equal((await control(base, "test-private", "slow")).pending, 1, "another trace cannot steal the old in-flight read");
     pending.destroy();
     for (let i = 0; i < 100 && (await control(base, "test-private", "slow")).pending; i++) await sleep(5);
     assert.equal((await control(base, "test-private", "slow")).cancelled, 1);
@@ -234,14 +264,14 @@ test("real delayed HTTP read cannot escape the final ledger through an old path 
   const base = `http://127.0.0.1:${server.address().port}`;
   let delayed;
   try {
-    await control(base, token, "old", { path, mode: "complete", delayMs: 100 });
-    await (await fetch(`${base}${path}`)).arrayBuffer();
+    const wire = await control(base, token, "old", { path, mode: "complete", delayMs: 100 });
+    await (await fetch(`${base}${path}`, { headers: wire })).arrayBuffer();
     const saved = await control(base, token, "old");
     const manifest = [{ id: "old", path, mode: "complete", requests: 1, cancelled: 0, receipt: upstreamEvidence(saved) }];
     // A second real read begins after the observation was saved, without arming
     // a new identity. This was requests=1 in the saved row, live=2, orphans=[].
     await sleep(20);
-    delayed = fetch(`${base}${path}`).then((r) => r.arrayBuffer());
+    delayed = fetch(`${base}${path}`, { headers: wire }).then((r) => r.arrayBuffer());
     for (let i = 0; i < 100 && !(await control(base, token, "old")).pending; i++) await sleep(1);
     assert.equal(saved.requests, 1);
     const pending = await control(base, token, "old");
@@ -256,7 +286,7 @@ test("real delayed HTTP read cannot escape the final ledger through an old path 
     assert.equal(final.operations[0].pending, 0); assert.equal(final.operations[0].completed, 2);
     assert.deepEqual(final.orphans, []);
     assert.ok(reconcileLedger(final, manifest).cells[0].issues.includes("saved-observation-drifted"));
-    assert.equal((await fetch(`${base}${path}`)).status, 503);
+    assert.equal((await fetch(`${base}${path}`, { headers: wire })).status, 503);
     const late = await control(base, token, "ledger");
     assert.equal(late.operations[0].requests, 3);
     assert.equal(late.orphans[0].reason, "after-seal"); assert.equal(late.orphans[0].operationId, "old");
@@ -269,8 +299,8 @@ test("final live ledger can admit exactly one completed native HTTP read with no
   const token = "test-exact-read", path = "/marketplace/records/item_1", server = loadUpstream({ item_1: records.item_1 }, token);
   server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await control(base, token, "single", { path, mode: "normal", delayMs: 0 });
-    await (await fetch(`${base}${path}`)).arrayBuffer();
+    const wire = await control(base, token, "single", { path, mode: "normal", delayMs: 0 });
+    await (await fetch(`${base}${path}`, { headers: wire })).arrayBuffer();
     const saved = await control(base, token, "single");
     await control(base, token, "seal", { action: "seal" });
     assert.equal(reconcileLedger(await control(base, token, "ledger"), [{ id: "single", path, mode: "normal", requests: 1,
@@ -282,10 +312,10 @@ test("all warmup/preparation/primary/readback API operations retain their exact 
   const { captured } = await vector("api"), startup = { id: "startup", path: "/marketplace/records/item_1", mode: "normal",
     requests: 1, completed: 1, cancelled: 0, pending: 0, events: [{ method: "GET", path: "/marketplace/records/item_1", result: "completed" }] };
   const manifest = upstreamManifest(plan, "api", startup, [upstreamPhase("warmup", 0, captured.capture, "api"), upstreamPhase("cycle", 0, captured.capture, "api")]);
-  const ledger = { schema: "mixed-native-upstream-ledger/v1", sealed: true, sealedUnixMs: 1, snapshotUnixMs: 2, orphans: [],
-    operations: manifest.map((op) => ({ id: op.id, path: op.path, mode: op.mode, requests: op.requests, cancelled: op.cancelled,
+  const ledger = { schema: "mixed-native-upstream-ledger/v1", wireIdentity: "w3c-trace-id", sealed: true, sealedUnixMs: 1, snapshotUnixMs: 2, orphans: [],
+    operations: manifest.map((op, i) => ({ id: op.id, path: op.path, mode: op.mode, traceId: (i + 1).toString(16).padStart(32, "0"), requests: op.requests, cancelled: op.cancelled,
       completed: op.requests - op.cancelled, pending: 0, events: Array.from({ length: op.requests }, () => ({ method: "GET", path: op.path,
-        result: op.cancelled ? "cancelled" : "completed" })) })) };
+        traceId: (i + 1).toString(16).padStart(32, "0"), result: op.cancelled ? "cancelled" : "completed" })) })) };
   assert.equal(reconcileLedger(ledger, manifest).valid, true);
   assert.equal(manifest.filter((op) => op.id.startsWith("cycle_") && op.id.includes("prep_") && op.requests === 1).length, 9);
   assert.equal(manifest.filter((op) => op.id.startsWith("cycle_") && op.id.includes("state_") && op.requests === 0).length, 9);
