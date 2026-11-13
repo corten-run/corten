@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -179,14 +180,23 @@ func (s *marketplaceSource) load(ctx context.Context, id string, completeDocumen
 	}
 	var record marketplaceRecord
 	decoder := json.NewDecoder(res.Body)
-	if err := decoder.Decode(&record); err != nil {
-		return nil, err
-	}
 	if completeDocument {
+		var data json.RawMessage
+		if err := decoder.Decode(&data); err != nil {
+			return nil, err
+		}
 		var extra any
 		if err := decoder.Decode(&extra); err != io.EOF {
 			return nil, fmt.Errorf("marketplace API: expected one JSON document")
 		}
+		if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &record); err != nil {
+			return nil, err
+		}
+	} else if err := decoder.Decode(&record); err != nil {
+		return nil, err
 	}
 	if err := record.validate(); err != nil {
 		return nil, err
