@@ -110,6 +110,13 @@ node bench/deployments/express-bun/verify-fixes.mjs regressions
 
 This command accepts the same round/output/dependency-root options and always builds
 the native image from the checkout. It is not the eight-cell qualification runner.
+It refuses a dirty or uncommitted verifier before creating output or starting Docker.
+Run a committed checkout and put output under the ignored `work/` directory (the default)
+or outside the checkout. The receipt records `commit`/`dirty` and `commitAfter`/`dirtyAfter`,
+plus exact SHA-256 file manifests in `sources`/`sourcesAfter` for the tracked Bun harness,
+native Express sources, catalog/marketplace/workload oracles and their shared helpers.
+A changed HEAD, dirty tree or different input hashes prevents a passing receipt even
+when every native probe passes. Earlier receipts without this binding are not upgraded.
 It checks a hanging named inspector's timeout cleanup, complete stdout/stderr logs
 from a failing native process, and Node/Bun fixture claims against actual fixture and
 API sources. Each runtime/source probe checks both 500-record JSON sweeps and native

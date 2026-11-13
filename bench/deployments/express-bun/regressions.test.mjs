@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { command, here } from "./build.mjs";
+import { checkoutIdentity, assertCheckoutUnchanged, verifyFixes } from "./verify-fixes.mjs";
 import { upstream, checkHttp, fixtureIndependent, read } from "./checks.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
@@ -64,4 +66,54 @@ test("command stream artifacts retain full stdout and stderr separately", async 
     assert.equal(readFileSync(stdout, "utf8"), "");
     assert.equal(readFileSync(stderr, "utf8"), "before failure\n");
   } finally { rmSync(out, { recursive: true, force: true }); }
+});
+
+test("receipt binds clean committed harness/oracle bytes and rejects changes after execution", () => {
+  mkdirSync(join(here, "work"), { recursive: true });
+  const base = mkdtempSync(join(here, "work/receipt-"));
+  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const verifier = "bench/deployments/express-bun/verify-fixes.mjs", oracle = "bench/workloads/json-check.mjs";
+  try {
+    git("init", "-q");
+    git("config", "user.name", "Local regression fixture"); git("config", "user.email", "fixture@example.invalid");
+    for (const path of [verifier, oracle]) {
+      mkdirSync(join(base, path, ".."), { recursive: true }); writeFileSync(join(base, path), "export const fixture = 1;\n");
+    }
+    git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-qm", "Committed receipt fixture");
+    const before = checkoutIdentity(base);
+    assert.equal(before.dirty, false); assert.match(before.commit, /^[a-f0-9]{40}$/);
+    assert.deepEqual(Object.keys(before.sources), [verifier, oracle]);
+    assertCheckoutUnchanged(before, checkoutIdentity(base));
+    for (const path of [verifier, oracle]) {
+      const original = readFileSync(join(base, path));
+      writeFileSync(join(base, path), "export const changed = true;\n");
+      const changed = checkoutIdentity(base); assert.equal(changed.dirty, true);
+      assert.throws(() => assertCheckoutUnchanged(before, changed), /became dirty/);
+      // Structural hostile receipt check: even a forged clean flag cannot hide changed hashes.
+      assert.throws(() => assertCheckoutUnchanged(before, { ...changed, dirty: false }), /bytes changed/);
+      writeFileSync(join(base, path), original);
+    }
+    writeFileSync(join(base, "untracked.txt"), "untracked");
+    assert.equal(checkoutIdentity(base).dirty, true); rmSync(join(base, "untracked.txt"));
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Different clean HEAD");
+    const after = checkoutIdentity(base); assert.equal(after.dirty, false);
+    assert.throws(() => assertCheckoutUnchanged(before, after), /commit changed/);
+    git("rm", "--cached", verifier); git("-c", "commit.gpgsign=false", "commit", "-qm", "HEAD without verifier");
+    assert.throws(() => checkoutIdentity(base), /verifier must be tracked/);
+  } finally {
+    assert.ok(base.startsWith(join(here, "work/receipt-")));
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("dirty checkout is refused before output creation or Docker execution", async () => {
+  const scratch = mkdtempSync(join(here, "receipt-untracked-")), out = join(scratch, "must-not-exist");
+  try {
+    writeFileSync(join(scratch, "dirty.txt"), "Untracked preflight regression fixture\n");
+    await assert.rejects(verifyFixes(["reject-dirty", "--out", out]), /requires a clean committed checkout/);
+    assert.equal(existsSync(out), false);
+  } finally {
+    assert.ok(scratch.startsWith(join(here, "receipt-untracked-")));
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

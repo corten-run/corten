@@ -1,7 +1,8 @@
 // Bounded regression probes, not a candidate qualification or performance matrix.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -12,9 +13,27 @@ import { checkPages } from "./pages.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
 
-const config = options(process.argv.slice(2)); mkdirSync(dirname(config.out), { recursive: true }); mkdirSync(config.out);
+export function checkoutIdentity(base = root) {
+  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8" }).trim();
+  const commit = git("rev-parse", "--verify", "HEAD"), dirty = !!git("status", "--porcelain", "--untracked-files=all");
+  const paths = git("ls-files", "-z", "--", "bench/deployments/express-bun", "bench/catalog", "bench/marketplace", "bench/workloads",
+    "bench/fullstack/apps/express", "bench/fullstack/apps.mjs", "bench/fullstack/conformance.mjs", "bench/fullstack/passes.mjs", "scripts/steady.mjs").split("\0").filter(Boolean).sort();
+  assert.ok(paths.includes("bench/deployments/express-bun/verify-fixes.mjs"), "verifier must be tracked in the checkout");
+  git("cat-file", "-e", `${commit}:bench/deployments/express-bun/verify-fixes.mjs`);
+  return { commit, dirty, sources: Object.fromEntries(paths.map((path) => [path, sha256(readFileSync(join(base, path)))])) };
+}
+export function assertCheckoutUnchanged(before, after) {
+  assert.equal(before.dirty, false, "verification requires a clean committed checkout");
+  assert.equal(after.dirty, false, "checkout became dirty during verification");
+  assert.equal(after.commit, before.commit, "commit changed during verification");
+  assert.deepEqual(after.sources, before.sources, "harness/oracle/source bytes changed during verification");
+}
+export async function verifyFixes(args) {
+const before = checkoutIdentity();
+assert.equal(before.dirty, false, "verification requires a clean committed checkout");
+const config = options(args); mkdirSync(dirname(config.out), { recursive: true }); mkdirSync(config.out);
 const task = `express-bun-fixes-${process.pid}-${randomBytes(4).toString("hex")}`;
-const result = { scope: "bounded P2 regressions only", task, commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+const result = { scope: "bounded P2 regressions only", task, ...before,
   readyForMeasurement: false, readyForLoad: false, probes: [], cleanupFailures: [] };
 const observe = (entry) => appendFileSync(join(config.out, "raw.ndjson"), JSON.stringify(entry) + "\n");
 let browser, api, current;
@@ -94,8 +113,19 @@ finally {
   }
   result.remainingContainers = await docker(["ps", "-aq", "--filter", `label=agent.task=${task}`]);
   result.remainingImages = await docker(["image", "ls", "-q", "--filter", `label=agent.task=${task}`]);
-  result.passed = !result.failure && !result.cleanupFailures.length && !result.remainingContainers && !result.remainingImages && result.probes.length === 6 && result.probes.every((probe) => probe.outcome === "passed");
+  try {
+    const after = checkoutIdentity();
+    Object.assign(result, { commitAfter: after.commit, dirtyAfter: after.dirty, sourcesAfter: after.sources });
+    assertCheckoutUnchanged(before, after);
+  } catch (error) { result.sourceCheckError = error.stack; }
+  result.passed = !result.failure && !result.sourceCheckError && !result.cleanupFailures.length && !result.remainingContainers && !result.remainingImages && result.probes.length === 6 && result.probes.every((probe) => probe.outcome === "passed");
   writeFileSync(join(config.out, "regressions.json"), JSON.stringify(result, null, 2) + "\n");
-  console.log(JSON.stringify({ passed: result.passed, probes: result.probes.map(({ name, outcome }) => ({ name, outcome })), cleanupFailures: result.cleanupFailures, remainingContainers: result.remainingContainers, remainingImages: result.remainingImages }));
-  process.exitCode = result.passed ? 0 : 1;
+  console.log(JSON.stringify({ passed: result.passed, commit: result.commit, dirty: result.dirty, commitAfter: result.commitAfter, dirtyAfter: result.dirtyAfter,
+    probes: result.probes.map(({ name, outcome }) => ({ name, outcome })), cleanupFailures: result.cleanupFailures, remainingContainers: result.remainingContainers, remainingImages: result.remainingImages }));
+}
+return result;
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  try { const result = await verifyFixes(process.argv.slice(2)); process.exitCode = result.passed ? 0 : 1; }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
 }
