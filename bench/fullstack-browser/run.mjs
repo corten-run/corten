@@ -182,7 +182,7 @@ export async function run(args) {
       save();
     }
     const network = await owned.createNetwork();
-    const upstreamImage = JSON.parse(await docker(["image", "inspect", "node:24-bookworm-slim"]))[0];
+    const upstreamImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0];
     summary.upstreamImage = imageEvidence(upstreamImage, commit);
     const upstreamName = `${task}-upstream`;
     const upstream = await owned.start(upstreamName, ["--network", network, "--cpus", "1", "--memory", "256m", "-p", "127.0.0.1::8080",

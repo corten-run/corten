@@ -16,7 +16,7 @@ test("actual OS cgroup boundaries, restart observations and sampler process clos
   };
   const runId = `mixed-os-resources-${randomBytes(4).toString("hex")}`, labels = ["--label", "agent.owner=codex", "--label", `agent.task=${runId}`,
     "--label", `run.corten.mixed-production=${runId}`], ids = [], participants = {}, repo = resolve(".");
-  const image = JSON.parse(await docker(["image", "inspect", "node:24-bookworm-slim"]))[0].Id;
+  const image = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0].Id;
   const inspect = async (id) => JSON.parse(await docker(["inspect", id]))[0];
   let sampler;
   try {

@@ -21,7 +21,7 @@ const waitForExit = async () => {
   }
 };
 try {
-  await docker(["run", "-d", "--name", name, "--network", "none", ...labels, ...limits, "node:24-bookworm-slim", "node", "--input-type=module", "-e",
+  await docker(["run", "-d", "--name", name, "--network", "none", ...labels, ...limits, "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "--input-type=module", "-e",
     'import {createServer} from "node:http";const server=createServer((req,res)=>{res.end("alive");if(req.url==="/exit")setTimeout(()=>{server.close();server.closeAllConnections();},250);});server.listen(8080,"127.0.0.1");']);
   await docker(["exec", name, "node", "-e", 'fetch("http://127.0.0.1:8080/health").then(r=>r.arrayBuffer())']);
   const before = await inspect(), since = new Date().toISOString();
@@ -29,7 +29,7 @@ try {
   const result = await collectTerminalHealth({ role: "application", source: "api", path: "/health", inspect, observe: async () => {
     await docker(["exec", name, "node", "-e", 'fetch("http://127.0.0.1:8080/exit").then(r=>r.arrayBuffer()).then(()=>process.exit(0))']);
     await waitForExit();
-    await docker(["create", "--name", observer, "--network", `container:${name}`, ...labels, ...limits, "node:24-bookworm-slim", "node", "-e", "process.exit(0)"]);
+    await docker(["create", "--name", observer, "--network", `container:${name}`, ...labels, ...limits, "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "-e", "process.exit(0)"]);
     try { await docker(["start", "-a", observer]); }
     catch (error) { assert.match(error.stderr, /cannot join network namespace of a non running container/); throw error; }
     assert.fail("Docker unexpectedly joined an exited target");

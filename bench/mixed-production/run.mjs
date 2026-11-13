@@ -151,7 +151,7 @@ export async function run(args) {
     summary.executionMounts = JSON.parse(readFileSync(join(folder, "execution/inputs.json"))).mounts;
     summary.tools.docker = await io.command("docker", ["version", "--format", "{{.Server.Version}}"]);
     const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
-    const nodeImage = await toolImage("node:24-bookworm-slim");
+    const nodeImage = await toolImage("node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1");
     const browserImage = await toolImage(`mcr.microsoft.com/playwright:v${version}-noble`);
     summary.tools.nodeImage = nodeImage.Id; summary.tools.browserImage = browserImage.Id; summary.tools.playwright = version;
     assert.ok(existsSync(join(repo, "node_modules", "@playwright", "test")), "install tooling dependencies or link main checkout dependencies");

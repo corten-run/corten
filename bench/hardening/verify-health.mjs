@@ -31,7 +31,7 @@ try {
     "--pids-limit", "64", "--label", "agent.owner=codex", "--label", `agent.task=${task}`, "--label", `run.corten.hardening=${task}`,
     "-v", `${resolve(repo)}:/repo:ro`, "--health-interval", "1s", "--health-timeout", "2s", "--health-retries", "1",
     "--health-cmd", 'node -e "fetch(\'http://127.0.0.1:8080/health\').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"',
-    "node:24-bookworm-slim", "node", "--input-type=module", "-e",
+    "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "--input-type=module", "-e",
     'import {createServer} from "node:http";let failed=false;createServer((req,res)=>{if(req.url==="/fail")failed=true;res.writeHead(req.url==="/health"&&failed?503:200);res.end("native health control");}).listen(8080,"127.0.0.1");']);
   const before = await waitFor("healthy"), start = await clock(), good = await health();
   assert.equal(good.response.status, 200);

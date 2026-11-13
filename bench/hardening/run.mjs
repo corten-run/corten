@@ -278,7 +278,7 @@ export async function run(args) {
     rootContext = await nativeBuildContext({ command }, folder, summary.commit, "corten", inputFiles.map(({ path, sha256 }) => ({ path, sha256 })));
     sourceRoot = join(folder, "corten-build-context");
     const version = JSON.parse(readFileSync(join(sourceRoot, "package.json"))).devDependencies["@playwright/test"];
-    const toolRefs = { node: "node:24-bookworm-slim", checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
+    const toolRefs = { node: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
     assert.ok(existsSync(join(installedDependencies, "@playwright/test/package.json")), "--node-modules must name an installed pinned dependency tree");
     assert.equal(JSON.parse(readFileSync(join(installedDependencies, "@playwright/test/package.json"))).version, version, "installed browser driver version mismatch");
     mounted = ["-v", `${sourceRoot}:/repo:ro`];

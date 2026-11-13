@@ -10,7 +10,7 @@ publishing integration is present.
 ## Run
 
 Install the root tooling dependencies and Playwright Chromium using the repository's existing
-setup. Have `node:24-bookworm-slim` available locally. `--build` builds the approved native
+setup. Have `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1` available locally. `--build` builds the approved native
 marketplace images using their existing Dockerfiles; alternatively `--targets` selects
 already-built local images. Execution never implicitly pulls an application image.
 Each native app gets one CPU, 1 GiB memory and

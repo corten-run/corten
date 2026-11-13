@@ -33,11 +33,11 @@ test("actual cached Docker build, charged worker lifetime and final cleanup repl
   try {
     // No image pull or package install. The control Dockerfile has no RUN and
     // copies exactly one committed marker from the retained archive.
-    const base = JSON.parse(await docker(["image", "inspect", "node:24-bookworm-slim"]))[0];
+    const base = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0];
     const dockerfile = "bench/marketplace/corten/Dockerfile"; mkdirSync(join(repository, "bench/marketplace/corten"), { recursive: true });
     writeFileSync(join(repository, "marker.txt"), "committed apparatus build input\n");
     const server = 'require("node:http").createServer((q,s)=>s.end("apparatus only")).listen(8080,"0.0.0.0")';
-    writeFileSync(join(repository, dockerfile), `FROM node:24-bookworm-slim\nCOPY marker.txt /marker.txt\nCMD ${JSON.stringify(["node", "-e", server])}\n`);
+    writeFileSync(join(repository, dockerfile), `FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\nCOPY marker.txt /marker.txt\nCMD ${JSON.stringify(["node", "-e", server])}\n`);
     git(["init", "--quiet"]); git(["add", "."]);
     git(["-c", "user.name=Apparatus Test", "-c", "user.email=apparatus@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "apparatus inputs"]);
     const commit = git(["rev-parse", "HEAD"]), files = committedInputs(repository, commit);
@@ -47,7 +47,7 @@ test("actual cached Docker build, charged worker lifetime and final cleanup repl
     summary.builds = { corten: build }; summary.ownedImages = [tag];
     assert.equal(build.command.inputSha256, digest(readFileSync(join(result, "corten-build-context.tar"))));
     assert.deepEqual(savedFiles(join(result, "corten-build-context")), before);
-    assert.equal(JSON.parse(await docker(["image", "inspect", "node:24-bookworm-slim"]))[0].Id, base.Id, "shared base tag changed");
+    assert.equal(JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0].Id, base.Id, "shared base tag changed");
     writeFileSync(join(result, "build.json"), JSON.stringify(build));
     const labels = ["--label", "agent.owner=codex", "--label", `agent.task=${runId}`, "--label", `run.corten.hardening=${runId}`];
     networkReserved = true; summary.ownedNetworks = [`${runId}-net`];
