@@ -77,3 +77,17 @@ native arrival barrier until those individual acknowledgements are recorded.
 This is for bounded fault setup, not measurement timing: default correctness and
 all offered-load measurements retain individual HTTP requests. No renderer,
 consumer work, history update or mutation-time instrumentation is bypassed.
+
+Snapshot requests reconcile the current DOM cursor, counter and row count against
+only the acknowledged state or its one staged candidate before replacing rows.
+Thus overflow after an applied event's lost acknowledgement retains that effect,
+while an unobserved delivery contributes none. Unmatched observations fail before
+snapshot reads or staged-state mutation. Automatic Action Cable reconnects resume
+after the first rendered snapshot, rather than reusing the initial-attach flag.
+`node bench/live/apps/rails/test/recovery.mjs <base>` drops native event/ACK frames,
+overflows the real bounded queue, checks rows and effects, and captures the second
+automatic native start with a new publication before it reaches the server.
+This routed-socket reconnect check ends by closing its browser context; native
+explicit detach/cleanup remains independently checked by the existing suites.
+Raw before/after receipts are in `test/receipts/`. These are bounded correctness
+observations, not throughput measurements or load admission.

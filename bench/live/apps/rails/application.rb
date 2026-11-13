@@ -51,7 +51,7 @@ class NativeChannel < ActionCable::Channel::Base
     ready = NativeStore.subscribe(self, @client, data["from"], data["initial"], data["observed"])
     transmit({ kind: "ready", **ready })
     if data["initial"] || ready[:needs_snapshot]
-      snapshot({})
+      snapshot(data["observed"] || {})
     else
       # Materialize the actual last-applied client state, not the latest source.
       state = NativeStore.client(@client)
@@ -62,8 +62,8 @@ class NativeChannel < ActionCable::Channel::Base
     transmit({ kind: "error", message: error.message })
   end
 
-  def snapshot(_data)
-    snapshot, state = NativeStore.snapshot_client(self, @client)
+  def snapshot(data)
+    snapshot, state = NativeStore.snapshot_client(self, @client, data)
     transmit({ kind: "snapshot", snapshot: snapshot, html: screen(state) })
   end
 

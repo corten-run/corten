@@ -105,7 +105,9 @@ defmodule NativeLive.StoreTest do
     publish(2)
     publish(3)
     assert_receive {:parity_event, %{"seq" => 3}, "gap", %{through: 1, count: 1}}
-    assert {%{through: 3}, %{count: 1}} = Store.call({:snapshot, self(), "browser"})
+
+    assert {%{through: 3}, %{count: 1}} =
+             Store.call({:snapshot, self(), "browser", observed(1, 1)})
   end
 
   test "held actual consumer reaches bounded queue and reports saturation before resnapshot" do
@@ -117,7 +119,48 @@ defmodule NativeLive.StoreTest do
     assert_receive {:parity_overflow, %{queueEvents: 2, queuePeak: 2}}
     assert Store.call(:resources).queueEvents == 0
     assert Store.call(:resources).queuePeak == 2
-    assert {%{through: 3}, %{count: 0}} = Store.call({:snapshot, self(), "browser"})
+
+    assert {%{through: 3}, %{count: 0}} =
+             Store.call({:snapshot, self(), "browser", observed(0, 0)})
+  end
+
+  test "overflow snapshot reconciles only acknowledged or staged browser observations" do
+    reader()
+    publish(1)
+    assert_receive {:parity_event, _, "applied", %{through: 1, count: 1}}
+    Store.call({:publish, %{"events" => Enum.map(2..4, &event/1)}})
+    assert_receive {:parity_overflow, %{queueEvents: 2}}
+    reads = Store.call(:resources).inventory.snapshotReads
+
+    for forged <- [nil, observed(1, 99), observed(4, 4), Map.put(observed(1, 1), "rowCount", 2)] do
+      assert {:error, _} = Store.call({:snapshot, self(), "browser", forged})
+    end
+
+    assert Store.call(:resources).inventory.snapshotReads == reads
+    assert Store.call({:client, "browser"}).pending.count == 1
+
+    assert {%{through: 4}, %{count: 1}} =
+             Store.call({:snapshot, self(), "browser", observed(1, 1)})
+
+    ack(4, 1)
+    Store.call({:control, %{"action" => "duplicate"}})
+    assert_receive {:parity_event, _, "duplicate", %{count: 1}}
+    ack(4, 1)
+    publish(5)
+    assert_receive {:parity_event, _, "applied", %{count: 2}}
+  end
+
+  test "snapshot does not count a staged delivery the browser did not observe" do
+    reader()
+    publish(1)
+    assert_receive {:parity_event, _, "applied", _}
+    Store.call({:publish, %{"events" => Enum.map(2..4, &event/1)}})
+    assert_receive {:parity_overflow, _}
+
+    assert {%{through: 4}, %{count: 0}} =
+             Store.call({:snapshot, self(), "browser", observed(0, 0)})
+
+    ack(4, 0)
   end
 
   test "replay copy is history bounded and expired cursor is actually detected" do
@@ -127,7 +170,7 @@ defmodule NativeLive.StoreTest do
     ack(1, 0)
     for n <- 2..6, do: publish(n)
     assert %{status: "expired"} = Store.call({:subscribe, self(), 1, false, observed(1, 0)})
-    Store.call({:snapshot, self(), "browser"})
+    Store.call({:snapshot, self(), "browser", observed(1, 0)})
     ack(6, 0)
     publish(7)
     publish(8)

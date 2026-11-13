@@ -127,7 +127,7 @@ class NativeStoreTest < Minitest::Test
     NativeStore.unsubscribe(@reader)
     NativeStore.publish(event(1))
     NativeStore.subscribe(@reader, "client", 0, true)
-    NativeStore.snapshot_client(@reader, "client")
+    NativeStore.snapshot_client(@reader, "client", observed(0, 0))
     ack(1, 0)
     NativeStore.unsubscribe(@reader)
     2.upto(6) { |seq| NativeStore.publish(event(seq)) }
@@ -135,7 +135,7 @@ class NativeStoreTest < Minitest::Test
     assert_equal "expired", result[:status]
     assert_equal 4, result[:resources][:historyEvents]
     assert_equal 4, result[:resources][:historyPeak]
-    NativeStore.snapshot_client(@reader, "client")
+    NativeStore.snapshot_client(@reader, "client", observed(1, 0))
     ack(6, 0)
     NativeStore.unsubscribe(@reader)
     7.upto(8) { |seq| NativeStore.publish(event(seq)) }
@@ -169,6 +169,35 @@ class NativeStoreTest < Minitest::Test
     assert_equal 1, NativeStore.client("client")[:count]
     NativeStore.pump(@reader)
     assert_equal 1, NativeStore.client("client")[:pending][:count]
+  end
+
+  def test_overflow_snapshot_reconciles_only_acknowledged_or_staged_observations
+    NativeStore.publish(event(1))
+    NativeStore.publish_many((2..4).map { |seq| event(seq) })
+    assert_equal 1, @reader.overflows.size
+    reads = NativeStore.resources[:inventory][:snapshotReads]
+    [nil, observed(1, 99), observed(4, 4), observed(1, 1).merge("rowCount" => 2)].each do |forged|
+      assert_raises(ArgumentError) { NativeStore.snapshot_client(@reader, "client", forged) }
+    end
+    assert_equal reads, NativeStore.resources[:inventory][:snapshotReads]
+    assert_equal 1, NativeStore.client("client")[:pending][:count]
+    snapshot, state = NativeStore.snapshot_client(@reader, "client", observed(1, 1))
+    assert_equal 4, snapshot[:through]
+    assert_equal 1, state[:count]
+    ack(4, 1)
+    NativeStore.control("action" => "duplicate")
+    ack(4, 1)
+    NativeStore.publish(event(5))
+    assert_equal 2, NativeStore.client("client")[:pending][:count]
+  end
+
+  def test_snapshot_does_not_count_an_unobserved_staged_delivery
+    NativeStore.publish(event(1))
+    NativeStore.publish_many((2..4).map { |seq| event(seq) })
+    snapshot, state = NativeStore.snapshot_client(@reader, "client", observed(0, 0))
+    assert_equal 4, snapshot[:through]
+    assert_equal 0, state[:count]
+    ack(4, 0)
   end
 
   def test_per_consumer_inventory_does_not_require_an_unrelated_reader_to_close

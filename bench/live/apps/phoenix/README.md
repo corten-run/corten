@@ -91,3 +91,15 @@ two pages sharing one browser cookie jar. These are correctness regressions, not
 load qualification or measurement admission.
 It also reconnects/detaches one page while its peer keeps receiving and withholds
 the first HTTP acknowledgement/native event during overlapping publication calls.
+
+Snapshot requests reconcile the last actual browser observation against only the
+acknowledged state or its single staged candidate before replacing rows. The
+saved observation is also used after an expired-cursor remount, whose new DOM is
+not the old browser state. Overflow after a lost acknowledgement preserves an
+already-applied effect; an unobserved delivery contributes none. Unmatched
+counters/cursors/row counts fail before snapshot reads or state mutation.
+`node bench/live/apps/phoenix/test/recovery.mjs <base>` drops actual native
+event/ACK frames, overflows the bounded queue, checks source rows and visible
+effects, and verifies duplicate suppression and subsequent progress.
+Raw before/after receipts are in `test/receipts/`. These are bounded correctness
+observations, not throughput measurements or load admission.

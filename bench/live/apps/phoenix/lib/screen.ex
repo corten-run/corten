@@ -26,7 +26,7 @@ defmodule NativeLive.Screen do
 
         cond do
           initial || ready.needs_snapshot ->
-            {:noreply, snapshot(socket)}
+            {:noreply, snapshot(socket, observed)}
 
           ready.status == "expired" ->
             {:noreply, socket}
@@ -38,7 +38,7 @@ defmodule NativeLive.Screen do
     end
   end
 
-  def handle_event("snapshot", _, socket), do: {:noreply, snapshot(socket)}
+  def handle_event("snapshot", observed, socket), do: {:noreply, snapshot(socket, observed)}
 
   def handle_event("pause", _, socket) do
     :ok = Store.call({:pause, self(), true})
@@ -81,9 +81,14 @@ defmodule NativeLive.Screen do
      push_event(socket, "parity", %{kind: "overflow", outcome: "resnapshot", resources: resources})}
   end
 
-  defp snapshot(socket) do
-    {snapshot, state} = Store.call({:snapshot, self(), socket.assigns.client})
-    socket |> replace(state) |> push_event("parity", %{kind: "snapshot", snapshot: snapshot})
+  defp snapshot(socket, observed) do
+    case Store.call({:snapshot, self(), socket.assigns.client, observed}) do
+      {:error, reason} ->
+        push_event(socket, "parity", %{kind: "error", message: reason})
+
+      {snapshot, state} ->
+        socket |> replace(state) |> push_event("parity", %{kind: "snapshot", snapshot: snapshot})
+    end
   end
 
   defp replace(socket, state) do
