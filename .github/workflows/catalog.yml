@@ -94,6 +94,9 @@ jobs:
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      - name: Test native router alert stores and localized targets
+        if: contains(fromJSON('["nextjs","nuxt","react-router","sveltekit","astro","tanstack-start"]'), matrix.app)
+        run: node --test bench/fullstack/apps/${{ matrix.app }}/alerts.test.mjs
       - name: Test native Django alert persistence and source boundaries
         if: matrix.app == 'django'
         run: |
