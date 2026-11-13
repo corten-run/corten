@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { assemble, artifacts, verifyArtifacts, digest } from "./evidence.mjs";
+import { assemble, artifacts, verifyArtifacts, digest, targetOutcome } from "./evidence.mjs";
 const folder = resolve(process.argv[2]);
 const read = (name) => JSON.parse(readFileSync(join(folder, name), "utf8"));
 verifyArtifacts(folder, read("manifest.json"));
@@ -32,6 +32,21 @@ const mutations = {
   "weakened native task limit": (v) => { v.lifecycle.application.before.HostConfig.PidsLimit = 4096; v.lifecycle.application.after.HostConfig.PidsLimit = 4096; },
   "external configuration update": (v) => v.lifecycle.application.events.push({ Action: "update" }),
   "changed reviewed schedule": (v) => { const b = JSON.parse(v.settings.effectiveBudgets); b.attack.scheduledAtMs.pop(); v.settings.effectiveBudgets = JSON.stringify(b); },
+  "successful HTTP 503": (v) => v.raw.find((r) => r.type === "legitimate" && r.ok).status = 503,
+  "successful reset": (v) => v.raw.find((r) => r.type === "legitimate" && r.ok).error = "ECONNRESET",
+  "successful timeout": (v) => v.raw.find((r) => r.type === "legitimate" && r.ok).timedOut = true,
+  "successful partial body": (v) => v.raw.find((r) => r.type === "legitimate" && r.ok).bodyComplete = false,
+  "invented response hash": (v) => v.raw.find((r) => r.type === "legitimate" && r.ok).bodySha256 = "a".repeat(64),
+  "established attack without emitted work": (v) => { const r = v.raw.find((r) => r.type === "attack" && r.established); r.bytesQueued = 0; r.writes = 0; r.drips = 0; r.dripAtMs = []; },
+  "substituted attack request": (v) => v.raw.find((r) => r.type === "attack").firstSha256 = "a".repeat(64),
+  "wrong numeric record with matching byte receipt": (v) => {
+    const row = v.raw.find((r) => r.type === "legitimate" && r.ok && r.path.startsWith("/api/"));
+    const record = JSON.parse(Buffer.from(row.bodyBase64, "base64")); record.title = "not the requested native record";
+    const body = Buffer.from(JSON.stringify(record)); row.bodyBase64 = body.toString("base64"); row.bodyBytes = body.length; row.bodySha256 = digest(body);
+  },
+};
+if (["slow-headers", "slow-bodies"].includes(settings.phase)) mutations["retained slow connection without trickles"] = (v) => {
+  const row = v.raw.find((r) => r.type === "attack" && r.established); row.drips = 0; row.dripAtMs = []; row.writes = 1; row.bytesQueued = row.firstBytes;
 };
 if (input.raw.some((r) => r.type === "resources" && r.collectedAtMs !== undefined)) {
   mutations["resource collection outside window"] = (v) => v.raw.find((r) => r.type === "resources").collectedAtMs += 30000;
@@ -44,7 +59,18 @@ if (settings.nativeSource === "api") {
     const body = JSON.parse(response.body); body.requests.item_1 = -1;
     response.body = JSON.stringify(body); response.bytes = Buffer.byteLength(response.body); response.sha256 = digest(response.body);
   };
+  mutations["zero timed API reads despite successful native service"] = (v) => {
+    const response = v.raw.find((r) => r.type === "upstream-control-after").response;
+    response.body = JSON.stringify({ status: 200, requests: {}, answers: {} }); response.bytes = Buffer.byteLength(response.body); response.sha256 = digest(response.body);
+  };
 }
+const terminalExit = structuredClone(input), state = terminalExit.lifecycle.application.after.State;
+state.Running = false; state.ExitCode = 137; state.OOMKilled = true;
+state.FinishedAt = new Date(Date.parse(terminalExit.raw.find((r) => r.type === "clock").wallAtStart) + JSON.parse(settings.effectiveBudgets).legitimate.after.endMs - 100).toISOString();
+const terminalCapture = assemble(terminalExit);
+assert.notEqual(terminalCapture.recovery.disposition, "recovered");
+assert.equal(targetOutcome(terminalCapture, { productionQualified: true }, { state: "observed" }).numericComparisonQualified, false);
+console.log("retained late terminal exit as target-capacity-failure, not an invented stopped midpoint sample");
 for (const [name, mutate] of Object.entries(mutations)) {
   const value = structuredClone(input); mutate(value); assert.throws(() => assemble(value), undefined, `accepted ${name}`); console.log(`rejected ${name}`);
 }

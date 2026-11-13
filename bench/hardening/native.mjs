@@ -64,11 +64,10 @@ export function assessNative(report, qualification, deployment = "direct") {
     assert.deepEqual(Object.keys(byName), ["mutated-json", "mutated-page", "fault-json-503", "fault-page-503", ...(expectedLive ? ["live-503"] : []), "fault-json-302", "fault-page-302", "restored-json"]);
     assert.equal(api.responses.length, Object.keys(byName).length, "duplicate API control response");
     const counters = (step) => jsonOf(api.controllers.find((r) => r.step === step).response);
-    assert.deepEqual(counters("count-json").requests, { item_1: 1 }, "native JSON did not read the upstream exactly once");
-    assert.deepEqual(counters("count-page").requests, { item_1: 1 }, "native page did not read the upstream exactly once");
+    const exactReads = ["count-json", "count-page"].every((step) => isDeepStrictEqual(counters(step).requests, { item_1: 1 }));
     const reset = counters("verify-reset"); assert.equal(reset.status, 200); assert.deepEqual(reset.answers, {}); assert.deepEqual(reset.requests, {});
     const errorResponse = (row) => row.complete && row.status >= 500 && row.status <= 599;
-    const valid = healthy(byName["mutated-json"]) && isDeepStrictEqual(jsonOf(byName["mutated-json"]), api.expected)
+    const valid = exactReads && healthy(byName["mutated-json"]) && isDeepStrictEqual(jsonOf(byName["mutated-json"]), api.expected)
       && byName["mutated-json"].body !== JSON.stringify(api.expected, null, 2)
       && healthy(byName["mutated-page"]) && byName["mutated-page"].body.includes(api.expected.title)
       && [503, 302].every((code) => errorResponse(byName[`fault-json-${code}`]) && errorResponse(byName[`fault-page-${code}`]))
@@ -98,6 +97,9 @@ export function assessTimedSource(raw) {
     assert.ok(map && typeof map === "object" && !Array.isArray(map));
     assert.ok(Object.values(map).every((value) => Number.isSafeInteger(value) && value >= 0), "invalid upstream counters");
   }
+  const successes = raw.filter((row) => row.type === "legitimate" && row.ok === true).length;
+  assert.ok((counts.requests.item_1 ?? 0) >= successes && (counts.answers[200] ?? 0) >= successes, "timed API counters contradict completed successful native reads");
+  assert.ok(Object.values(counts.answers).reduce((a, n) => a + n, 0) <= Object.values(counts.requests).reduce((a, n) => a + n, 0), "timed API answers exceed actual requests");
   return { state: "observed", status: 200, counts, attribution: "all native upstream reads including attacks; not assigned to individual legitimate requests" };
 }
 

@@ -145,6 +145,16 @@ logs and manifests accompany it. Replay rehashes artifacts, rechecks native
 parity/controls/counters, reconstructs the shared-oracle capture and compares it
 to the saved file. This is integrity validation, not signed remote attestation.
 Ephemeral form credentials and the TLS private key are removed after use.
+`semanticReceiptsVersion: 1` retains complete/partial legitimate response bytes,
+completion, status, error and timeout receipts; replay recomputes both hashes and
+semantic success. Exact native emission plans bind attack hashes/bytes, writes,
+body chunks and actual trickle timestamps. Target refusals before writes remain
+explicit refusals, not emitted work. Successful API reads impose a lower bound
+on actual upstream request and 200-answer totals; unrelated attack reads cannot
+be attributed to individual successes. Terminal Docker state is separate from
+the midpoint resource sample and can revoke recovery and numeric qualification.
+Historical byte-less captures are retained unchanged, but cannot satisfy these
+stronger semantic replay gates; no missing fields are backfilled or invented.
 
 Cleanup's 15 s timeout bounds each Docker cleanup operation, not total artifact
 collection wall time, which is retained separately. API-source upstream failure
@@ -159,7 +169,11 @@ to manufacture recovery. A broken functional gate or apparatus gets no measured
 capture. All owned containers (including anonymous volumes), command clients,
 sockets, timers, network and generated image tags are reaped; results remain.
 Each invalid cell names its failed stage and distinguishes `parity-blocked` from
-`apparatus-invalid`. Valid native captures separately classify `service-preserved`
+`apparatus-invalid`, and controlled native API contract failures are explicitly
+`target-functional-failure` rather than broken apparatus. Build image ownership
+is persisted before the daemon can create its tag, including cancellation paths.
+Cleanup checks ownership and removes only generated tags that actually exist.
+Valid native captures separately classify `service-preserved`
 or `target-capacity-failure`. Loss of baseline service after successful preflight
 is retained as an unavailable numeric measurement, not mislabeled broken injection.
 `numericComparisonQualified` also requires observed production qualification;
