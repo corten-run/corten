@@ -18,9 +18,13 @@ Corten is pre-1.0, so any minor version may change the API.
   These local apparatus integrations and read-only plans are not completed group baselines
   or automatic qualification of alternative runtimes.
 
-- Native marketplace alert stores expose independent, session-isolated readback for
-  accepted writes. Browser adapters retain their native form/router behavior, including
+- Native marketplace alert stores in the other benchmark adapters expose independent,
+  session-isolated readback for accepted writes. Browser adapters retain their native form/router behavior, including
   LiveView, Turbo and Livewire; invalid and failed submissions must not change stored state.
+- Native Corten, ASP.NET Razor Pages and Express marketplace forms persist each
+  accepted alert, with independent session-scoped JSON readback. Rejected forms,
+  failed source reads and render failures do not append. This is process-local
+  benchmark state, not durable storage or load qualification.
 
 - Catalog runners preserve full native application stdout and stderr in raw evidence,
   rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
