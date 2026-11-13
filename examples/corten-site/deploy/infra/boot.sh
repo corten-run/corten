@@ -1,8 +1,9 @@
 #!/bin/sh
 # What a machine made by main.tf runs as it first starts (corten-site-boot.service): it waits
-# until the site's name reaches this machine, then sets it up with ../provision.sh. The name may
-# not reach it for a while: its DNS may still be on its way, and the address belongs to the
-# machine before this one until OpenTofu moves it.
+# until the site's name reaches this machine, then sets it up with ../provision.sh, and then
+# does the same for the names that redirect to the site's. A name may not reach it for a
+# while: its DNS may still be on its way, and the address belongs to the machine before this
+# one until OpenTofu moves it.
 set -eu
 
 # Written by main.tf: the four it sets.
@@ -57,13 +58,14 @@ wait_for() {
 
 # The site first, under its own name alone. A name that redirects to it and is late, or is
 # refused a certificate, then holds back only itself: the site is served meanwhile, and this
-# unit's journal says which name is waited for. A run after one that failed further on finds
-# the certificate there and leaves this step out: asked for the site's name alone, a
+# unit's journal says which name is waited for. A run after one that failed further on leaves
+# this step out, by the file that says it finished: asked for the site's name alone, a
 # certificate that holds the others already would be replaced by one without them, and again
 # below by one with them, at each new try.
 wait_for "$domain"
-if [ -z "$redirects" ] || [ ! -e "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+if [ ! -e /var/lib/corten-site-boot.site ]; then
     sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine"
+    touch /var/lib/corten-site-boot.site
 fi
 
 # Then the names that redirect, once each reaches this machine: one certificate that holds

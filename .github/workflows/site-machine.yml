@@ -167,17 +167,18 @@ jobs:
           fi
           # Each name that redirects is asked too, under its own name and so its own place on the
           # certificate. A machine made now serves the site first and takes those names on once
-          # each reaches it: ten minutes for that, a minute otherwise.
+          # each reaches it, and tries a certificate it was refused again a quarter of an hour
+          # later: twenty minutes for all of them, so one new try is seen, and a minute otherwise.
           [ "$code" != 000 ] || exit 0
           # Read first, so a list jq cannot read fails the step: a loop over nothing would pass.
           names=$(jq -r '.[]' <<< "$REDIRECTS")
-          if [ "$MADE" = true ]; then tries=30; else tries=3; fi
+          if [ "$MADE" = true ]; then ends=$((SECONDS + 1200)); else ends=$((SECONDS + 60)); fi
           lost=0
           for name in $names; do
-            to=000
-            for _ in $(seq 1 "$tries"); do
+            while :; do
               to=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$name:443:$ADDRESS" "https://$name/" 2>/dev/null) || to=000
               [ "$to" != "308 https://$SITE_DOMAIN/" ] || break
+              [ "$SECONDS" -lt "$ends" ] || break
               sleep 20
             done
             if [ "$to" = "308 https://$SITE_DOMAIN/" ]; then

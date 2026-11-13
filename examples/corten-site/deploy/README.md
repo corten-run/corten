@@ -11,7 +11,7 @@ what is in use of that limit instead, and each gauge says which it is.
 
 | File | What it is |
 |---|---|
-| `provision.sh` | sets up a fresh Ubuntu 24.04 machine, once |
+| `provision.sh` | sets up a fresh Ubuntu 24.04 machine, and leaves what is in place when run again |
 | `corten-site.service` | the systemd service: the binary as a user that owns nothing |
 | `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, the streams asked for as zstd or uncompressed, and other names sent on to the site's |
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
@@ -104,10 +104,10 @@ certificate 1 min 42 s after the apply ended, and the Site run started then had 
 checked the release 1 min 54 s after that; a replacement has not been timed. The old machine
 and its certificate are gone by then, and Let's Encrypt issues the same names five
 certificates a week: a sixth replacement inside a week leaves the site down until its limit
-allows another. So
-gather changes to those files into one merge. When an apply fails, run the workflow again
-(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
-to a machine that answers 502. With deploys on, a run fails when the machine does not answer.
+allows another. So gather changes to those files into one merge. When an apply fails, run the
+workflow again (`gh workflow run site-machine.yml`): what it made is in the state, and the
+run ships the site to a machine that answers 502. With deploys on, a run fails when the
+machine does not answer.
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
 when it moves it.
@@ -146,9 +146,10 @@ Taking the names on runs `provision.sh` a second time, which writes the deploy k
 the deploy's `sudo` rule again: a deploy that reaches the machine in that instant can fail,
 and is run again. That has not been seen; where the names are there already, the second run
 is over well before the first release is built.
-After an apply the workflow asks the machine for each name, for ten minutes where it made the
-machine, and fails where one does not send its visitors to the site. Changing the list
-replaces the droplet on the next apply.
+After an apply the workflow asks the machine for each name, for twenty minutes where it made
+the machine (long enough to see one new try), and fails where one does not send its visitors
+to the site; the machine goes on trying after that. Changing the list replaces the droplet on
+the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
@@ -456,10 +457,9 @@ On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `
 a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the
 droplet, handed its files by cloud-init, ran `boot.sh` and `provision.sh` and got its
 certificate from Let's Encrypt, answering 502 under the site's name 1 min 42 s after the
-apply. The workflow then
-started the Site workflow, which shipped the release and was answered by the page, its JSON
-and its live stream as that commit. An earlier run had stopped at the bucket, with a key that
-could not make one.
+apply. The workflow then started the Site workflow, which shipped the release and was
+answered by the page, its JSON and its live stream as that commit. An earlier run had stopped
+at the bucket, with a key that could not make one.
 
 Still not run on a real machine: the address moving from one droplet to the next, a put-back
 of the release before, and a name that redirects. Which of `boot.sh`'s two ways ended its wait

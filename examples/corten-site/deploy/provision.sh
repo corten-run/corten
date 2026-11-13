@@ -19,23 +19,29 @@ machine=${4:-}
 redirects=${5:-}
 here=$(cd "$(dirname "$0")" && pwd)
 # The names are written into nginx's configuration and handed to certbot, and each reads them
-# its own way: a name is lower-case letters, digits, dots and hyphens, and does not start with
-# a hyphen. A name that redirects is not the site's own.
+# its own way: a name is lower-case letters, digits, dots and hyphens, does not start with a
+# hyphen, and has a dot only between two of its parts (certbot drops one at the end, and the
+# certificate would then never hold the name as given). A name that redirects is not the
+# site's own.
 not_a_name() {
     echo "give each name alone, in lower case: no scheme, path or port, and the site's own name once" >&2
     exit 1
 }
-case $domain in
-"" | -* | *[!a-z0-9.-]*) not_a_name ;;
-esac
 case $redirects in
 *[!a-z0-9.\ -]*) not_a_name ;;
 esac
-for name in $redirects; do
+# One space between two names and none around them, so no names is the empty text.
+# shellcheck disable=SC2086 # one name a word
+redirects=$(printf '%s ' $redirects)
+redirects=${redirects% }
+for name in "$domain" $redirects; do
     case $name in
-    "$domain" | -*) not_a_name ;;
+    "" | -* | .* | *. | *..* | *[!a-z0-9.-]*) not_a_name ;;
     esac
 done
+case " $redirects " in
+*" $domain "*) not_a_name ;;
+esac
 # What the machine is, as the page states it: the argument, or what an earlier run was given.
 [ -n "$machine" ] || machine=$(sed -n 's/^CORTEN_SITE_MACHINE=//p' /etc/corten-site.env 2>/dev/null || true)
 # systemd reads quotes and backslashes in an environment file as its own, not as the text, and
