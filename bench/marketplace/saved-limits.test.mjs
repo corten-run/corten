@@ -44,6 +44,32 @@ test("saved resource and execution limits reject coherent impossible evidence", 
   await probe("a downgraded 1 GiB generator receipt is not the native producer configuration", () => {
     edit(`${base}/fixed-receipt.json`, (v) => { v.load.memoryBytes = 2 ** 30; });
   });
+  const sampledCpu = (role, amount) => {
+    const raw = read(`${base}/sat256-receipt.json`), name = raw[role].name;
+    const sampled = edit(`${base}/sat256-stats.log.json`, (v) => {
+      for (const p of v.samples[name]) p.cpu = amount;
+      v.summary[name] = summarizeSamples(v.samples[name]);
+    });
+    write(`${base}/sat256-stats.log`, readFileSync(join(folder, base, "sat256-stats.log"), "utf8").trim().split("\n").map((line) => {
+      const p = JSON.parse(line); if (p.Name === name) p.CPUPerc = `${amount}%`; return JSON.stringify(p);
+    }).join("\n") + "\n");
+    summary("sat256", (v) => Object.assign(role === "app" ? v : v.upstream, sampled.summary[name], role === "upstream" ? { highCpu: amount >= 80 } : {}));
+    assert.equal(read(`${base}/sat256-cpu.json`)[name].usec, 1000000, "tamper leaves real cgroup deltas unchanged");
+  };
+  for (const role of ["app", "upstream"]) {
+    await probe(`${role} sampled CPU cannot exceed the physical host with coherent summaries`, () => sampledCpu(role, 1e12));
+    await probe(`${role} sampled CPU may exceed quota up to the conservative physical host bound`, () => sampledCpu(role, 800), true);
+    await probe(`${role} sampled CPU rejects the first displayed value above the host rounding bound`, () => sampledCpu(role, 800.01));
+  }
+  const online = (value) => {
+    edit("summary.json", (v) => { v.host.onlineCpus = value; });
+    const text = readFileSync(join(folder, "host.txt"), "utf8").trim().split("\n"); text[text.length - 1] = value;
+    write("host.txt", text.join("\n") + "\n");
+  };
+  for (const [label, value] of [["only CPU zero", "0"], ["missing app CPU", "0,2-7"], ["missing upstream CPU", "0-2,4-7"], ["missing load CPU", "0-6,8"]]) {
+    await probe(`role pinning must belong to online inventory: ${label}`, () => online(value));
+  }
+  await probe("noncontiguous native online inventory containing every pinned CPU is valid", () => online("0-7,9,11-12"), true);
   const cpu = (role, usec) => {
     const raw = edit(`${base}/sat256-receipt.json`, (v) => { v.after[v[role].name] = v.before[v[role].name] + usec; });
     edit(`${base}/sat256-cpu.json`, (v) => { v[raw[role].name].usec = usec; });

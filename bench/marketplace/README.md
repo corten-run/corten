@@ -351,6 +351,12 @@ two partial CFS periods and a conservative whole period per CPU for non-expiring
 CPU-local runtime slices, capped by physical CPU time. NanoCPU limits use Docker's
 default 100 ms period; explicit CFS periods must be within Linux's 1 ms to 1 s range.
 See [Linux CFS bandwidth and runtime-slice caveats](https://docs.kernel.org/scheduler/sched-bwc.html).
+Every pinned CPU in every role must belong to the retained host online-CPU set,
+not just have a plausible index or cardinality. The parsed inventory also bounds
+each Docker CPU sample to `100 * online logical CPUs` percent, with only `0.005`
+percentage points for Docker's two-decimal display rounding. Instantaneous samples
+are not capped at the role's quota; cumulative cgroup counters retain the separate
+phase/lifetime quota bounds above.
 Each raw Docker memory sample and its displayed limit must fit the participant's
 retained memory limit. The only display allowance is half a four-significant-digit
 step from [Docker's `BytesSize` formatter](https://github.com/docker/go-units/blob/master/size.go),

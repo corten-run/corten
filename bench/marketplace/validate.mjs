@@ -16,7 +16,7 @@ const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "in
 const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
 const imageId = (s) => assert.match(s, /^sha256:[a-f0-9]{64}$/);
-function cpuCount(value) {
+function cpuSet(value) {
   assert.match(value, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/, "invalid observed CPU inventory");
   const used = new Set();
   for (const part of value.split(",")) {
@@ -24,10 +24,10 @@ function cpuCount(value) {
     assert.ok(Number.isSafeInteger(first) && first >= 0 && last >= first && last <= 4095, "invalid observed CPU range");
     for (let i = first; i <= last; i++) { assert.ok(!used.has(i), "duplicate observed CPU"); used.add(i); }
   }
-  return used.size;
+  return used;
 }
 function cpuBudget(c, milliseconds, onlineCpus) {
-  const cores = cpuCount(c.cpuset || onlineCpus), period = c.cpuPeriod || 100000;
+  const cores = c.cpuset ? cpuSet(c.cpuset).size : onlineCpus.size, period = c.cpuPeriod || 100000;
   const quota = c.nanoCpus ? c.nanoCpus / 1e9 * period : c.cpuQuota;
   const usec = (milliseconds + 2) * 1000;
   // Two truncated wall-clock endpoints, two partial CFS periods, and a
@@ -85,6 +85,10 @@ function replay({ folder, round, commit }) {
   const host = files.text("host.txt").trim().split("\n");
   assert.equal(host.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim(), s.host.cpu, "host CPU differs from raw probe");
   assert.equal(host.at(-1).trim(), s.host.onlineCpus, "host CPU inventory differs from raw probe");
+  const onlineCpus = cpuSet(s.host.onlineCpus);
+  for (const [role, config] of Object.entries(s.measurement.cpus)) if (config.cpuset) {
+    for (const cpu of cpuSet(config.cpuset)) assert.ok(onlineCpus.has(cpu), `${role} CPU pinning includes offline CPU ${cpu}`);
+  }
   const used = new Map(), configurations = new Map(), probeIds = new Set(), loadIds = new Set();
   const cpuObservations = [], upstreamObservations = [], containerStarts = new Map();
   function covers(c, observation) {
@@ -280,11 +284,11 @@ function replay({ folder, round, commit }) {
         for (const name of participants) {
           const c = name === coldApp.name ? raw.app : raw.upstream;
           assert.ok(Number.isSafeInteger(raw.before[name]) && raw.before[name] >= 0, "invalid CPU counter before load");
-          assert.ok(raw.before[name] <= cpuBudget(c, time(k6.state.StartedAt) - time(c.state.StartedAt), s.host.onlineCpus), "CPU counter exceeds container lifetime capacity");
+          assert.ok(raw.before[name] <= cpuBudget(c, time(k6.state.StartedAt) - time(c.state.StartedAt), onlineCpus), "CPU counter exceeds container lifetime capacity");
           if (!appStopped) {
             assert.ok(Number.isSafeInteger(raw.after[name]) && raw.after[name] > raw.before[name], "invalid CPU counter after load");
-            assert.ok(raw.after[name] - raw.before[name] <= cpuBudget(c, end - start, s.host.onlineCpus), "CPU delta exceeds phase capacity");
-            assert.ok(raw.after[name] <= cpuBudget(c, end - time(c.state.StartedAt), s.host.onlineCpus), "CPU counter exceeds container lifetime capacity");
+            assert.ok(raw.after[name] - raw.before[name] <= cpuBudget(c, end - start, onlineCpus), "CPU delta exceeds phase capacity");
+            assert.ok(raw.after[name] <= cpuBudget(c, end - time(c.state.StartedAt), onlineCpus), "CPU counter exceeds container lifetime capacity");
           }
           cpuObservations.push({ id: name === coldApp.name ? coldApp.id : upstream.id, start, end, before: raw.before[name], after: raw.after[name] });
         }
@@ -309,13 +313,17 @@ function replay({ folder, round, commit }) {
           for (const line of statsText.split("\n").map((s) => s.trim()).filter(Boolean)) {
             const p = JSON.parse(line); assert.ok(Object.hasOwn(history, p.Name), "unexpected stats participant");
             assert.match(p.CPUPerc, /^\d+(?:\.\d+)?%$/);
+            // Docker reports one logical CPU as 100%, rounded to two decimals.
+            // Samples can burst beyond quota; only the whole host is a bound.
+            const cpu = parseFloat(p.CPUPerc);
+            assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
             assert.ok(history[p.Name].length < 1000, "stats log exceeds sample bound");
             const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
             assert.equal(parts.length, 2, "memory display missing its limit");
             const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
             assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
             assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
-            history[p.Name].push({ cpu: parseFloat(p.CPUPerc), mem: usage.mib });
+            history[p.Name].push({ cpu, mem: usage.mib });
           }
           const stats = {};
           for (const name of participants) {
