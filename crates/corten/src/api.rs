@@ -175,6 +175,27 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<Root>(|api| api.route::<Evil>(get(|| async { "" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// Nor has it a `.` or `..` segment, which a browser resolves away before it asks, so no link
+    /// would reach the route (docs/design.md#limit-path-values):
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/apis")]
+    /// struct ApiRoot;
+    ///
+    /// struct Item;
+    /// impl corten::Route for Item {
+    ///     const PATH: &'static str = "/apis/a/../b";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("/apis/b");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Item>(get(|| async { "item" })));
+    /// # let _ = app.router();
+    /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
         self.place::<R>();
         self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
@@ -204,7 +225,7 @@ impl<P: Prefix> Api<P> {
             );
             assert!(
                 crate::route::route_shaped(R::PATH),
-                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text (the note below names the route)"
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text, no . or .. segment (the note below names the route)"
             );
         };
         // Before the router, which would merge the two or refuse them less clearly.

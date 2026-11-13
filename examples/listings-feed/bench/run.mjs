@@ -48,7 +48,7 @@ function instance(name, ip, letter) {
     "-e", `INSTANCE=${letter}`, "-e", `DATABASE_URL=${db}`, "-e", "NATS_URL=nats://10.77.77.11:4222", "corten-listings-feed");
 }
 
-for (const c of containers) docker("rm", "-f", c);
+for (const c of containers) docker("rm", "-f", "-v", c);
 docker("network", "rm", "feedbench");
 docker("network", "create", "--subnet", "10.77.77.0/24", "feedbench");
 docker("run", "-d", "--name", "fb-pg", ...net, "--ip", "10.77.77.10", "-e", "POSTGRES_PASSWORD=postgres", "-e", "POSTGRES_DB=feeds", "postgres:16-alpine");
@@ -130,5 +130,5 @@ console.log(`outages: ${result.outages.n} (${result.outages.resynced} resynced);
 console.log(`relay takeover: ${result.relayTakeoverMs.map((r) => `${r.killed} ${r.wasLeader ? `${r.takeoverMs} ms` : "(not the relay)"}`).join(", ")}`);
 console.log(`browser: ${probe.patches} patches, ${probe.snapshots} snapshot(s) (${result.browser.resyncs} resyncs), last ${probe.last}/${committed}, lost ${result.browser.lost}, status ${probe.status}, errors ${pageErrors.length}`);
 console.log(`wrote ${out}`);
-if (!args.keep) for (const c of containers) docker("rm", "-f", c);
+if (!args.keep) for (const c of containers) docker("rm", "-f", "-v", c);
 if (!args.keep) docker("network", "rm", "feedbench");

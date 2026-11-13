@@ -12,6 +12,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
+  marketplace forms persist accepted alerts with session-isolated readback,
+  preserve their framework's enhanced and plain-form paths, and reject writes
+  whose source or rendering input failed. Next.js, Nuxt, SvelteKit and TanStack
+  Start guard pending same-form JS submissions to retain one session; these
+  correctness changes are not a completed group baseline. The shared correctness
+  checker recognizes TanStack's native generated server action only with matching
+  same-origin submitted fields, while retaining plain-form checks.
+
 - Native FastAPI, Django and Spring marketplace alerts persist accepted writes
   in isolated sessions with independent readback and no append after rejected,
   incomplete-source or render-failed submissions. FastAPI owns its page-source
@@ -248,6 +257,28 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A typed link no longer writes a path value that would open another page: `.` or `..`, which a
+  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
+  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
+  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
+  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  slug `/posts`). A debug build panics when such a link is written, naming the route by its
+  module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
+  (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
+  route and field, counting only a refusal written while the subscriber takes an error event of
+  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
+  filters on an event's message text or its line can disagree with that check either way: a
+  refusal it drops still uses up the one line, and one it would log may never be logged).
+  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
+  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
+  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
+  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
+  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
+  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
+  dot a second read (docs/design.md#limit-path-values)
+  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
+
 - `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
   `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
   is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
@@ -353,6 +384,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
+  listings-feed README and its failover benchmark remove their Postgres containers with
+  `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
+  behind
+  ([#1233 The Postgres containers CONTRIBUTING and the listings-feed example start are removed with docker rm -f, which keeps each one's anonymous data volume](https://github.com/corten-run/corten/issues/1233)).
+- The app guide's table of defaults has rows for the handler deadline (30 seconds, then a 503, or
+  the client's 408 while it waited for the body) and the request body limit (2 MiB for `Json`,
+  `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so
+  they are found where every other default is
+  ([#1220 The app guide's table of defaults leaves out the 30-second handler deadline and the 2 MiB body limit, so an app learns of its 503 and 413 only from prose](https://github.com/corten-run/corten/issues/1220)).
 - [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
   publishes no npm initializer that creates an app (`npm create corten`): the app would still
   build with Cargo and its other commands are installed by Cargo, so it would replace only
