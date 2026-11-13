@@ -6,7 +6,7 @@ import { join, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { selectedApps } from "../workloads/registry.mjs";
 import { inventory, nativePorts, portFor, recordedInventory, scenarios, settingsFor, workloadFor } from "./native.mjs";
-import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { wireEvents, wireSnapshots, wireResources, wireResumes } from "./wire.mjs";
 import { fanoutProfile, verifyFanout } from "./fanout.mjs";
 import { select, runRound, verifyArtifact } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
@@ -42,6 +42,28 @@ test("entry imports have no historical load side effects; explicit round is mand
   for (const args of [[], ["../escape"], ["."], ["round", "--typo"], {}]) {
     await assert.rejects(runRound("live-delivery", args));
   }
+});
+
+test("Leptos registration preserves native build and wire identity without upgrading historical inventory", async () => {
+  for (const group of ["live-delivery", "recoverable-live"]) {
+    for (const profile of ["bounded", "native-feed"]) {
+      const port = portFor("leptos", profile);
+      assert.equal(port.directory, "leptos");
+      assert.equal(port.rootContext, undefined);
+      assert.equal(port.wire, "leptos-axum-sse");
+      assert.equal(port.wireModule, "./apps/leptos/wire.mjs");
+      assert.equal(inventory(group, profile).find((row) => row.app === "leptos").implementation, "implemented");
+    }
+    const old = inventory(group, "bounded", 1);
+    assert.equal(old.find((row) => row.app === "leptos").implementation, "not-implemented");
+    assert.deepEqual(recordedInventory(group, old, "bounded", 2), old);
+  }
+  const manifest = await readFile(new URL("./apps/leptos/Cargo.toml", import.meta.url), "utf8");
+  assert.doesNotMatch(manifest, /^opt-level\s*=\s*[01]\s*$/m, "Candidate must not retain reduced optimization used by earlier functional images");
+  const resources = { subscriptions: 1, queueEvents: 0 };
+  const network = [{ kind: "native-sse", eventName: "ready", data: JSON.stringify({ from: 0, status: "accepted", resources }) }];
+  assert.deepEqual(wireResources(network, "leptos-axum-sse"), [resources]);
+  assert.deepEqual(wireResumes(network, "leptos-axum-sse"), [{ from: 0, status: "accepted" }]);
 });
 
 test("native Feed limits require an explicit equal-work alternative, never a hidden default", () => {

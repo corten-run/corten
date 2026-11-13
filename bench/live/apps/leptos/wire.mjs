@@ -19,3 +19,20 @@ export function wireSnapshots(network) {
     return s;
   });
 }
+
+export function wireResources(network) {
+  return network.filter(r => r.kind === 'native-sse' && ['ready', 'overflow'].includes(r.eventName)).map(r => {
+    const value = JSON.parse(r.data);
+    assert.ok(value.resources && typeof value.resources === 'object' && !Array.isArray(value.resources));
+    if (r.eventName === 'overflow') assert.equal(value.outcome, 'resnapshot');
+    return value.resources;
+  });
+}
+
+export function wireResumes(network) {
+  return network.filter(r => r.kind === 'native-sse' && r.eventName === 'ready').map(r => {
+    const { from, status } = JSON.parse(r.data);
+    assert.ok(Number.isSafeInteger(from) && from >= 0 && ['accepted', 'expired'].includes(status));
+    return { from, status };
+  });
+}

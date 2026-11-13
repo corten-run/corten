@@ -40,8 +40,11 @@ This is one native process without a broker/database. The deliberately
 unauthenticated publisher/control API is synthetic, not a production policy.
 No multi-node operation, restart durability, TCP slow-reader bound, throughput,
 comparative performance, cost, cloud qualification or registry admission is
-claimed. The Docker release profile is functional (`opt-level=1`), not a tuned
-performance candidate. Browser records are diagnostic observations, not a
+claimed. Docker uses the standard optimized Cargo release profile, without a
+reduced optimization override or custom performance tuning. Earlier local
+functional review images used `opt-level=1`; they are not evidence for this
+production build. The rebuilt candidate must pass every native gate before
+timing. Browser records are diagnostic observations, not a
 bounded production telemetry store.
 
 Build with the app-local Dockerfile, using this directory as the context:
@@ -63,9 +66,7 @@ raw native wire, and all writes/acknowledgements with actual HTTP bodies.
 Native Rust tests cover invalid batches, ordered keyed state, replay expiry,
 held queue saturation/overflow, finite history and reader RAII cleanup.
 
-Integration is intentionally left to the owner of `native.mjs`. Register both
-profiles with `directory: 'leptos'`, app-local Docker context, transport
-`Leptos hydrated keyed For / Axum SSE / Tokio bounded mpsc`, and
-`wire: 'leptos-axum-sse'`, `wireModule: './apps/leptos/wire.mjs'`.
-Use one native application process and allow a separate WASM/native build
-deadline. No runner, registry or other application is modified by this port.
+`native.mjs` registers both profiles with the app-local Docker context and
+`leptos-axum-sse` wire binding. It runs one native application process and gives
+the separate WASM/native build its own build deadline. Registration establishes
+neither qualification nor group readiness, and cannot upgrade older captures.

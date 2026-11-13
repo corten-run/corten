@@ -28,7 +28,6 @@ ssr = ["leptos/ssr", "dep:leptos_axum", "dep:axum", "dep:any_spawner", "dep:toki
 hydrate = ["leptos/hydrate", "dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:console_error_panic_hook"]
 
 [profile.release]
-opt-level = 1
 debug = 0
 strip = "debuginfo"
 
