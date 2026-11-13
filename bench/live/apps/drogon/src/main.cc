@@ -89,6 +89,12 @@ int main() {
     app.registerHandler("/parity/publish", endpoint([](auto request) { return feed.publish(live::decode(std::string(request->body()))); }), {drogon::Post});
     app.registerHandler("/parity/control", endpoint([](auto request) { return feed.control(live::decode(std::string(request->body()))); }), {drogon::Post});
     app.registerHandler("/parity/snapshot", endpoint([](auto) { return feed.snapshot(); }), {drogon::Get});
-    app.registerHandler("/parity/resources", endpoint([](auto) { return feed.resources(); }), {drogon::Get});
+    app.registerHandler("/parity/resources", endpoint([](auto request) {
+        const auto query = request->getParameter("reader");
+        if (query.empty()) return feed.resources();
+        uint64_t id = 0; auto parsed = std::from_chars(query.data(), query.data() + query.size(), id);
+        if (!id || parsed.ec != std::errc{} || parsed.ptr != query.data() + query.size()) throw live::Error(400, "invalid reader identity");
+        return feed.resources(id);
+    }), {drogon::Get});
     const char *port = std::getenv("PORT"); app.addListener("0.0.0.0", port ? std::stoi(port) : 8080).run();
 }

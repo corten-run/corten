@@ -93,5 +93,18 @@ int main() {
     auto result = f.publish(batch); assert(result["acks"].size() == 1044);
     assert(f.snapshot()["through"] == 1044 && f.resources()["historyEvents"].asInt() == 1025);
     auto oversized = batch; oversized["events"].append(change(1045)); rejected([&] { f.publish(oversized); });
+    f.configure(config());
+    const auto own = f.attach(0, [](auto) {}), peer = f.attach(0, [](auto) {});
+    f.publish(input(change(1)));
+    assert(f.resources(own)["reader"]["queueEvents"].asInt() == 1);
+    f.close(own);
+    const auto owned = f.resources(own);
+    assert(owned["connections"].asInt() == 1 && owned["reader"]["id"] == std::to_string(own));
+    for (const char *name : {"subscriptions", "connections", "pendingTasks", "queueEvents", "replayEvents", "inFlight"}) assert(owned["reader"][name].asInt() == 0);
+    assert(f.resources(peer)["reader"]["connections"].asInt() == 1);
+    assert(f.resources(peer)["reader"]["queueEvents"].asInt() == 1);
+    start(f, peer); assert(f.resources(peer)["reader"]["inFlight"].asInt() == 1);
+    f.close(peer); f.configure(config());
+    assert(f.resources(own)["reader"]["connections"].asInt() == 0);
     std::cout << "native feed: validation, atomic batch, keyed writes, 16 readers, ack gate, replay/expiry, real 2/1024 saturation and cleanup passed\n";
 }

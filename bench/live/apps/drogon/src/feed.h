@@ -23,7 +23,7 @@ class Feed {
     using Sink = std::function<void(const Json::Value &)>;
     Json::Value configure(const Json::Value &input);
     Json::Value snapshot();
-    Json::Value resources();
+    Json::Value resources(uint64_t reader = 0);
     Json::Value publish(const Json::Value &input);
     Json::Value control(const Json::Value &input);
     uint64_t attach(int64_t from, Sink sink);

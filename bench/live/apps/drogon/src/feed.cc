@@ -69,7 +69,18 @@ Json::Value Feed::counters() {
     i["nativeTransportBufferedBytes"] = Json::nullValue; i["kernelSocketBytes"] = Json::nullValue;
     return r;
 }
-Json::Value Feed::resources() { std::lock_guard lock(mutex_); return counters(); }
+Json::Value Feed::resources(uint64_t reader) {
+    std::lock_guard lock(mutex_); auto result = counters();
+    if (reader) {
+        const auto found = readers_.find(reader); const bool live = found != readers_.end();
+        auto &owned = result["reader"]; owned["id"] = std::to_string(reader);
+        owned["subscriptions"] = owned["connections"] = owned["pendingTasks"] = live ? 1 : 0;
+        owned["queueEvents"] = Json::UInt64(live ? found->second.queue.size() : 0);
+        owned["replayEvents"] = Json::UInt64(live ? found->second.replay.size() : 0);
+        owned["inFlight"] = live && found->second.inFlight ? 1 : 0;
+    }
+    return result;
+}
 Json::Value Feed::configure(const Json::Value &v) {
     std::lock_guard lock(mutex_);
     if (!readers_.empty()) throw Error(409, "readers still connected");
@@ -152,7 +163,8 @@ uint64_t Feed::attach(int64_t from, Sink sink) {
     Reader reader; reader.send = std::move(sink); reader.deliveredThrough = from;
     if (!expired) for (const auto &e : history_) if (e["seq"].asInt64() >= from) reader.replay.push_back(e);
     auto id = ++nextReader_; auto &r = readers_.emplace(id, std::move(reader)).first->second;
-    auto ready = envelope("ready"); ready["from"] = Json::Int64(from); ready["status"] = expired ? "expired" : "accepted";
+    auto ready = envelope("ready"); ready["readerId"] = std::to_string(id);
+    ready["from"] = Json::Int64(from); ready["status"] = expired ? "expired" : "accepted";
     ready["resources"] = counters(); send(r, std::move(ready)); return id;
 }
 void Feed::message(uint64_t id, const Json::Value &v) {

@@ -40,6 +40,7 @@ try {
     { event: { ...event(1), row: { ...initial[0], id: 'wrong' } } }, { events: [event(1)] }]) await request('publish', invalid, 400);
   await request('configure', { ...configuration(), initial: [initial[0], initial[0]] }, 400);
   assert.equal((await request('snapshot')).through, 0);
+  for (const id of ['0', '-1', 'no-reader', '1junk', '18446744073709551616']) await request('resources?reader=' + id, undefined, 400);
   for (const body of ['{"event":', '{"event":{},"event":{}}', '{} trailing']) {
     assert.equal((await fetch(base + '/parity/publish', { method: 'POST', body, signal: AbortSignal.timeout(10000) })).status, 400);
   }
@@ -50,8 +51,14 @@ try {
   while (reader.frames.length < 2) { assert.ok(performance.now() < deadline); await new Promise(resolve => setTimeout(resolve, 5)); }
   await request('publish', { event: event(2) }); await request('publish', { event: event(3) });
   const gated = await request('resources'); assert.equal(gated.queueEvents, 2); assert.equal(gated.inventory.inFlight, 1);
+  const id = reader.frames[0].readerId; assert.match(id, /^[1-9][0-9]*$/);
+  const scoped = await request('resources?reader=' + id);
+  assert.equal(scoped.connections, 1); assert.equal(scoped.reader.id, id);
+  assert.equal(scoped.reader.queueEvents, 2); assert.equal(scoped.reader.inFlight, 1);
   assert.equal(reader.frames.length, 2, 'unacknowledged native frames accumulated');
   reader.socket.close(); await zero();
+  const released = await request('resources?reader=' + id);
+  for (const field of ['subscriptions', 'connections', 'pendingTasks', 'queueEvents', 'replayEvents', 'inFlight']) assert.equal(released.reader[field], 0);
   await request('configure', configuration(true));
   const events = Array.from({ length: 1044 }, (_, index) => event(index + 1));
   for (const bad of [{ events: [] }, { event: events[0], events }, { events: [events[0], events[2]] }, { events: [...events, event(1045)] }]) await request('publish', bad, 400);

@@ -18,6 +18,7 @@ function messages(network) {
     assert.equal(message.protocol, 'drogon-live/v1');
     if (message.kind === 'ready') {
       assert.equal(socket.ready, false); socket.ready = true;
+      assert.ok(typeof message.readerId === 'string' && /^[1-9][0-9]*$/.test(message.readerId), 'native reader identity required');
       assert.ok(integer(message.from) && ['accepted', 'expired'].includes(message.status));
       assert.ok(message.resources && integer(message.resources.subscriptions));
     } else {

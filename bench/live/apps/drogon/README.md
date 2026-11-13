@@ -20,7 +20,7 @@ attachment/replay fencing, snapshots and acknowledgement transitions.
 `/parity/socket?from=N` is a native Drogon WebSocket, not an SSE compatibility
 endpoint. Text JSON envelopes identify `protocol: "drogon-live/v1"` and `kind`:
 
-- `ready`: `from`, `status: "accepted" | "expired"`, actual `resources`.
+- `ready`: native `readerId`, `from`, `status: "accepted" | "expired"`, actual `resources`.
 - `event`: original `event` and monotonically increasing per-socket `delivery`.
 - `overflow`: `outcome: "resnapshot"`, `delivery`, and the actual saturated
   mutation-time `resources`, captured before clearing pending payloads.
@@ -44,13 +44,32 @@ the reader, queue, replay and in-flight state; detach also closes the browser
 socket. `pagehide` closes it on navigation. There are no retained sessions,
 external brokers, background publishers or per-reader worker threads.
 
+The ready frame's server-assigned identity is monotonic across configuration
+resets. `GET /parity/resources?reader=ID` adds a `reader` observation from the actual
+consumer map: id, subscriptions, connections, pendingTasks, queueEvents,
+replayEvents and inFlight. Top-level counters remain the unmodified aggregate,
+including other healthy readers. Cleanup waits for this reader alone, only after
+native connection closure. It does not close or wait for unrelated readers.
+
+A failed delivery/snapshot is retained as a `failure` record and a browser error;
+`settle()` rejects that original failure until an explicit reconnect. The failed
+native consumer is closed without acknowledging the unsuccessful delivery.
+Disconnect/detach still drain and release it. A reconnect starts a fresh scheduling
+chain after own cleanup, performs an actual authoritative resnapshot if recovery
+failed, and resumes ordinary consumption. Earlier failure evidence is not erased
+or converted into success, and snapshots never manufacture per-event effects.
+
 The publisher accepts exactly one `event`, or (only in explicit native-feed
 configuration) `events` of length 1 to 1,044. It prevalidates every shape,
 consecutive sequence and intermediate row budget before the first write. Both
 forms call the same mutation/history/queue/delivery path per event. The batch
 response contains each actual write's acknowledgement/resources. The browser
 records all those acknowledgements behind one publication barrier before
-applying queued native effects. Individual publications remain individual HTTP
+applying queued native effects. Concurrent browser publication calls are
+serialized through their actual HTTP response/acknowledgement, so a later call
+cannot overwrite an earlier write's delivery barrier. Each caller still receives
+its own real success or rejection; a rejected call cannot poison later calls.
+Individual publications remain individual HTTP
 requests, including normal delivery and all measured publications. Bulk input is
 only for constructing the larger recovery fault, never for timing measurements.
 
@@ -122,6 +141,7 @@ node bench/live/apps/drogon/test/http.mjs http://127.0.0.1:8080
 node bench/live/apps/drogon/test/browser.mjs http://127.0.0.1:8080 bounded
 node bench/live/apps/drogon/test/browser.mjs http://127.0.0.1:8080 native-feed
 node bench/live/apps/drogon/test/readers.mjs http://127.0.0.1:8080
+node bench/live/apps/drogon/test/repairs.mjs http://127.0.0.1:8080
 ```
 
 Browser checks use the repository's installed `@playwright/test` and Chromium.
@@ -140,3 +160,10 @@ The integration owner can register `directory: 'drogon'`, image
 wire `drogon-websocket`, `wireModule: './apps/drogon/wire.mjs'`, topology
 `one Drogon C++ process; no external broker/database`, and both explicit profiles.
 This port does not change the registry or shared gates.
+
+The repair regressions hold a real first publication response while calling the
+second concurrently, abort one actual gap snapshot and explicitly reconnect,
+and disconnect/reconnect/detach one reader while another remains healthy. They
+compare original native WebSocket/HTTP bodies with DOM/effect observations,
+retain the actual failed request/browser error, and require real final cleanup.
+They do not fulfill network routes with invented fixture responses or frames.
