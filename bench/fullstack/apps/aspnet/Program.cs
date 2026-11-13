@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Unicode;
 using ItemPage;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.Extensions.WebEncoders;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +10,15 @@ var builder = WebApplication.CreateBuilder(args);
 // ASP.NET Core's own middleware and settings; without it the app is as the template starts it.
 var matched = Environment.GetEnvironmentVariable("PROFILE") == "matched";
 builder.Services.AddRazorPages();
+builder.Services.AddRequestTimeouts(options => options.AddPolicy("Marketplace", new RequestTimeoutPolicy
+{
+    Timeout = TimeSpan.FromSeconds(10),
+    WriteTimeoutResponse = context =>
+    {
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        return context.Response.WriteAsync("The marketplace request timed out.");
+    }
+}));
 // Razor encodes every character outside Basic Latin by default ("·" becomes "&#xB7;"); the usual
 // setting for a site with text in other scripts lets them through. HTML's own characters are
 // still encoded.
@@ -16,9 +26,8 @@ builder.Services.Configure<WebEncoderOptions>(o => o.TextEncoderSettings = new T
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
 // Both record JSON routes need JSON errors in the default profile too.
 builder.Services.AddProblemDetails();
-// The item API's client. In the profile a read gives up after 10 seconds, card-market's deadline,
-// and the exception handler answers 500: ASP.NET Core's request timeout (UseRequestTimeouts) only
-// cancels code that reads the request's token, which the app's reads do not take.
+// Legacy item/catalog client settings stay profile-specific. Marketplace reads use the
+// endpoint's request deadline and RequestAborted instead of a competing HttpClient timer.
 void Client(HttpClient c)
 {
     c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080");
@@ -28,8 +37,13 @@ builder.Services.AddHttpClient<ItemSource>(Client);
 builder.Services.AddSingleton<ItemSource>();
 builder.Services.AddHttpClient<CatalogSource>(Client);
 builder.Services.AddSingleton<CatalogSource>();
-builder.Services.AddHttpClient<MarketplaceSource>(Client)
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<MarketplaceSource>(c =>
+    {
+        Client(c);
+        c.Timeout = Timeout.InfiniteTimeSpan;
+    })
+    // Do not drain a cancelled body for connection reuse after this request has ended.
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, MaxResponseDrainSize = 0 });
 builder.Services.AddSingleton<MarketplaceSource>();
 builder.Services.AddSingleton<LivePrices>();
 builder.Services.AddSingleton<AlertStore>();
@@ -79,11 +93,12 @@ if (matched)
 }
 app.UseWhen(c => c.Request.Path.StartsWithSegments("/api/catalog") || c.Request.Path.StartsWithSegments("/api/marketplace")
     || (matched && c.Request.Path.StartsWithSegments("/api")), api => api.UseExceptionHandler().UseStatusCodePages());
+// Routing after exception handlers permits /Error re-execution. Request timeouts must
+// follow routing and sit inside those handlers so they see cancellation exceptions first.
+app.UseRouting();
+app.UseRequestTimeouts();
 if (matched)
 {
-    // Routing after the exception handler, as the template places it: the handler clears the failed
-    // request's endpoint and runs it again as /Error, which routing before it would not match again.
-    app.UseRouting();
     app.MapHealthChecks("/health/live");
     app.MapHealthChecks("/health/ready");
 }
@@ -94,7 +109,9 @@ app.MapRazorPages().WithStaticAssets();
 string[] get = matched ? ["GET", "HEAD"] : ["GET"];
 app.MapMethods("/api/items/{id}", get, async (string id, ItemSource items) => await items.Get(id) is { } item ? Results.Ok(item) : Results.NotFound());
 app.MapMethods("/api/catalog/{id}", ["GET", "HEAD"], async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
-app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source) => await source.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
+app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source, CancellationToken cancellationToken) =>
+    await source.Get(id, cancellationToken) is { } record ? Results.Ok(record) : Results.NotFound())
+    .WithRequestTimeout(TimeSpan.FromSeconds(10));
 app.MapGet("/api/alerts", (HttpContext context, AlertStore alerts) =>
 {
     context.Response.Headers.CacheControl = "no-store";

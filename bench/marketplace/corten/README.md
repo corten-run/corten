@@ -34,3 +34,43 @@ Focused checks from the repository root:
 ```sh
 cargo test --manifest-path bench/marketplace/corten/Cargo.toml
 ```
+
+## Request lifetime
+
+In both profiles, the API source's existing ten-second whole-read timeout now
+answers 504, through Corten's native HTML or JSON error response. It covers both
+waiting for upstream headers and consuming the body. Other upstream/parse errors
+retain their previous error contract. Fixture reads have no upstream timer.
+Client disconnect still drops the handler's awaited reqwest future; no spawned
+fetch, retry, shared renderer or framework change is involved. The app's existing
+request deadline and matched connection limit remain unchanged.
+
+`tests/lifetime.mjs` exercises real native production images for Corten, ASP.NET
+and Express. Build each app with its existing Dockerfile, then run from the root:
+
+```sh
+node bench/marketplace/corten/tests/lifetime.mjs corten <corten-image>
+node bench/marketplace/corten/tests/lifetime.mjs aspnet <aspnet-image>
+node bench/marketplace/corten/tests/lifetime.mjs express <express-image>
+```
+
+It runs default and matched processes with one CPU/1 GiB each, all three page
+locales, neutral JSON and actual native form POSTs (including Razor antiforgery).
+The source holds headers or the body for 40 seconds; an un-aborted client must
+receive native 408/503/504 within the driver's twelve-second observation bound.
+Cancellation waits for one observed upstream request, then waits 50 ms before
+destroying the real client socket. Within 500 ms the source must report exactly
+one request, zero completions, one cancellation and zero pending work. Slow
+successful reads and POST non-mutation/recovery are also checked. The driver
+never credits its forced cleanup as cancellation and removes its own containers.
+Image identity and per-operation status, source counters and measured clocks
+remain under ignored `tests/results/`. A third positional argument labels the
+artifact directory; a fourth `baseline` limits diagnostics to one locale and
+header holds. These are correctness/latency diagnostics, not load qualification
+or comparative throughput evidence.
+The fourth argument `posts` runs only the native form lifetime checks. Those
+first establish a real accepted session, then check that cancelled/deadline POSTs
+leave its independently read store unchanged and a recovered POST appends once.
+`deadlines` checks header-hold deadlines and slow-read recovery for all locales
+and JSON in both profiles. Deadline evidence also requires a contract content
+type, not just a status on an empty untyped response.
