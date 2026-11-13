@@ -307,11 +307,19 @@ export function classifyNoJSRequests(journal) {
   for (const row of result.requests) {
     const r = row.dispatch;
     if (!row.terminal) { result.reasons.push(`Unfinished request ${r.request}`); continue; }
-    if (r.type === "Document") { row.classification = row.terminal.event === "Network.loadingFailed" ? "failed-document" : "document"; continue; }
+    if (r.type === "Document") {
+      if (!r.frame || !r.loader) result.reasons.push(`Document ${r.request} lacks native frame/loader ownership`);
+      else if (row.terminal.event === "Network.loadingFailed") row.classification = "failed-document";
+      else if (row.terminal.event === "native-redirect" && row.terminal.status >= 300 && row.terminal.status < 400
+        || row.response?.frame === r.frame && row.response?.loader === r.loader && Number.isInteger(row.response?.status)
+          && row.response.status >= 100 && row.response.status <= 599) row.classification = "document";
+      else result.reasons.push(`Document ${r.request} lacks a matched native response/status receipt`);
+      continue;
+    }
     const documentRequest = result.requests.find((d) => d.dispatch.type === "Document" && d.dispatch.frame === r.frame && d.dispatch.loader === r.loader);
     const observed = journal.documents.find((d) => d.observer && d.scope && d.frame === r.frame && d.loader === r.loader
       && d.path === r.document?.path && d.observedAt >= r.receivedAt);
-    if (!documentRequest?.response || !observed || r.sameDocumentOrigin !== true || !r.frame || !r.loader) {
+    if (documentRequest?.classification !== "document" || !documentRequest.response || !observed || r.sameDocumentOrigin !== true || !r.frame || !r.loader) {
       result.reasons.push(`Request ${r.request} lacks matching native document/parser ownership`); continue;
     }
     const directParser = r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && r.initiator.path === observed.path;
