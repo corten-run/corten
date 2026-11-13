@@ -3072,6 +3072,83 @@ rules something out.
     five with main first and three with the change first); 2026-11-11, the CSP in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
+46. <a id="choice-patch-brings-area-styles"></a>**A patch ends with the section stylesheet links of its handler's path, and the
+    runtime loads the ones the page lacks before it puts the patch in place; the server is not
+    told the page the patch lands on.** A page links the stylesheets of the areas its path is
+    under (`Area::components`, [Limit 9](#limit-stylesheet-support)), and a navigation's answer
+    carries the same links for the runtime to load before it swaps the page in. A patch carried
+    none and the runtime's `apply()` loaded none, so a `data-patch` form on `/search` answered by
+    a handler at `/items/{slug}/save` drew the `/items` area's dialog unstyled, while the debug
+    check passed because it read the handler's path
+    ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
+    Now `Req::patch` (and a refused form's patch) ends with the links of the handler's path, after
+    the patch's elements, and `apply()` loads those the document lacks with the patch's modules,
+    through the function a navigation uses (`stylesOf`). A component a patch renders is then
+    listed where its handler is, as a page's components are listed where the page is, and the
+    debug check's path is the right one. A stylesheet that fails to load is taken out of the
+    head again and the patch goes in unstyled, where a navigation loads the page in full: a
+    patch is often a write's answer, which a reload would lose, and the next patch that links the
+    stylesheet tries again.
+
+    The cost falls on a patch whose handler is under an area with a stylesheet, wherever it
+    lands: its answer is the link longer (88 bytes for the watchlist's `/smoke` area, sent as they
+    are, since a patch under 1 KiB is not compressed), and the runtime finds the link in the
+    patch and in the head and fetches nothing when the page has it, the same-area case. In
+    process such a patch costs fewer instructions than before (17,631.2 against 18,560.2 per request):
+    finding and writing its links takes about 220 (`links_section`, `section_links` and the
+    comparisons under them), and its buffer starts from the size the last one took, as a page's
+    does, which saves the 1,100 or so that growing it from empty took (`realloc` and
+    `finish_grow`), by the per-function counts of one run of each. A patch outside every area of
+    an app with area stylesheets pays the area check alone and renders as before. A patch in an
+    app whose areas have no stylesheets costs 18,586.7 against
+    18,563.7, the 23 more being where the compiler put the patch's render (no longer inlined
+    into the handler), not work the links add: the check of the area returns at once there. The runtime is 16 bytes larger with gzip and 15 with brotli.
+
+    Not chosen: the runtime telling the server the page's path (a request header of Corten's own
+    beside `corten: action`, [Choice 11](#choice-corten-request-header)), which would let the server
+    leave out a link the page has or, as the issue's second option, refuse the patch in a debug
+    build. Leaving links out saves the same-area patch its link bytes, but every patch request
+    carries the header, a response that depends on it needs `Vary` on it, and a script's
+    `patch()` or a `ReadAgain` read has no page path to send that the server could trust more
+    than the document's own head; refusing in a debug build leaves a release build drawing the
+    patch unstyled and makes the app list the component in both areas (a shared file) or in
+    `App::components`, which every page then links, the pilot's workaround. `Referer` is not
+    used for the same purpose, since an area may set a referrer policy that sends less, and a
+    proxy may drop it. Recording which components a patch rendered, so only their sections are
+    linked, would make every release render keep that record, which [Limit 9](#limit-stylesheet-support) rules out. A live
+    fragment (`corten::live`) is drawn without a request's path and still carries no links: a
+    stream that renders an area's component on a page outside the area lists it where its pages
+    are.
+
+    Stands on: measured (callgrind, release, `tests::what_a_patch_in_an_area_costs` at 200 and 1,200
+    requests with jemalloc, three runs of each build alternated, before at `d12b1fe6` (main
+    `87344049` with the test) and after at `0a693dae`, every run of a build within 0.2
+    instructions of the others; the runtime's minified size with Node's gzip and brotli at
+    their defaults, once, against `87344049`; the patch's bytes from the watchlist, once);
+    platform (a `<link rel="stylesheet">` added to `<head>` fires `load` once its rules apply and
+    `error` when it fails, and `style-src 'self'` allows it under the policy the document loaded
+    with, checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`); reasoned (a handler's
+    path decides its area, as a page's does, so the links need nothing the request does not
+    have; the runtime already skips a stylesheet the head has, by its URL); bet (a patch from an
+    area's handler mostly lands on a page in the same area, where the links are bytes and no
+    request, and patches are few enough a visit that those bytes do not show beside its pages);
+    value (a patch drawn unstyled with no signal is wrong output, Values order 1; an area's
+    rules load where they are used rather than on every page, Values 1; a component is listed
+    in its own area for patches as for pages, Values 5).
+
+    Revisit when: an app in the repository or the Chase Sets pilot sends patches under an area
+    whose link bytes reach a tenth of its patch bytes on a screen people use for many writes in
+    a row (a patch-heavy desk in an area); the runtime starts sending the page's path for
+    another reason, when the server could leave out the links the page has; or a live fragment
+    is found drawing an area's component unstyled on a page outside it.
+
+    Last checked: 2026-11-13, the callgrind runs on `d12b1fe6` against `0a693dae`, with valgrind
+    3.19.0 (the change's first version, `a9fa0058`, which appended the links to a buffer grown
+    from empty, counted 19,191.3 and 18,594.7, and `07c7f075`, which sized the buffer but checked
+    the area in every app, 17,615.3 and 18,630.7); 2026-11-13, the runtime's size on `0a693dae` against
+    `87344049`; 2026-11-13, the patch's link loaded, failed and kept in Chromium 156, Firefox 157 and
+    WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -3205,11 +3282,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
-   linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
-   a page renders, which would cost every render.
+   linked from those pages, and from the patches their handlers answer
+   ([Choice 46](#choice-patch-brings-area-styles)); the split is by URL prefix, chosen by the app,
+   not detected from what a page renders, which would cost every render.
    The lists are written by hand. `corten check` reads the source for a component with a
    stylesheet, script or view that no array names (a `COMPONENTS` list, `.components(&[..])`),
-   and a debug build refuses a page that draws one its area does not get. The scan sees names,
+   and a debug build refuses a page, or a patch, that draws one its handler's area does not get. The scan sees names,
    not whether a list reaches `App::components`. A build-time check could do more for a child
    whose type `html!` knows (an inherent constant on each component, `None` for a hand-written
    `Render`, walked at startup), but not for a generic child, whose type is known only where it is
