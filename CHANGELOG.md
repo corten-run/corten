@@ -569,6 +569,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- Benchmark deployment refreshes target the newest stable framework, runtime and build
+  tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
+  silently downgrading them or removing selected contenders; qualify new inputs afresh.
+
 - The corten-site deploy guide has the times of the first replacement of the site's machine
   (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six
   until the run the workflow starts was answered) in place of "a replacement has not been

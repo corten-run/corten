@@ -18,6 +18,16 @@ its label visible. Scope published claims to the measured workload; use losses a
 profiling to improve Corten, not to change the work competitors must do. No cohort membership
 changes are made here.
 
+Before a new round, refresh framework packages, runtimes and benchmark build tools to
+their newest published stable releases, not merely the newest LTS or supported release
+line. Verify primary release metadata, pin the actual resolved inputs, and repeat native
+qualification on the composed configuration. A changed version is a compatibility input;
+old-image checks and historical results do not qualify it. If the newest stable inputs
+are incompatible, retain that contender and its exact blocked/failed outcome. Do not
+force unsupported dependencies, substitute its renderer, silently downgrade a runtime
+or remove it from its approved groups. An unresolved refresh is not a qualified current
+configuration, and prereleases are not stable alternatives.
+
 ## Read-only inventory
 
 ```sh
