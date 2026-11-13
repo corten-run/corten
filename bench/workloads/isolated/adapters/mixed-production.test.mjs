@@ -1,6 +1,6 @@
 // Fixed native API substitutes exercise composition, not native benchmark qualification.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { after, beforeEach, mock, test } from "node:test";
@@ -9,6 +9,8 @@ import { cpuSettings } from "../../../catalog/contract.mjs";
 import { parseArgs } from "../../../mixed-production/run.mjs";
 import { createPlan } from "../../mixed.mjs";
 import { records } from "../../../marketplace/fixtures.mjs";
+import { composePhase } from "../composition.mjs";
+import { latestStableSchema } from "../../latest-stable.mjs";
 
 const commit = "a".repeat(40), apps = selectedApps("mixed-production"), folder = mkdtempSync(join(tmpdir(), "isolated-mixed-adapter-"));
 const options = parseArgs(["w17", "--build", "--measure", "--profile", "matched", "--native-audits", "/bench/campaign/r17-0123456789abcdef/mixed-native-audits.json"]); options.apps = apps;
@@ -57,6 +59,11 @@ test("complete functional target failure retains every selected app and gated ti
   const result = await inspect(); assert.equal(result.status, "failed"); assert.equal(result.attemptComplete, true);
   assert.deepEqual(result.outcomes.map((r) => r.app), apps); assert.equal(result.outcomes[0].outcome, "failed");
   assert.ok(result.outcomes.slice(1).every((r) => r.outcome === "passed"));
+  const composed = composePhase({ ...binding, preparation: { fixtures: [] }, latestStable: {
+    schema: latestStableSchema, group: "mixed-production", valid: true, status: "not-applicable", groupComparisonEligible: null } },
+  result, { resources: "verified", cleanupComplete: true }, [{ terminal: true, code: 1, signal: null, error: null, cancelled: false, forced: false, success: false }]);
+  assert.equal(composed.outcome, "native-validated");
+  assert.ok(composed.appOutcomes.every((r) => !r.comparisonEligible), "a passed functional app has no timing when another app gated the group");
 });
 
 for (const [name, change, status] of [
