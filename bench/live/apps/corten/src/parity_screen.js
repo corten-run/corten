@@ -14,7 +14,7 @@ import { rows, ParityRow } from "corten/views";
 export function start(body, template, count, feed, signal) {
   const list = rows(body, ParityRow, template), records = [], effects = [];
   let through = 0, seen = 0, settings, work = Promise.resolve(), ack = Promise.resolve();
-  let resume = false, received;
+  let resume = false, received, nativeReady = false;
   const lifetime = new AbortController();
   const log = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
   const visible = () => Array.from(body.children, (el) => {
@@ -37,6 +37,7 @@ export function start(body, template, count, feed, signal) {
     source.addEventListener("parity-ready", (message) => {
       const ready = JSON.parse(message.data);
       enqueue(async () => {
+        nativeReady = true;
         if (resume) log("attach");
         log("resources", ready.resources);
         if (resume) { log("resume", { from: ready.from, status: ready.status }); resume = false; }
@@ -95,7 +96,7 @@ export function start(body, template, count, feed, signal) {
   window.liveApp = {
     records,
     async setup(s) { settings = s; await resources(); log("attach"); follow();
-      await this.until(() => records.some((r) => r.kind === "snapshot") && records.some((r) => r.kind === "resources" && r.connections === 1)); },
+      await this.until(() => nativeReady && records.some((r) => r.kind === "snapshot")); },
     async until(predicate) {
       const deadline = performance.now() + 10000;
       while (!predicate()) { await work; if (performance.now() > deadline) throw new Error("native feed wait timed out"); await new Promise((r) => setTimeout(r, 5)); }
