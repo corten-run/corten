@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { targetAmount } from "./src/marketplace.ts";
+import { targetMinor, alertMessage } from "./src/marketplace.ts";
 import { ensureSession, appendAlert, readAlerts } from "./src/alerts.server.ts";
 
 test("opaque sessions preserve insertion order, isolate clients and copy stored rows", async () => {
@@ -30,9 +30,19 @@ test("opaque sessions preserve insertion order, isolate clients and copy stored 
 
 test("localized targets produce safe positive integer minor units", () => {
   for (const locale of ["en-US", "fr-FR", "de-DE"]) {
-    assert.equal(Math.round(targetAmount(locale, locale === "en-US" ? "1234.50" : "1234,50") * 100), 123450);
-    for (const target of ["0", "-1", "", "not-a-price", "9999999999999999999999999"]) assert.equal(targetAmount(locale, target), null);
-    assert.equal(targetAmount(locale, locale === "en-US" ? "1,234.50" : "1.234,50"), null);
+    const local = (text) => locale === "en-US" ? text : text.replace(".", ",");
+    for (const [text, minor] of [["70368744177664.01", 7036874417766401], ["90071992547409.91", Number.MAX_SAFE_INTEGER],
+      ["0.01", 1], ["1.01", 101], ["0001.20", 120]]) {
+      assert.equal(targetMinor(locale, local(text)), minor, text);
+      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(text);
+      assert.ok(alertMessage(locale, "Synthetic", new URLSearchParams({ email: "exact@example.test", target_price: local(text) })).includes(price), text);
+    }
+    for (const text of ["90071992547409.92", "1.005", "0.001", "1e2", "Infinity", "+1"]) {
+      assert.equal(targetMinor(locale, local(text)), null, text);
+    }
+    assert.equal(targetMinor(locale, locale === "en-US" ? "1234.50" : "1234,50"), 123450);
+    for (const target of ["0", "-1", "", "not-a-price", "9999999999999999999999999"]) assert.equal(targetMinor(locale, target), null);
+    assert.equal(targetMinor(locale, locale === "en-US" ? "1,234.50" : "1.234,50"), null);
   }
 });
 

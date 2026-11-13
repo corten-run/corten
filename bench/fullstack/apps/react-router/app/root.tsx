@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Link, Links, Meta, Outlet, Scripts, useLocation } from "react-router";
+import { Link, Links, Meta, Outlet, Scripts, useLocation, type HeadersFunction } from "react-router";
 import components from "./components.css?url";
 import styles from "./style.css?url";
 
@@ -7,6 +7,14 @@ export const links = () => [
   { rel: "stylesheet", href: styles },
   { rel: "stylesheet", href: components },
 ];
+
+export const headers: HeadersFunction = ({ parentHeaders, errorHeaders }) => {
+  const allow = errorHeaders?.get("Allow");
+  if (!allow) return parentHeaders;
+  const headers = new Headers(parentHeaders);
+  headers.set("Allow", allow);
+  return headers;
+};
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const locale = useLocation().pathname.match(/^\/marketplace\/(en-US|fr-FR|de-DE)\//)?.[1] ?? "en";

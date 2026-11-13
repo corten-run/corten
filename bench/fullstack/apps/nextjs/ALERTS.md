@@ -11,6 +11,11 @@ The hydrated Pages Router form calls a native Next API route. A plain form still
 Source failures in the enhanced API return the existing 502 JSON error without
 appending an alert, including unavailable upstreams and malformed records.
 
+Targets are ungrouped locale-decimal inputs with at most two fractional digits.
+Extra precision is rejected rather than rounded. Parsing constructs the positive
+integer minor amount directly from the digits, rejects unsafe integers, and
+formats the confirmation from that same exact amount with native Intl.
+
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
 client-chosen new identities, and expire after one hour. Cookies use Path=/,

@@ -68,9 +68,9 @@ test("locale-decimal alert validation uses native money, not stored formatted st
   for (const locale of ["en-US", "fr-FR", "de-DE"]) {
     const decimal = locale === "en-US" ? "." : ",";
     const f = model.formatters(locale);
-    assert.equal(model.targetAmount(locale, "1234" + decimal + "50"), 1234.5);
+    assert.equal(model.targetMinor(locale, "1234" + decimal + "50"), 123450);
     for (const bad of ["", "0", "-1", "Infinity", "1e3", "12wrong", "1" + decimal + "234", locale === "en-US" ? "1,50" : "1.50"]) {
-      assert.equal(model.targetAmount(locale, bad), null, bad);
+      assert.equal(model.targetMinor(locale, bad), null, bad);
     }
     const form = new URLSearchParams({ email: "bad", target_price: "1" });
     assert.equal(model.alertMessage(locale, record.title, form), f.labels.invalid_email);
