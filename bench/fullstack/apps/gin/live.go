@@ -3,7 +3,9 @@ package main
 import (
 	"io"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -45,6 +47,10 @@ func (l *livePrices) stream(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-s.wake:
+			if os.Getenv("PROFILE") == "matched" {
+				// A stream may be idle longer than a finite response's write deadline.
+				_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(30 * time.Second))
+			}
 			s.mu.Lock()
 			messages := s.queue
 			s.queue = nil

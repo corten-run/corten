@@ -53,6 +53,7 @@ jobs:
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
       - run: npm run check:marketplace
+      - run: node --test bench/fullstack/apps/gin/compiled-check.test.mjs
       - run: node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"
@@ -119,6 +120,16 @@ jobs:
           -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
           mcr.microsoft.com/dotnet/sdk:10.0
           dotnet test tests/Marketplace.Tests.csproj -c Release
+      - name: Test native compiled alert forms and independent readback
+        if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
+        run: |
+          npx playwright install --with-deps chromium
+          node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+      - name: Test native Gin production boundaries and matched forms
+        if: matrix.app == 'gin'
+        run: |
+          node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results
+          node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -127,6 +138,7 @@ jobs:
             bench/catalog/results/c1/
             bench/marketplace/results/w1/
             bench/fullstack/apps/fastapi/tests/results/
+            bench/fullstack/apps/gin/production-results/
           if-no-files-found: warn
           retention-days: 14
 
