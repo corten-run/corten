@@ -37,3 +37,12 @@ independent HTTP contract against those native apps. It checks all locales, JS a
 no-JS browser contexts, native transport, CSRF/cross-site rejection, missing fields
 and items, sequential order, eight concurrent POSTs, and separate cookie jars. It
 does not time throughput or make comparative performance claims.
+
+To check native routing and source failures independently, build this application's
+Dockerfile and run `node bench/fullstack/apps/rails/test/source-http.mjs IMAGE`.
+It starts and cleans up bounded native containers and a synthetic HTTP upstream,
+checking both fixture startup and real API reads for both fixture records, every
+locale, JSON, missing items, upstream errors and unchanged empty alert state.
+In fixture mode an absent map key returns an empty 404; in API mode an upstream
+404 does the same. Both page and JSON routes use the same source, never a fallback
+record. Upstream failures remain 5xx rather than being relabeled missing.
