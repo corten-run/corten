@@ -3,11 +3,12 @@
 FROM rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 AS build
 WORKDIR /src
 COPY . .
-# Every build on this machine shares the target cache: one at a time (`locked`), and with the
+ENV CARGO_HOME=/var/cache/cargo
+# Builds of this app share its target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
 # would get that build's crates.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/bench/live/apps/corten/target,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id=bench-live-corten.target,target=/src/bench/live/apps/corten/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && cd bench/live/apps/corten && test -f Cargo.toml && cargo build --release && mkdir -p /out && cp target/release/live-corten /out/server
 

@@ -4,8 +4,9 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bench/live/apps/corten ./bench/live/apps/corten
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/bench/live/apps/corten/target,sharing=locked \
+ENV CARGO_HOME=/var/cache/cargo
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id=bench-live-corten-parity.target,target=/src/bench/live/apps/corten/target,sharing=locked \
     find crates bench/live/apps/corten -name target -prune -o -type f -exec touch {} + \
     && cd bench/live/apps/corten && cargo build --locked --release \
     && mkdir -p /out && cp target/release/live-corten /out/server

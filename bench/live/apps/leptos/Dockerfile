@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1
 FROM rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 AS tools
 RUN rustup target add wasm32-unknown-unknown
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo install cargo-leptos --version =0.3.12 --locked
+RUN --mount=type=cache,target=/var/cache/cargo \
+    CARGO_HOME=/var/cache/cargo cargo install cargo-leptos --version =0.3.12 --locked --root /usr/local/cargo
 
 FROM tools AS build
 WORKDIR /src
 COPY . .
+ENV CARGO_HOME=/var/cache/cargo
 ENV CARGO_BUILD_JOBS=2
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id=live-parity-leptos,target=/src/target,sharing=locked \
     find src public -type f -exec touch {} + \
     && cargo leptos build --release --cargo-locked \

@@ -482,6 +482,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- Give the Rust benchmark images distinct locked target caches and a shared whole Cargo home,
+  including the package-cache lock. Keep pinned CLI binaries outside that mount and align the
+  fullstack recipes' dependency, build and development paths with the images. Historical results
+  remain historical; no build timings or native qualification are inferred from this change.
+
 - The marketplace browser gate recognizes Livewire's native enhanced alert response
   only for the same origin, matching component, item, locale, save call and submitted
   values. Native transport and plain-form behavior remain unchanged.
