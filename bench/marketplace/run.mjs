@@ -12,8 +12,9 @@ import { workload } from "./contract.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, k6Image, nodeImage, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, sourceTree } from "./raw-contract.mjs";
 import { retainLoadEvidence } from "./load-evidence.mjs";
+import { describeK6, k6Image } from "../load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -424,10 +425,11 @@ try {
   if (!options.checkOnly) {
     assert.equal(await command("git", ["rev-parse", "HEAD"]), summary.commit, "checkout moved during builds/checks");
     assert.equal(await command("git", ["status", "--porcelain"]), "", "checkout changed during builds/checks");
-    const k6 = JSON.parse(await docker(["image", "inspect", k6Image]).catch(async () => { await docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") }); return docker(["image", "inspect", k6Image]); }))[0];
-    summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
-    toolImages.k6 = imageReceipt(k6);
+    summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`], { pullLog: join(folder, "pull-k6.log") });
+    const k6 = JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0];
+    toolImages.k6 = { ...imageReceipt(k6), platform: summary.tools.k6.platform, version: summary.tools.k6.version, versionOutput: summary.tools.k6.versionOutput };
     retain(join(folder, "tools.json"), toolImages);
+    save();
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     startedAt[cpuName] = (await inspect(cpuName)).State.StartedAt;

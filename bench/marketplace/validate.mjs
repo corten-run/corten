@@ -11,6 +11,7 @@ import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, 
 import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
+import { verifyK6Provenance } from "../load-tool.mjs";
 
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
 const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
@@ -161,6 +162,8 @@ function replay({ folder, round, commit }) {
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
   assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
   const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
+  verifyK6Provenance(s.tools.k6);
+  for (const field of ["platform", "version", "versionOutput"]) assert.equal(toolImages.k6[field], s.tools.k6[field], "retained k6 executable probe differs");
   for (const tool of Object.keys(toolImages)) {
     imageId(toolImages[tool].id); assert.equal(toolImages[tool].id, s.tools[tool].imageId, "tool image receipt differs");
   }
