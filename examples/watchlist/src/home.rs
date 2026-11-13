@@ -339,14 +339,11 @@ pub(crate) async fn watch(
     zone: Option<ClientZone>,
     Form(form): Form<StockForm>,
 ) -> HtmlResult {
-    let mut message = match market.stocks.read(|rows| rows.get(&form.id).map(|s| format!("Watching {} at {}.", s.name, s.price)))
-    {
-        Some(message) => {
-            watching.add(&lists, &form.id);
-            message
-        }
-        None => "That stock is not on the market.".into(),
+    let Some(mut message) = market.stocks.read(|rows| rows.get(&form.id).map(|s| format!("Watching {} at {}.", s.name, s.price)))
+    else {
+        return not_listed(&req, viewer.as_deref(), &market, &mut watching).await;
     };
+    watching.add(&lists, &form.id);
     // The browser's zone, which the runtime keeps once a page has loaded: no script of the app's.
     if let Some(ClientZone(zone)) = zone {
         message.push_str(&format!(" Alerts follow {zone} time."));
@@ -362,19 +359,34 @@ pub(crate) async fn unwatch(
     mut watching: Watching,
     Form(form): Form<UnwatchForm>,
 ) -> HtmlResult {
-    let message = market
-        .stocks
-        .read(|rows| rows.get(&form.remove).map(|s| format!("Stopped watching {}.", s.name)))
-        .unwrap_or_else(|| "That stock is not on the market.".into());
+    let Some(message) = market.stocks.read(|rows| rows.get(&form.remove).map(|s| format!("Stopped watching {}.", s.name))) else {
+        return not_listed(&req, viewer.as_deref(), &market, &mut watching).await;
+    };
     watching.remove(&lists, &form.remove);
     changed(&req, viewer.as_deref(), &market, &mut watching, message)
+}
+
+/// What a watch or a removal of a stock the market does not list says.
+const NOT_LISTED: &str = "That stock is not on the market.";
+
+/// A watch or a removal of a stock the market does not list, refused (422) and the list left as it
+/// is: the form saying so as a patch with JavaScript, the watchlist with the form saying so
+/// without it (drawn at `/watch` or `/unwatch` only to refuse, as `req.invalid` draws a refusal),
+/// and the Problem Details document for a data client.
+async fn not_listed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching) -> HtmlResult {
+    let mut errors = Errors::new();
+    errors.add_form(NOT_LISTED);
+    let home = &Home::new(market, watching, NOT_LISTED.into(), None);
+    let form = WatchForm { others: &home.others, message: &home.message, notice: None };
+    req.invalid(&errors, form, || async move { home_screen(req, viewer, watching, home) }).await
 }
 
 /// The answer to a change of the list: with JavaScript, the prices and the form as a patch; to a
 /// native screen or an agent, the whole screen. `/watch` and `/unwatch` are paths of their own
 /// (one form's two writes), so a browser without JavaScript is sent back to the watchlist, whose
-/// form says what changed, once (`req.redirect_with_notice`). The patch leaves the picks as they
-/// are, so until the page is read again they can still name a stock just watched.
+/// form says what changed, once (`req.redirect_with_notice`); only a refusal is drawn there
+/// (`not_listed`). The patch leaves the picks as they are, so until the page is read again they
+/// can still name a stock just watched.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
     if !matches!(req.mode, Mode::Action | Mode::Data) {
         return Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?));
@@ -591,6 +603,45 @@ mod tests {
         let data = watch(Mode::Data).await;
         assert_eq!(data.headers()["content-type"], "application/json");
         assert!(data.text().ends_with(r#""message":"Watching Halcyon Health at $88.40."}}"#), "{}", data.text());
+    }
+
+    /// Without JavaScript `/watch` and `/unwatch` have no page of their own: a change sends the
+    /// browser back to the watchlist with what it did, and a stock the market does not list is
+    /// refused where it was posted, the watchlist drawn there with a 422 and the list as it was.
+    #[tokio::test]
+    async fn without_javascript_a_change_goes_back_to_the_watchlist_and_a_refusal_is_drawn() {
+        let app = client();
+        let removed = app
+            .post(&url::Unwatch)
+            .mode(Mode::Document)
+            .cookie("visitor", VISITOR)
+            .field(UnwatchForm::FIELDS.remove, "GLBX")
+            .await;
+        assert_eq!((removed.status(), removed.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
+        let notice = removed.cookie("__Host-corten-notice").unwrap();
+        let page = app.get(&url::Home::default()).cookie("visitor", VISITOR).cookie("__Host-corten-notice", notice).await;
+        let page = page.text();
+        assert!(page.contains(r#"<p id="watch-message" aria-live="polite">Stopped watching Globex.</p>"#), "{page}");
+        assert_eq!(rows(page), ["ACME", "INIT"]);
+        let watch =
+            app.post(&url::Watch).mode(Mode::Document).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "ZZZZ").await;
+        let unwatch = app
+            .post(&url::Unwatch)
+            .mode(Mode::Document)
+            .cookie("visitor", VISITOR)
+            .field(UnwatchForm::FIELDS.remove, "ZZZZ")
+            .await;
+        for refused in [watch, unwatch] {
+            let page = refused.text();
+            assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY, "{page}");
+            assert!(page.contains(r#"<p id="watch-message" aria-live="polite">That stock is not on the market.</p>"#), "{page}");
+            assert_eq!(rows(page), ["ACME", "INIT"], "the list as it was");
+        }
+        // With JavaScript the refusal is the form, as a patch with the refusal's status.
+        let patch = app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "ZZZZ").await;
+        assert_eq!(patch.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(patch.text().starts_with(r#"<form data-scope="watch-form" id="watch-form""#), "{}", patch.text());
+        assert!(patch.text().contains("That stock is not on the market."), "{}", patch.text());
     }
 
     #[tokio::test]

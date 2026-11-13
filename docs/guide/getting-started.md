@@ -119,7 +119,7 @@ layout with the page in it. A form with `data-patch` is submitted by the runtime
 answers with the fragment to replace; without JavaScript the same handler returns the whole page.
 The form posts to its page's own route, so that page is at an address that answers a `GET` and
 can be bookmarked and shared; a write with a path of its own redirects once it is done
-([the rule](requests-and-forms.md#request-modes)).
+([the rule](requests-and-forms.md#where-a-form-posts)).
 
 ```rust,no_run
 use corten::prelude::*;

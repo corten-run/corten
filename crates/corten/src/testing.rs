@@ -47,7 +47,7 @@
 //!
 //! ```compile_fail,E0277
 //! # async fn f(app: corten::testing::Client) {
-//! app.get(&"/greet").await;
+//! app.get(&"/").await;
 //! # }
 //! ```
 //!

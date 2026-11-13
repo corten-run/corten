@@ -2564,26 +2564,33 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
     assert_eq!(call(app(api, None), "GET", None).await.0, StatusCode::OK, "only pages are checked");
 }
 
-/// A write that answers a page wherever it is posted, as a patch for the runtime.
-#[cfg(debug_assertions)]
+/// A write that answers a page wherever it is posted, as a patch for the runtime, with a cookie.
 async fn post_page_drawn(req: Req) -> HtmlResult {
-    req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await
+    let res =
+        req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await?;
+    Ok(res.with_cookie(SetCookie::new("saved", "1")))
+}
+
+/// The same write at a path with a parameter.
+async fn post_item_drawn(req: Req, Params(_): Params<post_page_url::ItemSave>) -> HtmlResult {
+    post_page_drawn(req).await
 }
 
 /// A write refused for its input: the page again, with the refusal's status.
-#[cfg(debug_assertions)]
 async fn post_page_refused(req: Req) -> HtmlResult {
     let mut res = req.test_page("Refused", html! { <p>"refused"</p> })?;
     *res.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
     Ok(res)
 }
 
-#[cfg(debug_assertions)]
 async fn post_page_redirected(req: Req) -> HtmlResult {
     req.redirect(&post_page_url::Home)
 }
 
-#[cfg(debug_assertions)]
+async fn post_api_saved() -> &'static str {
+    "saved"
+}
+
 #[crate::routes]
 mod post_page_url {
     #[route("/", get = post_page_drawn, post = post_page_drawn)]
@@ -2592,42 +2599,101 @@ mod post_page_url {
     #[route("/save", post = post_page_drawn)]
     pub struct Save;
 
+    #[route("/items/{id}/save", post = post_item_drawn)]
+    pub struct ItemSave {
+        pub id: u32,
+    }
+
     #[route("/refuse", post = post_page_refused)]
     pub struct Refuse;
 
     #[route("/done", post = post_page_redirected)]
     pub struct Done;
+
+    #[route("/relay", any = post_page_drawn)]
+    pub struct Relay;
 }
 
+#[crate::routes(area = PostShop)]
+mod post_page_area {
+    #[route("/shop")]
+    pub struct PostShop;
+
+    #[route("/shop/save", post = post_page_drawn)]
+    pub struct ShopSave;
+}
+
+#[crate::routes(api = PostApi)]
+mod post_page_api {
+    #[route("/api")]
+    pub struct PostApi;
+
+    #[route("/api/save", post = post_api_saved)]
+    pub struct ApiSave;
+}
+
+/// An app with a page route, post-only routes that draw a page, refuse or redirect, one with a
+/// parameter, one in an area, an `any = ..` route and an API, and a POST to it with `headers`.
+fn post_page_router() -> crate::Router {
+    App::new(post_page_url::router()).area(post_page_area::area).api(post_page_api::api).error_page(test_error_page, ()).router()
+}
+
+async fn post_page_send(
+    router: &crate::Router,
+    path: &str,
+    headers: &[(&'static str, &'static str)],
+) -> (StatusCode, HeaderMap, String) {
+    let mut req = Request::builder().method("POST").uri(path);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (status, headers) = (res.status(), res.headers().clone());
+    let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, headers, String::from_utf8(body.to_vec()).unwrap())
+}
+
+const POST_PAGE_BROWSER: &[(&str, &str)] = &[("accept", "text/html")];
+
 /// A browser's post answered with a page at a path with no `GET` is an error in a debug build: the
-/// browser would show it at an address that answers 405 when it is opened again. A page's own
-/// route, a refusal, a redirect, the runtime's patch and a client that does not ask for HTML are not.
+/// browser would show it at an address that answers 405 when it is opened again. The handler's
+/// cookies go out with it. A page's own route, a refusal, a redirect, the runtime's patch, a client
+/// that does not ask for HTML, an `any = ..` route (which answers `GET` too) and an API's path
+/// are not.
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_builds() {
-    let router = App::new(post_page_url::router()).error_page(test_error_page, ()).router();
-    let send = |path: &'static str, headers: &'static [(&'static str, &'static str)]| {
-        let router = router.clone();
-        async move {
-            let mut req = Request::builder().method("POST").uri(path);
-            for (name, value) in headers {
-                req = req.header(*name, *value);
-            }
-            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-            let status = res.status();
-            let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
-            (status, String::from_utf8(body.to_vec()).unwrap())
-        }
-    };
-    let browser: &[(&str, &str)] = &[("accept", "text/html")];
-    let (status, body) = send("/save", browser).await;
+    let router = post_page_router();
+    let (status, headers, body) = post_page_send(&router, "/save", POST_PAGE_BROWSER).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(body.contains("post to /save, which has no GET handler"), "it names the route outside dev too: {body}");
-    assert_eq!(send("/", browser).await.0, StatusCode::OK, "the page's own route");
-    assert_eq!(send("/refuse", browser).await.0, StatusCode::UNPROCESSABLE_ENTITY, "a refusal draws the page");
-    assert_eq!(send("/done", browser).await.0, StatusCode::SEE_OTHER, "a redirect");
-    assert_eq!(send("/save", &[("accept", "text/html"), ("corten", "action")]).await.0, StatusCode::OK, "the runtime's patch");
-    assert_eq!(send("/save", &[]).await.0, StatusCode::OK, "not a browser");
+    let cookies: Vec<_> = headers.get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
+    assert!(cookies.iter().any(|c| c.starts_with("saved=1;")), "the handler's cookie is kept: {cookies:?}");
+    let (status, _, body) = post_page_send(&router, "/items/7/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a route with a parameter: {body}");
+    assert!(body.contains("post to /items/{id}/save, which has no GET handler"), "{body}");
+    let (status, _, body) = post_page_send(&router, "/shop/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "an area's route: {body}");
+    assert_eq!(post_page_send(&router, "/", POST_PAGE_BROWSER).await.0, StatusCode::OK, "the page's own route");
+    assert_eq!(post_page_send(&router, "/refuse", POST_PAGE_BROWSER).await.0, StatusCode::UNPROCESSABLE_ENTITY, "a refusal");
+    assert_eq!(post_page_send(&router, "/done", POST_PAGE_BROWSER).await.0, StatusCode::SEE_OTHER, "a redirect");
+    assert_eq!(post_page_send(&router, "/relay", POST_PAGE_BROWSER).await.0, StatusCode::OK, "any = .. answers GET too");
+    assert_eq!(post_page_send(&router, "/api/save", POST_PAGE_BROWSER).await.0, StatusCode::OK, "an API's path");
+    let patch = post_page_send(&router, "/save", &[("accept", "text/html"), ("corten", "action")]).await;
+    assert_eq!(patch.0, StatusCode::OK, "the runtime's patch");
+    assert_eq!(post_page_send(&router, "/save", &[]).await.0, StatusCode::OK, "not a browser");
+}
+
+/// A release build compiles none of the check: the same post is the page it drew.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_page_answering_a_post_to_a_path_with_no_get_is_sent_in_release_builds() {
+    let router = post_page_router();
+    for path in ["/save", "/items/7/save", "/shop/save"] {
+        let (status, _, body) = post_page_send(&router, path, POST_PAGE_BROWSER).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        assert!(body.contains("<p>saved</p>"), "{path}: {body}");
+    }
 }
 
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in

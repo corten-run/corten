@@ -4913,10 +4913,11 @@ async function run(browser) {
     plain.getByRole("button", { name: "Save draft" }).click(),
   ]).then(([answer]) => answer);
   check("no script: a save sends the browser back to the draft", saved.status() === 303 && saved.headers().location === "/" && new URL(plain.url()).pathname === "/", `${saved.status()} ${plain.url()}`);
-  // The notice rides in a Secure cookie, which Playwright's WebKit never sends back over http.
+  // The notice rides in a `__Host-` cookie, which must be Secure, and Playwright's WebKit never sends
+  // a Secure cookie back over http, so it cannot be given back as a plain one either.
   const savedToast = "no script: the draft a save goes back to shows its toast";
   if (engine !== "webkit") check(savedToast, (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()), await plain.locator("#ui-toast").textContent());
-  else skip(savedToast, "Playwright's WebKit never sends a Secure cookie back over http");
+  else skip(savedToast, "the notice's __Host- cookie must be Secure, and Playwright's WebKit never sends a Secure cookie back over http");
   await plain.goto(`${base}/`);
   await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
   {

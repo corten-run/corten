@@ -85,20 +85,6 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
-Where a form posts decides what a browser without JavaScript is left at. A form that belongs to
-one page posts to that page's route (`#[route("/items/{id}", get = show, post = save)]`, the form's
-`action={url::Item { id }}`): the page drawn as its answer is at the page's own address, which
-answers a `GET`, so it can be bookmarked and shared, and a refusal drawn there keeps what the user
-typed. A path takes one `POST`, so a page with several writes, or a write several pages use,
-gives the write a path of its own (`/watch`, `/sign-out`). That write answers a redirect once it
-is done, `req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
-([Redirects](#redirects)), and draws a page only to refuse (`req.invalid`): drawn there after a
-success, the page would sit at an address with no `GET`, which answers 405 when it is reloaded
-from a bookmark or a shared link. A debug build answers a browser's post with a 500 that says so
-when a path with no `GET` handler answers it with a page and a success status. Either way, a page
-drawn as a post's answer is reloaded by posting again (the browser asks first), so a write that
-must not run twice carries a `SubmitKey` (below) or redirects too.
-
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer
 sends the browser to another page, until that page is), and for a navigation `<main>` and the
@@ -174,6 +160,32 @@ the page's memory only: a Back that loads the whole document (another layout, a 
 answer that is not a page, or after a reload) draws the page as the server does, and so does a
 second Back past an entry a script pushed on the same page. Without the Navigation API every
 navigation is a full load, and the browser fills the page itself.
+
+### Where a form posts
+
+Where a form posts decides what a browser without JavaScript is left at. A form that belongs to
+one page posts to that page's route (`#[route("/items/{id}", get = show, post = save)]`, the form's
+`action={url::Item { id }}`): the page drawn as its answer is at the page's own address, which
+answers a `GET`, so it can be bookmarked and shared, and a refusal drawn there keeps what the user
+typed. A path takes one `POST`, so a page with several writes, or a write several pages use,
+gives the write a path of its own (`/watch`, `/sign-out`). That write answers a redirect once it
+is done, `req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
+([Redirects](#redirects)), and draws a page only to refuse (`req.invalid`): drawn there after a
+success, the page would sit at an address with no `GET`, which answers 405 when it is reloaded
+from a bookmark or a shared link. The same holds for a post that comes from elsewhere to a path
+of its own (a payment provider's return, a sign-in provider's `form_post` callback): it
+redirects once it has what it needs. Either way, a page drawn as a post's answer is reloaded by
+posting again (the browser asks first), so a write that must not run twice carries a
+`SubmitKey` ([Forms](#forms)) or redirects too.
+
+A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500 that
+says so when a path whose route has no `GET` handler answers it with a page and a success status,
+so an app's router test fails there; the handler's cookies go out with the error. It reads the
+routes `#[corten::routes]` declares, so it does not see everything: a router built by hand from
+a `Table` is not checked, and a page such a route serves at a path a post-only macro route also
+matches is taken for that route's, a false 500; an `unstaged` route skips the stages the check
+runs in; an `any = ..` route answers `GET` too; and a release build compiles none of it, so it
+never runs in a production image or a smoke test against one.
 
 ### Seeing what went over the wire
 
