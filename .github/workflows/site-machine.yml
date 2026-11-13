@@ -215,8 +215,8 @@ jobs:
           # The count of connections is over one second: these start after the ones above. They
           # are made to port 80, which the firewall counts with 443: over TLS curl reads the
           # runner's certificates for each connection in turn, and a connection long made is
-          # timed late for that alone (28 to 35 of 40 a second or more, with no line in the
-          # firewall).
+          # timed late for that alone (most of the 40 in a rig with no line in the firewall:
+          # deploy/README.md).
           sleep 5
           waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "http://$SITE_DOMAIN/robots.txt?[1-40]" || true)
           late=$(awk '$1 >= 0.9' <<< "$waits" | wc -l)

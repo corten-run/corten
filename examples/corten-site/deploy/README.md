@@ -383,8 +383,8 @@ again and fewer than 19 have been let in that second. From a sender that tries e
 second later and 2 a second after that, and of 100 the last 5 in the sixth second. From one
 that waits twice as long each time (Linux before 6.5, set so for the run), of 40 the last 2
 connected after 3 seconds, and of 100, 19 at 0, 1, 3, 7 and 15 seconds and the last 5 after
-32. All were answered; what Windows and macOS do between tries was not run. A reader over a
-limit of nginx's is answered 429, with nginx's own plain page where
+31 to 32 (two reviews' runs). All were answered; what Windows and macOS do between tries was
+not run. A reader over a limit of nginx's is answered 429, with nginx's own plain page where
 it was the page that was asked for; a stylesheet or script refused leaves the page without
 it until it is loaded again, and a stream refused leaves the page's readings still. The
 requests and the answers are two lines of `nginx.conf` (`rate=` and `burst=`, and the
@@ -476,10 +476,9 @@ requests at once about 100 are answered and the rest refused, of 40 connections 
 port 80 about 21 wait a second or more, and 250 requests one after another take three
 connections from each of nginx's servers. It fails where nginx refuses too few, no
 connection waits, or a server keeps a connection, and the second is what says the firewall's
-lines were read
-there: where the machine's kernel refuses them, `provision.sh` takes them out and the
-machine serves without the firewall's two counts. The answers on their way and the
-connections held are not asked for there: each takes hundreds of connections held open.
+lines were read there: where the machine's kernel refuses them, `provision.sh` takes them
+out and the machine serves without the firewall's two counts. The answers on their way and
+the connections held are not asked for there: each takes hundreds of connections held open.
 
 ## What has and has not been checked
 
@@ -675,22 +674,25 @@ for the names that redirect keeping an HTTP/1.1 connection for any number of req
 connections from each server, over HTTP/1.1 and HTTP/2, and from port 80 for a redirect and
 for a challenge file.
 
-The workflow's step was run as it is written (bash, curl 8.5.0, jq 1.7), with the rig's
-address for the machine's: with the limits, the firewall's lines and one name that redirects
-it said 103 answered, 197 refused, 21 waited and three connections for each of the three
-servers, and passed; with the configuration as it was first written it failed for the name
-that redirects, one connection; with the one before the limits it failed on all three
-counts; and for an address that answers nothing it warned and passed after 24 seconds (as
-first written it asked that address 300 times, one after another, and was stopped after five
-minutes). Those runs had curl take the rig's certificate unchecked. A second review ran the
-step with the certificate in the system's bundle, as a runner trusts a real one, on a
-machine whose firewall had none of the lines, and it passed, 35 of 40 having waited: the 40
-were then made over TLS, and curl reads the bundle for each connection in turn and times a
-connection long made as late. Run again that way, the step as it was said 28 and 31 had
-waited with no lines and 30 and 34 with them. The 40 are now made to port 80: 0 waited with
-no lines, and the step failed, and 21 with them, and it passed (two runs of each). It has
-not been run from one of GitHub's runners: it takes the runner's 40 connections to leave
-from one address, and a runner's TCP to try again within the 20 seconds a request is given.
+The workflow's step was run from its own text (bash, curl 8.5.0, jq 1.7), with the rig's
+address for the machine's, first as it then was, its 40 connections made over TLS and curl
+taking the rig's certificate unchecked: with the configuration as it was first written it
+failed for the name that redirects, one connection; with the one before the limits it failed
+on all three counts; and for an address that answers nothing it warned and passed after 24
+seconds (as first written it asked that address 300 times, one after another, and was
+stopped after five minutes). Those three were not run again. A second review ran that step
+with the certificate in the system's bundle, as a runner trusts a real one, on a machine
+whose firewall had none of the lines, and it passed, 35 of 40 having waited: over TLS curl
+reads the bundle for each connection in turn and times a connection long made as late. Run
+again that way in this rig, it said 28 and 31 had waited with no lines and 30 and 34 with
+them (a third review's rig: 20 and 28 with none). The 40 are now made to port 80, and the
+step as it is now was run with the certificate in the bundle: 0 waited with no lines, and
+it failed, and 21 with them, and it passed (two runs of each here, and two and three in the
+third review's rig). With the certificate unchecked, the limits, the lines and one name that
+redirects, it said 103 answered, 197 refused, 21 waited and three connections for each of
+the three servers, and passed. It has not been run from one of GitHub's runners: it takes
+the runner's 40 connections to leave from one address, and a runner's TCP to try again
+within the 20 seconds a request is given.
 
 The site's smoke test, in Chromium and then Firefox on a machine held to one CPU, was run six
 times in turn against the limits as they are now, with two lines of `nginx.conf` changed so
