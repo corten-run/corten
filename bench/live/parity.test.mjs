@@ -17,7 +17,7 @@ const fanout = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name = "express-normal", base = fanout) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
 async function measured() {
-  const base = new URL("./evidence/review-v2-express/", import.meta.url);
+  const base = new URL("./evidence/review-v3-express/", import.meta.url);
   const a = await artifact("express-fanout-4", base), normal = await artifact("express-normal", base);
   const qualification = JSON.parse(await readFile(new URL("express-artifacts.json", base), "utf8")).files;
   return { a, expected: { app: "express", group: "live-delivery", provenance: normal.provenance,
@@ -91,7 +91,7 @@ test("actual qualified native fan-out retains CPU/memory, visible latency and ho
   const round = await verifyRound(fanout);
   assert.equal(round.readyForLoad, false);
   assert.deepEqual(round.measured, [], "historical receipts cannot qualify actual native cost");
-  const current = await verifyRound(new URL("./evidence/review-v2-express/", import.meta.url));
+  const current = await verifyRound(new URL("./evidence/review-v3-express/", import.meta.url));
   assert.deepEqual(current.measured, ["express"]);
   const ledger = JSON.parse(await readFile(new URL("coverage.json", fanout), "utf8"));
   assert.equal(ledger.cells.find((r) => r.app === "express").measurement, "complete");

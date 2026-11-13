@@ -13,7 +13,7 @@ const retained = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name, base = retained) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
 async function measured() {
-  const base = new URL("./evidence/review-v2-express/", import.meta.url);
+  const base = new URL("./evidence/review-v3-express/", import.meta.url);
   const a = await artifact("express-fanout-4", base), normal = await artifact("express-normal", base);
   const qualification = JSON.parse(await readFile(new URL("express-artifacts.json", base), "utf8")).files;
   return { a, expected: { app: "express", group: "live-delivery", provenance: normal.provenance, qualification, settings: normal.settings } };

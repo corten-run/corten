@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { verifyMeasurementBindings } from "./measurement.mjs";
 import { createLiveWorkload, liveSnapshot } from "../workloads/live.mjs";
 import { wireEvents, wireSnapshots } from "./wire.mjs";
-import { verifyResources } from "./resources.mjs";
+import { verifyResources, verifyResourceBounds, verifyResourceLifecycle } from "./resources.mjs";
 
 export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile/v1", clients: [1, 2, 4],
   seed: 17, rowCount: 5, eventCount: 60, rate: 20, deadlineMs: 90000, maxScheduleLagMs: 500,
@@ -21,18 +21,13 @@ export function kernelObservation(raw) {
 }
 
 export function checkResources(r, clients, settings, released = false) {
-  for (const name of ["subscriptions", "connections", "pendingTasks", "queueEvents", "queuePeak", "historyEvents", "historyPeak"]) {
-    assert.ok(Number.isSafeInteger(r[name]) && r[name] >= 0, `missing native ${name}`);
-  }
-  assert.equal(r.queueLimit, settings.queueLimit); assert.equal(r.historyLimit, settings.historyLimit);
-  assert.ok(r.queueEvents <= clients * settings.queueLimit && r.queuePeak <= settings.queueLimit, "fan-out queue exceeded budget");
-  assert.ok(r.historyEvents <= settings.historyLimit && r.historyPeak <= settings.historyLimit, "fan-out history exceeded budget");
+  verifyResourceBounds(r, clients, settings);
   if (released) for (const name of ["subscriptions", "connections", "pendingTasks", "queueEvents"]) assert.equal(r[name], 0, `leaked ${name}`);
   else { assert.equal(r.subscriptions, clients); assert.equal(r.connections, clients); assert.equal(r.pendingTasks, clients); }
 }
 
 export function verifyFanout(a, { app, group, provenance, qualification, settings, wire }) {
-  assert.ok(["native-live-fanout/v1", "native-live-fanout/v2"].includes(a.schema));
+  assert.ok(["native-live-fanout/v1", "native-live-fanout/v2", "native-live-fanout/v3"].includes(a.schema));
   assert.equal(a.app, app); assert.equal(a.group, group);
   assert.deepEqual(a.profile, fanoutProfile); assert.ok(fanoutProfile.clients.includes(a.clients));
   assert.deepEqual(a.provenance, provenance); assert.deepEqual(a.qualification, qualification);
@@ -76,6 +71,7 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
     for (const [i, r] of b.records.entries()) assert.ok(Number.isFinite(r.at) && r.at >= 0
       && (!i || r.at >= b.records[i - 1].at), "browser observation clock regressed");
     verifyResources(b.records, b.network, wire);
+    verifyResourceLifecycle(b.records, a.clients, a.settings);
     assert.deepEqual(b.failures, []);
     const events = b.records.filter((r) => r.kind === "event");
     assert.deepEqual(events.map((r) => r.event), wireEvents(b.network, wire), "fan-out native wire/app mismatch");
@@ -91,6 +87,8 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
     assert.deepEqual(sort(snapshots[0].state), sort(workload.initial));
     const effects = [];
     for (const r of events) {
+      if (r.receivedAt !== undefined) assert.ok(Number.isFinite(r.receivedAt) && r.receivedAt >= 0 && r.receivedAt <= r.at,
+        "visible frame chronology precedes native arrival");
       if (r.disposition === "applied") effects.push(r.event.effectId);
       assert.deepEqual(r.effects, effects); assert.equal(r.effectCount, effects.length);
       assert.deepEqual(sort(r.state), liveSnapshot(workload, effects.length).rows);
@@ -113,9 +111,18 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
       && ["subscriptions", "connections", "pendingTasks", "queueEvents"].every((k) => r[k] === 0));
     assert.ok(zero && zero.at - detach.at <= a.settings.maxCleanupMs
       && probeAcknowledgedAt - (b.timeOrigin + detach.at) <= a.settings.maxCleanupMs, "cleanup exceeded detach deadline");
-    assert.ok(!events.some((r) => r.event.seq === workload.cleanupProbe.seq), "post-detach delivery");
-    for (const frame of b.frames) assert.ok(Number.isSafeInteger(frame.through) && frame.through >= 0 && frame.through <= workload.eventCount
-      && Number.isFinite(frame.firstFrameAt) && Number.isFinite(frame.secondFrameAt), "invalid visible frame observation");
+    const detachIndex = b.records.findIndex((r) => r.kind === "detach");
+    assert.equal(b.records.filter((r) => r.kind === "detach").length, 1);
+    assert.ok(!b.records.slice(detachIndex + 1).some((r) => r.kind === "event"), "event processing after detach");
+    for (const [i, frame] of b.frames.entries()) {
+      assert.ok(Number.isSafeInteger(frame.through) && frame.through >= 0 && frame.through <= workload.eventCount
+        && Number.isFinite(frame.firstFrameAt) && Number.isFinite(frame.secondFrameAt), "invalid visible frame observation");
+      const change = frame.through === 0 ? snapshots[0] : applied[frame.through - 1];
+      assert.ok(frame.firstFrameAt >= change.at && frame.secondFrameAt > frame.firstFrameAt,
+        "visible frame chronology precedes application state");
+      if (i) assert.ok(frame.through > b.frames[i - 1].through && frame.firstFrameAt >= b.frames[i - 1].firstFrameAt
+        && frame.secondFrameAt >= b.frames[i - 1].secondFrameAt, "visible frame chronology regressed");
+    }
     for (const [i, event] of applied.entries()) {
       const frame = b.frames.find((f) => f.through >= event.event.seq);
       assert.ok(frame && frame.secondFrameAt >= frame.firstFrameAt, "missing browser paint opportunity");
@@ -154,6 +161,8 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       const identityReceipt = await cdp.send("Target.getTargetInfo");
       const identity = { receipt: identityReceipt, targetId: identityReceipt.targetInfo.targetId, contextId: identityReceipt.targetInfo.browserContextId };
       const network = [], failures = [], pending = [];
+      cdp.on("Network.requestWillBeSent", (e) => network.push({ kind: "native-request", requestId: e.requestId,
+        url: e.request.url, method: e.request.method, type: e.type, timestamp: e.timestamp }));
       for (const [event, kind] of [["Network.eventSourceMessageReceived", "native-sse"], ["Network.webSocketFrameReceived", "native-websocket-received"],
         ["Network.webSocketFrameSent", "native-websocket-sent"], ["Network.webSocketCreated", "native-websocket-created"], ["Network.loadingFinished", "received-bytes"]]) cdp.on(event, (e) => network.push({ kind, ...e }));
       page.on("pageerror", (e) => failures.push(e.message));

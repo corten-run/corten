@@ -48,11 +48,16 @@ including failed or unavailable-profile cases, independently of coverage flags.
 Its result includes current `passed`, `measured`, `unqualified` and `inspected`
 inventories. Original coverage remains historical metadata, not current admission.
 The verifier CLI exits 1 when any retained success-schema capture is unqualified.
-New measurements use `native-live-fanout/v2`, retaining independent CDP reader IDs,
+New measurements use `native-live-fanout/v3`, retaining independent CDP reader IDs,
 source-instance/interval-bound kernel receipts, raw host resource HTTP responses
-and host/browser publication clock alignment. Historical v1 measurements lack
-these receipts and are not currently qualified; their bytes are never upgraded.
-`evidence/review-v2-express/` contains a fresh real native 1/2/4-reader verification,
+and host/browser publication clock alignment. Native frame request IDs must match
+recorded CDP connection requests on the inspected instance's origin. Every resource
+acknowledgement is bounded; resources cannot resurrect after post-detach zero.
+Paint callbacks must follow actual state application, and record order rejects all
+post-detach event processing, including duplicates at the detach timestamp.
+Historical v1/v2 measurements lack required receipts and are not currently
+qualified; their bytes are never upgraded.
+`evidence/review-v3-express/` contains a fresh real native 1/2/4-reader verification,
 not full-group readiness or a comparative throughput claim.
 
 Implemented native ports are Express (its response writer and EventSource), ASP.NET Core

@@ -307,7 +307,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
             let a;
             try {
               const observed = await fanoutJourney(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters);
-              a = { schema: "native-live-fanout/v2", profile: fanoutProfile, app, group, provenance, qualification: files,
+              a = { schema: "native-live-fanout/v3", profile: fanoutProfile, app, group, provenance, qualification: files,
                 comparative: false, repeats: 1, ...observed };
               a.summary = verifyFanout(a, { app, group, provenance, qualification: files, settings: qualified[0].settings, wire: port.wire });
             } catch (error) {

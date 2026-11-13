@@ -115,7 +115,7 @@ Missing ports stay visible; no transport-only placeholders count as implemented.
 
 ## Measurement receipts
 
-New `native-live-fanout/v2` artifacts retain CDP target/context receipts and native
+New `native-live-fanout/v3` artifacts retain CDP target/context receipts and native
 transport request IDs for each independent reader. They bind kernel observations
 to exact container/image/PID/started-at/port inspection receipts and unique measured
 intervals; raw host resource requests/responses to attached/delivered/released
@@ -123,6 +123,15 @@ counters; and host RPC intervals to actual browser publication starts using both
 time origins. Clock rounding allowance is 2 ms, not a relaxed offered-rate gate.
 The first zero-resource observation and cleanup probe acknowledgement must each
 meet the 5-second detach deadline; the 150-ms post-ack observation is additional.
-Historical v1 measurements remain unchanged and cannot qualify without these
+EventSource frames must match a retained CDP `Network.requestWillBeSent` GET and
+WebSocket frames a retained `Network.webSocketCreated`, on the inspected HTTP/WS
+origin. No browser request/response may borrow another instance's origin.
+Every resource observation/acknowledgement must obey reader, queue/history and
+peak bounds, with monotone peaks and no resurrection after post-detach zero.
+Publication acknowledgements count all attached readers. Every sampled paint
+must follow the observed application state and native arrival (where recorded),
+with distinct ordered frame callbacks. No event, including a duplicate, may be
+processed after the detach record; equal timestamps do not erase record order.
+Historical v1/v2 measurements remain unchanged and cannot qualify without these
 receipts. Reusing another build, container, reader or measured interval is rejected.
 The runner supplies these receipts; app ports must not manufacture them.

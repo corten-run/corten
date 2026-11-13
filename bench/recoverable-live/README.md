@@ -23,7 +23,7 @@ Explicit-profile captures in `evidence/native-feed-corten/` and
 `evidence/native-feed-aspnet/` each retain all six native fault scenarios and historical
 1/2/4-browser measurements. Their v1 measurement records lack the newly required
 source-instance/interval, host HTTP and independent reader receipts and no longer
-qualify measured native costs. Fresh v2 recovery measurements are required. They
+qualify measured native costs. Fresh v3 recovery measurements are required. They
 remain partial rounds, never full-group readiness.
 `evidence/native-recovery-timing-limit/` preserves the earlier failed Corten
 round without rewriting its identity or relaxing the 10-second gates.

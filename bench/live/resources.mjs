@@ -2,6 +2,34 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { wireResources } from "./wire.mjs";
 
+export function verifyResourceBounds(r, clients, settings) {
+  for (const key of ["subscriptions", "connections", "pendingTasks", "queueEvents", "queuePeak", "historyEvents", "historyPeak"]) {
+    assert.ok(Number.isSafeInteger(r[key]) && r[key] >= 0, `missing native resource ${key}`);
+  }
+  for (const key of ["subscriptions", "connections", "pendingTasks"]) assert.ok(r[key] <= clients, `native resource ${key} exceeded reader budget`);
+  assert.equal(r.queueLimit, settings.queueLimit); assert.equal(r.historyLimit, settings.historyLimit);
+  assert.ok(r.queuePeak <= settings.queueLimit && r.queueEvents <= clients * r.queuePeak, "native resource queue exceeded budget/peak");
+  assert.ok(r.historyEvents <= r.historyPeak && r.historyPeak <= settings.historyLimit, "native resource history exceeded budget/peak");
+}
+
+export function verifyResourceLifecycle(records, clients, settings) {
+  const owned = ["subscriptions", "connections", "pendingTasks", "queueEvents"];
+  let detached = false, quiescent = false, queuePeak = 0, historyPeak = 0;
+  for (const [i, r] of records.entries()) {
+    if (r.kind === "detach") detached = true;
+    if (r.kind === "publish") for (const key of ["subscriptions", "connections", "pendingTasks"]) {
+      assert.equal(records[i + 1]?.[key], clients, `native publication resource ${key} omitted a live reader`);
+    }
+    if (r.kind !== "resources") continue;
+    verifyResourceBounds(r, clients, settings);
+    assert.ok(r.queuePeak >= queuePeak && r.historyPeak >= historyPeak, "native resource peak regressed");
+    queuePeak = r.queuePeak; historyPeak = r.historyPeak;
+    const zero = owned.every((k) => r[k] === 0);
+    assert.ok(!quiescent || zero, "native resources resurrected after post-detach zero");
+    if (detached && zero) quiescent = true;
+  }
+}
+
 // Acknowledgement barriers can reorder native callbacks against HTTP responses.
 // Preserve each raw source's order without assuming one cross-transport clock.
 export function verifyResources(records, network, wire) {

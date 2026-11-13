@@ -29,7 +29,7 @@ Every measured level uses 60 individual native publications at 20/s, at 1/2/4 br
 ## Observed results
 
 This section records the original capture sessions. It is not current measurement
-qualification: the second review below withdraws all v1 native-cost admissions
+qualification: the reviews below withdraw all v1/v2 native-cost admissions
 because their required instance/interval/reader/host-response receipts are absent.
 
 Corten uses the existing Feed, subscribe(), generated keyed views and native
@@ -160,6 +160,9 @@ The changed-file inventory below records the earlier delivery, not this repair.
 
 ## Second review
 
+This section records the second-review checkpoint; current qualification is
+superseded by the third review below, without rewriting any capture.
+
 The next independent read-only review found ten further admission gaps. Repairs
 require exact distinct negative-control requests; nonempty source/container/process
 identity; exact disconnected write counts and raw native cursor status; cleanup
@@ -198,6 +201,54 @@ Other repair files are `parity.mjs`, `fanout.mjs`, `verify.mjs`, `wire.mjs`,
 `bench/recoverable-live/README.md`. New evidence files are the fresh directory's
 `coverage.json`, `plan.json`, `source.diff.gz`, `express-artifacts.json`,
 `express-normal.json.gz`, `express-slow-reader.json.gz`,
+`express-measurements.json`, and `express-fanout-{1,2,4}.json.gz`.
+
+## Third review
+
+Four additional in-memory bypasses reproduced against the exact retained v2
+Express four-reader bytes (sha256:735ea017c37a1df8412ffa8e99eda4abeb57ba19d411092f68104f28d39e339f):
+foreign browser URL origins, unbounded or resurrected matching raw/trace resource
+acknowledgements, paint timestamps preceding application, and duplicate event
+processing after detach at the same timestamp. These now have specific hostile
+tests rather than relying on saved aggregates.
+
+Repairs bind all browser URL origins to the inspected instance, and native frame
+request IDs to actual CDP EventSource GET / WebSocket creation receipts. All
+resource observations are bounded and peaks monotone; ordinary publication acks
+must account for every reader, and no owned resource may resurrect after zero.
+Every frame follows its actual application state/native arrival, two frame
+callbacks have increasing timestamps, and record order forbids all post-detach
+event processing. Native consumers/renderers are unchanged.
+
+The missing native connection request receipts cannot be added to old captures.
+The v2 round is retained byte-for-byte but its three measured levels are now
+unqualified. Fresh `evidence/review-v3-express/` contains actual native delivery
+qualification and 1/2/4-reader measurements with `native-live-fanout/v3` receipts.
+Reopening reports only Express measured, no qualification errors and group
+readiness false. No Corten/other native costs or comparative wins are qualified.
+Fresh independent review remains required; no child agents were started.
+
+Terminal checks for this repair: the focused admission/parity/review/live-workload
+suite passed 192 tests; `npm run check:workloads` passed 241 tests;
+`node scripts/design-refs.mjs` and `git diff --check` passed. Replaying all 12
+retained rounds inspected 81 artifacts, preserving 16 excluded historical journeys
+and 27 excluded historical measurement levels. The original four-reader v2 gzip
+still has the SHA-256 recorded above. No full framework/Rust/browser matrix was
+run for this runner-only repair.
+
+The new capture records source HEAD `6f99dca75` plus its retained dirty source
+diff (SHA-256 e99ab4be4b57d0dc92e9121ddef06795bba9e52b22a5d4397c51fb2ae91ffebd),
+not the eventual repair commit or a parent cherry-pick. Measured Express results
+for 1/2/4 readers respectively: 60/120/240 delivered effects, CPU
+266184/198982/267109 microseconds, current memory 30617600/35155968/39432192 bytes,
+and visible-latency p95 44.7002/40.5/58.3999 milliseconds. These are one bounded
+repeat on a concurrently loaded workstation, not throughput or comparative wins.
+
+Changed runner/tests: `measurement.mjs`, `resources.mjs`, `fanout.mjs`, `parity.mjs`,
+`verify.mjs`, `admission.test.mjs`, `parity.test.mjs`, and `review.test.mjs`.
+Docs: `PORTS.md`, `README.md`, this record and `bench/recoverable-live/README.md`.
+New evidence is the v3 directory's `coverage.json`, `plan.json`, `source.diff.gz`,
+`express-artifacts.json`, `express-normal.json.gz`, `express-slow-reader.json.gz`,
 `express-measurements.json`, and `express-fanout-{1,2,4}.json.gz`.
 
 ## Changed files
