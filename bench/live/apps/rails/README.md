@@ -87,7 +87,11 @@ after the first rendered snapshot, rather than reusing the initial-attach flag.
 `node bench/live/apps/rails/test/recovery.mjs <base>` drops native event/ACK frames,
 overflows the real bounded queue, checks rows and effects, and captures the second
 automatic native start with a new publication before it reaches the server.
-This routed-socket reconnect check ends by closing its browser context; native
-explicit detach/cleanup remains independently checked by the existing suites.
+The routed-socket reconnect check requires explicit detach through the unchanged
+five-second native cleanup gate, followed by zero connection/reader/queue and
+retained-client inventory before closing its browser context. Its injected close
+uses application code 3001: the upstream is a browser WebSocket, whose `close()`
+rejects reserved code 1001. The test retains both close-forwarding callbacks and
+requires an actual upstream close notification, not just a page-side close.
 Raw before/after receipts are in `test/receipts/`. These are bounded correctness
 observations, not throughput measurements or load admission.

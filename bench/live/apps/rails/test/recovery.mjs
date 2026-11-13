@@ -83,13 +83,23 @@ try {
   if (framework === 'rails') await run('automatic Action Cable reconnect replays before start', async context => {
     const page = await context.newPage();
     let interrupt, starts = 0, connections = 0;
-    const actions = [], receipts = [];
+    const actions = [], receipts = [], closes = [];
     await page.routeWebSocket(url => url.pathname === '/cable', ws => {
       const connection = ++connections;
       const server = ws.connectToServer();
-      ws.onClose((code, reason) => server.close({ code, reason }));
-      server.onClose((code, reason) => ws.close({ code, reason }));
-      interrupt = () => { server.close({ code: 1001, reason: 'native interruption' }); ws.close({ code: 1001, reason: 'native interruption' }); };
+      ws.onClose((code, reason) => {
+        closes.push({ connection, side: 'page', code, reason });
+        return server.close({ code, reason });
+      });
+      server.onClose((code, reason) => {
+        closes.push({ connection, side: 'server', code, reason });
+        return ws.close({ code, reason });
+      });
+      // The upstream is a browser WebSocket: close() rejects reserved code 1001.
+      interrupt = () => Promise.all([
+        server.close({ code: 3001, reason: 'native interruption' }),
+        ws.close({ code: 3001, reason: 'native interruption' }),
+      ]);
       ws.onMessage(async data => {
         const frame = JSON.parse(data.toString());
         const action = frame.data ? JSON.parse(frame.data) : null;
@@ -108,7 +118,7 @@ try {
     await call(page, 'setup', settings);
     await call(page, 'publish', workload.events[0]);
     await page.waitForFunction(() => window.liveApp.through === 1);
-    interrupt();
+    await interrupt();
     await page.waitForFunction(() => window.liveApp.through === 2, null, { timeout: 15000 });
     const actual = await observation(page);
     console.log(JSON.stringify({ framework, actions, actual, native: receipts.filter(r => ['ready', 'snapshot', 'event'].includes(r.message.kind)) }));
@@ -118,8 +128,21 @@ try {
     assert.deepEqual(actual.effects, workload.events.slice(0, 2).map(e => e.effectId));
     assert.ok(receipts.some(({ connection, message: m }) => connection === 2 &&
       m.kind === 'event' && m.event.seq === 2 && m.disposition === 'applied'), 'event 2 arrives on the reconnected native socket');
-    // This wire fault leaves the old proxied socket alive until context teardown.
-    // Explicit detach is independently covered by browser.mjs/adversarial.mjs.
+    const cleanupStarted = performance.now();
+    let resources;
+    try {
+      await call(page, 'detach');
+    } finally {
+      resources = await (await context.request.get(base + '/parity/resources')).json();
+      console.log(JSON.stringify({ framework, cleanupMs: performance.now() - cleanupStarted, closes, resources }));
+    }
+    for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueEvents']) assert.equal(resources[key], 0);
+    for (const key of ['applicationQueues', 'inflightEvents', 'replayCopyEvents', 'retainedClients', 'retainedClientRows', 'stagedClientRows']) {
+      assert.equal(resources.inventory[key], 0);
+    }
+    assert.deepEqual(resources.inventory.consumers, {});
+    assert.ok(closes.some(close => close.connection === 1 && close.side === 'server' && close.code === 3001),
+      'interrupted upstream socket actually closed');
   });
 } finally { await browser.close(); }
 assert.deepEqual(failures, []);
