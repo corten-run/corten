@@ -7,6 +7,8 @@ authoritative item and applies the same localized validation as the ordinary
 HTML POST. The form's action, method and CSRF input also work without JavaScript.
 
 An accepted submission appends exactly one `{item_id,email,target_minor}` record.
+The confirmation formats that canonical persisted integer amount, not the parsed
+floating-point input before its conversion to minor units.
 `GET /api/alerts` returns the current session's array in insertion order with
 `private, no-store`. It does not derive records from query parameters, clear them,
 or use a confirmation message as proof. Native file-cache storage is keyed by the
@@ -34,3 +36,6 @@ The smoke uses real HTTP readbacks with each browser's cookie jar, all three
 locales and both JS modes, and observes the real Livewire component `save` request.
 It also checks rejection, order, concurrent same-session POSTs and two-client
 isolation. These are bounded functional checks, not throughput measurements.
+The native HTTP and browser checks also cover a floating-point rounding boundary
+in all locales, requiring the confirmation to match the independent stored minor
+amount in both plain HTML and Livewire-enhanced submissions.

@@ -83,6 +83,6 @@ final class MarketplaceFormat
             return [$this->labels['invalid_price'], null];
         }
 
-        return [strtr($this->labels['alert_set'], ['{email}' => $email, '{title}' => $title, '{price}' => $this->amount($amount)]), (int) $minor];
+        return [strtr($this->labels['alert_set'], ['{email}' => $email, '{title}' => $title, '{price}' => $this->money((int) $minor)]), (int) $minor];
     }
 }

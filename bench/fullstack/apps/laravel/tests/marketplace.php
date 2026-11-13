@@ -100,6 +100,15 @@ foreach (MarketplaceFormat::LOCALES as $locale) {
     check($send($route, 'POST', ['email' => 'a@b', 'target_price' => $target])->getStatusCode() === 419, 'CSRF remains enabled');
     check($send($route, 'POST', ['_token' => $csrf, 'email' => 'a@b', 'target_price' => $target], ['HTTP_ORIGIN' => 'https://other.test'])->getStatusCode() === 403, 'Cross-origin write rejected');
     check($send($route, 'POST', ['_token' => $csrf, 'email' => 'a@b', 'target_price' => $target], ['HTTP_SEC_FETCH_SITE' => 'cross-site'])->getStatusCode() === 403, 'Cross-site write rejected');
+    $boundary = $locale === 'en-US' ? '1.0049999999999999' : '1,0049999999999999';
+    [$confirmation, $minor] = $format->alertResult('canonical@example.test', $boundary, $records['item_1']['title']);
+    $canonical = strtr($format->labels['alert_set'], ['{email}' => 'canonical@example.test', '{title}' => $records['item_1']['title'], '{price}' => $format->money(100)]);
+    $response = $send($route, 'POST', ['_token' => $csrf, 'email' => 'canonical@example.test', 'target_price' => $boundary]);
+    check($response->getStatusCode() === 200, 'Boundary POST status '.$locale);
+    check(nodes($response->getContent(), '//*[@class="marketplace__message"]')->item(0)->textContent === $canonical, 'Native HTTP canonical persisted confirmation '.$locale);
+    check($minor === 100 && $confirmation === $canonical, 'Canonical persisted minor confirmation '.$locale);
+    $expectedAlerts[] = ['item_id' => 'item_1', 'email' => 'canonical@example.test', 'target_minor' => 100];
+    check(json_decode($send('/api/alerts')->getContent(), true) === $expectedAlerts, 'Boundary independent native readback '.$locale);
 }
 
 check(json_decode($send('/api/alerts?email=fake&target_minor=999')->getContent(), true) === $expectedAlerts, 'GET neither resets nor fabricates state');

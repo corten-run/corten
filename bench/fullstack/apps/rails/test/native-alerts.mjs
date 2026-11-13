@@ -108,6 +108,20 @@ try {
         await page.locator('.marketplace__contents a').first().click();
         await expect(page).toHaveURL(new RegExp(`/marketplace/${locale}/item_2`));
         assert.deepEqual(await read(), stored, 'Navigation leaves persistent state intact');
+        if (stack === 'laravel') {
+          await page.goto(base + path);
+          if (javaScriptEnabled) await page.waitForFunction(() => window.Livewire?.all().some(component => component.name === 'marketplace-alert'));
+          const canonicalForm = page.locator('.marketplace__alert form');
+          const boundaryEmail = 'canonical@example.test';
+          const title = await page.locator('article h1').innerText();
+          await canonicalForm.locator('[name=email]').fill(boundaryEmail);
+          await canonicalForm.locator('[name=target_price]').fill(locale === 'en-US' ? '1.0049999999999999' : '1,0049999999999999');
+          await canonicalForm.locator('button[type=submit]').click();
+          const money = new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD' }).format(1);
+          await expect(page.locator('.marketplace__message')).toHaveText(labels[locale].alert_set.replace('{email}', boundaryEmail).replace('{title}', title).replace('{price}', money));
+          assert.deepEqual(await read(), [...stored, { item_id: 'item_1', email: boundaryEmail, target_minor: 100 }], 'Native confirmation matches canonical persisted minor');
+          assert.deepEqual(await read(other), [{ item_id: 'item_1', email: 'isolated@example.test', target_minor: 1250 }]);
+        }
         console.log(`${stack} ${locale} JS=${javaScriptEnabled}: native submit/readback/rejection/order/concurrency/isolation/filter/sort/show-all/navigation passed`);
       } finally {
         await context.close();
