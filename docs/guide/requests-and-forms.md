@@ -384,8 +384,9 @@ such a link is written, naming the route by its module path (`shop::url::Item`) 
 release build writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400,
 and logs that as an error once for each route and field. A refusal counts only when the subscriber
 then in place takes an error event of Corten's, as Corten's default subscriber and a level or
-target filter do; a subscriber that filters on an event's fields, message, span, file or line can
-disagree with that check, and drop the one line or never get it. A value that only contains dots
+target filter do; a subscriber that filters on an event's message text or its line can disagree
+with that check either way: a refusal it drops still uses up the one line, and one it would log
+may never be logged. A value that only contains dots
 (`a.b`, `.hidden`) is written as it is, as is an empty one between two segments (`/shelves//`
 for `/shelves/{id}/`), which reads back. Refuse these values where the app stores them (a slug, a
 user name, a file key), so no link reaches the check. A route's own path with a `.` or `..`

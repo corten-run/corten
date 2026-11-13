@@ -4759,8 +4759,9 @@ pub mod __private {
         }
         let key = (param.route, param.field);
         // `event_enabled!`, not `enabled!`: a subscriber that takes events alone, such as
-        // Corten's own, answers no to a callsite that may be a span.
-        let first = tracing::event_enabled!(tracing::Level::ERROR)
+        // Corten's own, answers no to a callsite that may be a span. It names the `message`
+        // field the `error!` below has, so a filter directive on that field agrees.
+        let first = tracing::event_enabled!(tracing::Level::ERROR, message)
             && !LOGGED.read().unwrap_or_else(PoisonError::into_inner).contains(&key)
             && {
                 let mut logged = LOGGED.write().unwrap_or_else(PoisonError::into_inner);

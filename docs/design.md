@@ -3160,10 +3160,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     refusal counts as that time only when the subscriber takes an error event of Corten's
     (`tracing::event_enabled!`), as Corten's default subscriber and one that filters by level and
     target do, so one written before the app installs its subscriber does not use it up. The check
-    asks before the event exists, so a subscriber that filters on what it cannot see (the event's
-    fields or message, its span, its file or line) can disagree with it either way: a refusal it
-    drops still uses up the line, and one it would log may never be logged. Later refusals of a
-    route and field read the list of those logged and do not wait on each other. The link opens no
+    asks before the event exists, so a subscriber that filters on an event's message text or its
+    line can disagree with it either way: a refusal it drops still uses up the one line, and one
+    it would log may never be logged. Later refusals of a route and field read the list of those
+    logged and do not wait on each other. The link opens no
     other page or file either way. A route that starts with a `{*rest}` refuses a dot segment after
     the value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
     browser resolves: the refusal is kept, since it costs nothing where no value has such a

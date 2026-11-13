@@ -246,7 +246,8 @@ Corten is pre-1.0, so any minor version may change the API.
   (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
   route and field, counting only a refusal written while the subscriber takes an error event of
   Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
-  filters on an event's fields, message, span, file or line can drop that line or never get it).
+  filters on an event's message text or its line can disagree with that check either way: a
+  refusal it drops still uses up the one line, and one it would log may never be logged).
   Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
   value between two segments. A route path with a `.` or `..` segment, or that text after a
   parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
