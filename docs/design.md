@@ -2866,6 +2866,85 @@ rules something out.
     five with main first and three with the change first); 2026-11-11, the CSP in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
+46. <a id="choice-ref-values"></a>**A value an element gives its script is its ref's,
+    `ref={row.with(cents)}`, written as JSON in `data-ref-value` and read as a `Map` from each
+    element to its value.** A script that reorders or filters rows the server drew compares
+    something each row carries (a price in cents, a count in stock). A `data-` attribute read
+    through `dataset` named it as text twice, in the markup and in the script, so a misspelled or
+    renamed name compiled, passed `tsc` and read `undefined`, and the value reached the script as
+    a string to convert. A ref already ties a handler's parameter to the elements it names, checked
+    when the crate compiles ([Choice 5](#choice-handlers-checked-where-called)), so the value goes on
+    the ref: `row.with(x)` fixes the ref's third type parameter from `x`'s Rust type (a number,
+    text or a `bool`: `ts::Number`, `ts::String`, `ts::Boolean`), every element given the ref
+    gives a value of that one type, and a parameter typed `Map<El, number>` (or `string`,
+    `boolean`) takes only such a ref, as `El` takes only a ref on that tag. A ref given a value on
+    some elements and none on others, or text where the handler takes `number`, does not compile
+    (`compile_fail` doctests on `Ref::with`). The call names it `=row`, and the runtime gives the
+    handler every element with the ref, in the page's order, with `JSON.parse` of its
+    `data-ref-value`. The server writes the value with the writers a handler's arguments use,
+    single-quoted ([Choice 45](#choice-data-on-single-quoted)), so a number is a number in the
+    script, and an integer past 2^53 stops debug builds as an argument's does. The one name the
+    markup and the script share is the ref's, which the compiler already holds them to;
+    `data-ref-value` is the runtime's own, written only by `ref=`.
+
+    Not chosen: the row's key (`ref={rows} key={..}` and a `Map<string, El>`). A key is a row's
+    identity, which two rows with the same price cannot share, and it is text, so taking it for the
+    value would change what a keyed ref means and still convert in the script. A typed `dataset`
+    (a declaration generated from the component): the attribute's name stays text in the markup,
+    and it is a second way to hand a script data beside its arguments and refs (Value 5). A
+    `#[component(view)]`'s holes: they type rows a script makes, and would bring the views module
+    to a page that only reorders. A handler argument with the values in the rows' order: the list
+    and the rows are tied only by position, which a reorder or a patch to one row breaks. A value is
+    one number, text or `bool` an element gives, not a record: a script that needs more about a row
+    reads the row it has, or takes the records as a `ToJson` argument. `data-` is HTML's place
+    for a page's private data and `data-ref-value` is read only by Corten's runtime, so it needs no
+    standard ([Rule 10](#rule-standard-formats)); a `data-` attribute written for CSS or for the
+    runtime (`data-selected`, `data-reload`) is unchanged.
+
+    What it costs every user is the runtime's reader, the `=` kind in `on.js` and its case in
+    `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
+    (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
+    `immutable`, and nothing on a load: the value is read only when a handler that takes it runs.
+    That is half the 41 bytes [Choice 45](#choice-data-on-single-quoted) did not spend on a block
+    for large data, and Value 1, which says no to what costs every user to help a few, weighs the
+    two differently. The block made a few pages' large data faster where the single-quoted attribute
+    already gave them most of the gain. Here nothing without a reader in the runtime checks the
+    name: a value read through `dataset` is text the compiler cannot see, and the other ways below
+    each give up a row's identity or its order. A misspelled name fails silently in any app whose
+    script reorders or filters the rows it was sent, and Value 4 asks for that to fail when the
+    crate compiles. So the reader is taken, at 21 bytes with gzip once a release, as one checked way
+    for those rows (Value 5) rather than a faster second way for a few pages. On Value 1 the bytes
+    are spent where a page uses them: card-market's item page, whose listings each give their ref
+    their cents, is 418 bytes larger (8,818 to 9,236), since each row now carries its ref's name
+    beside its value (`data-ref="row" data-ref-value='1250'` where it had `data-cents="1250"`), and
+    21 bytes larger with zstd (2,181 to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with
+    gzip (2,512 to 2,511), the bytes a user receives. Its render and request times did not move by
+    more than runs of one build differ by (building and rendering the main part took 13.7 to 25.3 µs
+    before and 15.1 to 26.6 after). A page whose rows give no value is unchanged.
+
+    Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
+    brotli at quality 11, once each build; `render_cost` in `examples/card-market`, five release
+    runs of each build alternated, the base first, once); platform (a `data-` attribute is HTML's
+    place for data private to the page, and `getAttribute` gives a script its decoded value);
+    reasoned (the runtime already finds a ref's elements in the page's order for `*` and `#`, so a
+    value is one attribute read per element when the handler runs and nothing on a load; the ref's
+    third type parameter is one type wherever the component uses the ref, so a ref given text on one
+    element and a number on another, or a value on one and none on another, is a type error); bet
+    (apps beyond card-market hand their scripts values on rows the scripts reorder or filter, so the
+    reader serves more than one page); value (no name as text at a seam, Values 4; one way for a
+    script to get what an element carries, its ref, Values 5; a value on a ref, not a new concept,
+    Values 6).
+
+    Revisit when: an app's script needs a record per element rather than one number, text or
+    `bool` (then the value might be any `ToJson` with its generated declaration), or the platform
+    gives elements typed custom data a script can read without a name as text, or something outside
+    Corten has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal.
+
+    Last checked: 2026-11-13, the runtime's size and card-market's `render_cost` on `c3d455a1`
+    against this change; 2026-11-13, the value read back by card-market's smoke, sorted by the
+    script in Chromium and read with `getAttribute` without scripts in Chromium, Firefox and
+    WebKit (Playwright 1.64.1).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

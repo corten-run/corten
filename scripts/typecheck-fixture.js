@@ -41,6 +41,16 @@ export function keys(event, click, screen) {
   return key === "Control+s" || shortcut(event) === "p";
 }
 
+// The values a ref's elements give (`ref={row.with(cents)}`): the call is checked against the
+// parameter's value type when the crate compiles, and the script reads each value from the map,
+// as the number the markup gave, never by an attribute's name.
+/** @param {HTMLTableSectionElement} body @param {Map<HTMLTableRowElement, number>} rows */
+export function sortRows(body, rows) {
+  body.append(...Array.from(rows).sort(([, a], [, b]) => a - b).map(([row]) => row));
+  // @ts-expect-error A value is the number the markup gave, not text to convert.
+  for (const [, cents] of rows) cents.trim();
+}
+
 // The handler's parameter names the feed's rows (the route's rows = Stock, checked when the crate
 // compiles), and subscribe() takes them from it.
 /** @param {FeedUrl<Stock>} stocks @param {FeedUrl<Level>} levels @param {string} url */

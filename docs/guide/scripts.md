@@ -46,7 +46,7 @@ export function showAll(rows, rest, button) {
 | In the markup | In the script |
 |---|---|
 | `#[component(js)]` on `OfferList` | `offer_list.js` next to it; `js::showAll` is its `export function showAll` |
-| `let (rows, rest) = refs();`, `ref={rows}` on a `<tbody>` | a parameter `@param {HTMLTableSectionElement} rows` (`HTMLTableSectionElement[]`: every element with the ref; `Map<string, ..>`: every one by its `key={..}`) |
+| `let (rows, rest) = refs();`, `ref={rows}` on a `<tbody>` | a parameter `@param {HTMLTableSectionElement} rows` (`HTMLTableSectionElement[]`: every element with the ref; `Map<string, ..>`: every one by its `key={..}`; `Map<.., number>`: every one with the value it gives, `ref={row.with(cents)}`, [below](#lists-and-larger-components)) |
 | `on:click={js::showAll(..)}` | runs `showAll` on a click on that element |
 | `row.closest()` | the element with ref `row` around the event's target (the handler runs only inside one) |
 | `js::Selection { rows: row, count }` | a `@typedef` of elements: one object argument |
@@ -342,7 +342,7 @@ library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 
 ## Lists and larger components
 
-A grid of 500 rows with a handler on every checkbox prints 500 handler calls. Four tools keep a
+A grid of 500 rows with a handler on every checkbox prints 500 handler calls. Five tools keep a
 large component small and its handlers short.
 
 **One handler for the list.** `row.closest()` is the element with ref `row` that holds the
@@ -397,6 +397,31 @@ find their cells without reading attributes:
 <td ref={qty} key={item.id}>{line.qty}</td>
 // on:connect={js::live(qty, url::Levels, signal)}, live(cells, feed, signal) with cells.get(level.id)
 ```
+
+**A value for each element.** Rows a script compares (orders by price, filters by stock) carry
+what it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a
+parameter typed `Map<HTMLTableRowElement, number>` gets every row with its value, in the page's
+order. Two rows may give the same value, and a row with a key keeps it. The value is named once,
+in the markup, and the script reads it from the map, so the two share no attribute name as text,
+and a number is a number in the script (an integer past 2^53 stops debug builds, as a handler's
+number argument does). The call is checked as any ref's is: a ref whose elements give no value,
+give text where the handler takes `number`, or give one on some elements and not on others does
+not compile. A value is a number, text (`string`) or a `bool` (`boolean`); an app's own type gives
+the number or text it stands for.
+
+```rust,ignore
+<tbody ref={body}>
+    for l in listings { <tr ref={row.with(sort_cents(l))}><ListingCells l={l} /></tr> }
+</tbody>
+// on:click={js::toggle(body, row)}, toggle(body, rows) with Array.from(rows).sort(([, a], [, b]) => a - b)
+```
+
+The page gets `<tr data-ref="row" data-ref-value='1250'>` and the call `toggle(@body,=row)`. A
+component that puts a parent's ref with values on its element names its type
+`Ref<el::HTMLTableRowElement, NoRows, ts::Number>` (`corten::script::{NoRows, ts}`). A `data-`
+attribute a script reads through `dataset` is text on both sides that nothing checks: write one
+for CSS or for the runtime (`data-selected`, `data-reload`), and give a value a script reads with
+the element's ref.
 
 **Values the markup owns.** `html!` owns what it captures (a view lent to a prop,
 `action={&html! { .. }}`, borrows from the view around it instead), so a value borrowed from one
@@ -797,15 +822,14 @@ a JSDoc union of strings compiles (a Rust enum the server declares, such as `Sor
 checked way, in the table at the top of this page). `examples/seller-desk` sorts and filters its
 grid this way, and `examples/deck-builder` makes its deck's lines with `replace(items)` after each
 change, each filled from the collection row of the same card. Rows a script only puts in another
-order, and never writes or makes, need no view: the server writes the value each sorts by as a
-`data-` attribute (the number its own sort uses, such as a price in cents, never a cell's text),
-and the script compares those. `examples/card-market`'s listings sort this way, which keeps the
-views module off a page that needs nothing else from it. Where no two rows share the value, it can
-be each row's key instead (`ref={tiles} key={reading}`, and a `Map<string, HTMLElement>`
-parameter), so the script names no attribute: the compiler checks the ref as it does any other,
-but not that each row has a key. `examples/corten-site`'s wall sorts this way. A table that only
-sorts by the header clicked needs no script of its own: corten-ui's `rows::sort` is that handler
-([UI](ui.md)).
+order, and never writes or makes, need no view: each gives its ref the value it sorts by
+(`ref={row.with(sort_cents(l))}`, the number the server's own sort uses, such as a price in cents,
+never a cell's text), and the handler compares the values of a `Map<HTMLTableRowElement, number>`
+([A value for each element](#lists-and-larger-components)). Two rows may share the value, the
+compiler checks that every row gives one of the type the handler takes, and the views module stays
+off a page that needs nothing else from it. `examples/card-market`'s listings sort this way. A
+table that only sorts by the header clicked needs no script of its own: corten-ui's `rows::sort`
+is that handler ([UI](ui.md)).
 
 The parameter's type says whose rows it holds: `Holds<Row, HTMLTableSectionElement>` (or
 `Holds<Row, HTMLTemplateElement>` for the template). `tsc` then rejects `rows(body, Card)` and

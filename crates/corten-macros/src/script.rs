@@ -1647,7 +1647,7 @@ const UNKNOWN: &str = "unknown";
 fn unchecked(ty: &str, expanded: &str, browser: bool) -> String {
     let shown = if expanded == ty { ty.to_string() } else { format!("{ty}, which is {expanded}") };
     if browser {
-        return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, Holds<Row, El>, Map<string, El>, a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
+        return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, Holds<Row, El>, Map<string, El>, Map<El, number> (or string, or boolean), a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
     }
     format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
 }
@@ -1788,6 +1788,20 @@ fn param_type(ty: &str) -> Param {
     {
         return match common(value.trim(), element) {
             Some(e) => Param::Checked(format!("ts::Map<::corten::script::el::{e}>")),
+            None => Param::Any,
+        };
+    }
+    // `Map<HTMLTableRowElement, number>`: every element of a ref with the value it gives,
+    // `ref={row.with(cents)}`.
+    if let Some((el, value)) = ty.strip_prefix("Map<").and_then(|t| t.strip_suffix('>')).and_then(|t| t.split_once(',')) {
+        let kind = match value.trim() {
+            "number" => "Number",
+            "string" => "String",
+            "boolean" => "Boolean",
+            _ => return Param::Any,
+        };
+        return match common(el.trim(), element) {
+            Some(e) => Param::Checked(format!("ts::Valued<::corten::script::el::{e}, ::corten::script::ts::{kind}>")),
             None => Param::Any,
         };
     }
@@ -1942,6 +1956,26 @@ mod tests {
         assert_eq!(param_type("CustomEvent<{ op: \">\" }>"), event("CustomEvent"));
         assert_eq!(param_type("CustomEvent<{ s: `a>b` }>"), event("CustomEvent"));
         assert_eq!(param_type("CustomEvent<{ a: \"<\" }> | Foo<\">\">"), Param::Any);
+    }
+
+    #[test]
+    fn a_map_from_elements_to_numbers_text_or_bools_takes_a_ref_with_values() {
+        let valued =
+            |e: &str, k: &str| Param::Checked(format!("ts::Valued<::corten::script::el::{e}, ::corten::script::ts::{k}>"));
+        assert_eq!(param_type("Map<HTMLTableRowElement, number>"), valued("HTMLTableRowElement", "Number"));
+        assert_eq!(param_type("Map<HTMLElement,string>"), valued("HTMLElement", "String"));
+        assert_eq!(param_type("Map<HTMLLIElement, boolean>"), valued("HTMLLIElement", "Boolean"));
+        // Keys are still text: elements by their key.
+        assert_eq!(
+            param_type("Map<string, HTMLTableCellElement>"),
+            Param::Checked("ts::Map<::corten::script::el::HTMLTableCellElement>".into())
+        );
+        // A value no ref gives, or a key that is not an element, is not checked against anything.
+        for ty in
+            ["Map<HTMLTableRowElement, Date>", "Map<HTMLTableRowElement, number[]>", "Map<string, number>", "Map<Node, number>"]
+        {
+            assert_eq!(param_type(ty), Param::Any, "{ty}");
+        }
     }
 
     #[test]

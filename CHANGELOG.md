@@ -12,6 +12,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A value the markup gives an element for its script is the element's ref's:
+  `ref={row.with(cents)}` (a number, text or a `bool`), and a handler parameter typed
+  `Map<HTMLTableRowElement, number>` gets every element of the ref with its value, a number as a
+  number. The call is checked as any ref's is, so a ref whose elements give no value, give one of
+  another type, or give one on some elements and not others does not compile, where a `data-`
+  attribute read through `dataset` was text on both sides that nothing checked.
+  `examples/card-market`'s listing sort reads its cents this way, and the scripts guide
+  recommends it for rows a script only reorders.
+
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
   the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`

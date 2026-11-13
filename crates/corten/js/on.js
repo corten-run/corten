@@ -7,14 +7,15 @@
  * One handler call of a `data-on` attribute: `click:cart_line.confirm($e,@dialog,"Lamp")`, and
  * the component it belongs to when a parent passed it to a child (`..(@form/save)/form`).
  * @typedef {{ type: string, module: string, name: string, args: Arg[], home: string | null }} Binding
- * @typedef {{ kind: "@" | "*" | "#" | "^", owner: string | null, name: string } | { kind: "$e" | "$t" | "$s" | "$c", owner: string | null } | { kind: "v", value: unknown } | { kind: "{", fields: [string, Arg][] } | { kind: "%", parts: string[] } | { kind: "f", spec: import("./format.js").Spec }} Arg
+ * @typedef {{ kind: "@" | "*" | "#" | "=" | "^", owner: string | null, name: string } | { kind: "$e" | "$t" | "$s" | "$c", owner: string | null } | { kind: "v", value: unknown } | { kind: "{", fields: [string, Arg][] } | { kind: "%", parts: string[] } | { kind: "f", spec: import("./format.js").Spec }} Arg
  */
 
 /**
  * Parses `type:module.name(arg,arg) type:module.name()`, each call followed by `/home` when it
  * is a parent's on a child's element. Arguments are refs (`@rows`, every one:
- * `*rows`, every one by its `data-key`: `#rows`, the one around the event's target: `^rows`,
- * another component's: `@offer-list/rows`), the browser's values (`$e` event, `$t` the element
+ * `*rows`, every one by its `data-key`: `#rows`, every one with its `data-ref-value`: `=rows`, the
+ * one around the event's target: `^rows`, another component's: `@offer-list/rows`), the browser's
+ * values (`$e` event, `$t` the element
  * with the attribute, `$s` its signal, `$c` the component's root, `$c/offer-list`), a group of
  * arguments (`{rows:*row,all:@all}`), a message for the handler to fill in (`%["","count"," selected"]`:
  * text and argument names alternating), a format (`%{"z":"0",..}`, format.js), or JSON. A module name may have dots (`ui.combo_box`).
@@ -75,7 +76,7 @@ function split(source, start, end, each) {
 /** @param {string} text @returns {Arg} */
 function parseArg(text) {
   const c = text[0];
-  if (c === "@" || c === "*" || c === "#" || c === "^") {
+  if (c === "@" || c === "*" || c === "#" || c === "=" || c === "^") {
     const slash = text.indexOf("/");
     return slash < 0 ? { kind: c, owner: null, name: text.slice(1) } : { kind: c, owner: text.slice(1, slash), name: text.slice(slash + 1) };
   }
