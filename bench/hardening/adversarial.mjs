@@ -10,14 +10,7 @@ const settings = read("settings.json"), deployment = read("deployment.json"), li
 for (const p of deployment.processes) lifecycle[p.id] = read(`${p.id}-lifecycle.json`);
 const input = { settings, raw: readFileSync(join(folder, "raw.jsonl"), "utf8").trim().split("\n").map(JSON.parse), parity: read("parity.json"),
   source: read("qualification.json").source, cleanup: read("cleanup.json"), provenance: deployment.provenance, lifecycle };
-const replay = assemble(input), saved = read("capture.json");
-// Historical captures remain immutable and unqualified under newer producer gates.
-// Compare their common fields without upgrading the saved lifecycle metadata.
-if (!saved.recovery.terminalServices) {
-  delete replay.recovery.terminalServices;
-  replay.recovery.evidence = saved.recovery.evidence;
-}
-assert.deepEqual(replay, saved);
+assert.deepEqual(assemble(input), read("capture.json"));
 const mutations = {
   "dropped attack": (v) => v.raw.splice(v.raw.findIndex((r) => r.type === "attack"), 1),
   "dropped legitimate request": (v) => v.raw.splice(v.raw.findIndex((r) => r.type === "legitimate"), 1),

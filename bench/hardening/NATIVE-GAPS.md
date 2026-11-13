@@ -116,3 +116,56 @@ browser/content gates. The full matrix is a multi-hour operation, not a 216-time
 13.5-second smoke test. Verification filters retain all other cells as `not-run`
 and can never set `groupReady`. Missing production defenses do not exclude an app
 from hardening observation or turn unqualified observations into numeric parity.
+
+## Five-finding repair verification
+
+Fresh `w11` was produced from commit `7b39c7438c07b05ca12729b96872e2a229e292a1`
+with `semanticReceiptsVersion: 2` and `lifecycleVersion: 2`. Its command was:
+
+```sh
+node bench/hardening/run.mjs w11 --review user-authorized-five-review-repairs --build --verify-app aspnet --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
+```
+
+Both direct and TLS marketplace browser gates passed 500 JSON, 264 page and 12
+profile checks. Direct native production qualification passed. The effective
+TLS deployment still reports `host`, `unfinishedHead`, `connectionCap`: unknown
+Host now reaches HTTP and returns 200 (missing validation, not the old SNI error),
+the unfinished head remains open at 40,023 ms, and only 641/472 TLS connections
+complete within the unchanged cap-probe deadlines. The last is inconclusive,
+not proof of a missing cap and not permission to enlarge its budget. Edge liveness,
+liveness under upstream fault and API-source controls were observed/passed.
+
+The actual timed cell recorded 12 established connections retained to client
+release at 8,500.034-8,506.071 ms, with 19-23 actual trickles per connection.
+Legitimate work completed 4/4 before, 13/13 during, 10/10 after, with exactly
+27 observed upstream requests and 27 successful upstream answers. Terminal
+application, proxy and API-upstream Docker states were running, without OOM;
+native process inventories were 1 application, 2 proxy, 1 upstream processes.
+The declared 1.5 CPU/1536 MiB native limits were verified against Docker, with
+the injector separately limited to 2 CPU/1024 MiB. Event-loop maximum was
+38.011 ms. These are bounded observations, not workstation throughput claims.
+
+Raw verification passed, as did 34 adversarial mutations and all six focused
+retained-evidence review regressions. The result remains one observed cell,
+215 not run, `groupReady: false`, `numericComparisonQualified: false`. Native
+cleanup recorded no remaining containers, volumes or command clients and no
+failures. A separate final label audit also found zero owned containers, volumes,
+networks and generated images.
+No old `w9`/`w10` evidence was rewritten or qualified under the new producer gates.
+`review-regressions.mjs` can replay the old bytes without upgrading a capture;
+`adversarial.mjs` retains strict full equality against a current saved capture.
+
+The five review repairs now check release/window drift, full trickle cadence,
+600 ms completed-response deadlines, all service-critical terminal roles,
+pre-reserved network ownership/reconciliation, and completed native HTTP failures
+as target-functional rather than apparatus failures. An unacknowledged network
+create failure/timeout remains explicitly uncertifiable cleanup, never an empty passing
+cleanup receipt. Real-daemon cancellation controls use labeled empty networks
+and an explicitly injected process SIGINT event; they are not native qualification.
+Fresh independent review and the full selected matrix remain outstanding.
+
+Terminal focused checks passed 30/30; combined hardening/workloads/production-
+qualification/edge checks passed 284/284 with file concurrency enabled. The two
+bounded real-daemon controls each removed their two labeled test networks while
+preserving the differently owned same-prefix network until its own cleanup.
+No native timing parameters or shared application files were changed.

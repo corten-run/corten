@@ -21,7 +21,15 @@ export async function trackedNetworkCreate(summary, name, save, create) {
   assert.ok(!summary.ownedNetworks.includes(name));
   summary.ownedNetworks.push(name);
   save(); // Reserve before asking the daemon, including cancellation before acknowledgement.
-  return create();
+  try { return await create(); }
+  catch (error) {
+    if (error.daemonOutcomeUnknown) {
+      summary.cleanupFailures ??= [];
+      summary.cleanupFailures.push(`${name}: network-create failure left daemon completion unacknowledged; reconciliation cannot certify cleanup`);
+      save();
+    }
+    throw error;
+  }
 }
 
 export async function removeOwnedNetwork(name, runId, docker) {
