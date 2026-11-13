@@ -411,12 +411,36 @@ new name; after a run that had stopped between the keys' halves it made the keys
 stopped, writing nothing more, when the host key could not be read back; and interrupted with
 the keys on disk it left nothing in its temporary directory.
 
-None of this has met DigitalOcean or GitHub. Not run: `tofu apply`, the Spaces bucket, the
-`Site machine` workflow's apply on GitHub, `bootstrap.sh` against GitHub, the address moving
-from one droplet to the next, and the metadata address itself: the two paths `boot.sh` reads
-there (`reserved_ip/ipv4/active` and `ip_address`) have not been asked of a droplet. Whether a
-droplet can reach its own reserved address from inside is not known either, which is why
-`boot.sh` has both ways. The first apply is their test.
+The names that redirect were checked at `914ad4c7f` in Ubuntu 24.04 containers with a stand-in
+for `systemctl` that starts and reloads nginx, and with certbot pointed at Pebble, Let's
+Encrypt's test server, in a container beside them, so the lines that ask for a certificate ran
+as they are. `provision.sh`, given one name that redirects, was issued one certificate for both
+names; nginx then answered the other name with 308 to the same path and query at the site's
+name on ports 80 and 443, the site's own name with 502 on 443 (no app behind it), and a name
+in neither list with 308 on port 80 and 502 on 443. Run again with the same names it asked for
+no certificate; with a name more, for one that holds all three; with none, for none, and the
+other names were no longer redirected on 443. A name written as a URL was refused before
+anything was installed. `boot.sh`, with two names that redirect and one of them pointing at an
+address that answers nothing, waited (two rounds of its 30 seconds were watched), and went on
+to the certificate when that name reached the machine; with no such names it ran as before.
+The step the workflow runs after an apply, trusting Pebble's root alone, said that each name
+sends its visitors to the site, and failed for a name the machine does not redirect and for
+one nginx redirects that the certificate lacks. A plan with stand-in values adds one record
+for each name (none with the zone elsewhere), and is refused for a name outside the zone, the
+site's own name, a name given twice, and a URL. The site's smoke test was not run again
+through this nginx: the server that answers the site is as it was.
 
-certbot's request for a certificate and the Site workflow on GitHub have not been run from this
-repository yet: the first deploy is their test.
+On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on
+`a7bbe4cc9` (one run): `bootstrap.sh` had set the repository up on GitHub, the state went to
+a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the droplet, handed its
+files by cloud-init, ran `boot.sh` and `provision.sh` and got its certificate from Let's
+Encrypt, answering 502 under the site's name 1 min 42 s after the apply. The workflow then
+started the Site workflow, which shipped the release and was answered by the page, its JSON
+and its live stream as that commit. An earlier run had stopped at the bucket, with a key that
+could not make one.
+
+Still not run on a real machine: the address moving from one droplet to the next, a put-back
+of the release before, and a name that redirects. Which of `boot.sh`'s two ways ended its wait
+on that droplet was not looked at, so whether a droplet can reach its own reserved address
+from inside is still not known, nor whether the two metadata paths (`reserved_ip/ipv4/active`
+and `ip_address`) answer as `boot.sh` reads them.
