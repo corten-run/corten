@@ -79,6 +79,12 @@ function pass(app, measured) {
     actions: measured ? workload.operations.map((op) => ({ operation: op.id, kind: op.kind, elapsedMs: 0.25 })) : null,
     resourceDetails: [], failure: null };
 }
+function failedPass(phase = "load", records = [], errors = []) {
+  const c = { schema: "client-capture/v1", app: "react", effectiveWorkload: workload,
+    outcome: "failed", reason: `native-${phase}-failed`, records: null };
+  return { capture: c, oracle: validateClientCapture(workload, c, settings), readyMs: null, actions: null,
+    failure: { phase, diagnostic: "Error", diagnosticSha256: hash("fixture"), records, errors } };
+}
 const requiredSources = ["bench/client-heavy/run.mjs", "bench/client-heavy/build.mjs", "bench/client-heavy/observer.mjs",
   "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json",
   "bench/browser/gen/Cargo.toml", "bench/browser/gen/src/bin/client.rs", ...paths.filter((p) => p.startsWith("crates/"))];
@@ -222,10 +228,122 @@ test("failed captured qualification bars measurement and preserves the offline f
   f.result.cells.react.measurement = pass("react", true); await f.save(); invalid(await f.validate(), "measurement-before-qualification");
 });
 
+test("independent regression: failed build cannot coexist with successful qualification", async (t) => {
+  const f = await fixture(t);
+  f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
+  await f.write("native/react/failure.log", "fixture");
+  Object.assign(f.result.cells.react, { outcome: "failed", measurement: failedPass(), readyForMeasurement: false });
+  f.result.passed = false; await f.save();
+  invalid(await f.validate(), "passing-cell-without-native-build");
+});
+
+test("independent regression: failed partial records and errors require structured entries", async (t) => {
+  const f = await fixture(t), q = failedPass("load", [null, 42], [false, "raw unstructured error"]);
+  f.result.cells.react = { outcome: "failed", qualification: q, measurement: null, readyForMeasurement: false };
+  f.result.passed = false; await f.save();
+  const r = await f.validate(); assert.equal(r.status, "invalid"); assert.equal(r.diagnosticsPassed, false);
+  assert.ok(r.errors.some((e) => e.at === "react:qualification"));
+});
+
+test("every passing capture checks a failed build even without the build manifest", async (t) => {
+  const f = await fixture(t);
+  f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
+  await f.write("native/react/failure.log", "fixture");
+  for (const qualification of [pass("react", false), failedPass(), null]) {
+    f.result.cells.react = { outcome: "failed", qualification,
+      measurement: qualification?.oracle.functionalPassed ? failedPass() : pass("react", true), readyForMeasurement: false };
+    f.result.passed = false; await f.save(); await rm(join(f.folder, "native/build.json"));
+    const r = await f.validate(); invalid(r, "passing-cell-without-native-build");
+    assert.equal(r.diagnosticsPassed, false); assert.ok(r.blockers.includes("missing-native-build-file"));
+  }
+});
+
+test("every failed partial record and sanitized error variant is checked before returning", async (t) => {
+  const f = await fixture(t), original = failedPass("oracle", capture("react").records);
+  const mutations = [
+    (q) => { q.failure.records = [null]; }, (q) => { q.failure.records = [42]; },
+    (q) => { q.failure.errors = [false]; }, (q) => { q.failure.errors = ["raw unstructured error"]; },
+    (q) => { q.failure.errors = [{ kind: "unknown", sha256: hash("fixture") }]; },
+    (q) => { q.failure.errors = [{ kind: "pageerror", sha256: hash("fixture") }]; },
+    (q) => { q.failure.errors = [{ kind: "pageerror", name: false, sha256: hash("fixture") }]; },
+    (q) => { q.failure.errors = [{ kind: "console-error", sha256: "bad" }]; },
+    (q) => { q.failure.errors = [{ kind: "console-error", sha256: hash("fixture"), message: "raw" }]; },
+    (q) => { q.failure.records[0].kind = "unknown"; },
+    (q) => { q.failure.records[0].at = null; },
+    (q) => { q.failure.records[0].owned.timers = -1; },
+    (q) => { q.failure.records[1].data.rows = [null]; },
+    (q) => { q.failure.records[1].data.cards[0].priceMinor = false; },
+    (q) => { q.failure.records[1].dom.rows[0].node = false; },
+    (q) => { q.failure.records[1].dom.cards[0].id = false; },
+    (q) => { q.failure.records[1].dom.selected = false; },
+    (q) => { q.failure.records[1].dom.totalMinor = false; },
+    (q) => { q.failure.records[1].errors = [false]; },
+    (q) => { q.failure.records[3].operation = { id: "operation-0", kind: "unknown" }; },
+    (q) => { q.failure.records[3].network = [{ transport: "unknown" }]; },
+    (q) => { q.failure.records[3].network = [{ transport: "http", method: false, resourceType: "fetch" }]; },
+    (q) => { q.failure.records[3].network = [{ transport: "fetch", url: "raw" }]; },
+    (q) => { q.failure.records[3].errors = [{ kind: "console-error", sha256: hash("not in ledger") }]; },
+    (q) => { q.failure.errors = [{ kind: "console-error", sha256: hash("fixture") }];
+      q.failure.records[1].errors = structuredClone(q.failure.errors); },
+    (q) => { q.failure.records.find((r) => r.kind === "detach").extra = false; },
+    (q) => { q.failure.records.find((r) => r.kind === "cleanup-probe").input.count = false; },
+    (q) => { q.failure.records.at(-1).owned.pendingTasks = false; },
+    (q) => { q.failure.records.at(-1).errors = [false]; },
+    (q) => { q.failure.records[2].at = q.failure.records[1].at; },
+    (q) => { q.failure.records.splice(1, 1); },
+    (q) => { q.failure.phase = "unknown"; },
+    (q) => { q.failure.phase = "readiness"; },
+    (q) => { q.failure.phase = "readiness"; q.capture.reason = "native-readiness-failed";
+      q.oracle = validateClientCapture(workload, q.capture, settings); },
+  ];
+  for (const [i, mutate] of mutations.entries()) {
+    const q = structuredClone(original); mutate(q);
+    f.result.cells.react = { outcome: "failed", qualification: q, measurement: null, readyForMeasurement: false };
+    f.result.passed = false; await f.save();
+    const r = await f.validate(); assert.equal(r.status, "invalid", `mutation ${i}: ${JSON.stringify(r.errors)}`);
+    assert.equal(r.diagnosticsPassed, false);
+    assert.ok(r.errors.some((e) => e.at === "react:qualification"), `mutation ${i}`);
+  }
+});
+
+test("producer-shaped early and semantic failures remain failed and blocked, not malformed", async (t) => {
+  const f = await fixture(t), records = capture("react").records;
+  const errors = [{ kind: "pageerror", name: "TypeError", sha256: hash("page error") },
+    { kind: "console-error", sha256: hash("console error") }];
+  const network = ["websocket", "fetch", "xhr", "beacon", "WebSocket", "EventSource", "WebSocket.send"]
+    .map((transport) => ({ transport }));
+  network.push({ transport: "http", method: "GET", resourceType: "fetch" });
+  for (const record of records) if (Object.hasOwn(record, "errors")) record.errors = errors;
+  records[3].network = network;
+  records[1].dom.rows[0].label = "observed wrong value";
+  // Number(non-numeric DOM text) serializes as null, a real functional failure.
+  records[1].dom.cards[0].priceMinor = null; records[1].dom.totalMinor = null;
+  for (const [phase, partial] of [["load", []], ["readiness", records.slice(0, 1)],
+    [workload.operations[0].id, records.slice(0, 4)], ["detach", records.slice(0, -4)],
+    ["cleanup-probe", records.slice(0, -1)], ["oracle", records]]) {
+    const q = failedPass(phase, partial, errors);
+    f.result.cells.react = { outcome: "failed", qualification: q, measurement: null, readyForMeasurement: false };
+    f.result.passed = false; await f.save(); const r = await f.validate();
+    assert.equal(r.status, "blocked", `${phase}: ${JSON.stringify(r.errors)}`);
+    assert.equal(r.diagnosticsPassed, true); assert.equal(r.cells.react.outcome, "failed");
+    assert.equal(r.cells.react.qualification.oracle.functionalPassed, false);
+    for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+    assert.equal(r.isolation, "unknown");
+  }
+});
+
+test("present optional cell reasons cannot hide malformed fields on a failed pass", async (t) => {
+  const f = await fixture(t);
+  for (const reason of [false, 0, null, ""]) {
+    f.result.cells.react = { outcome: "failed", qualification: failedPass(), measurement: null, readyForMeasurement: false, reason };
+    f.result.passed = false; await f.save(); invalid(await f.validate(), "invalid-cell-reason");
+  }
+});
+
 for (const phase of ["qualification", "measurement"]) for (const rawOutcome of ["failed", "unsupported", "not-run"])
   test(`outer semantic outcome must match the ${phase} capture's ${rawOutcome} state`, async (t) => {
     const f = await fixture(t), c = { schema: "client-capture/v1", app: "react", effectiveWorkload: workload,
-      outcome: rawOutcome, reason: "native-pass-unavailable", records: null };
+      outcome: rawOutcome, reason: rawOutcome === "failed" ? "native-load-failed" : "native-pass-unavailable", records: null };
     const unavailable = { capture: c, oracle: validateClientCapture(workload, c, settings), readyMs: null, actions: null,
       failure: rawOutcome === "failed" ? { phase: "load", diagnostic: "Error", diagnosticSha256: hash("fixture"), records: [], errors: [] } : null };
     const cell = { outcome: rawOutcome, qualification: phase === "qualification" ? unavailable : pass("react", false),
@@ -364,7 +482,7 @@ test("missing native build manifest retains a valid failed summary without quali
 
 for (const outcome of ["failed", "unsupported", "not-run"]) test(`unavailable ${outcome} pass validates present optional resource details`, async (t) => {
   const f = await fixture(t), c = { schema: "client-capture/v1", app: "react", effectiveWorkload: workload, outcome,
-    reason: "native-load-unavailable", records: null };
+    reason: outcome === "failed" ? "native-load-failed" : "native-load-unavailable", records: null };
   const qualification = { capture: c, oracle: validateClientCapture(workload, c, settings), readyMs: null, actions: null,
     failure: outcome === "failed" ? { phase: "load", diagnostic: "Error", diagnosticSha256: hash("fixture"), records: [], errors: [] } : null,
     resourceDetails: false };

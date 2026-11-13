@@ -149,6 +149,81 @@ function matchesSource(bytes, sha) {
   return !text.includes("\r") && Buffer.from(text).equals(bytes) && hash(text.replaceAll("\n", "\r\n")) === sha;
 }
 
+function sanitizedErrors(errors) {
+  need(Array.isArray(errors), "invalid-sanitized-errors");
+  for (const error of errors) {
+    need(object(error) && ["pageerror", "console-error"].includes(error.kind), "invalid-sanitized-error");
+    keys(error, error.kind === "pageerror" ? ["kind", "name", "sha256"] : ["kind", "sha256"]);
+    need(digest(error.sha256) && (error.kind !== "pageerror" || typeof error.name === "string"), "invalid-sanitized-error");
+  }
+}
+
+// Failed journeys may stop at any prefix and contain genuine functional errors.
+// Check the producer's record union, not the successful-journey oracle semantics.
+function partialRecords(records, errors, workload, phase) {
+  need(Array.isArray(records), "invalid-partial-records");
+  const resource = (owned) => {
+    const names = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
+    keys(owned, names);
+    need(names.every((name) => bounded(owned[name], 0, Number.MAX_SAFE_INTEGER)), "invalid-partial-resources");
+  };
+  const rows = (values, card, observed) => {
+    need(Array.isArray(values), "invalid-partial-rows");
+    for (const value of values) {
+      keys(value, ["id", card ? "priceMinor" : "label", ...(observed ? ["node"] : [])]);
+      need(typeof value.id === "string" && (card ? Number.isFinite(value.priceMinor) || (observed && value.priceMinor === null)
+        : typeof value.label === "string") && (!observed || typeof value.node === "string"), "invalid-partial-row");
+    }
+  };
+  const dom = (value) => {
+    keys(value, ["id", "rows", "selected", "cards", "totalMinor"]);
+    need(typeof value.id === "string" && (value.selected === null || typeof value.selected === "string")
+      && (Number.isFinite(value.totalMinor) || value.totalMinor === null), "invalid-partial-dom");
+    rows(value.rows, false, true); rows(value.cards, true, true);
+  };
+  const network = (values) => {
+    need(Array.isArray(values), "invalid-partial-network");
+    for (const value of values) {
+      need(object(value) && ["http", "websocket", "fetch", "xhr", "beacon", "WebSocket", "EventSource", "WebSocket.send"]
+        .includes(value.transport), "invalid-partial-network-entry");
+      keys(value, value.transport === "http" ? ["transport", "method", "resourceType"] : ["transport"]);
+      if (value.transport === "http") need(typeof value.method === "string" && typeof value.resourceType === "string",
+        "invalid-partial-http-entry");
+    }
+  };
+  const variants = {
+    resources: ["owned"], initial: ["data", "dom", "errors"], operation: ["operation", "dom", "network", "errors"],
+    detach: [], "cleanup-probe": ["input", "network"], state: ["dom", "owned", "network", "errors"],
+  };
+  const sequence = ["resources", "initial", "resources", ...workload.operations.map(() => "operation"),
+    "detach", "resources", "cleanup-probe", "resources", "state"];
+  let at = -1, operation = 0, errorCount = 0;
+  for (const [i, record] of records.entries()) {
+    need(object(record) && Object.hasOwn(variants, record.kind), "invalid-partial-record-kind");
+    keys(record, ["kind", "at", ...variants[record.kind]]);
+    need(record.kind === sequence[i] && Number.isFinite(record.at) && record.at >= 0 && record.at > at,
+      "invalid-partial-record-order-or-clock"); at = record.at;
+    if (Object.hasOwn(record, "owned")) resource(record.owned);
+    if (Object.hasOwn(record, "dom")) dom(record.dom);
+    if (Object.hasOwn(record, "network")) network(record.network);
+    if (Object.hasOwn(record, "errors")) {
+      sanitizedErrors(record.errors);
+      need(record.errors.length >= errorCount && same(record.errors, errors.slice(0, record.errors.length)),
+        "partial-errors-differ-from-failure-ledger"); errorCount = record.errors.length;
+    }
+    if (record.kind === "initial") {
+      keys(record.data, ["rows", "cards"]); rows(record.data.rows, false, false); rows(record.data.cards, true, false);
+    }
+    if (record.kind === "operation") need(same(record.operation, workload.operations[operation++]), "invalid-partial-operation");
+    if (record.kind === "cleanup-probe") need(same(record.input, workload.cleanupProbe), "invalid-partial-cleanup-input");
+  }
+  const count = workload.operations.length, index = workload.operations.findIndex((op) => op.id === phase);
+  const range = phase === "load" ? [0, 1] : phase === "readiness" ? [1, 3]
+    : index >= 0 ? [3 + index, 4 + index] : phase === "detach" ? [3 + count, 5 + count]
+      : phase === "cleanup-probe" ? [5 + count, 8 + count] : [8 + count, 8 + count];
+  need(bounded(records.length, ...range), "partial-records-differ-from-failure-phase");
+}
+
 function replay(pass, app, phase, workload, settings, timeoutMs) {
   keys(pass, ["capture", "oracle", "readyMs", "actions", "failure"], ["resourceDetails"]);
   need(pass.capture?.app === app, "wrong-pass-app");
@@ -167,9 +242,11 @@ function replay(pass, app, phase, workload, settings, timeoutMs) {
     need(pass.readyMs === null && pass.actions === null, "unavailable-pass-has-timings");
     if (pass.capture.outcome === "failed") {
       keys(pass.failure, ["phase", "diagnostic", "diagnosticSha256", "records", "errors"]);
-      need(typeof pass.failure.phase === "string" && digest(pass.failure.diagnosticSha256)
-        && typeof pass.failure.diagnostic === "string" && Array.isArray(pass.failure.records)
-        && Array.isArray(pass.failure.errors), "invalid-failed-pass");
+      need(["load", "readiness", ...workload.operations.map((op) => op.id), "detach", "cleanup-probe", "oracle"]
+        .includes(pass.failure.phase) && pass.capture.reason === `native-${pass.failure.phase}-failed`
+        && digest(pass.failure.diagnosticSha256) && typeof pass.failure.diagnostic === "string", "invalid-failed-pass");
+      sanitizedErrors(pass.failure.errors);
+      partialRecords(pass.failure.records, pass.failure.errors, workload, pass.failure.phase);
     } else need(pass.failure === null, "unavailable-pass-has-invented-failure");
     return { oracle, derived: null, timings: null };
   }
@@ -359,6 +436,7 @@ export async function validateSaved(request) {
     await check(`${app}:cell`, async () => {
       need(object(cell) && ["passed", "failed", "unsupported", "not-run"].includes(cell.outcome), "invalid-cell-outcome");
       keys(cell, ["outcome", "qualification", "measurement", "readyForMeasurement"], ["reason"]);
+      if (Object.hasOwn(cell, "reason")) need(typeof cell.reason === "string" && cell.reason.trim().length > 0, "invalid-cell-reason");
       if (files.has(`${app}.json`)) need(same(json(`${app}.json`), cell), "raw-app-differs-from-summary");
       else if (cell.outcome === "not-run") report.blockers.push(`missing-unrun-app-file:${app}`);
       else need(false, "missing-raw-app-file");
@@ -368,6 +446,8 @@ export async function validateSaved(request) {
       const m = cell.measurement === null ? null : await check(`${app}:measurement`, () =>
         replay(cell.measurement, app, "measurement", output.effectiveWorkload, output.settings, output.timeoutMs));
       report.cells[app].qualification = q ?? null; report.cells[app].measurement = m ?? null;
+      if (builds && (q?.oracle.functionalPassed === true || m?.oracle.functionalPassed === true))
+        need(builds[app]?.outcome === "built", "passing-cell-without-native-build");
       if (cell.qualification === null) {
         need(cell.outcome !== "passed" && cell.measurement === null && cell.readyForMeasurement === false
           && typeof cell.reason === "string" && cell.reason.trim().length > 0, "unavailable-cell-needs-reason-and-no-measurement");
@@ -378,7 +458,6 @@ export async function validateSaved(request) {
       need(cell.readyForMeasurement === passed && (cell.outcome === "passed") === passed, "cell-flags-differ-from-raw-replay");
       const unavailable = q?.oracle.functionalPassed === true ? m?.oracle : q?.oracle;
       need(cell.outcome === (passed ? "passed" : unavailable?.outcome ?? "failed"), "cell-outcome-differs-from-raw-replay");
-      if (passed && builds) need(builds[app]?.outcome === "built", "passing-cell-without-native-build");
       report.cells[app].replayPassed = passed;
       if (!passed) report.blockers.push(`unqualified-cell:${app}`);
     });

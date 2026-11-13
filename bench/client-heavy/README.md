@@ -159,6 +159,12 @@ hashes and artifact hashes are validated even if the separate build manifest is
 missing or inconsistent. Optional failure and resource-detail fields must have
 their declared shape whenever present, including falsy values and failed,
 unsupported or not-run passes that cannot supply timings.
+Any oracle-passing capture requires a built receipt when build claims are present,
+even if the other pass fails. Failed-pass diagnostics use the producer's complete
+partial-record and sanitized-error unions, including nested DOM, data, resource,
+network and error fields, source-bound operation inputs and matching failure
+phase/reason. Well-formed incomplete or functionally failing observations remain
+failed and blocked; they are not required to be complete successful journeys.
 
 The verifier refuses traversal, absolute paths inside receipts, links/junctions,
 linked ancestors, hardlinks, duplicate/case-colliding files and build inputs,
