@@ -53,6 +53,7 @@ jobs:
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
       - run: npm run check:marketplace
+      - run: node --test bench/fullstack/apps/gin/compiled-check.test.mjs
       - run: node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"

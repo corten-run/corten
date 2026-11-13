@@ -2,13 +2,14 @@
 // APIRequestContext uses that browser's real cookie jar for independent readback.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { records as marketplaceRecords } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
+import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
 
@@ -19,7 +20,7 @@ const docker = (...args) => {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim();
+  return (args[0] === 'logs' ? result.stdout + result.stderr : result.stdout).trim();
 };
 const folder = await mkdtemp(join(tmpdir(), 'compiled-alerts-'));
 const records = marketplaceRecords();
@@ -49,9 +50,7 @@ let browser;
 let active;
 const moneyFailures = [];
 try {
-  await writeFile(join(folder, 'items.json'), '{}');
-  await writeFile(join(folder, 'catalog.json'), JSON.stringify(catalogRecords()));
-  await writeFile(join(folder, 'marketplace.json'), JSON.stringify(records));
+  await writeFixtures(folder, { 'items.json': {}, 'catalog.json': catalogRecords(), 'marketplace.json': records });
   browser = await chromium.launch({ headless: true });
   for (const source of ['fixture', 'api']) {
     active = `compiled-alerts-${app}-${source}-${process.pid}`;
@@ -63,15 +62,14 @@ try {
       '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json', '-e', 'CATALOG_SOURCE=fixture',
       '-e', `MARKETPLACE_SOURCE=${source}`, '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
       '-e', `API_BASE=http://host.docker.internal:${upstream.address().port}`, image);
-    const binding = JSON.parse(docker('inspect', active))[0].NetworkSettings.Ports['8080/tcp'][0];
-    const base = `http://127.0.0.1:${binding.HostPort}`;
+    const base = containerBase(docker, active);
     const pageURL = `${base}/marketplace/en-US/item_1`;
     await assert.doesNotReject(async () => {
       for (let i = 0; i < 100; i++) {
         try { if ((await fetch(`${base}/api/alerts`)).ok) return; } catch {}
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      throw new Error(docker('logs', active));
+      throw startupFailure(docker, active);
     });
     // Pair the native confirmation with independent, exact JSON readback. JSON
     // numbers above 2^53 must not be rounded by the test client either.

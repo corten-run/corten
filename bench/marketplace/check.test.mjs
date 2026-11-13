@@ -26,6 +26,41 @@ test("native generated form actions require same-origin exact submitted fields",
   }
 });
 
+test("Leptos alert responses require the native endpoint and exact URL-encoded fields", async () => {
+  const fields = { email: "native@example.test", target_price: "1234,50" }, action = "http://localhost/marketplace/fr-FR/item_1";
+  const candidate = (url = "http://localhost/api/marketplace-alert", edits = {}, extra = "", method = "POST", type = "application/x-www-form-urlencoded") => {
+    const body = new URLSearchParams({ ...fields, tag: "fr-FR", item_id: "item_1", ...edits }).toString() + extra;
+    return { url: () => url, request: () => ({ method: () => method,
+      headers: () => ({ "content-type": type }), postDataBuffer: () => Buffer.from(body) }) };
+  };
+  assert.equal(await alertResponse(candidate(), action, fields), true);
+  for (const response of [candidate("http://foreign.example/api/marketplace-alert"), candidate("http://localhost/api/other"),
+    candidate(undefined, { email: "other@example.test" }), candidate(undefined, { target_price: "1" }),
+    candidate(undefined, { tag: "de-DE" }), candidate(undefined, { item_id: "item_2" }),
+    candidate(undefined, {}, "&email=duplicate"), candidate(undefined, {}, "", "GET"),
+    candidate(undefined, {}, "", "POST", "text/plain")]) {
+    assert.equal(await alertResponse(response, action, fields), false);
+  }
+});
+
+test("native Leptos enhanced alert response is observed without changing the page action", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: route.request().method() === "POST" ? "application/json" : "text/html",
+      body: route.request().method() === "POST" ? '"saved"' : '<form method="post"><input name="email" value="native@example.test"><input name="target_price" value="1"><input name="tag" value="en-US"><input name="item_id" value="item_1"><button type="submit">Send</button></form><p class="marketplace__message"></p>' }));
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    await page.evaluate(() => document.querySelector("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = new URLSearchParams(new FormData(event.currentTarget));
+      const response = await fetch("/api/marketplace-alert", { method: "POST", body });
+      document.querySelector(".marketplace__message").textContent = await response.json();
+    }));
+    await submitAlert(page, page.locator("form"), true);
+    assert.equal(await page.locator(".marketplace__message").textContent(), "saved");
+  } finally { await browser.close(); }
+});
+
 test("native enhanced form posts to a generated endpoint without changing its plain form action", async () => {
   const browser = await chromium.launch({ headless: true });
   try {

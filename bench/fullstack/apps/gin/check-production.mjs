@@ -10,6 +10,7 @@ import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import { records } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
 import { qualify } from '../../../marketplace/qualify.mjs';
+import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
 
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 if (!isMainThread) {
@@ -52,7 +53,7 @@ if (!isMainThread) {
     const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim();
+    return (args[0] === 'logs' ? result.stdout + result.stderr : result.stdout).trim();
   };
   const git = (...args) => {
     const result = spawnSync('git', args, { encoding: 'utf8' });
@@ -86,9 +87,7 @@ if (!isMainThread) {
       resources: { cpus: 1, memory: '512m', maxConnections: 1000 },
     };
     await writeFile(join(output, 'identity.json'), JSON.stringify(identity, null, 2));
-    await writeFile(join(folder, 'items.json'), '{}');
-    await writeFile(join(folder, 'catalog.json'), JSON.stringify(catalogRecords()));
-    await writeFile(join(folder, 'marketplace.json'), JSON.stringify(records()));
+    await writeFixtures(folder, { 'items.json': {}, 'catalog.json': catalogRecords(), 'marketplace.json': records() });
     for (const source of ['fixture', 'api']) {
       const name = `compiled-gin-production-${source}-${process.pid}`;
       docker('run', '-d', '--name', name, '--cpus', '1', '--memory', '512m',
@@ -101,9 +100,10 @@ if (!isMainThread) {
         '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
         '-e', `API_BASE=http://host.docker.internal:${port}`, image);
       active = name;
-      const binding = JSON.parse(docker('inspect', name))[0].NetworkSettings.Ports['8080/tcp'][0];
-      const base = `http://127.0.0.1:${binding.HostPort}`;
-      await until(async () => { try { return (await fetch(base + '/health/live')).status === 200; } catch { return false; } }, 'native startup failed');
+      const base = containerBase(docker, name);
+      try {
+        await until(async () => { try { return (await fetch(base + '/health/live')).status === 200; } catch { return false; } }, 'native startup failed');
+      } catch (error) { throw startupFailure(docker, name, error); }
       const qualification = await qualify({ base, source, upstream });
       await writeFile(join(output, `${source}-qualification.json`), JSON.stringify(qualification, null, 2));
       console.log(`${source}: eligible=${qualification.eligible} missing=${qualification.missing.join(',') || 'none'}`);
