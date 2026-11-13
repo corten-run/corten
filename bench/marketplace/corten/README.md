@@ -99,3 +99,28 @@ image ID/labels, complete input manifest, fixture and driver hashes. Labelled
 input digests must match the current inputs before execution. Images built
 without the helper are explicitly recorded as sourceInputsVerified=false; the
 host driver's HEAD is never presented as proof of an image's build source.
+
+## Marketplace trace context
+
+Native marketplace page GET, record-JSON GET and form POST source reads accept an
+optional request-scoped W3C `traceparent`. Its immutable value is passed to the
+existing source read, never stored on the shared source/client or in a process
+"current operation". Version 00 is forwarded unchanged; supported known fields
+of future versions are down-versioned to 00. Invalid, duplicate and zero-ID
+contexts are not propagated by the app. No exporter, new fetch, parser, fixture
+behavior, deadline or runtime configuration is introduced.
+
+The scoped `tests/traceparent.mjs` driver checks actual native production images
+for all three apps, both profiles and all locales. Build with the existing
+`tests/build-lifetime.mjs`, then run `node bench/marketplace/corten/tests/traceparent.mjs
+<corten|aspnet|express> <image> <artifact-label>` from the root. It binds the image
+ID to scoped source hashes and records per-operation upstream headers/counters.
+Discovery, primary POST and readback have distinct immutable identities. It also
+holds source headers/bodies while another context completes, delays a native
+form body before its source starts, and follows invalid/missing contexts with
+untraced reads. ASP.NET may create a fresh native Activity for an untraced request;
+the negative check rejects reuse of any issued incoming trace ID, not fresh native
+tracing. Direct source tests also start a captured call after another completes.
+These scoped diagnostics are not the independent clean-source audit or complete
+mixed measurement admission. The unresolved cancellation evidence in
+`tests/LIFETIME-HANDOFF.md` remains unchanged.

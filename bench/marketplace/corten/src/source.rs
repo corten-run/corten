@@ -21,7 +21,7 @@ impl Source {
             base: base.parse()?,
         })
     }
-    pub async fn record(&self, id: &str) -> corten::Result<Option<Arc<Record>>> {
+    pub async fn record(&self, id: &str, traceparent: Option<&str>) -> corten::Result<Option<Arc<Record>>> {
         let (client, base) = match self {
             Self::Fixture(records) => return Ok(records.get(id).cloned()),
             Self::Api { client, base } => (client, base),
@@ -32,7 +32,11 @@ impl Source {
             "records",
             id,
         ]);
-        let response = client.get(url).send().await.map_err(upstream_error)?;
+        let mut request = client.get(url);
+        if let Some(parent) = crate::trace::parent(traceparent) {
+            request = request.header("traceparent", parent);
+        }
+        let response = request.send().await.map_err(upstream_error)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -87,7 +91,7 @@ mod tests {
                 client: reqwest::Client::builder().timeout(Duration::from_millis(200)).build().unwrap(),
                 base: format!("http://{addr}").parse().unwrap(),
             };
-            let error = source.record("item_1").await.unwrap_err();
+            let error = source.record("item_1", None).await.unwrap_err();
             assert_eq!(error.status_code(), corten::http::StatusCode::GATEWAY_TIMEOUT);
             tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
         }
@@ -103,7 +107,16 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let thread = std::thread::spawn(move || {
             let mut paths = Vec::new();
-            for index in 0..5 {
+            for (index, parent) in [
+                Some("00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bbbbbbbbbbbbbbbb-00"),
+                Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-aaaaaaaaaaaaaaaa-00"),
+                None,
+                None,
+                None,
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let (mut socket, _) = listener.accept().unwrap();
                 socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
                 let mut head = Vec::new();
@@ -112,7 +125,10 @@ mod tests {
                     socket.read_exact(&mut byte).unwrap();
                     head.push(byte[0]);
                 }
-                paths.push(String::from_utf8(head).unwrap().lines().next().unwrap().to_string());
+                let head = String::from_utf8(head).unwrap();
+                let actual = head.lines().find_map(|line| line.strip_prefix("traceparent: "));
+                assert_eq!(actual, parent);
+                paths.push(head.lines().next().unwrap().to_string());
                 let mut record: Record = serde_json::from_str(include_str!("../tests/marketplace.json")).unwrap();
                 record.title = format!("Fresh {index}");
                 let (status, body) = match index {
@@ -126,12 +142,14 @@ mod tests {
             paths
         });
         let source = Source::Api { client: reqwest::Client::new(), base: format!("http://{addr}/root/").parse().unwrap() };
-        for index in 0..2 {
-            assert_eq!(source.record("id /?").await.unwrap().unwrap().title, format!("Fresh {index}"));
-        }
-        assert!(source.record("missing").await.unwrap().is_none());
-        assert!(source.record("failure").await.is_err());
-        assert!(source.record("bad-json").await.is_err());
+        // The first future is not polled until another request's distinct context completes.
+        let delayed = source.record("id /?", Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-aaaaaaaaaaaaaaaa-00"));
+        let current = source.record("id /?", Some("00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bbbbbbbbbbbbbbbb-00"));
+        assert_eq!(current.await.unwrap().unwrap().title, "Fresh 0");
+        assert_eq!(delayed.await.unwrap().unwrap().title, "Fresh 1");
+        assert!(source.record("missing", None).await.unwrap().is_none());
+        assert!(source.record("failure", None).await.is_err());
+        assert!(source.record("bad-json", None).await.is_err());
         let paths = thread.join().unwrap();
         assert_eq!(paths.len(), 5);
         assert_eq!(paths[0], "GET /root/marketplace/records/id%20%2F%3F HTTP/1.1");
