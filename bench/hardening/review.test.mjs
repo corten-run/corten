@@ -66,6 +66,10 @@ test("network ownership survives daemon success before cancelled acknowledgement
   collide.Labels = { "run.corten.hardening": "run", "agent.owner": "codex", "agent.task": "run" }; collide.Containers = { foreign: {} };
   await assert.rejects(removeOwnedNetwork(name, "run", docker), /attached processes/);
   assert.equal(networks.has("unrelated-id"), true);
+  const uncertain = {}, timeout = new Error("create deadline"); timeout.daemonOutcomeUnknown = true;
+  await assert.rejects(trackedNetworkCreate(uncertain, "uncertain-net", () => {}, async () => { throw timeout; }), /deadline/);
+  assert.deepEqual(uncertain.ownedNetworks, ["uncertain-net"]);
+  assert.match(uncertain.cleanupFailures[0], /cannot certify cleanup/);
 });
 
 test("every service-critical terminal role is required; fixture upstream remains apparatus", () => {

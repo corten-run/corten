@@ -188,8 +188,11 @@ network-create client is allowed to settle on interruption, within its 15 s
 operation deadline, before exact-name/ownership-label reconciliation removes the
 network by ID. Cleanup never removes differently named or owned resources and
 reports an attached or ownership-conflicting reserved network as a cleanup failure.
+An unacknowledged create failure/deadline also invalidates cleanup, even if reconciliation
+finds nothing yet; absence cannot certify that a delayed daemon operation finished.
 `verify-network.mjs` is a finite, opt-in real-daemon cancellation control using
-two empty, labeled private networks; it starts no containers or benchmarks.
+two empty, labeled private networks and an injected process SIGINT event before
+the owning callback receives acknowledgement; it starts no containers or benchmarks.
 Completed native baseline HTTP errors are `target-functional-failure`, including
 allowed-Host/liveness 503 responses. Incomplete/reset/timed-out baseline transport
 is apparatus-invalid; a negative-health transport failure is inconclusive, not live.

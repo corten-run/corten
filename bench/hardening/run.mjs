@@ -46,7 +46,11 @@ export async function run(args) {
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeout);
     try {
       const code = await new Promise((res, rej) => { child.once("error", rej); child.once("close", res); });
-      assert.ok(code === 0 && !timedOut && (cleanup || !interrupted), `${binary} ${args.slice(0, 2).join(" ")}: ${timedOut ? "deadline" : code}\n${error || output}`);
+      if (!(code === 0 && !timedOut && (cleanup || !interrupted))) {
+        const failure = new Error(`${binary} ${args.slice(0, 2).join(" ")}: ${timedOut ? "deadline" : code}\n${error || output}`);
+        if (settleOnInterrupt && (timedOut || code !== 0)) failure.daemonOutcomeUnknown = true;
+        throw failure;
+      }
       return output.trim();
     } finally { clearTimeout(timer); children.delete(child); settling.delete(child); }
   }

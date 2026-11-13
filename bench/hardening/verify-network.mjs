@@ -27,10 +27,14 @@ try {
   const remaining = JSON.parse(await docker(["network", "inspect", other]))[0];
   assert.equal(remaining.Name, other); assert.equal(remaining.Labels["run.corten.hardening"], `${runId}-other`);
   assert.equal(await docker(["network", "ls", "-q", "--filter", `label=run.corten.hardening=${runId}`]), "");
-  console.log(JSON.stringify({ runId, started, control: "real-daemon-create-then-SIGINT-before-owner-ack", removedOwnedNetwork: true, preservedDifferentOwner: true }));
+  console.log(JSON.stringify({ runId, started, control: "real-daemon-create-then-SIGINT-before-owner-ack", interrupt: "injected process SIGINT event", removedOwnedNetwork: true, preservedDifferentOwner: true }));
 } finally {
   process.off("SIGINT", interrupt);
-  for (const [network, owner] of reserved) await removeOwnedNetwork(network, owner, docker);
-  for (const owner of [runId, `${runId}-other`]) assert.equal(await docker(["network", "ls", "-q", "--filter", `label=run.corten.hardening=${owner}`]), "");
+  const failures = [];
+  for (const [network, owner] of reserved) try { await removeOwnedNetwork(network, owner, docker); } catch (error) { failures.push(error); }
+  for (const owner of [runId, `${runId}-other`]) try {
+    assert.equal(await docker(["network", "ls", "-q", "--filter", `label=run.corten.hardening=${owner}`]), "");
+  } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "owned network control cleanup failed");
   console.log(JSON.stringify({ runId, finished: new Date().toISOString(), ownedNetworksRemaining: 0, containersStarted: 0, volumesCreated: 0 }));
 }
