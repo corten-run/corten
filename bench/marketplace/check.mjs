@@ -148,13 +148,31 @@ export async function navigationFinished(page) {
   await page.evaluate(() => globalThis.navigation?.transition?.finished);
 }
 
+export async function alertResponse(response, action, fields) {
+  const request = response.request(), url = new URL(response.url()), target = new URL(action);
+  if (request.method() !== "POST" || url.origin !== target.origin) return false;
+  if (url.pathname.includes("/marketplace/")) return true;
+  // TanStack Start's native server action has a generated endpoint, not the form URL.
+  const headers = request.headers();
+  if (headers["x-tsr-serverfn"] !== "true" || !headers["content-type"]?.startsWith("multipart/form-data;")) return false;
+  const [, section, locale, id] = target.pathname.split("/");
+  if (section !== "marketplace" || !locale || !id) return false;
+  try {
+    const data = await new Response(request.postDataBuffer(), { headers: { "content-type": headers["content-type"] } }).formData();
+    return ["email", "target_price", "locale", "item_id"].every((key) => data.getAll(key).length === 1)
+      && data.get("email") === fields.email && data.get("target_price") === fields.target_price
+      && data.get("locale") === decodeURIComponent(locale) && data.get("item_id") === decodeURIComponent(id);
+  } catch { return false; }
+}
+
 export async function submitAlert(page, form, javaScriptEnabled) {
   const fields = await form.evaluate((f) => {
     const data = new FormData(f);
     return { email: data.get("email"), target_price: data.get("target_price") };
   });
+  const action = await form.evaluate((f) => f.action);
   const [response] = await Promise.all([
-    page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/marketplace/")),
+    page.waitForResponse((r) => alertResponse(r, action, fields)),
     form.locator('[type="submit"]').click(),
   ]);
   try {

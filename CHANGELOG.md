@@ -17,7 +17,9 @@ Corten is pre-1.0, so any minor version may change the API.
   preserve their framework's enhanced and plain-form paths, and reject writes
   whose source or rendering input failed. Next.js, Nuxt, SvelteKit and TanStack
   Start guard pending same-form JS submissions to retain one session; these
-  correctness changes are not a completed group baseline.
+  correctness changes are not a completed group baseline. The shared correctness
+  checker recognizes TanStack's native generated server action only with matching
+  same-origin submitted fields, while retaining plain-form checks.
 
 - Native FastAPI, Django and Spring marketplace alerts persist accepted writes
   in isolated sessions with independent readback and no append after rejected,
