@@ -64,8 +64,14 @@ native transport: register a reviewed raw-wire binding rather than serving a
 common EventSource client under a WebSocket/LiveView/Turbo framework name. Keep raw
 CDP messages and HTTP bodies; normalization cannot invent missing observations.
 
-An app-local `wire.mjs` can export synchronous `wireEvents(network)` and
-`wireSnapshots(network)`. The integration owner registers `wire` and `wireModule`
+An app-local `wire.mjs` must export synchronous `wireEvents(network)`,
+`wireSnapshots(network)` and `wireResources(network)`. The last returns every
+actual resource payload recorded by the client from native ready/overflow or
+other resource-bearing frames, in native frame order. Do not include HTTP resource
+responses or publication acknowledgements: the shared verifier binds those
+separately. The entire resource object, including peaks and buffer/process fields,
+must match its recorded observation. No counter synthesis or omitted raw payloads.
+The integration owner registers `wire` and `wireModule`
 in `native.mjs`; the runner hashes the module as part of the app source. Native
 WebSocket records have `kind: native-websocket-received` / `native-websocket-sent`
 and CDP's `response.payloadData`, opcode and timestamp; creation records retain the
@@ -93,5 +99,8 @@ Use native lifecycle cancellation and prove server reader/task cleanup. Record
 publication acknowledgements before application effects (the existing clients use
 an acknowledgement barrier, retaining actual receive times separately). After
 detach, the runner publishes a cleanup probe and observes unchanged DOM/effects
-and zero owned resources. A passing subset does not qualify the full registry.
+and zero owned resources for at least 150 ms after its acknowledgement, aligning
+each reader's `performance.timeOrigin`. All qualification scenarios and measured
+levels must retain the same complete build/container/topology provenance.
+A passing subset does not qualify the full registry.
 Missing ports stay visible; no transport-only placeholders count as implemented.

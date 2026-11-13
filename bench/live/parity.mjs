@@ -12,6 +12,7 @@ import { contractSha256, selectedApps } from "../workloads/registry.mjs";
 import { coverage } from "../workloads/evidence.mjs";
 import { inventory, nativePorts, portFor, scenarios, settingsFor, workloadFor } from "./native.mjs";
 import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout } from "./fanout.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
@@ -190,6 +191,7 @@ export function verifyArtifact(artifact, expected) {
     if (body.acks) { assert.equal(profile, "native-feed"); return body.acks.map((a) => a.seq); } return [body.seq];
   }), [...artifact.workload.events, artifact.workload.cleanupProbe].map((e) => e.seq), "missing raw publication acknowledgements");
   assert.deepEqual(artifact.failures, []);
+  verifyResources(artifact.capture.records, artifact.network, port.wire);
   return summary;
 }
 
@@ -206,7 +208,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
     verifier: hash(await readFile(join(here, "verify.mjs"))),
     oracle: hash(await readFile(join(here, "../workloads/live.mjs"))),
     native: hash(await readFile(join(here, "native.mjs"))), wire: hash(await readFile(join(here, "wire.mjs"))),
-    fanout: hash(await readFile(join(here, "fanout.mjs"))) };
+    fanout: hash(await readFile(join(here, "fanout.mjs"))), resources: hash(await readFile(join(here, "resources.mjs"))) };
   const plan = { schema: "native-live-plan/v2", group, round: round ?? basename(out), startedAt: new Date().toISOString(), apps: selectedApps(group), requested: apps,
     profile, measurement: measure ? fanoutProfile : null,
     inventory: inventory(group, profile), workload, scenarios: scenarios(group), settings: scenarios(group).map((s) => settingsFor(group, s, profile)),
@@ -286,7 +288,10 @@ export async function run({ group, out, apps: requested, build = false, round, p
         if (measure && allPassed) {
           // Independent admission: revalidate every saved native fault journey before any timing.
           assert.deepEqual(qualified.map((a) => a.scenario), scenarios(group));
-          for (const a of qualified) verifyArtifact(a, { app, group, scenario: a.scenario });
+          for (const a of qualified) {
+            assert.deepEqual(a.provenance, provenance, "qualification scenario provenance differs from the measured native instance");
+            verifyArtifact(a, { app, group, scenario: a.scenario });
+          }
           const measurementFiles = [];
           measurement = "complete"; measurementArtifact = `${app}-measurements.json`;
           const kernelCounters = () => {

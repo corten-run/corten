@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createLiveWorkload, liveSnapshot } from "../workloads/live.mjs";
 import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { verifyResources } from "./resources.mjs";
 
 export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile/v1", clients: [1, 2, 4],
   seed: 17, rowCount: 5, eventCount: 60, rate: 20, deadlineMs: 90000, maxScheduleLagMs: 500,
@@ -45,6 +46,10 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   assert.ok(a.kernel.after.cpuUsageUs >= a.kernel.before.cpuUsageUs, "CPU counter regressed");
   assert.ok(a.kernel.after.memoryPeakBytes >= a.kernel.after.memoryCurrentBytes, "missing kernel memory high-water");
   const publisher = a.browsers[0];
+  const probes = publisher.records.filter((r) => r.kind === "cleanup-probe");
+  assert.equal(probes.length, 1, "cleanup acknowledgement missing");
+  assert.deepEqual(probes[0].event, workload.cleanupProbe, "cleanup acknowledgement probe differs");
+  const probeAcknowledgedAt = publisher.timeOrigin + probes[0].at;
   const publications = publisher.records.filter((r) => r.kind === "publish");
   assert.deepEqual(publications.map((r) => r.seq), workload.events.map((e) => e.seq));
   const writes = publisher.network.filter((r) => r.kind === "request" && new URL(r.url).pathname === "/parity/publish");
@@ -63,6 +68,10 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   }
   const samples = [];
   for (const b of a.browsers) {
+    assert.ok(Number.isFinite(b.timeOrigin) && b.timeOrigin > 0, "browser clock origin missing");
+    for (const [i, r] of b.records.entries()) assert.ok(Number.isFinite(r.at) && r.at >= 0
+      && (!i || r.at >= b.records[i - 1].at), "browser observation clock regressed");
+    verifyResources(b.records, b.network, wire);
     assert.deepEqual(b.failures, []);
     const events = b.records.filter((r) => r.kind === "event");
     assert.deepEqual(events.map((r) => r.event), wireEvents(b.network, wire), "fan-out native wire/app mismatch");
@@ -90,6 +99,12 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
     }
     const detach = b.records.find((r) => r.kind === "detach");
     assert.ok(detach && states.at(-1).at - detach.at >= a.settings.cleanupObservationMs);
+    assert.ok(b.timeOrigin + detach.at <= probeAcknowledgedAt, "cleanup acknowledgement preceded reader detach");
+    const observedAfter = probeAcknowledgedAt + a.settings.cleanupObservationMs;
+    assert.ok(b.timeOrigin + states.at(-1).at >= observedAfter, "cleanup observation too short after acknowledgement");
+    assert.ok(b.records.some((r) => r.kind === "resources" && b.timeOrigin + r.at >= observedAfter
+      && ["subscriptions", "connections", "pendingTasks", "queueEvents"].every((k) => r[k] === 0)),
+    "cleanup resource observation too short after acknowledgement");
     assert.ok(!events.some((r) => r.event.seq === workload.cleanupProbe.seq), "post-detach delivery");
     for (const frame of b.frames) assert.ok(Number.isSafeInteger(frame.through) && frame.through >= 0 && frame.through <= workload.eventCount
       && Number.isFinite(frame.firstFrameAt) && Number.isFinite(frame.secondFrameAt), "invalid visible frame observation");
