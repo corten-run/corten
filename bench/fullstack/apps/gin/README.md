@@ -13,8 +13,7 @@ forms and legacy item transport are not replaced. Native timeout errors return
 errors use a generic native templ page without exposing upstream details. Caller
 disconnects cancel the source request through Go's request context; the same native
 client timeout closes an outstanding header or body read. Neither failure can
-reach the alert commit point. This does not add the production middleware required
-by the localized-marketplace or hardening groups.
+reach the alert commit point. These semantics also apply without production middleware.
 
 With the pinned Go and templ tools from the Dockerfile installed, generate native
 views and run the checks from this directory:
@@ -58,6 +57,7 @@ node bench/fullstack/apps/gin/check-alerts.mjs gin IMAGE
 node bench/fullstack/apps/gin/check-alerts.mjs drogon IMAGE
 node bench/fullstack/apps/gin/check-alerts.mjs topcoat IMAGE
 node bench/fullstack/apps/gin/check-alerts.mjs leptos IMAGE
+node bench/fullstack/apps/gin/check-alerts.mjs gin IMAGE matched
 ```
 
 It starts and removes its own resource-limited containers and synthetic fixture/API
@@ -77,3 +77,44 @@ For API-sourced alert writes, required/non-nullable fields are checked recursive
 against the existing native Go record declarations, including nested rows, before
 native decoding. Optional pointer fields retain their native null/missing behavior.
 No separate schema or record types, dependencies, or GET-path rules are introduced.
+
+## Native production profile
+
+`PROFILE=matched` keeps the same Gin router, native templ views, forms and JSON
+serializer. Gin middleware adds a self-only CSP (no inline scripts or eval),
+nosniff, strict-origin-when-cross-origin referrer policy, frame denial, same-origin
+opener policy, disabled camera/microphone/geolocation permissions, private
+`no-store` responses and negotiated Go gzip for text/JSON/JavaScript. HEAD,
+already encoded responses, ranges, upgrades and native event streams are not
+compressed. Representations are not rewritten.
+
+`HOSTS` is a comma-separated native Host allowlist, defaulting to
+`localhost,127.0.0.1,[::1]`. A host without a port permits that host's ports; an
+explicit port must match. Unknown authorities receive 421. Forwarded headers are
+not trusted. Invalid configuration fails startup. `/health/live` is a real
+upstream-independent liveness endpoint; missing health paths remain 404.
+
+The native Go `http.Server` uses 30-second header/read/write/idle deadlines and a
+16 KiB maximum header budget. A native `MaxBytesReader` bounds bodies at 2 MiB;
+known oversized bodies receive 413 before handlers, and chunked bodies fail native
+binding when the limit is reached. The body is not pre-read ahead of the native
+cross-site guard. `MAX_CONNECTIONS` (default 1000) configures the native
+`netutil.LimitListener`; this uses the already pinned `golang.org/x/net` module,
+not a new dependency. Native SSE refreshes its write deadline before each batch
+and removes its subscriber on disconnect. Other profiles retain `gin.Default()`
+and `r.Run` without this production configuration.
+
+The app-local functional driver runs the existing, unchanged marketplace production
+qualification against a real image, with separate fixture/API source receipts:
+
+```sh
+node bench/fullstack/apps/gin/check-production.mjs IMAGE OUTPUT_DIRECTORY
+```
+
+It retains raw probes, image identity and source revision, and checks actual API
+disconnect/deadline cleanup and alert readback. Its synthetic upstream runs in a
+separate worker so synchronous socket probes cannot stall it. Containers have
+the same one-CPU/512-MiB bound as the alert checker and are removed afterwards.
+These direct HTTP checks do not qualify a TLS deployment, the complete hardening
+matrix, or comparative throughput. Run the alert browser checker for both profiles
+as well; eligibility is an observed result, never inferred from this configuration.
