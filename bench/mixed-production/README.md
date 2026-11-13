@@ -260,17 +260,19 @@ cancelled and no pending work. They still fail the existing deadline response co
 an ordinary error; native deadline status mapping needs an app-local fix, not a runner-side
 reclassification. No capture authorizes load or supplies throughput evidence.
 
-Immutable native-port builds subsequently exercised both sources from `e8c23cf` (FastAPI,
-Django, Spring) and `7e4bbfe` (ASP.NET, Express). Each completed candidate passed 47/53
+Immutable native-port builds subsequently exercised both sources from the original source
+revisions recorded in their raw captures. The corresponding Python/Java and ASP.NET/Express
+changes were imported here as `5858ddcc8` and `a50ef5283`; these import commits are not the
+captures' measured identities. Each completed candidate passed 47/53
 cells, including all 18 real accepted/rejected POSTs and their independent native store
 reads. Their remaining cells were cancellation/deadline failures, not missing readback.
 FastAPI returned 502 and Django 500 on native deadline; Spring, ASP.NET and Express still
-reached the shorter diagnostic client deadline. The Corten build from `7e4bbfe` exceeded
+reached the shorter diagnostic client deadline. The Corten build in that same native-port round exceeded
 the bounded native build window and stayed image-unavailable, not unsupported. These are
 functional observations of those exact commits, not production qualification or proof of
 all storage invariants. Later native fixes must be rebuilt and rechecked.
 
-Compiled-port round `w11`, built from `bd475eff`, observed Gin 50/53 and Drogon 47/53,
+Compiled-port round `w11`, whose native changes were imported as `f96868119`, observed Gin 50/53 and Drogon 47/53,
 including all 18 native POST/readback cases per app. Gin cancelled upstream correctly but
 returned 502 for all three native deadlines. Drogon left upstream work pending after abort
 and returned 200 after all three 40-second deadline holds. Topcoat exceeded the bounded
