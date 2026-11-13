@@ -1529,14 +1529,15 @@ rules something out.
     an unknown URL, whose `404` belongs to the prefix it is under, and a route that can match a
     path under another prefix, an area's, an API's or one of Corten's own (`/corten/`, the
     assets'), look it up by the request's path, a scan of those prefixes. Which routes can is
-    counted segment by segment when the router is built (`api::can_match_under`): a parameter
-    matches one segment that starts and ends with the text around it, a catch-all the rest, and a
-    prefix of Corten's own holds only paths with a segment after it. So a page's `/{*rest}` looks
-    up by path, as does `/{slug}` beside an area at `/shop` (it matches `/shop`) and `/shop/{id}`
-    beside one at `/shop/desk`, while `/{slug}` in an app with no areas, or beside `/shop/desk`
-    alone, has its scope. The count may still send a route by path that cannot match (two
-    parameters in one segment); it never gives a route a scope when one of its paths is under
-    another prefix. A route that says `unstaged` where it is declared, in the app's routes
+    counted segment by segment when the router is built (`api::can_match_under`), as matchit
+    matches: a parameter takes the rest of its segment after any text before it, empty only where
+    the route goes on with a `/`, a catch-all the rest of the path, and a prefix of Corten's own
+    holds only paths with a segment after it. So a page's `/{*rest}` looks up by path, as does
+    `/{slug}` beside an area at `/shop` (it matches `/shop`) and `/shop/{id}` beside one at
+    `/shop/desk`, while `/{slug}` in an app with no areas, or beside `/shop/desk` alone, has its
+    scope. The count reads each route alone, so it may send by path one whose paths under another
+    prefix a static route beside it always answers first (`/{slug}` beside an area's route at
+    `/shop`); it never gives a route a scope when one of its paths is under another prefix. A route that says `unstaged` where it is declared, in the app's routes
     module, an area's or an API's, goes through none of the stages, the app's, area's and API's
     middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
     order a reader checks is still one, and a flag, as `no_store` is, that names what the route
@@ -1695,7 +1696,15 @@ rules something out.
     handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
-    and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
+    and 7,797, and 8,099 for a plain axum router in both); reasoned (the segment count that gives
+    a route its scope is exact only for the routes the router holds and the matcher it holds them
+    in: every such route has whole-segment parameters, since `#[derive(Route)]`'s `parse_path`
+    refuses text before a parameter, an area's and an API's routes are held to
+    `route::route_shaped` when the app compiles, and text after a parameter is stripped before
+    the router holds the path (`suffixed`), so only a `Route` written by hand and given to the
+    hidden `Routes::__route` can put text before one; and matchit 0.8.4, read in its source,
+    has a parameter take the rest of its segment, empty only where a `/` follows, and refuses
+    text after one in its segment (`InvalidParamSegment`), so a segment holds one parameter); measured (callgrind, release, three runs each, every run the same, an uncommitted
     variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
     and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each with
     jemalloc and with glibc, every run the same, step 4 at `5548c97a` against step 3 at
@@ -1748,10 +1757,13 @@ rules something out.
     which looks its scope up by path, costs more than about 100 instructions over the same page at
     an app route there, beyond the 667 measured at `084db982` (19,236.7 through the catch-all
     against 18,569.8 at the route, a catch-all's match counted in it); or a route whose every
-    path is outside the other prefixes is sent by path for a reason other than two parameters in
-    one segment, which says the segment count has grown looser than it reads; or one is given a
-    scope while one of its paths is under another prefix, which a request would then answer with
-    the wrong area's settings.
+    path is outside the other prefixes is sent by path for a reason other than a static route
+    beside it answering those paths first, which says the segment count has grown looser than it
+    reads; or one is given a scope while one of its paths is under another prefix, which a
+    request would then answer with the wrong area's settings; or matchit's parameter rules
+    change (`crates/corten/Cargo.toml`'s caret requirement, `0.8.4`, lets `cargo update` move
+    it, and 0.8.6, read, matches text after a parameter and no empty value before a `/`), or a
+    route may put text before a parameter, either of which the count must then follow.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1778,7 +1790,9 @@ rules something out.
     route given its area's or API's scope at `f7d33ce2` against main `31de4268`
     ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)),
     and the app with areas against the one with none in one build at `6ffc316f`; 2026-11-13,
-    routes counted by segment at `084db982` against `416882fa`, with a catch-all's request.
+    routes counted by segment at `084db982` against `416882fa`, with a catch-all's request;
+    2026-11-13, matchit 0.8.4's parameter matching and route insertion read in its source
+    (`tree.rs`), with 0.8.6's for the Revisit-when.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
