@@ -5,6 +5,7 @@ edition = "2021"
 description = "The server side of a Corten live feed: keyed rows, numbered patches, replay and resume, served as JSON snapshots and server-sent events as plain HTTP responses."
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "sse", "live", "feed", "http"]
 categories = ["web-programming::http-server", "asynchronous"]

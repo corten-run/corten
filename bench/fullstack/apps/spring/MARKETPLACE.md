@@ -39,3 +39,125 @@ On native Linux it adds Docker's `host-gateway` mapping for the host upstream;
 Windows and macOS retain Docker Desktop's built-in host resolution.
 The native Java tests separately cover `GET`, `HEAD`, methods and malformed JSON.
 These checks establish functional JSON behavior, not load or production readiness.
+
+## Native alert sessions
+
+Accepted marketplace POSTs append one alert to the native servlet session. Spring
+MVC/Jackson serves `GET /api/alerts` as `[{item_id,email,target_minor}]` in insertion
+order, without creating a session for a new reader. Servlet session IDs are not
+adopted from unknown caller cookies. Cookies are HttpOnly, SameSite=Lax, cookie-only
+(no URL session IDs), and Secure on HTTPS under the servlet container's defaults.
+Servlet session expiry applies; restarts lose these synthetic in-memory alerts.
+
+The session mutex protects appends and snapshot reads, including concurrent requests
+that add the first alert to an existing session. ICU validation returns both its
+localized message and half-up rounded minor units from one parse. Targets beyond
+signed 64-bit minor units are rejected. Missing/invalid inputs and missing records
+do not append. Marketplace POST rejects cross-site Fetch Metadata or a different
+Origin using the servlet request's scheme and Host. This app has no Spring Security
+dependency; none is added or disabled. POST responses and readbacks are no-store.
+The existing read-only pages, record JSON, full-page marketplace forms and legacy
+htmx enhancement remain unchanged.
+
+For an accepted POST only, the controller resolves the normal Thymeleaf view and
+renders it once into Spring's `ContentCachingResponseWrapper`. Only a complete,
+successful render appends the alert; the buffered bytes are then copied to the
+response. A render exception or error status cannot append or expose partial HTML.
+GET and rejected form rendering retain the ordinary MVC lifecycle. This does not
+promise rollback when a client disconnects after an alert has committed.
+
+POST source reads use a native Jackson `ObjectReader` that rejects missing creator
+properties (including nullable ones), unknown keys, null primitive numbers and
+scalar coercions. The fetched record is parsed once, then checked before rendering:
+required strings/lists/row members, requested ID, per-list unique row IDs and the
+numeric bounds in `bench/marketplace/records.mjs` (counts 0..1e9, signed minor units
+-1e9..1e9, ratings 0..500). No extra HTTP read or source pass is added. API-backed
+GET pages and JSON retain their existing mapper and serialization.
+
+The fixture map remains parsed once at startup and reused by reads. Its parser now
+uses the same strict Jackson settings: missing properties, unknown keys and scalar
+coercions fail startup rather than being silently normalized. This is necessary
+because missing nullable properties and coerced primitive types cannot be recovered
+from the resulting typed record. Fixture POSTs still check the record's required
+non-null members, ID, uniqueness and numeric invariants before rendering; healthy
+fixture GET behavior is unchanged.
+
+`mvn -B test` includes native validation/concurrent-session tests. Real HTTP,
+isolation, concurrent writes, and JS/no-JS browser checks for the built image are
+documented in `../fastapi/README.md`. They retain the same browser/request cookie
+jar between each POST and its separate readback, with no reset/oracle endpoint.
+`AlertsHttpTest` runs a real upstream and embedded Tomcat HTTP server: a malformed
+`fields: [null]` record with a large title that previously failed inside Thymeleaf
+must return 500 with unchanged readback for existing and fresh cookie jars. A valid
+subsequent write must still append exactly once.
+`../fastapi/alert-contract.test.mjs` additionally exercises the full malformed-record
+matrix over real HTTP in both profile environments; setup is in that app's README.
+
+## Unreleased
+
+- Forward marketplace `traceparent` per native MVC request through explicit
+  source arguments and request-local RestClient headers, including POST reads.
+
+- Document the native MVC/RestClient page request-lifetime limit with real-socket
+  probes, without changing runtime, adding a response heartbeat or inventing a
+  timeout solely to satisfy the mixed workload gate.
+
+- Validate complete marketplace POST source records with strict native Jackson
+  parsing, requested-ID/unique-row checks and existing numeric contract bounds.
+  Reject structurally unparseable fixtures at startup rather than losing evidence
+  needed to validate later writes.
+
+- Persist native servlet-session marketplace alerts with independent JSON readback,
+  atomic appends and cross-site write rejection.
+- Complete native template rendering before committing an accepted alert so a
+  failed render cannot mutate the session store.
+
+## Request-scoped Trace Propagation
+
+Page/POST and JSON handlers capture the incoming W3C `traceparent` as an immutable
+optional string. `MarketplaceSource.get` and `getForWrite` accept it explicitly;
+their original one-argument overloads remain compatible. Only the individual
+RestClient request receives the header, never the shared client's defaults.
+There is no ambient current operation, exporter or extra fetch. Fixture reads
+still bypass HTTP, and JSON parsing, deadlines and worker settings are unchanged.
+
+This is transparent forwarding, not a trace participant: missing headers stay
+absent, and malformed headers pass through unchanged with no child span or
+identity repair. The mixed runner retains invalid/orphan evidence instead of
+attributing it to a newer operation.
+
+`mvn -B test` includes `TraceContextHttpTest`, using embedded Tomcat and a real
+upstream HTTP server. It overlaps distinct valid contexts, delays the first
+fetch until a newer request completes, holds an upstream body, and covers JSON,
+every locale's page and accepted POST/readback, invalid/missing headers,
+subsequent untraced requests and fixture bypass. This is functional evidence,
+not performance or lifetime qualification. The MVC lifetime limit below remains;
+new source hashes require a later independent source audit, not a self-issued
+positive receipt.
+
+## Page Request Lifetime Limit
+
+The representative remains Spring MVC/Thymeleaf on Tomcat with blocking RestClient
+and the JDK HTTP request factory. [Spring documents that Servlet does not notify
+an application when a remote client leaves](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-async.html#webmvc-ann-async-disconnects)
+before subsequent I/O discovers it. Registering an async listener or returning a
+`Callable`/`WebAsyncTask` alone does not supply a pre-response disconnect signal.
+Sending heartbeat HTML or committing a 200 before the real page exists would alter
+the native page/error contract, not satisfy cancellation.
+
+An interrupted [JDK HttpClient send attempts to cancel the exchange](https://docs.oracle.com/en/java/javase/25/docs/api/java.net.http/java/net/http/HttpClient.html#send(java.net.http.HttpRequest,java.net.http.HttpResponse.BodyHandler)),
+but this synchronous MVC request has no disconnect notification to trigger that
+interruption while it is blocked upstream. No interruption/cancellation capability
+is claimed merely from the client API's existence. A reactive WebFlux deployment
+would be a different native stack; adding WebClient inside MVC would not remove
+the Servlet notification limitation.
+
+The real-socket probe in `../fastapi/page-lifetime.test.mjs` checks all locales with
+both profile environment values (this app has no separate matched configuration).
+It captures upstream counters before cleaning up failed probes. Pending work after
+client abort fails the gate. Its twelve-second client guard expiring without a
+native response also fails the gate and establishes only that observation window,
+not absence of every possible later timeout. The marketplace source configures no
+explicit request/read deadline;
+no arbitrary new shared timeout or native async-controller conversion is added here.
+The existing production representative remains unqualified for the mixed lifetime gate.

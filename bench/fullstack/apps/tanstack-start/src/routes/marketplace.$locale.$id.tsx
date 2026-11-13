@@ -1,5 +1,5 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
-import { getMarketplacePage } from "../marketplace-api";
+import { createMarketplaceAlert, getMarketplacePage } from "../marketplace-api";
 import { Marketplace } from "../marketplace-page";
 import { isLocale, readQuery, sameOrigin } from "../marketplace";
 import { NotFound } from "../not-found";
@@ -26,5 +26,6 @@ export const Route = createFileRoute("/marketplace/$locale/$id")({
 function MarketplacePage() {
   const props = Route.useLoaderData();
   const search = useLocation({ select: (location) => location.searchStr });
-  return <Marketplace {...props} query={readQuery(new URLSearchParams(search))} />;
+  return <Marketplace {...props} query={readQuery(new URLSearchParams(search))}
+    submitAlert={(form) => createMarketplaceAlert({ data: form })} />;
 }

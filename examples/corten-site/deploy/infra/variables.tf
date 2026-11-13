@@ -13,6 +13,20 @@ variable "zone" {
   default     = null
 }
 
+variable "redirects" {
+  description = "Other names in the zone that send their visitors to the site's name, such as www.example.com for example.com. The certificate holds each of them."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for name in var.redirects : can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", name))])
+    error_message = "Give each name alone, in lower case: no scheme, path or port."
+  }
+  validation {
+    condition     = !contains(var.redirects, var.domain) && length(distinct(var.redirects)) == length(var.redirects)
+    error_message = "Give each name once, and not the site's own: a name cannot send its visitors to itself."
+  }
+}
+
 variable "manage_dns" {
   description = "Whether the zone's records are kept here. Set false where its DNS stays elsewhere, and point an A record at the address this gives."
   type        = bool

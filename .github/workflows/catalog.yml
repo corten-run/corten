@@ -88,12 +88,25 @@ jobs:
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
         run: |
-          docker run --rm --cpus 1 --memory 1g cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json
-          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json
+          docker run --rm --cpus 1 --memory 1g cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read app.test_trace_context
+          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read app.test_trace_context
           node bench/fullstack/apps/fastapi/check-native.mjs cb-catalog-fastapi
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      - name: Test native router alert stores and localized targets
+        if: contains(fromJSON('["nextjs","nuxt","react-router","sveltekit","astro","tanstack-start"]'), matrix.app)
+        run: node --test bench/fullstack/apps/${{ matrix.app }}/alerts.test.mjs
+      - name: Test native Django alert persistence and source boundaries
+        if: matrix.app == 'django'
+        run: |
+          docker run --rm --cpus 1 --memory 1g cb-catalog-django python -m django test itempage --verbosity 1
+          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-django python -m django test itempage --verbosity 1
+      - name: Test native Spring alert persistence and source boundaries
+        if: matrix.app == 'spring'
+        run: |
+          docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
+          docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
       - name: Test native Express alert persistence and rejected writes
         if: matrix.app == 'express'
         run: |
