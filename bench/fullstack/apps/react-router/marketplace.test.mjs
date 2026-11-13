@@ -7,7 +7,12 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import ts from "typescript";
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
+import { createMemoryRouter, RouterProvider } from "react-router";
+
+const renderToStaticMarkup = (element) => renderMarkup(createElement(RouterProvider, {
+  router: createMemoryRouter([{ path: "*", element }]),
+}));
 
 const directory = new URL("./app/", import.meta.url);
 const model = await import(new URL("marketplace.ts", directory));
@@ -28,6 +33,15 @@ const record = {
 };
 const query = model.readQuery(new URLSearchParams());
 const spaces = (value) => value.replace(/[\u00a0\u202f]/g, " ");
+
+test("native URL encoding rejects unpaired surrogates and preserves Unicode pairs", () => {
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    for (const id of ["\ud800", "\udc00", "item/\ud800", "item/\udc00"]) {
+      assert.throws(() => model.marketplacePath(locale, id), URIError);
+    }
+    assert.equal(model.marketplacePath(locale, "item/\ud83d\ude00"), "/marketplace/" + locale + "/item%2F%F0%9F%98%80");
+  }
+});
 
 test("native Intl formats signed money, half-away ratings, grouped counts and cardinal plurals", () => {
   const expected = {
@@ -63,9 +77,9 @@ test("locale-decimal alert validation uses native money, not stored formatted st
   for (const locale of ["en-US", "fr-FR", "de-DE"]) {
     const decimal = locale === "en-US" ? "." : ",";
     const f = model.formatters(locale);
-    assert.equal(model.targetAmount(locale, "1234" + decimal + "50"), 1234.5);
+    assert.equal(model.targetMinor(locale, "1234" + decimal + "50"), 123450);
     for (const bad of ["", "0", "-1", "Infinity", "1e3", "12wrong", "1" + decimal + "234", locale === "en-US" ? "1,50" : "1.50"]) {
-      assert.equal(model.targetAmount(locale, bad), null, bad);
+      assert.equal(model.targetMinor(locale, bad), null, bad);
     }
     const form = new URLSearchParams({ email: "bad", target_price: "1" });
     assert.equal(model.alertMessage(locale, record.title, form), f.labels.invalid_email);

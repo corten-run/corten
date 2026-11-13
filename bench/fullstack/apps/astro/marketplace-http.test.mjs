@@ -121,7 +121,7 @@ test("built native routes: complete SSR, form POSTs, exact JSON, statuses and so
           else assert.deepEqual({
             listings: listingRows, offers: rows(body, "data-offer-id"), summary: text(section(body, "summary")).replace(/\s+/g, " ").trim(),
           }, fixturePages.get(locale));
-          const origin = app === "sveltekit" ? "http://localhost:18413" : `http://localhost:${port}`;
+          const origin = base;
           const post = (email, target_price, customOrigin = origin) => get(url, {
             method: "POST", headers: { Origin: customOrigin }, body: new URLSearchParams({ email, target_price }),
           });

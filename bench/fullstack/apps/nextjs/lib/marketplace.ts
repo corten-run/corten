@@ -53,20 +53,25 @@ export function sortedListings(record: MarketplaceRecord, query: MarketplaceQuer
 }
 // Intl exposes decimal symbols, but not a parser. Accept ungrouped decimals only
 // instead of guessing whether a separator means grouping or a fraction.
-export function targetAmount(locale: Locale, text: string): number | null {
+export function targetMinor(locale: Locale, text: string): number | null {
   const decimal = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal")!.value;
   const escaped = decimal === "." ? "\\." : decimal;
   if (!new RegExp("^\\d+(?:" + escaped + "\\d{1,2})?$").test(text)) return null;
-  const amount = Number(text.replace(decimal, "."));
-  return Number.isFinite(amount) && amount > 0 && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
+  const [whole, fraction = ""] = text.split(decimal);
+  const digits = (whole + fraction.padEnd(2, "0")).replace(/^0+/, "");
+  if (digits.length > 16) return null;
+  const minor = Number(digits);
+  return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 export function alertMessage(locale: Locale, title: string, form: FormData | URLSearchParams): string {
   const f = formatters(locale);
   const email = String(form.get("email") ?? "");
   if (!email.includes("@")) return f.labels.invalid_email;
-  const amount = targetAmount(locale, String(form.get("target_price") ?? ""));
-  if (amount === null) return f.labels.invalid_price;
-  const replacements: Record<string, string> = { email, title, price: f.money.format(amount) };
+  const minor = targetMinor(locale, String(form.get("target_price") ?? ""));
+  if (minor === null) return f.labels.invalid_price;
+  const digits = String(minor).padStart(3, "0");
+  const price = f.money.format(`${digits.slice(0, -2)}.${digits.slice(-2)}` as `${number}`);
+  const replacements: Record<string, string> = { email, title, price };
   return f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name: string) => replacements[name]);
 }
 export function sameOrigin(request: Request) {

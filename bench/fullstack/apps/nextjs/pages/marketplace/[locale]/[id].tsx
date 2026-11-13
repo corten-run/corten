@@ -1,8 +1,9 @@
 import Head from "next/head";
 import type { GetServerSideProps } from "next";
 import { Marketplace, type MarketplaceProps } from "../../../lib/marketplace-page";
-import { alertMessage, isLocale, readQuery, sameOrigin } from "../../../lib/marketplace";
+import { isLocale, readQuery, sameOrigin } from "../../../lib/marketplace";
 import { fetchMarketplaceRecord } from "../../../lib/marketplace-server";
+import { submitAlert } from "../../../lib/alerts-http";
 
 type Props = MarketplaceProps | { error: string; locale: string };
 export const getServerSideProps: GetServerSideProps<Props> = async ({ params, req, res, resolvedUrl }) => {
@@ -51,7 +52,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async ({ params, re
   const record = await fetchMarketplaceRecord(String(params?.id ?? ""));
   if (!record) return { notFound: true };
   return { props: { record, locale, query: readQuery(url.searchParams),
-    message: form ? alertMessage(locale, record.title, form) : "" } };
+    message: form ? submitAlert(req, res, locale, record, form) : "" } };
 };
 
 export default function MarketplacePage(props: Props) {
