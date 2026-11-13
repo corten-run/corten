@@ -101,10 +101,18 @@ to install its packages and get a certificate, and then a whole run of the Site 
 tests and builds before it ships. For the first machine made for corten.run (one run, on
 `a7bbe4cc9`, with the name already at DigitalOcean's servers) the machine answered under its
 certificate 1 min 42 s after the apply ended, and the Site run started then had shipped and
-checked the release 1 min 54 s after that; a replacement has not been timed. The old machine
+checked the release 1 min 54 s after that. For the first replacement (one run, on `cd3f67f43`)
+the machine answered under its certificate 1 min 22 s after the apply ended, and the site was
+down about two minutes: between 1 min 51 s and 2 min 7 s from the address moving to the page
+being answered. That was shorter than the sum above because the merge had started a Site run
+of its own, which had built its release by then and shipped it 6 s after the machine answered;
+where a merge starts none, the wait is for the run the workflow starts, as with the first
+machine. The old machine
 and its certificate are gone by then, and Let's Encrypt issues the same names five
 certificates a week: a sixth replacement inside a week leaves the site down until its limit
-allows another. So gather changes to those files into one merge. When an apply fails, run the
+allows another (with names that redirect, a machine asks for two, one for the site's name and
+one for all of them, and each set of names has its own five). So gather changes to those files
+into one merge. When an apply fails, run the
 workflow again (`gh workflow run site-machine.yml`): what it made is in the state, and the
 run ships the site to a machine that answers 502. With deploys on, a run fails when the
 machine does not answer.
@@ -476,8 +484,19 @@ apply. The workflow then started the Site workflow, which shipped the release an
 answered by the page, its JSON and its live stream as that commit. An earlier run had stopped
 at the bucket, with a key that could not make one.
 
-Still not run on a real machine: the address moving from one droplet to the next, a put-back
-of the release before, and a name that redirects. Which of `boot.sh`'s two ways ended its wait
-on that droplet was not looked at, so whether a droplet can reach its own reserved address
-from inside is still not known, nor whether the two metadata paths (`reserved_ip/ipv4/active`
-and `ip_address`) answer as `boot.sh` reads them.
+The same day the merge of `cd3f67f43` replaced that droplet, with `SITE_REDIRECTS` naming
+`www.corten.run` (one run, read from the workflows' logs). The plan was two to add, one to
+change and one to destroy. The new droplet was made in 33 seconds, the address moved to it in
+the 16 seconds after, the record for `www` was made, and the old droplet was gone 23 seconds
+after the move, the apply ending 39 seconds after the address began to move. The machine answered 502
+under the site's name 1 min 22 s after the apply ended (the step asks each 20 seconds). The
+Site run the merge itself had started shipped then and was answered by the page as that
+commit 6 seconds later, and the step said `www` sends its visitors to the site on its second
+ask, 20 seconds after the first answer. The Site run the workflow started was answered as the
+same commit.
+
+Still not run on a real machine: a put-back of the release before, a name that reaches the
+machine late or is refused its certificate, and a renewal. Which of `boot.sh`'s two ways ended
+its wait on either droplet was not looked at, so whether a droplet can reach its own reserved
+address from inside is still not known, nor whether the two metadata paths
+(`reserved_ip/ipv4/active` and `ip_address`) answer as `boot.sh` reads them.
