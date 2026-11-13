@@ -174,6 +174,25 @@ test("TLS qualification never falls back to plaintext or counts TCP handshake as
   }
 });
 
+test("unknown HTTP Host control cannot replace TLS server identity or fail before reaching HTTP", async () => {
+  const peers = new Set(); let hello;
+  const server = createTcpServer((socket) => {
+    peers.add(socket); socket.once("close", () => peers.delete(socket)); socket.on("error", () => {});
+    const chunks = [];
+    socket.on("data", (chunk) => {
+      chunks.push(chunk); const bytes = Buffer.concat(chunks);
+      if (bytes.length >= 5 && bytes.length >= 5 + bytes.readUInt16BE(3)) { hello = bytes; socket.destroy(); }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await observe(`https://localhost:${server.address().port}/`, { host: "unrecognized.invalid", timeoutMs: 2000 });
+    assert.equal(response.host, "unrecognized.invalid"); assert.equal(response.complete, false);
+    assert.ok(hello && hello[0] === 22); assert.ok(hello.includes(Buffer.from("localhost")), "TLS ClientHello must identify the actual certificate host");
+    assert.equal(hello.includes(Buffer.from("unrecognized.invalid")), false, "bad HTTP Host must not poison SNI/certificate validation");
+  } finally { for (const socket of peers) socket.destroy(); await new Promise((resolve) => server.close(resolve)); }
+});
+
 test("capacity failure is an observed target outcome, not apparatus success or numeric service evidence", () => {
   const capture = { legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 4, ok: 0, errors: 4 } }])), recovery: { disposition: "stopped" }, measurement: "unavailable" };
   assert.equal(targetOutcome(capture, { productionQualified: true }).classification, "target-capacity-failure");

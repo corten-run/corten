@@ -79,18 +79,35 @@ clients and retains separate `edge-qualification.json`, edge native controls and
 direct/edge browser receipts. Missing edge defenses are deployment outcomes, not
 assumed native mechanism failures. A healthy native form is still mandatory.
 
+The retained `w10/aspnet/api/deployed-edge/slow-bodies` observation (producer
+`398b3482f`) has no missing direct ASP.NET production features. Effective TLS
+qualification observes unknown Host 200 and an unfinished head still held at
+40,070 ms. The cap probe establishes only 536/473 completed TLS handshakes within
+its unchanged connection deadline, below the required 950. Its connection-cap
+result is therefore inconclusive, not proof of an absent cap; do not enlarge the
+deadline/quota or relabel it a pass. Exact per-probe TLS receipts are retained in
+`edge-qualification.json.probes.jsonl`, including on qualification failure.
+
+The additional bad-Host control in that capture remains inconclusive because
+Node derived TLS SNI from the overridden HTTP Host and rejected the certificate.
+The follow-up client fix explicitly retains the URL's certificate identity while
+changing only HTTP Host, tested with actual ClientHello bytes and trusted/untrusted
+TLS receiving controls. The original native receipt is not rewritten. Effective
+qualification's separate TLS client already kept SNI independent, so its observed
+unknown-Host 200 remains valid. No qualified edge performance is claimed.
+
 For a bounded app-author regression, use a fresh local round, for example:
 
 ```sh
-node bench/hardening/run.mjs w9 --review approved-native-app-change --build --verify-app express --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
-node bench/hardening/verify.mjs bench/hardening/results/w9
+node bench/hardening/run.mjs w11 --review approved-native-app-change --build --verify-app express --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
+node bench/hardening/verify.mjs bench/hardening/results/w11
 ```
 
 The unchanged full 216-cell execution, after author changes are committed, is:
 
 ```sh
-node bench/hardening/run.mjs w10 --review approved-complete-group --build
-node bench/hardening/verify.mjs bench/hardening/results/w10
+node bench/hardening/run.mjs w12 --review approved-complete-group --build
+node bench/hardening/verify.mjs bench/hardening/results/w12
 ```
 
 An existing pinned dependency install can be supplied with `--node-modules PATH`.
