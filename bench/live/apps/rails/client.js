@@ -4,7 +4,7 @@ import '/native/turbo.js';
 const { renderStreamMessage } = window.Turbo;
 
 const records = [], effects = [];
-let consumer, subscription, settings, detached = false, through = 0;
+let consumer, subscription, settings, detached = false, through = 0, initialized = false;
 let consumerId, publications = Promise.resolve();
 function enqueuePublication(work) { return publications = publications.then(work); }
 let chain = Promise.resolve(), publication = Promise.resolve(), resolveReady, resolveFinished;
@@ -41,14 +41,14 @@ async function render(html) {
 const observed = () => ({ through: +document.querySelector('#effects').dataset.through,
   effectCount: +document.querySelector('#effects').value, rowCount: rows().length });
 function acknowledge() { subscription.perform('acknowledge', observed()); }
-function snapshot() { record('snapshot-request'); subscription.perform('snapshot', {}); }
+function snapshot() { record('snapshot-request'); subscription.perform('snapshot', observed()); }
 async function connect(resume) {
   record('attach');
   if (!resume) record('snapshot-request');
   const ready = new Promise(resolve => { resolveReady = resolve; });
   consumer = createConsumer('/cable');
   subscription = consumer.subscriptions.create({ channel: 'NativeChannel', consumer: document.querySelector('meta[name="native-consumer"]').content }, {
-    connected() { this.perform('start', { from: through, initial: !resume, observed: observed() }); },
+    connected() { this.perform('start', { from: through, initial: !initialized, observed: observed() }); },
     received(message) {
       const receivedAt = performance.now(), barrier = publication;
       chain = chain.then(async () => {
@@ -59,7 +59,7 @@ async function connect(resume) {
         if (message.kind === 'ready') {
           consumerId = message.consumer;
           record('resources', message.resources);
-          if (resume) {
+          if (initialized) {
             record('resume', { from: message.from, status: message.status });
             if (message.status === 'expired') snapshot();
           }
@@ -70,7 +70,7 @@ async function connect(resume) {
           await render(message.html);
           through = +document.querySelector('#effects').dataset.through;
           record('snapshot', { ...message.snapshot, ...application() });
-          acknowledge(); resolveReady();
+          initialized = true; acknowledge(); resolveReady();
         } else if (message.kind === 'event') {
           await render(message.html);
           through = +document.querySelector('#effects').dataset.through;

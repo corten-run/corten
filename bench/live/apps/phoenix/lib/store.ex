@@ -146,30 +146,11 @@ defmodule NativeLive.Store do
   end
 
   def handle_call({:snapshot, pid, client}, _, s) do
-    snap = snapshot(s)
+    snapshot_client(s, pid, client, nil)
+  end
 
-    state = %{
-      Map.fetch!(s.clients, client)
-      | through: s.through,
-        rows: s.rows,
-        initialized: true,
-        pending: nil
-    }
-
-    s = put_in(s.clients[client].pending, state)
-    reader = Map.fetch!(s.readers, pid)
-
-    s =
-      put_in(s.readers[pid], %{
-        reader
-        | queue: :queue.new(),
-          count: 0,
-          replay: :queue.new(),
-          inflight: true,
-          overflowed: false
-      })
-
-    {:reply, {snap, state}, %{s | reads: s.reads + 1}}
+  def handle_call({:snapshot, pid, client, observed}, _, s) do
+    snapshot_client(s, pid, client, observed)
   end
 
   def handle_call({:ack, pid, observed}, _, s) do
@@ -247,6 +228,47 @@ defmodule NativeLive.Store do
       _ ->
         {:noreply, s}
     end
+  end
+
+  defp snapshot_client(s, pid, client, observed) do
+    current = Map.fetch!(s.clients, client)
+
+    reconciliation =
+      if observed == nil && !current.initialized,
+        do: {:ok, current},
+        else: reconcile(current, if(is_map(observed), do: observed["through"]), observed)
+
+    case reconciliation do
+      {:ok, current} -> stage_snapshot(put_in(s.clients[client], current), pid, client)
+      :error -> {:reply, {:error, "browser snapshot state is not acknowledged or pending"}, s}
+    end
+  end
+
+  defp stage_snapshot(s, pid, client) do
+    snap = snapshot(s)
+
+    state = %{
+      Map.fetch!(s.clients, client)
+      | through: s.through,
+        rows: s.rows,
+        initialized: true,
+        pending: nil
+    }
+
+    s = put_in(s.clients[client].pending, state)
+    reader = Map.fetch!(s.readers, pid)
+
+    s =
+      put_in(s.readers[pid], %{
+        reader
+        | queue: :queue.new(),
+          count: 0,
+          replay: :queue.new(),
+          inflight: true,
+          overflowed: false
+      })
+
+    {:reply, {snap, state}, %{s | reads: s.reads + 1}}
   end
 
   defp snapshot(s),

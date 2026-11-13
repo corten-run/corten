@@ -95,13 +95,20 @@ module NativeStore
       end
     end
 
-    def snapshot_client(channel, client)
+    def snapshot_client(channel, client, observed = nil)
       @mutex.synchronize do
+        current = @clients.fetch(client)
+        if observed_state?(current, observed)
+          current = current.merge(pending: nil)
+        elsif current[:pending] && observed_state?(current[:pending], observed)
+          current = current[:pending].merge(pending: nil)
+        elsif current[:initialized] || observed
+          raise ArgumentError, "browser snapshot state is not acknowledged or pending"
+        end
         @reads += 1
         snapshot = { through: @through, rows: @rows.values, work: { reads: 1, rows: @rows.size } }
-        current = @clients.fetch(client)
         state = current.except(:pending).merge(through: @through, rows: @rows.dup, initialized: true)
-        current[:pending] = state
+        @clients[client] = current.merge(pending: state)
         reader = @readers.fetch(channel)
         reader[:queue].clear
         reader[:replay].clear

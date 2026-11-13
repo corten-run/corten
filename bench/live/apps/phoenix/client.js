@@ -24,7 +24,7 @@ async function resources() {
 const observed = () => ({ through: +document.querySelector('#effects').dataset.through,
   effectCount: +document.querySelector('#effects').value, rowCount: rows().length });
 function acknowledge() { hook.pushEvent('acknowledge', observed()); }
-function snapshot() { record('snapshot-request'); hook.pushEvent('snapshot', {}); }
+function snapshot() { record('snapshot-request'); hook.pushEvent('snapshot', lastObserved || observed()); }
 function credit(paused) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('native delivery credit deadline')), settings.maxPublishLagMs);
