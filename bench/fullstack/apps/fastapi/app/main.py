@@ -99,9 +99,10 @@ async def marketplace(request: Request, locale: str, record_id: str):
         return PlainTextResponse("Unsupported locale", status_code=400)
     if request.method == "POST" and cross_site(request):
         return PlainTextResponse("Forbidden", status_code=403)
+    traceparent = request.headers.get("traceparent")
     # Finish the native form read before a disconnect listener consumes receive().
     form = await request.form() if request.method == "POST" else {}
-    record = await read_page_record(request, marketplace_source, record_id)
+    record = await read_page_record(request, marketplace_source, record_id, traceparent)
     if record is None:
         raise HTTPException(status_code=404)
     if request.method == "POST":
@@ -152,7 +153,7 @@ async def alert_list(request: Request, response: Response) -> list[Alert]:
 
 @record_routes.api_route("/api/marketplace/{record_id}", methods=GET)
 async def marketplace_json(request: Request, record_id: str) -> MarketplaceRecord:
-    return await read_record(request, marketplace_source, record_id)
+    return await read_record(request, marketplace_source, record_id, request.headers.get("traceparent"))
 
 
 @app.get("/catalog/{record_id}", response_class=HTMLResponse)

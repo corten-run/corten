@@ -5,12 +5,12 @@ from fastapi import HTTPException
 import httpx
 
 
-async def read_page_record(request, source, record_id):
+async def read_page_record(request, source, record_id, traceparent=None):
     async def disconnected():
         while (await request.receive())["type"] != "http.disconnect":
             pass
 
-    read = asyncio.create_task(source.get(record_id))
+    read = asyncio.create_task(source.get(record_id) if traceparent is None else source.get(record_id, traceparent))
     gone = asyncio.create_task(disconnected())
     try:
         # Keep the marketplace client's existing ten-second budget, but bound the
