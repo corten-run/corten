@@ -91,6 +91,14 @@ Missing whole network streams, missing committed loaders and deleted asset respo
 unknown coverage, not proof of no work. Page/Network enable receipts are required as well as
 the declared coverage flags. The Chromium apparatus tests exercise these deletions against
 actual journals and keep intact native redirect/parser/preload cases positive.
+Reconciliation is bidirectional: every completed HTTP document and parser inventory also
+needs its unique matching native commit. Empty commit streams cannot classify no-JS work.
+A redirect continuation requires its preceding dispatch under the same request/frame/loader/
+resource identity; its redirect status alone cannot supply a deleted predecessor. Mandatory
+dispatch, response, terminal and parser fields and their observation ordering are checked.
+Observed stylesheet/image/script-preload declarations require matching native dispatches;
+coalesced declarations may share an observed request, but deleted asset streams remain unknown.
+Unobserved or cross-origin asset coverage is not invented from a DOM declaration.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
