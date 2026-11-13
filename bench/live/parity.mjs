@@ -11,7 +11,9 @@ import { liveCaptureSchema, liveContracts, validateLiveCapture } from "../worklo
 import { contractSha256, selectedApps } from "../workloads/registry.mjs";
 import { coverage } from "../workloads/evidence.mjs";
 import { inventory, nativePorts, portFor, scenarios, settingsFor, workloadFor } from "./native.mjs";
-import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { wireEvents, wireSnapshots, wireResumes } from "./wire.mjs";
+import { negativeRequests, verifyIdentity, verifyScenario } from "./admission.mjs";
+import { inspectFormat, kernelCommand } from "./measurement.mjs";
 import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout } from "./fanout.mjs";
 
@@ -49,38 +51,33 @@ export function select(group, requested) {
 export async function browserJourney(browser, base, workload, settings, port = {}) {
   const context = await browser.newContext();
   const deadline = setTimeout(() => { context.close().catch(() => {}); }, workload.eventCount > 24 ? 180000 : 45000);
-  const page = await context.newPage();
-  page.setDefaultTimeout(15000);
+  let page;
   const network = [], failures = [], observations = [];
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("Network.enable");
-  await cdp.send("Performance.enable");
-  cdp.on("Network.eventSourceMessageReceived", (e) => network.push({ kind: "native-sse", ...e }));
-  cdp.on("Network.webSocketFrameReceived", (e) => network.push({ kind: "native-websocket-received", ...e }));
-  cdp.on("Network.webSocketFrameSent", (e) => network.push({ kind: "native-websocket-sent", ...e }));
-  cdp.on("Network.webSocketCreated", (e) => network.push({ kind: "native-websocket-created", ...e }));
-  cdp.on("Network.loadingFinished", (e) => network.push({ kind: "received-bytes", ...e }));
-  page.on("request", (r) => network.push({ kind: "request", at: performance.now(), method: r.method(), url: r.url(), body: r.postData() }));
-  page.on("response", (r) => {
-    const observation = { kind: "response", at: performance.now(), url: r.url(), status: r.status(), headers: r.headers() };
-    network.push(observation);
-    if (r.headers()["content-type"]?.includes("application/json")) {
-      observations.push(r.text().then((body) => { observation.body = body; }, (error) => { observation.bodyError = error.message; }));
-    }
-  });
-  page.on("pageerror", (e) => failures.push(e.message));
-  let result;
   try {
+    page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Network.enable");
+    await cdp.send("Performance.enable");
+    cdp.on("Network.eventSourceMessageReceived", (e) => network.push({ kind: "native-sse", ...e }));
+    cdp.on("Network.webSocketFrameReceived", (e) => network.push({ kind: "native-websocket-received", ...e }));
+    cdp.on("Network.webSocketFrameSent", (e) => network.push({ kind: "native-websocket-sent", ...e }));
+    cdp.on("Network.webSocketCreated", (e) => network.push({ kind: "native-websocket-created", ...e }));
+    cdp.on("Network.loadingFinished", (e) => network.push({ kind: "received-bytes", ...e }));
+    page.on("request", (r) => network.push({ kind: "request", at: performance.now(), method: r.method(), url: r.url(), body: r.postData() }));
+    page.on("response", (r) => {
+      const observation = { kind: "response", at: performance.now(), url: r.url(), status: r.status(), headers: r.headers() };
+      network.push(observation);
+      if (r.headers()["content-type"]?.includes("application/json")) {
+        observations.push(r.text().then((body) => { observation.body = body; }, (error) => { observation.bodyError = error.message; }));
+      }
+    });
+    page.on("pageerror", (e) => failures.push(e.message));
     const configured = await context.request.post(`${base}/parity/configure`, { data: { initial: workload.initial, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit } });
     assert.equal(configured.status(), 200, "native configure failed");
     const configuration = await configured.json();
-    const rejected = await context.request.post(`${base}/parity/publish`, { data: { event: { ...workload.events[0], seq: 10000 } } });
-    assert.equal(rejected.status(), 400, "native port accepted an out-of-order publication");
-    const controls = [{ request: { event: { ...workload.events[0], seq: 10000 } }, status: rejected.status(), body: await rejected.text() }];
-    if (settings.queueLimit > 2) for (const request of [
-      { event: workload.events[0], events: [workload.events[0]] },
-      { events: [workload.events[0], { ...workload.events[1], seq: 10000 }] }, { events: [] },
-    ]) {
+    const controls = [];
+    for (const request of negativeRequests(workload, settings.queueLimit > 2 ? "native-feed" : "bounded")) {
       const r = await context.request.post(`${base}/parity/publish`, { data: request });
       assert.equal(r.status(), 400, "native batch accepted malformed/nonconsecutive work");
       controls.push({ request, status: r.status(), body: await r.text() });
@@ -133,16 +130,15 @@ export async function browserJourney(browser, base, workload, settings, port = {
     const capture = { schema: liveCaptureSchema, contract: liveContracts[settings.group], records: await page.evaluate(() => window.liveApp.records) };
     const summary = validateLiveCapture(workload, capture, settings);
     assert.ok(wireEvents(network, port.wire).length > 0, "no actual native browser transport evidence");
-    result = { configuration, controls, capture, summary, network, failures, html: await page.content(),
+    return { configuration, controls, capture, summary, network, failures, html: await page.content(),
       browser: { version: browser.version(), userAgent: await page.evaluate(() => navigator.userAgent) },
       browserCosts: { performance: await cdp.send("Performance.getMetrics"), dom: await cdp.send("Memory.getDOMCounters") },
       costs: await page.evaluate(() => ({ resources: performance.getEntriesByType("resource").map((r) => r.toJSON()),
         navigation: performance.getEntriesByType("navigation").map((r) => r.toJSON()) })) };
-    return result;
   } catch (error) {
     error.evidence = { capture: { schema: liveCaptureSchema, contract: liveContracts[settings.group],
-      records: await page.evaluate(() => window.liveApp?.records ?? []).catch(() => []) }, network, failures,
-      html: await page.content().catch(() => "") };
+      records: page ? await page.evaluate(() => window.liveApp?.records ?? []).catch(() => []) : [] }, network, failures,
+      html: page ? await page.content().catch(() => "") : "" };
     throw error;
   } finally { clearTimeout(deadline); await context.close(); }
 }
@@ -153,6 +149,7 @@ export function verifyArtifact(artifact, expected) {
   assert.equal(artifact.app, expected.app); assert.equal(artifact.group, expected.group);
   assert.equal(artifact.scenario, expected.scenario);
   assert.equal(artifact.provenance.contractSha256, contractSha256(expected.group));
+  verifyIdentity(artifact.provenance);
   assert.match(artifact.provenance.imageId, /^sha256:[a-f0-9]{64}$/);
   const profile = artifact.profile ?? "bounded";
   const port = portFor(expected.app, profile);
@@ -162,10 +159,12 @@ export function verifyArtifact(artifact, expected) {
   assert.deepEqual(artifact.provenance.container, { nanoCpus: 1000000000, memory: 1073741824, memorySwap: 1073741824 }, "unreviewed native deployment budget");
   assert.equal(artifact.configuration.framework, expected.app);
   assert.deepEqual(artifact.controls.map((r) => r.status), profile === "native-feed" ? [400, 400, 400, 400] : [400], "negative native publication control missing");
+  assert.deepEqual(artifact.controls.map((r) => r.request), negativeRequests(artifact.workload, profile), "negative native publication control requests differ");
   assert.equal(artifact.provenance.sourceSha256, hash(JSON.stringify(artifact.provenance.sourceHashes)));
   assert.equal(artifact.provenance.imageSourceSha256, artifact.provenance.sourceSha256, "image is not bound to the captured native sources");
   assert.deepEqual(artifact.workload, workloadFor(profile), "unreviewed workload");
   const summary = validateLiveCapture(artifact.workload, artifact.capture, artifact.settings);
+  verifyScenario(artifact.capture.records, artifact.settings, wireResumes(artifact.network, port.wire));
   assert.deepEqual(artifact.summary, summary, "saved aggregate does not match raw capture");
   const received = wireEvents(artifact.network, port.wire);
   assert.ok(received.length > 0, "missing native browser evidence");
@@ -208,7 +207,8 @@ export async function run({ group, out, apps: requested, build = false, round, p
     verifier: hash(await readFile(join(here, "verify.mjs"))),
     oracle: hash(await readFile(join(here, "../workloads/live.mjs"))),
     native: hash(await readFile(join(here, "native.mjs"))), wire: hash(await readFile(join(here, "wire.mjs"))),
-    fanout: hash(await readFile(join(here, "fanout.mjs"))), resources: hash(await readFile(join(here, "resources.mjs"))) };
+    fanout: hash(await readFile(join(here, "fanout.mjs"))), resources: hash(await readFile(join(here, "resources.mjs"))),
+    admission: hash(await readFile(join(here, "admission.mjs"))), measurement: hash(await readFile(join(here, "measurement.mjs"))) };
   const plan = { schema: "native-live-plan/v2", group, round: round ?? basename(out), startedAt: new Date().toISOString(), apps: selectedApps(group), requested: apps,
     profile, measurement: measure ? fanoutProfile : null,
     inventory: inventory(group, profile), workload, scenarios: scenarios(group), settings: scenarios(group).map((s) => settingsFor(group, s, profile)),
@@ -294,15 +294,20 @@ export async function run({ group, out, apps: requested, build = false, round, p
           }
           const measurementFiles = [];
           measurement = "complete"; measurementArtifact = `${app}-measurements.json`;
-          const kernelCounters = () => {
-            const raw = command("docker", ["exec", name, "sh", "-c", "cat /sys/fs/cgroup/cpu.stat; echo MEMORY; cat /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.peak"]);
-            return kernelObservation(raw);
+          const kernelCounters = (id, phase) => {
+            const capture = (args) => {
+              const startedAt = performance.now(), stdout = command("docker", args), finishedAt = performance.now();
+              return { request: { program: "docker", args }, stdout, status: 0, startedAt, finishedAt };
+            };
+            const instance = capture(["inspect", "--format", inspectFormat, provenance.containerId]);
+            const receipt = { ...capture(["exec", provenance.containerId, "sh", "-c", kernelCommand(id, phase)]), instance };
+            return { ...kernelObservation(receipt.stdout), receipt };
           };
           for (const clients of fanoutProfile.clients) {
             let a;
             try {
               const observed = await fanoutJourney(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters);
-              a = { schema: "native-live-fanout/v1", profile: fanoutProfile, app, group, provenance, qualification: files,
+              a = { schema: "native-live-fanout/v2", profile: fanoutProfile, app, group, provenance, qualification: files,
                 comparative: false, repeats: 1, ...observed };
               a.summary = verifyFanout(a, { app, group, provenance, qualification: files, settings: qualified[0].settings, wire: port.wire });
             } catch (error) {

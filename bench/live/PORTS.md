@@ -65,7 +65,11 @@ common EventSource client under a WebSocket/LiveView/Turbo framework name. Keep 
 CDP messages and HTTP bodies; normalization cannot invent missing observations.
 
 An app-local `wire.mjs` must export synchronous `wireEvents(network)`,
-`wireSnapshots(network)` and `wireResources(network)`. The last returns every
+`wireSnapshots(network)`, `wireResources(network)` and `wireResumes(network)`.
+`wireResumes` returns all actual native ready/cursor acknowledgements, including
+initial readiness, as `{from,status:"accepted"|"expired"}` in native frame order.
+Do not infer cursor outcomes from application records or later snapshots.
+`wireResources` returns every
 actual resource payload recorded by the client from native ready/overflow or
 other resource-bearing frames, in native frame order. Do not include HTTP resource
 responses or publication acknowledgements: the shared verifier binds those
@@ -102,5 +106,23 @@ detach, the runner publishes a cleanup probe and observes unchanged DOM/effects
 and zero owned resources for at least 150 ms after its acknowledgement, aligning
 each reader's `performance.timeOrigin`. All qualification scenarios and measured
 levels must retain the same complete build/container/topology provenance.
+Disconnect, missed-updates and expired-cursor journeys require exactly 1, 3 and
+historyLimit+2 native writes while disconnected, respectively, and a native cursor
+acknowledgement consistent with the observed resume. Negative controls retain the
+exact distinct malformed requests, not merely repeated HTTP 400 responses.
 A passing subset does not qualify the full registry.
 Missing ports stay visible; no transport-only placeholders count as implemented.
+
+## Measurement receipts
+
+New `native-live-fanout/v2` artifacts retain CDP target/context receipts and native
+transport request IDs for each independent reader. They bind kernel observations
+to exact container/image/PID/started-at/port inspection receipts and unique measured
+intervals; raw host resource requests/responses to attached/delivered/released
+counters; and host RPC intervals to actual browser publication starts using both
+time origins. Clock rounding allowance is 2 ms, not a relaxed offered-rate gate.
+The first zero-resource observation and cleanup probe acknowledgement must each
+meet the 5-second detach deadline; the 150-ms post-ack observation is additional.
+Historical v1 measurements remain unchanged and cannot qualify without these
+receipts. Reusing another build, container, reader or measured interval is rejected.
+The runner supplies these receipts; app ports must not manufacture them.

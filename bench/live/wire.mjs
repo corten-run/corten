@@ -9,6 +9,16 @@ for (const port of Object.values(nativePorts)) if (port.wireModule) {
   bindings.set(port.wire, binding);
 }
 
+export function wireResumes(network, wire = "event-sse") {
+  if (bindings.has(wire)) {
+    assert.equal(typeof bindings.get(wire).wireResumes, "function", "native resume wire binding required");
+    return bindings.get(wire).wireResumes(network);
+  }
+  assert.ok(["event-sse", "corten-feed"].includes(wire), "unregistered native resume wire binding");
+  return network.filter((r) => r.kind === "native-sse" && r.eventName === (wire === "corten-feed" ? "parity-ready" : "ready"))
+    .map((r) => { const { from, status } = JSON.parse(r.data); return { from, status }; });
+}
+
 export function wireResources(network, wire = "event-sse") {
   if (bindings.has(wire)) {
     assert.equal(typeof bindings.get(wire).wireResources, "function", "native resource wire binding required");

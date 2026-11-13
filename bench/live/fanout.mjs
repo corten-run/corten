@@ -1,5 +1,7 @@
 // Bounded native equal-work measurements. Admission is separate from this driver.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { verifyMeasurementBindings } from "./measurement.mjs";
 import { createLiveWorkload, liveSnapshot } from "../workloads/live.mjs";
 import { wireEvents, wireSnapshots } from "./wire.mjs";
 import { verifyResources } from "./resources.mjs";
@@ -30,7 +32,7 @@ export function checkResources(r, clients, settings, released = false) {
 }
 
 export function verifyFanout(a, { app, group, provenance, qualification, settings, wire }) {
-  assert.equal(a.schema, "native-live-fanout/v1");
+  assert.ok(["native-live-fanout/v1", "native-live-fanout/v2"].includes(a.schema));
   assert.equal(a.app, app); assert.equal(a.group, group);
   assert.deepEqual(a.profile, fanoutProfile); assert.ok(fanoutProfile.clients.includes(a.clients));
   assert.deepEqual(a.provenance, provenance); assert.deepEqual(a.qualification, qualification);
@@ -41,8 +43,10 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   checkResources(a.resources.attached, a.clients, a.settings);
   checkResources(a.resources.delivered, a.clients, a.settings);
   checkResources(a.resources.released, a.clients, a.settings, true);
-  assert.deepEqual(a.kernel.before, kernelObservation(a.kernel.before.raw));
-  assert.deepEqual(a.kernel.after, kernelObservation(a.kernel.after.raw));
+  for (const k of [a.kernel.before, a.kernel.after]) {
+    const { receipt, ...counters } = k;
+    assert.deepEqual(counters, kernelObservation(k.raw));
+  }
   assert.ok(a.kernel.after.cpuUsageUs >= a.kernel.before.cpuUsageUs, "CPU counter regressed");
   assert.ok(a.kernel.after.memoryPeakBytes >= a.kernel.after.memoryCurrentBytes, "missing kernel memory high-water");
   const publisher = a.browsers[0];
@@ -105,6 +109,10 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
     assert.ok(b.records.some((r) => r.kind === "resources" && b.timeOrigin + r.at >= observedAfter
       && ["subscriptions", "connections", "pendingTasks", "queueEvents"].every((k) => r[k] === 0)),
     "cleanup resource observation too short after acknowledgement");
+    const zero = b.records.find((r) => r.kind === "resources" && r.at >= detach.at
+      && ["subscriptions", "connections", "pendingTasks", "queueEvents"].every((k) => r[k] === 0));
+    assert.ok(zero && zero.at - detach.at <= a.settings.maxCleanupMs
+      && probeAcknowledgedAt - (b.timeOrigin + detach.at) <= a.settings.maxCleanupMs, "cleanup exceeded detach deadline");
     assert.ok(!events.some((r) => r.event.seq === workload.cleanupProbe.seq), "post-detach delivery");
     for (const frame of b.frames) assert.ok(Number.isSafeInteger(frame.through) && frame.through >= 0 && frame.through <= workload.eventCount
       && Number.isFinite(frame.firstFrameAt) && Number.isFinite(frame.secondFrameAt), "invalid visible frame observation");
@@ -116,6 +124,7 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
       samples.push(latency);
     }
   }
+  verifyMeasurementBindings(a);
   const summary = { deliveredEffects: a.clients * workload.eventCount, clients: a.clients,
     visibleLatencyP50Ms: pct(samples, .5), visibleLatencyP95Ms: pct(samples, .95), visibleLatencyMaxMs: Math.max(...samples),
     serverCpuUs: a.kernel.after.cpuUsageUs - a.kernel.before.cpuUsageUs,
@@ -126,10 +135,15 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
 
 export async function fanoutJourney(browser, base, settings, clients, port, kernelCounters) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
+  const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
   const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
-  const api = async (name, data) => {
+  const api = async (name, data, phase = name) => {
+    const startedAt = performance.now();
     const r = await fetch(`${base}/parity/${name}`, { ...(data === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }), signal: AbortSignal.timeout(10000) });
-    assert.ok(r.ok, `native ${name} failed: ${r.status}`); return r.json();
+    const body = await r.text(), finishedAt = performance.now();
+    host.requests.push({ request: { method: data === undefined ? "GET" : "POST", url: `${base}/parity/${name}`,
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }) }, phase, status: r.status, body, startedAt, finishedAt });
+    assert.ok(r.ok, `native ${name} failed: ${r.status}`); return JSON.parse(body);
   };
   try {
     const configuration = await api("configure", { initial: workload.initial, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit });
@@ -137,6 +151,8 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       const context = await browser.newContext(); contexts.push(context);
       const page = await context.newPage(); page.setDefaultTimeout(15000);
       const cdp = await context.newCDPSession(page); await cdp.send("Network.enable"); await cdp.send("Performance.enable");
+      const identityReceipt = await cdp.send("Target.getTargetInfo");
+      const identity = { receipt: identityReceipt, targetId: identityReceipt.targetInfo.targetId, contextId: identityReceipt.targetInfo.browserContextId };
       const network = [], failures = [], pending = [];
       for (const [event, kind] of [["Network.eventSourceMessageReceived", "native-sse"], ["Network.webSocketFrameReceived", "native-websocket-received"],
         ["Network.webSocketFrameSent", "native-websocket-sent"], ["Network.webSocketCreated", "native-websocket-created"], ["Network.loadingFinished", "received-bytes"]]) cdp.on(event, (e) => network.push({ kind, ...e }));
@@ -144,7 +160,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       page.on("request", (r) => network.push({ kind: "request", method: r.method(), url: r.url(), body: r.postData() }));
       page.on("response", (r) => {
         const observation = { kind: "response", url: r.url(), status: r.status(), headers: r.headers() }; network.push(observation);
-        if (r.headers()["content-type"]?.includes("application/json")) pending.push(r.text().then((body) => { observation.body = body; }));
+        if (r.headers()["content-type"]?.includes("application/json")) pending.push(r.text().then((body) => { observation.body = body; }, (error) => { observation.bodyError = error.message; }));
       });
       await page.goto(base); await page.waitForFunction(() => !!window.liveApp);
       await page.evaluate((s) => window.liveApp.setup(s), settings);
@@ -162,26 +178,30 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
         };
         requestAnimationFrame(tick);
       });
-      readers.push({ page, cdp, network, failures, pending });
+      readers.push({ page, cdp, network, failures, pending, identity });
     }
     let attached;
     const attachDeadline = performance.now() + 10000;
-    do { attached = await api("resources"); if (attached.subscriptions === clients && attached.connections === clients) break;
+    do { attached = await api("resources", undefined, "attach-poll"); if (attached.subscriptions === clients && attached.connections === clients) break;
       assert.ok(performance.now() < attachDeadline, "fan-out readers failed to attach"); await sleep(10);
     } while (true);
     checkResources(attached, clients, settings);
-    const before = kernelCounters();
+    resourceObservations.attached = host.requests.length - 1;
+    const interval = { id: randomUUID(), clients };
+    const before = kernelCounters(interval.id, "before"); interval.startedAt = before.receipt.startedAt;
     const schedule = [], start = performance.now() + 50;
     for (const event of workload.events) {
       const scheduledAt = start + (event.seq - 1) * 1000 / fanoutProfile.rate;
       while (performance.now() < scheduledAt) await sleep(Math.max(1, scheduledAt - performance.now()));
-      const startedAt = performance.now(); schedule.push({ seq: event.seq, scheduledAt, startedAt });
+      const startedAt = performance.now();
       assert.ok(startedAt - scheduledAt <= fanoutProfile.maxScheduleLagMs, "native publisher behind offered rate");
       await readers[0].page.evaluate((e) => window.liveApp.publish(e), event);
+      schedule.push({ seq: event.seq, scheduledAt, startedAt, finishedAt: performance.now() });
     }
     await Promise.all(readers.map(async ({ page }) => { await page.waitForFunction((n) => window.liveApp.through === n, workload.eventCount); await page.evaluate(() => window.liveApp.settle()); }));
     await sleep(50);
-    const after = kernelCounters(), delivered = await api("resources");
+    const after = kernelCounters(interval.id, "after"); interval.finishedAt = after.receipt.finishedAt;
+    const delivered = await api("resources", undefined, "delivered"); resourceObservations.delivered = host.requests.length - 1;
     await readers[0].page.evaluate(() => window.liveApp.duplicate());
     await Promise.all(readers.map(async ({ page }) => {
       await page.waitForFunction(() => window.liveApp.records.some((r) => r.kind === "event" && r.disposition === "duplicate"));
@@ -191,15 +211,16 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
     await readers[0].page.evaluate((e) => window.liveApp.publish(e, true), workload.cleanupProbe);
     await sleep(settings.cleanupObservationMs + 10);
     await Promise.all(readers.map(({ page }) => page.evaluate(async () => { await window.liveApp.released(); window.liveApp.state(); window.livePaint.stopped = true; })));
-    const released = await api("resources");
+    const released = await api("resources", undefined, "released"); resourceObservations.released = host.requests.length - 1;
     const browsers = [];
     for (const r of readers) {
       await Promise.all(r.pending);
       browsers.push({ ...await r.page.evaluate(() => ({ records: window.liveApp.records, frames: window.livePaint.frames, timeOrigin: performance.timeOrigin })),
-        network: r.network, failures: r.failures, html: await r.page.content(), version: browser.version(),
+        identity: r.identity, network: r.network, failures: r.failures, html: await r.page.content(), version: browser.version(),
         costs: { performance: await r.cdp.send("Performance.getMetrics"), dom: await r.cdp.send("Memory.getDOMCounters") } });
     }
-    return { clients, configuration, workload, settings, resources: { attached, delivered, released }, kernel: { before, after }, browsers, schedule };
+    return { clients, configuration, workload, settings, resources: { attached, delivered, released }, resourceObservations,
+      host, interval, kernel: { before, after }, browsers, schedule };
   } catch (error) {
     error.evidence = { workload, settings, browsers: await Promise.all(readers.map(async (r) => ({
       network: r.network, failures: r.failures, records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []),

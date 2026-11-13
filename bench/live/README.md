@@ -15,7 +15,7 @@ node bench/live/run.mjs local-check --group live-delivery --apps express,aspnet,
 node bench/recoverable-live/run.mjs local-check --apps aspnet --build
 node bench/recoverable-live/run.mjs native-check --apps corten,aspnet --profile native-feed --measure
 node bench/live/verify.mjs bench/live/results/parity/local-check
-node --test bench/live/parity.test.mjs bench/workloads/live.test.mjs
+node --test bench/live/*.test.mjs bench/workloads/live.test.mjs
 ```
 
 Install the root tooling dependencies and Playwright Chromium first. Docker builds each new
@@ -42,6 +42,18 @@ Explicit `--measure` admits only an app whose complete required native fault sui
 passed, revalidating saved artifacts before timing. See [bounded fan-out](#bounded-fan-out).
 No unqualified app is timed. Group readiness is derived from complete selected native
 qualification and, when requested, all measured levels, never a manually enabled flag.
+
+Saved-round verification reads every retained/requested scenario and measurement,
+including failed or unavailable-profile cases, independently of coverage flags.
+Its result includes current `passed`, `measured`, `unqualified` and `inspected`
+inventories. Original coverage remains historical metadata, not current admission.
+The verifier CLI exits 1 when any retained success-schema capture is unqualified.
+New measurements use `native-live-fanout/v2`, retaining independent CDP reader IDs,
+source-instance/interval-bound kernel receipts, raw host resource HTTP responses
+and host/browser publication clock alignment. Historical v1 measurements lack
+these receipts and are not currently qualified; their bytes are never upgraded.
+`evidence/review-v2-express/` contains a fresh real native 1/2/4-reader verification,
+not full-group readiness or a comparative throughput claim.
 
 Implemented native ports are Express (its response writer and EventSource), ASP.NET Core
 (`TypedResults.ServerSentEvents`, a bounded `Channel<Change>` and EventSource), and Gin
