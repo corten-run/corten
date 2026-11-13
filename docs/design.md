@@ -1357,7 +1357,7 @@ rules something out.
     unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`; 2026-11-12, the dispatch suite with its one case changed
-    for RFC 9110 9.1 (the `501`); 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
+    for RFC 9110 9.1 (the `501`), on `794e6c7f` and on it with that change; 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
     them, and the seven requests Stands on counts for the `501`, on `8b02835d` and on it with
     the `501` and its marker.
 
