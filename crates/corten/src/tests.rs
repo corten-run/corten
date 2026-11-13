@@ -12950,7 +12950,8 @@ mod layout_reads {
     }
 
     /// A middleware that answers `/soon` itself with a bare `501`, as one for a part of the app not
-    /// built yet would.
+    /// built yet would, and turns a `501` into a `418` when the query asks: `?to=418` changes only
+    /// the status, `?to=418-page` gives it a page of its own too.
     struct NotBuilt;
 
     impl crate::Middleware for NotBuilt {
@@ -12958,7 +12959,21 @@ mod layout_reads {
             if req.uri().path() == "/soon" {
                 return crate::response::IntoResponse::into_response(StatusCode::NOT_IMPLEMENTED);
             }
-            next.run(req).await
+            let to = req.uri().query().map(str::to_owned);
+            let mut res = next.run(req).await;
+            if res.status() == StatusCode::NOT_IMPLEMENTED {
+                match to.as_deref() {
+                    Some("to=418") => *res.status_mut() = StatusCode::IM_A_TEAPOT,
+                    Some("to=418-page") => {
+                        *res.status_mut() = StatusCode::IM_A_TEAPOT;
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>teapot</p>");
+                    }
+                    _ => {}
+                }
+            }
+            res
         }
     }
 
@@ -13021,6 +13036,39 @@ mod layout_reads {
             assert!(!body.contains("count") && body.contains("<p>501</p>") && body.contains("<p>failed</p>"), "{path}: {body}");
             assert!(at.elapsed() < Duration::from_secs(1), "{path}: {:?}", at.elapsed());
         }
+    }
+
+    #[tokio::test]
+    async fn a_middleware_that_turns_the_routers_501_into_another_status_keeps_it() {
+        // Only the status changed: the error page for that status, not for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418", None, None).await;
+        assert_eq!(status, StatusCode::IM_A_TEAPOT, "{body}");
+        assert!(body.contains("<p>418</p>") && body.contains("<p>failed</p>"), "{body}");
+        // With a page of its own, which goes out as it wrote it.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "<p>teapot</p>"));
+    }
+
+    /// The router's `501` is a refusal, as its `405` is, not a failure of the app's: nothing is
+    /// logged as an error, where a handler's `Error::status(NOT_IMPLEMENTED)` is.
+    #[cfg(feature = "log")]
+    #[tokio::test]
+    async fn the_routers_501_is_not_logged_as_an_error() {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let _logging = tracing::subscriber::set_default(subscriber);
+        let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+        for accept in [None, Some("application/json")] {
+            let (status, _, _) = call_with(not_built(CartCount::default()), "PROPFIND", "/", None, accept).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+            let logged = text();
+            assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "{accept:?}: {logged}");
+        }
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/said", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(logged.contains("ERROR") && logged.contains("corten: request failed"), "{logged}");
     }
 
     #[tokio::test(start_paused = true)]

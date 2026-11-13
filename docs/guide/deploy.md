@@ -5,8 +5,8 @@
 Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come from a proxy or a CDN
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
-for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
-the release profile an app builds with.
+for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
+release profile an app builds with, and what to know when monitoring it.
 
 ## What the proxy must do
 
@@ -24,7 +24,6 @@ the release profile an app builds with.
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
-| 13 | leave the app's `501`s with no `Allow` out of 5xx alerting, or count them apart | the router answers a method no route in the app has (`PROPFIND`, `TRACE`, a scanner's made-up method) with `501 Not Implemented`, as RFC 9110 9.1 says, so a scan raises the 5xx rate; it is a refusal, not a failure, and the app does not log it as an error ([Error pages](app.md#error-pages)). A handler's `Error` at 501 is logged as an error, as any 5xx `Error` is |
 
 ### Live streams
 
@@ -190,3 +189,16 @@ time: in the second round, the quieter one for the default, its rebuild took 135
 its clean build 361 s against 206 s. One codegen unit against sixteen costs about 1% more per page in
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
+
+## Monitoring
+
+The router answers a request whose method no route in the app has (`PROPFIND`, `TRACE`, a
+scanner's made-up method) with `501 Not Implemented`, as RFC 9110 9.1 says, at any URL a route has
+([Error pages](app.md#error-pages)). It is a refusal, not a failure: the app does not log it as an
+error. A scan therefore raises a proxy's or a CDN's 5xx rate. To keep it out of a 5xx alert, leave
+out requests by their method: the methods the app's routes serve are its own (`GET`, `HEAD` and
+`POST` for most apps, with `OPTIONS` and whatever else its API routes take), and a 5xx to any other
+method is one of these. Nothing on the wire marks the router's `501` apart from another, and a
+handler's or a middleware's `501` has no `Allow` either, so leaving out every `501`, or every
+`501` without `Allow`, would also hide the app's own: a handler's `Error` at 501 is a failure,
+logged as an error as any 5xx `Error` is.

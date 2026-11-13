@@ -2688,7 +2688,7 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
 | `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
-| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed` | 501 |
+| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed`, and the router's turned into another status by a middleware keeps that status and its body | 501 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
@@ -2710,8 +2710,10 @@ method, as it is for a method the app does implement. Only a request that reache
 405 checks the method again, so a request a route answers costs no more (within 3 instructions
 of Corten's own code when measured, [design Choice 25](../design.md#choice-axum-router), Stands on). Such a 501 is a
 refusal of a method the app does not implement, not a failure: Corten does not log it as an
-error, and an alert on a proxy's or a CDN's 5xx rate can leave it out ([Deploying](deploy.md#what-the-proxy-must-do), item 13),
-since scanners send `PROPFIND`, `TRACE` and made-up methods to any site.
+error. Scanners send `PROPFIND`, `TRACE` and made-up methods to any site, so an alert on a
+proxy's or a CDN's 5xx rate leaves out 5xx answers to methods the app's routes do not serve,
+by the request's method, not by status: a `501` from a handler or a middleware looks the same
+on the wire and is a failure ([Deploying](deploy.md#monitoring)).
 
 Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
 navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure

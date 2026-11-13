@@ -415,14 +415,15 @@ pub enum Failure {
     /// `Error::not_found()` (the error is logged).
     NotFound,
     /// A route has this URL but not this method, which the app implements: another route has a
-    /// handler for it, or it is `GET`, `HEAD` or `OPTIONS` (405; the `Allow` header is kept). One
-    /// no route has is [`Failure::UnknownMethod`].
+    /// handler for it, a route takes every method (`any`, a relay), or it is `GET`, `HEAD` or
+    /// `OPTIONS` (405; the `Allow` header is kept). One no route has is
+    /// [`Failure::UnknownMethod`].
     WrongMethod,
     /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
     /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): the router's
-    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this; a `501` a handler or a
-    /// middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is
-    /// [`Failure::Failed`].
+    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this, and only while a middleware
+    /// has not turned it into another status; a `501` a handler or a middleware answers
+    /// (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is [`Failure::Failed`].
     UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
@@ -2690,7 +2691,13 @@ async fn page_or_error<S: crate::app::Steps>(
     // more value every request's future holds across the await below.
     #[cfg(debug_assertions)]
     let keeps_detail = res.extensions().get::<KeepsDetail>().is_some();
-    let cause = res.extensions().get::<Cause>().copied();
+    // The router's mark counts only while its `501` is still the answer: a middleware that turned
+    // it into another answered it itself, and that answer is kept as on the JSON path.
+    let cause = res
+        .extensions()
+        .get::<Cause>()
+        .copied()
+        .filter(|cause| !matches!(cause, Cause::UnknownMethod) || status == StatusCode::NOT_IMPLEMENTED);
     let empty_error = res.body().size_hint().exact() == Some(0);
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
     // plain text written for a developer. A browser gets the error page instead, with the text

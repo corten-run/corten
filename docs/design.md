@@ -1095,7 +1095,9 @@ rules something out.
        A browser's `501` is the error page's `Failure::UnknownMethod`, which the request is at
        fault for as it is for a `405`, so the page waits for the layout's reads; the router marks
        its `501` (a response extension), so a `501` a handler or a middleware answers for a part
-       not built yet stays `Failure::Failed`, a failure of the app's.
+       not built yet stays `Failure::Failed`, a failure of the app's; the mark counts only while
+       the answer is still a `501`, so a middleware that turned it into another status keeps that
+       status and its body on the error page's path, as it does on an API's.
        The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
        `OPTIONS` always among them (`OPTIONS` because its caller asks what a resource allows,
        which the `405`'s `Allow` tells it, where a `501` would tell it nothing), and every method
@@ -1105,9 +1107,11 @@ rules something out.
        A `501` is a 5xx, so a scanner's `PROPFIND` or `TRACE` raises a proxy's or a CDN's 5xx
        rate, where a `405` did not; RFC 9110 9.1 says a server SHOULD answer it so, a client
        reads from it that no resource here takes the method, and Corten does not log it as an
-       error, so the deploy guide tells operators to leave these out of 5xx alerting
-       ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 13) rather than Corten keeping
-       the `405` the standard does not ask for.
+       error. Nothing on the wire tells the router's `501` from a handler's, so the deploy guide
+       tells operators to leave these out of 5xx alerting by the request's method, one the app's
+       routes do not serve, and not by status, which would hide the app's own `501`s too
+       ([Deploying](guide/deploy.md#monitoring)), rather than Corten keeping the `405` the
+       standard does not ask for.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:
@@ -1134,7 +1138,7 @@ rules something out.
        sends it through a lane (`route::Lane`) in their place, a `Stages` of its own that holds
        the host check, the headers every unstaged answer gets, the panic catch and, under an API's
        prefix, the API's JSON, and that its `404` for a segment without the text after its
-       parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
+       parameter and its `405` and `501`, the router's own, meet as its handler's answer does. Its handler
        is the app's; the lane wraps the handler's boxed future in a box of its own (two boxes, since axum's
        handler boxed its own future; step 3, below, keeps two). It costs 71 to 86 instructions more than those checks written into the handler: 7,003
        against 6,932 in the app's routes and 7,068 against 6,982 in an API's module (67 and 82
@@ -1270,7 +1274,15 @@ rules something out.
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
     for a method the server knows that the target resource does not support, and MUST carry
     `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
-    case-sensitive; step 1); measured (callgrind, release, glibc's allocator, the run of 1,200
+    case-sensitive; step 1); reasoned (step 1: an operator can tell the router's `501` from the
+    app's own by the request's method, since the app's routes serve a short list of methods and a
+    scanner's are outside it, which is the premise behind accepting the higher 5xx rate; RFC 9110
+    sets no order among its errors, so the path is matched first and an unknown URL keeps the
+    app's `404` page, which says more about a mistyped address than a `501`; and `OPTIONS` is
+    always one the app implements because its caller asks what a resource allows, which the
+    `405`'s `Allow` answers and a `501` would not); reasoned (the mark is checked against the
+    `501` only when it is there, so the counts below hold for every request but that `501`,
+    whose check is one comparison on a cold path); measured (callgrind, release, glibc's allocator, the run of 1,200
     requests less the run of 200 over 1,000 in process, three runs of each build alternating,
     every run within 2 of the others, on `8b02835d` and on it with step 1's `501` and its
     marker, in a harness outside the repository: a page route 17,403 instructions against
@@ -1341,6 +1353,9 @@ rules something out.
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
     ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
+    The `501` itself (step 1) is reopened when operators or CDNs cannot in practice tell it from
+    the app's own `501`s by the request's method (the premise behind its higher 5xx rate), or a
+    client that handled the `405` breaks on the `501`.
 
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
@@ -1570,14 +1585,14 @@ rules something out.
     runs the host check every request meets, so a
     DNS-rebound page reads it no more than any route, and, under an API's prefix, writes a failure
     as the API writes every failure there (its Problem Details or `Api::errors` shape), the
-    router's `405` and a segment without its suffix among them, so an API's clients still read
+    router's `405` and `501` and a segment without its suffix among them, so an API's clients still read
     every failure under its prefix as JSON; only a failure boxes anything for that. A tower layer
     around those routes alone (axum's `route_layer`) was built first and measured at 751
     instructions a request more than the same checks in the handler (jemalloc), since axum boxes a
     layered route again and clones that box on each request; the lane costs 71 to 86 more than
     the same checks in the handler (about 1%, which wall times did not show), taken for one place
     that says what goes around a route: the router holds the app's stages or the route's lane for
-    each path, and its own `404` and `405` meet the lane as the handler's answer does, with no
+    each path, and its own `404`, `405` and `501` meet the lane as the handler's answer does, with no
     handler of their own. Value 1 still holds with it: the route stays under axum's plain router
     in the same build and inside the bound below, which is what this Choice holds it to
     ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own

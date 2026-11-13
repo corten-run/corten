@@ -259,14 +259,18 @@ Corten is pre-1.0, so any minor version may change the API.
   server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
   it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
   where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
-  CDN's 5xx rate; the app does not log it as an error, and the deploy guide says how to leave it
-  out of alerting ([Deploying](docs/guide/deploy.md#what-the-proxy-must-do), item 13). A method
+  CDN's 5xx rate. The app does not log it as an error, and the deploy guide says how to leave it
+  out of 5xx alerting: by the request's method (one the app's routes do not serve), not by
+  status, since leaving out every 501 would also hide the app's own
+  ([Deploying](docs/guide/deploy.md#monitoring)). A method
   some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
   route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
   501; an unknown URL is still a 404 whatever the method. A browser gets the error page as the
   new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
-  page waits for the layout's reads (only the router's 501 is; a 501 a handler or a middleware
-  answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still `Failure::Failed`), and
+  page waits for the layout's reads (only the router's 501 is, while it is still a 501: a
+  middleware that turns it into another status keeps that status and its body; a 501 a handler
+  or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
+  `Failure::Failed`), and
   an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
   `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
   405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
