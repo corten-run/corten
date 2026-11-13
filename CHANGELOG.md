@@ -328,6 +328,23 @@ Corten is pre-1.0, so any minor version may change the API.
   length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
   dot a second read (docs/design.md#limit-path-values)
   ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
+
+- `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
+  `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
+  is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
+  reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
+  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
+  field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
+  `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
+  as serde refuses it. A transparent struct whose one read field is a path ending in
+  `PhantomData` (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde
+  refuses it. Each other attribute it refused is still a compile error, some with reworded
+  messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
+  for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
+  than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
+  count)
+  ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
+
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
   with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
