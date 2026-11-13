@@ -29,13 +29,14 @@ async function readers(expected) {
 }
 const browser = await chromium.launch({ headless: true });
 let contexts = [];
-async function open() {
+async function open(setup = true) {
   const context = await browser.newContext(); contexts.push(context);
   const page = await context.newPage(), network = [], errors = [], pending = [], failed = [];
   page.setDefaultTimeout(10000);
   const cdp = await context.newCDPSession(page); await cdp.send('Network.enable');
   for (const [name, kind] of [['Network.webSocketCreated', 'native-websocket-created'],
-    ['Network.webSocketFrameReceived', 'native-websocket-received'], ['Network.webSocketFrameSent', 'native-websocket-sent']]) {
+    ['Network.webSocketFrameReceived', 'native-websocket-received'], ['Network.webSocketFrameSent', 'native-websocket-sent'],
+    ['Network.webSocketClosed', 'native-websocket-closed']]) {
     cdp.on(name, value => network.push({ kind, ...value }));
   }
   page.on('pageerror', error => errors.push(error.message));
@@ -47,7 +48,7 @@ async function open() {
     const body = response.text().then(body => { value.body = body; });
     body.catch(() => {}); pending.push(body);
   });
-  await page.goto(base); await page.evaluate(settings => window.liveApp.setup(settings), settings);
+  await page.goto(base); if (setup) await page.evaluate(settings => window.liveApp.setup(settings), settings);
   const call = (method, arg) => page.evaluate(({ method, arg }) => window.liveApp[method](arg), { method, arg });
   const wait = async seq => { await page.waitForFunction(seq => window.liveApp.through === seq, seq); await call('settle'); };
   const records = () => page.evaluate(() => window.liveApp.records);
@@ -64,17 +65,17 @@ async function open() {
   };
   return { page, context, network, errors, failed, call, wait, records, state, raw };
 }
-async function outcome(reader, method) {
-  return reader.page.evaluate(async method => {
+async function outcome(reader, method, arg) {
+  return reader.page.evaluate(async ({ method, arg }) => {
     const started = performance.now(); let timer;
     try {
       return await Promise.race([
-        window.liveApp[method]().then(() => ({ ok: true, elapsedMs: performance.now() - started }),
+        window.liveApp[method](arg).then(() => ({ ok: true, elapsedMs: performance.now() - started }),
           error => ({ ok: false, error: error.message, elapsedMs: performance.now() - started })),
         new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, error: '10-second deadline', elapsedMs: performance.now() - started }), 10000); }),
       ]);
     } finally { clearTimeout(timer); }
-  }, method);
+  }, { method, arg });
 }
 const cases = {
   async overlapping() {
@@ -159,11 +160,91 @@ const cases = {
     await second.call('detach'); await readers(0);
     console.log('independent: own native identity released while healthy peer remains counted/live; replay, detach, raw WS/DOM and final zero resources passed');
   },
+  async admission() {
+    const peers = [];
+    async function peerThrough(seq) {
+      const deadline = performance.now() + 5000;
+      while (peers.some(peer => peer.socket.readyState === WebSocket.OPEN && peer.events.at(-1)?.seq !== seq)) {
+        assert.ok(performance.now() < deadline, 'healthy native peer stopped consuming'); await delay(10);
+      }
+    }
+    async function closePeer(peer) {
+      if (peer.socket.readyState === WebSocket.CLOSED) return;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('native peer close timeout')), 5000);
+        peer.socket.addEventListener('close', () => { clearTimeout(timer); resolve(); }, { once: true }); peer.socket.close();
+      });
+    }
+    try {
+      const url = new URL('/parity/socket?from=0', base); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      for (let n = 0; n < 16; n++) {
+        const peer = { socket: new WebSocket(url), events: [] }; peers.push(peer);
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('native peer ready timeout')), 5000);
+          peer.socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('native peer failed')); }, { once: true });
+          peer.socket.addEventListener('message', message => {
+            const value = JSON.parse(message.data);
+            if (value.kind === 'ready') {
+              peer.id = value.readerId; peer.socket.send(JSON.stringify({ kind: 'start', through: 0 })); clearTimeout(timer); resolve();
+            } else if (value.kind === 'event') {
+              peer.events.push(value.event); peer.socket.send(JSON.stringify({ kind: 'ack', delivery: value.delivery, through: value.event.seq }));
+            }
+          });
+        });
+        assert.match(peer.id, /^[1-9][0-9]*$/);
+      }
+      assert.equal(new Set(peers.map(peer => peer.id)).size, 16); await readers(16);
+      const recovering = await open(false), detaching = await open(false);
+      for (const reader of [recovering, detaching]) {
+        const refused = await outcome(reader, 'setup', settings); assert.equal(refused.ok, false); assert.match(refused.error, /WebSocket/);
+        const deadline = performance.now() + 5000;
+        while (!reader.network.some(value => value.kind === 'native-websocket-closed')) {
+          assert.ok(performance.now() < deadline, 'refused browser has no raw terminal socket proof'); await delay(10);
+        }
+        assert.deepEqual(wireEvents(reader.network), []); assert.deepEqual(wireSnapshots(reader.network), []);
+        assert.equal(reader.network.filter(value => value.kind === 'native-websocket-received' && value.response.opcode === 1).length, 0);
+        assert.equal((await reader.state(0)).effectCount, 0); await readers(16);
+      }
+      const ack = await api('publish', { event: fixture.events[0] }); assert.equal(ack.seq, 1); assert.equal(ack.resources.connections, 16);
+      await peerThrough(1); await closePeer(peers[0]); await readers(15);
+      const reconnected = await outcome(recovering, 'reconnect'), detached = await outcome(detaching, 'detach');
+      if (!reconnected.ok) {
+        // Distinguish client poisoning from capacity still being unavailable on the original image.
+        const fresh = await open(); await fresh.call('detach'); await readers(15);
+      }
+      assert.ok(reconnected.ok && detached.ok, `pre-ready recovery/cleanup rejected: ${JSON.stringify({ reconnected, detached, resources: await api('resources') })}`);
+      await detaching.call('released');
+      for (const reader of [recovering, detaching]) {
+        const values = await reader.records(), transport = await reader.page.evaluate(() => window.liveApp.transportRecords);
+        const terminal = transport.find(value => value.kind === 'socket-close');
+        const created = reader.network.find(value => value.kind === 'native-websocket-created');
+        assert.ok(reader.network.some(value => value.kind === 'native-websocket-closed' && value.requestId === created.requestId));
+        assert.equal(terminal.url, created.url);
+        assert.equal(terminal.readerId, null); assert.equal(terminal.code, 1008); assert.equal(terminal.reason, 'reader limit'); assert.equal(terminal.wasClean, true);
+        const cleanup = transport.find(value => value.kind === 'transport-released');
+        assert.ok(cleanup && cleanup.readerId === null && cleanup.code === terminal.code && cleanup.reason === terminal.reason);
+        assert.equal(cleanup.scope, 'browser-socket');
+        assert.deepEqual(Object.keys(cleanup).sort(), ['kind', 'at', 'scope', 'url', 'readerId', 'code', 'reason', 'wasClean'].sort(),
+          'transport-only proof gained fabricated inventory');
+        assert.ok(values.every(value => !['socket-close', 'transport-released'].includes(value.kind)), 'raw transport evidence polluted normalized capture');
+        assert.equal(reader.errors.length, 1); assert.ok(values.some(value => value.kind === 'failure' && value.message === reader.errors[0]));
+      }
+      const refusedResources = (await detaching.records()).filter(value => value.kind === 'resources');
+      assert.equal(refusedResources.length, 1); assert.equal(refusedResources[0].connections, 16); assert.equal('reader' in refusedResources[0], false);
+      assert.equal(detaching.network.filter(value => value.kind === 'request' && new URL(value.url).pathname === '/parity/resources').length, 1);
+      await recovering.wait(1); assert.equal((await recovering.state(1)).effectCount, 0); await readers(16);
+      await recovering.call('publish', fixture.events[1]); await recovering.wait(2); await peerThrough(2);
+      assert.deepEqual((await recovering.state(2)).effects, [fixture.events[1].effectId]);
+      for (const peer of peers.slice(1)) assert.deepEqual(peer.events, fixture.events.slice(0, 2));
+      await recovering.raw(); await detaching.raw(); await recovering.call('detach'); await readers(15);
+      console.log('admission: 16 real native readers, raw pre-ready refusal/terminal proof, same-page reconnect/resnapshot, detach without invented inventory, healthy peers and cleanup passed');
+    } finally { await Promise.all(peers.map(closePeer)); await readers(0); }
+  },
 };
 let failures = 0;
 try {
   for (const [name, check] of Object.entries(cases)) {
-    await readers(0); await api('configure', { initial: fixture.initial, queueLimit: 2, historyLimit: 4 });
+    await api('configure', { initial: fixture.initial, queueLimit: 2, historyLimit: 4 }); await readers(0);
     try { await check(); }
     catch (error) { failures++; console.error(`${name}: FAILED`, error.message); }
     finally { await Promise.all(contexts.map(context => context.close())); contexts = []; await readers(0); }

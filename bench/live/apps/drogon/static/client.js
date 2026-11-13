@@ -3,10 +3,11 @@
   const body = document.querySelector('#rows'), template = document.querySelector('#listing');
   const counter = document.querySelector('#effects'), status = document.querySelector('#status');
   const keyed = new Map([...body.children].map(node => [node.dataset.key, node]));
-  const records = [], effects = [];
+  const records = [], effects = [], transportRecords = [];
   let through = 0, connection, settings, detached = false, needsSnapshot = false, failure;
   let sequence = Promise.resolve(), publication = Promise.resolve(), publishQueue = Promise.resolve();
   const log = (kind, data = {}) => records.push(structuredClone({ kind, at: performance.now(), ...data }));
+  const logTransport = (kind, data) => transportRecords.push(structuredClone({ kind, at: performance.now(), ...data }));
   const rows = () => [...body.children].map(node => ({ id: node.dataset.key, version: +node.cells[1].textContent,
     priceCents: +node.cells[2].textContent, quantity: +node.cells[3].textContent }));
   const observed = () => ({ state: rows(), effects: [...effects], effectCount: +counter.value });
@@ -50,9 +51,11 @@
     failure = undefined; log('attach');
     await new Promise((resolve, reject) => {
       const url = new URL('/parity/socket', location.href); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'; url.searchParams.set('from', through);
-      const owner = connection = { socket: new WebSocket(url), reject, readerId: null, expectedClose: false, failed: false };
+      const owner = connection = { socket: new WebSocket(url), reject, readerId: null, terminal: null, expectedClose: false, failed: false };
       owner.socket.onerror = () => failed(owner, new Error('Drogon WebSocket failed'));
-      owner.socket.onclose = () => {
+      owner.socket.onclose = event => {
+        owner.terminal = { url: owner.socket.url, readerId: owner.readerId, code: event.code, reason: event.reason, wasClean: event.wasClean };
+        logTransport('socket-close', owner.terminal);
         if (owner === connection && !owner.failed) status.textContent = detached ? 'Detached' : 'Disconnected';
         if (!owner.expectedClose) failed(owner, new Error('Drogon WebSocket closed unexpectedly'));
       };
@@ -113,8 +116,13 @@
     const task = publishQueue.then(() => write(events, probe, batch, scheduledAt));
     publishQueue = task.catch(() => {}); return task;
   }
-  async function released(reader = connection?.readerId) {
-    if (!reader) throw new Error('Drogon reader identity unavailable for cleanup');
+  async function released(owner = connection) {
+    const reader = owner?.readerId;
+    if (!reader) {
+      if (!owner?.terminal || owner.socket.readyState !== WebSocket.CLOSED) throw new Error('Drogon reader identity unavailable for cleanup');
+      // No ready frame means no known reader inventory. Prove only actual local transport closure.
+      logTransport('transport-released', { scope: 'browser-socket', ...owner.terminal }); return;
+    }
     const deadline = performance.now() + settings.maxCleanupMs;
     while (true) {
       const value = await resources(reader), owned = value.reader;
@@ -132,11 +140,11 @@
         owner.socket.addEventListener('close', () => { clearTimeout(timer); resolve(); }, { once: true }); owner.socket.close(1000);
       });
     }
-    await sequence; await released(owner.readerId);
+    await sequence; await released(owner);
   }
   window.addEventListener('pagehide', () => { if (connection) { connection.expectedClose = true; connection.socket.close(1000); } });
   window.liveApp = {
-    records, get through() { return through; },
+    records, transportRecords, get through() { return through; },
     async setup(value) { settings = value; await resources(); await attach(false); },
     publish(event, probe = false) { return publish([event], probe, false); },
     publishBatch(events) { return publish(events, false, true); },

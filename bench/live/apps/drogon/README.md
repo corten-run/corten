@@ -51,6 +51,18 @@ replayEvents and inFlight. Top-level counters remain the unmodified aggregate,
 including other healthy readers. Cleanup waits for this reader alone, only after
 native connection closure. It does not close or wait for unrelated readers.
 
+Closure before a ready frame has no known reader identity. The browser retains
+the actual `CloseEvent` URL, code, reason and `wasClean` as `socket-close` in
+`liveApp.transportRecords`, separate from normalized capture records and the
+retained original failure. Disconnect/detach/reconnect can finish that attempt's
+cleanup only after this terminal event and a CLOSED browser socket, recording
+`transport-released` with scope `browser-socket`. This is transport-only proof,
+not a server reader-resource observation: unknown inventory is never reported as
+zero or queried under an invented identity. The native 16-reader capacity refusal
+closes with code 1008 and reason `reader limit`, without a ready frame or admitted
+consumer. After capacity is freed, the same page can explicitly reconnect and
+resnapshot; admitted attempts still require actual identity-scoped cleanup.
+
 A failed delivery/snapshot is retained as a `failure` record and a browser error;
 `settle()` rejects that original failure until an explicit reconnect. The failed
 native consumer is closed without acknowledging the unsuccessful delivery.
@@ -163,7 +175,9 @@ This port does not change the registry or shared gates.
 
 The repair regressions hold a real first publication response while calling the
 second concurrently, abort one actual gap snapshot and explicitly reconnect,
-and disconnect/reconnect/detach one reader while another remains healthy. They
+disconnect/reconnect/detach one reader while another remains healthy, and fill
+all 16 native readers to test real pre-ready refusal, same-page recovery and
+detach while healthy peers remain counted and consuming. They
 compare original native WebSocket/HTTP bodies with DOM/effect observations,
 retain the actual failed request/browser error, and require real final cleanup.
 They do not fulfill network routes with invented fixture responses or frames.
