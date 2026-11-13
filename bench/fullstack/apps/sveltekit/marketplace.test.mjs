@@ -10,6 +10,15 @@ const source = new URL("./src/lib/server/marketplace.ts", import.meta.url);
 const spaces = (text) => text.replace(/[\u00a0\u202f]/g, " ");
 const restore = (key, value) => value === undefined ? delete process.env[key] : process.env[key] = value;
 
+test("native URL encoding rejects unpaired surrogates and preserves Unicode pairs", () => {
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    for (const id of ["\ud800", "\udc00", "item/\ud800", "item/\udc00"]) {
+      assert.throws(() => marketplacePath(locale, id), URIError);
+    }
+    assert.equal(marketplacePath(locale, "item/\ud83d\ude00"), "/marketplace/" + locale + "/item%2F%F0%9F%98%80");
+  }
+});
+
 test("copied contract assets remain byte-identical", async () => {
   assert.deepEqual(await readFile(new URL("./static/marketplace.css", import.meta.url)), await readFile(new URL("../../../marketplace/marketplace.css", import.meta.url)));
   assert.deepEqual(await readFile(new URL("./src/lib/marketplace-labels.json", import.meta.url)), await readFile(new URL("../../../marketplace/labels.json", import.meta.url)));

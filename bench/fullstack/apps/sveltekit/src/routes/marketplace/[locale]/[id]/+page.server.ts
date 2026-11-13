@@ -1,5 +1,5 @@
 import { error } from "@sveltejs/kit";
-import { isLocale, alertMessage, targetMinor } from "#lib/marketplace";
+import { isLocale, alertMessage, marketplacePath, targetMinor } from "#lib/marketplace";
 import { alertCookie, alertLifetime, appendAlert } from "#lib/server/alerts";
 import { fetchMarketplaceRecord } from "#lib/server/marketplace";
 import type { Actions, PageServerLoad } from "./$types";
@@ -19,6 +19,10 @@ export const actions: Actions = {
     const form = await request.formData();
     const record = await fetchMarketplaceRecord(params.id);
     if (!record) error(404, "Not found");
+    // Check the native view's URL encodings before the alert can be committed.
+    marketplacePath(params.locale, record.id);
+    for (const line of record.contents) marketplacePath(params.locale, line.item_id);
+    for (const line of record.included_in) marketplacePath(params.locale, line.item_id);
     locals.marketplaceAlertRecord = record;
     const email = String(form.get("email") ?? ""), target = String(form.get("target_price") ?? "");
     const minor = targetMinor(params.locale, target);
