@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A read-only saved client-heavy evidence validator checks source identities,
+  native bundles, observations, outcomes and resource/timing consistency without
+  executing archived code or contacting a network. Historical v1 captures remain
+  blocked from qualification and verified timings when required proof is absent.
+
 - Grouped catalog runs preserve versioned raw load, counted CPU, memory samples,
   cold-start, image/check and cleanup observations. An offline validator replays
   the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
