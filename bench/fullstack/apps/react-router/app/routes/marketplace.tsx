@@ -1,20 +1,24 @@
 import { data, useActionData, useLoaderData, type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
 import { Marketplace } from "../marketplace-page";
-import { alertMessage, isLocale, readQuery, sameOrigin, targetAmount } from "../marketplace";
+import { alertMessage, isLocale, readQuery, sameOrigin, targetMinor, type MarketplaceRecord } from "../marketplace";
 import { appendAlert } from "../alerts.server";
 import { sessionCookie } from "../alert-cookie.server";
 import { fetchMarketplaceRecord } from "../marketplace.server";
 
 export const links = () => [{ rel: "stylesheet", href: "/marketplace.css" }];
 export const meta = () => [{ title: "Marketplace | Card Market" }];
-export async function loader({ params, request }: LoaderFunctionArgs) {
+declare module "react-router" {
+  interface AppLoadContext { marketplaceAlertRecord?: MarketplaceRecord }
+}
+export async function loader({ params, request, context }: LoaderFunctionArgs) {
   const locale = params.locale ?? "";
   if (!isLocale(locale)) throw new Response("Unsupported locale", { status: 400 });
-  const record = await fetchMarketplaceRecord(params.id ?? "");
+  const record = context.marketplaceAlertRecord ?? await fetchMarketplaceRecord(params.id ?? "");
   if (!record) throw new Response("Not found", { status: 404 });
   return { record, locale, query: readQuery(new URL(request.url).searchParams) };
 }
-export async function action({ request, params }: ActionFunctionArgs) {
+export async function action({ request, params, context }: ActionFunctionArgs) {
+  if (request.method !== "POST") throw new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD, POST" } });
   const locale = params.locale ?? "";
   if (!isLocale(locale)) throw new Response("Unsupported locale", { status: 400 });
   if (!sameOrigin(request)) throw new Response("Forbidden", { status: 403 });
@@ -22,16 +26,18 @@ export async function action({ request, params }: ActionFunctionArgs) {
   const record = await fetchMarketplaceRecord(params.id ?? "");
   if (!record) throw new Response("Not found", { status: 404 });
   const email = String(form.get("email") ?? "");
-  const amount = targetAmount(locale, String(form.get("target_price") ?? ""));
+  const minor = targetMinor(locale, String(form.get("target_price") ?? ""));
+  const message = alertMessage(locale, record.title, form);
+  context.marketplaceAlertRecord = record;
   const headers = new Headers({ "Cache-Control": "private, no-store" });
-  if (email.includes("@") && amount !== null) {
+  if (email.includes("@") && minor !== null) {
     const previous = await sessionCookie.parse(request.headers.get("Cookie"));
-    const token = appendAlert(previous, { item_id: record.id, email, target_minor: Math.round(amount * 100) });
+    const token = appendAlert(previous, { item_id: record.id, email, target_minor: minor });
     if (token !== previous) headers.append("Set-Cookie", await sessionCookie.serialize(token, {
       secure: new URL(request.url).protocol === "https:",
     }));
   }
-  return data({ message: alertMessage(locale, record.title, form) }, { headers });
+  return data({ message }, { headers });
 }
 export default function MarketplacePage() {
   const props = useLoaderData<typeof loader>();

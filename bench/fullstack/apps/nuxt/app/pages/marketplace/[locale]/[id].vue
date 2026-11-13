@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { MarketplaceRecord } from "~~/shared/marketplace";
 import { isLocale, marketplacePath, marketplaceView } from "~~/shared/marketplace";
+import alertErrors from "~~/shared/marketplace-alert-errors.json";
 
 definePageMeta({ key: (route) => route.fullPath });
 const route = useRoute();
@@ -26,10 +27,15 @@ const view = computed(() => marketplaceView(data.value!.record, locale, new URLS
 async function submitAlert(event: Event) {
   const form = new FormData(event.currentTarget as HTMLFormElement);
   form.set("locale", locale);
-  const result = await $fetch<{ message: string }>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
-    method: "POST", body: form, retry: 0,
-  });
-  data.value = { ...data.value!, message: result.message };
+  data.value = { ...data.value!, message: "" };
+  try {
+    const result = await $fetch<{ message: string }>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
+      method: "POST", body: form, retry: 0,
+    });
+    data.value = { ...data.value!, message: result.message };
+  } catch {
+    data.value = { ...data.value!, message: alertErrors[locale] };
+  }
 }
 useHead({ title: "Marketplace | Card Market", htmlAttrs: { lang: locale },
   link: [{ rel: "stylesheet", href: "/marketplace.css" }] });

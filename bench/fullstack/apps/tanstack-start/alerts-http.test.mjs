@@ -47,6 +47,38 @@ test("native alerts readback preserves HEAD and refuses other methods without mu
     assert.deepEqual(JSON.parse(body), { error: "method not allowed" });
   });
 });
+test("native HTTP targets preserve exact cents and reject unsafe or over-precision input", { timeout: 60000 }, async () => {
+  const request = client(), expected = [];
+  assert.deepEqual(await (await request("/api/alerts")).json(), []);
+  const normalize = (text) => text.replace(/&nbsp;|&#160;|&#8239;|[\u00a0\u202f]/g, " ");
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    const local = (text) => locale === "en-US" ? text : text.replace(".", ",");
+    const post = (target_price) => request(`/marketplace/${locale}/item_1`, {
+      method: "POST", headers: { Origin: origin },
+      body: new URLSearchParams({ email: "exact@example.test", target_price }),
+    });
+    for (const [target, minor] of [["70368744177664.01", 7036874417766401],
+      ["90071992547409.91", Number.MAX_SAFE_INTEGER], ["0.01", 1], ["1.01", 101]]) {
+      const response = await post(local(target));
+      assert.equal(response.status, 200);
+      const body = normalize(await response.text());
+      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(target);
+      assert.ok(body.includes(normalize(price)), `${locale} ${target}: confirmation must match stored cents`);
+      expected.push({ item_id: "item_1", email: "exact@example.test", target_minor: minor });
+      assert.deepEqual(await (await request("/api/alerts")).json(), expected);
+    }
+    for (const target of ["90071992547409.92", "1.005", "0.001", "1e2", "Infinity", "+1"]) {
+      const response = await post(local(target));
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      const invalid = { "en-US": "Enter a target price above zero.",
+        "fr-FR": "Saisissez un prix cible supérieur à zéro.", "de-DE": "Geben Sie einen Zielpreis über null ein." };
+      assert.ok(body.includes(invalid[locale]), `${locale}: reject ${target}`);
+      assert.deepEqual(await (await request("/api/alerts")).json(), expected, `${locale}: reject ${target}`);
+    }
+  }
+});
+
 test("native HTTP alerts: accepted writes, independent reads, rejected writes, ordering and session isolation", { timeout: 60000 }, async () => {
   const a = client(), b = client();
   let response = await a("/api/alerts");

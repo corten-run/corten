@@ -8,6 +8,14 @@ An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
 Vue enhances the form through Nuxt's native server API. The ordinary POST still renders the Nuxt page.
+Enhanced submission clears the previous message while pending and shows a
+localized request failure when the native API rejects or transport fails.
+It does not present the earlier success as the result of the failed request.
+
+Targets are ungrouped locale-decimal inputs with at most two fractional digits.
+Extra precision is rejected rather than rounded. Parsing constructs the positive
+integer minor amount directly from the digits, rejects unsafe integers, and
+formats the confirmation from that same exact amount with native Intl.
 
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
@@ -36,3 +44,7 @@ non-document POST in enhanced mode, and reads back through
 `context.request.get` using the browser context's own cookie jar. HTTP checks
 also cover rejected writes, multiple clients and concurrent accepted requests.
 These are functional checks, not throughput measurements.
+
+`node --test alerts-source-http.test.mjs` starts the built native server and a
+synthetic HTTP upstream. Chromium checks prior-success clearing, real upstream
+503 failures, unchanged readback and successful recovery in all three locales.

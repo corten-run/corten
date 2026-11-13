@@ -1,5 +1,5 @@
 import { error } from "@sveltejs/kit";
-import { isLocale, alertMessage, targetAmount } from "#lib/marketplace";
+import { isLocale, alertMessage, targetMinor } from "#lib/marketplace";
 import { alertCookie, alertLifetime, appendAlert } from "#lib/server/alerts";
 import { fetchMarketplaceRecord } from "#lib/server/marketplace";
 import type { Actions, PageServerLoad } from "./$types";
@@ -21,15 +21,16 @@ export const actions: Actions = {
     if (!record) error(404, "Not found");
     locals.marketplaceAlertRecord = record;
     const email = String(form.get("email") ?? ""), target = String(form.get("target_price") ?? "");
-    const amount = targetAmount(params.locale, target);
-    if (email.includes("@") && amount !== null) {
+    const minor = targetMinor(params.locale, target);
+    const message = alertMessage(params.locale, record.title, email, target);
+    if (email.includes("@") && minor !== null) {
       const previous = cookies.get(alertCookie);
-      const token = appendAlert(previous, { item_id: record.id, email, target_minor: Math.round(amount * 100) });
+      const token = appendAlert(previous, { item_id: record.id, email, target_minor: minor });
       if (token !== previous) cookies.set(alertCookie, token, {
         path: "/", httpOnly: true, sameSite: "lax", secure: url.protocol === "https:", maxAge: alertLifetime,
       });
     }
     setHeaders({ "Cache-Control": "private, no-store" });
-    return { message: alertMessage(params.locale, record.title, email, target) };
+    return { message };
   },
 };

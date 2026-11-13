@@ -8,6 +8,16 @@ An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
 React Router's Form calls the native route action and revalidates its loader. Without JavaScript it posts a document.
+Only POST reaches form parsing or storage. Its validated source record is passed
+to the loader through the native request context, so a plain POST does not fetch
+again after committing. Enhanced submissions still perform native GET
+revalidation in a separate request. A failed later GET does not undo a successful
+POST; no record or rendered output is cached between requests.
+
+Targets are ungrouped locale-decimal inputs with at most two fractional digits.
+Extra precision is rejected rather than rounded. Parsing constructs the positive
+integer minor amount directly from the digits, rejects unsafe integers, and
+formats the confirmation from that same exact amount with native Intl.
 
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
@@ -36,3 +46,7 @@ non-document POST in enhanced mode, and reads back through
 `context.request.get` using the browser context's own cookie jar. HTTP checks
 also cover rejected writes, multiple clients and concurrent accepted requests.
 These are functional checks, not throughput measurements.
+
+`node --test alerts-source-http.test.mjs` starts the built native server and a
+synthetic HTTP upstream. It checks same-request record reuse, unsafe methods,
+source failures, and successful enhanced POST followed by failed revalidation.

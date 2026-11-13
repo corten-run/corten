@@ -27,22 +27,26 @@ const formatters = new Map(locales.map((locale) => [locale, {
 export function marketplacePath(locale: Locale, id: string) {
   return `/marketplace/${locale}/${encodeURIComponent(id)}`;
 }
-export function targetAmount(locale: Locale, target: string): number | null {
+export function targetMinor(locale: Locale, target: string): number | null {
   // Discover the decimal separator through Intl; grouping is deliberately not accepted.
   const decimal = formatters.get(locale)!.money.formatToParts(1.1).find((part) => part.type === "decimal")!.value;
   const text = target.trim();
-  const pattern = decimal === "." ? /^\d+(?:\.\d+)?$/ : /^\d+(?:,\d+)?$/;
+  const pattern = decimal === "." ? /^\d+(?:\.\d{1,2})?$/ : /^\d+(?:,\d{1,2})?$/;
   if (!pattern.test(text)) return null;
-  const amount = Number(text.replace(decimal, "."));
-  const minor = Math.round(amount * 100);
-  return Number.isFinite(amount) && amount > 0 && Number.isSafeInteger(minor) && minor > 0 ? amount : null;
+  const [whole, fraction = ""] = text.split(decimal);
+  const digits = (whole + fraction.padEnd(2, "0")).replace(/^0+/, "");
+  if (digits.length > 16) return null;
+  const minor = Number(digits);
+  return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 export function alertMessage(locale: Locale, title: string, email: string, target: string): string {
   const words = labels[locale];
   if (!email.includes("@")) return words.invalid_email;
-  const amount = targetAmount(locale, target);
-  if (amount === null) return words.invalid_price;
-  const values: Record<string, string> = { email, title, price: formatters.get(locale)!.money.format(amount) };
+  const minor = targetMinor(locale, target);
+  if (minor === null) return words.invalid_price;
+  const digits = String(minor).padStart(3, "0");
+  const price = formatters.get(locale)!.money.format(`${digits.slice(0, -2)}.${digits.slice(-2)}` as `${number}`);
+  const values: Record<string, string> = { email, title, price };
   return words.alert_set.replace(/\{(email|title|price)\}/g, (_, key: string) => values[key]!);
 }
 export function marketplaceView(record: MarketplaceRecord, locale: Locale, query: URLSearchParams) {
