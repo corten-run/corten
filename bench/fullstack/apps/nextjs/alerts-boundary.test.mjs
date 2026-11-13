@@ -108,6 +108,111 @@ for (const app of Object.keys(commands)) test(app + ": render-sensitive links fa
   });
 });
 
+for (const app of ["nuxt", "sveltekit"]) test(app + ": fresh native JS form guards pending first submissions without readback prewarm", { timeout: 120000 }, async (t) => {
+  await withApp(app, async ({ base, state, calls }) => {
+    const browser = await chromium.launch({ headless: true, args: ["--renderer-process-limit=2"] });
+    try {
+      for (const locale of ["en-US", "fr-FR", "de-DE"]) await t.test(locale, async () => {
+        const context = await browser.newContext();
+        try {
+          state.delay = 0;
+          const page = await context.newPage(), posts = [], replies = [], errors = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          page.on("request", (request) => { if (request.method() === "POST") posts.push(request); });
+          page.on("response", (response) => { if (response.request().method() === "POST") replies.push(response.status()); });
+          assert.equal((await page.goto(base + "/marketplace/" + locale + "/item_1")).status(), 200);
+          await page.waitForFunction(() => window.__hydratedAt !== undefined, undefined, { timeout: 15000 });
+          assert.equal((await context.cookies()).filter((cookie) => cookie.name.includes("alert")).length, 0);
+          const form = page.locator(".marketplace__alert form"), button = form.locator('button[type="submit"]');
+          const message = page.locator(".marketplace__message");
+          const fill = async (email, target = "1.25") => {
+            await form.locator('[name="email"]').fill(email);
+            await form.locator('[name="target_price"]').fill(locale === "en-US" ? target : target.replace(".", ","));
+          };
+          state.delay = 800; calls.length = 0;
+          await fill("first@example.test");
+          const firstPost = page.waitForResponse((response) => response.request().method() === "POST");
+          await button.click();
+          await sleep(50);
+          const disabledWhilePending = await button.isDisabled();
+          await fill("second@example.test");
+          // A real implicit form submission while the first native request is pending.
+          await form.locator('[name="target_price"]').press("Enter");
+          // Also exercise the handler guard independently of the disabled button.
+          await form.evaluate((element) => element.requestSubmit());
+          assert.equal((await firstPost).status(), 200);
+          await expect(message).not.toBeEmpty({ timeout: 15000 });
+          await expect(button).toBeEnabled({ timeout: 15000 });
+          await sleep(100);
+          assert.equal((await context.cookies()).filter((cookie) => cookie.name === app + "_alerts").length, 1,
+            "the first native response establishes the session before any readback");
+          const expected = [{ item_id: "item_1", email: "first@example.test", target_minor: 125 }];
+          const rows = await (await context.request.get(base + "/api/alerts")).json();
+          const probes = await Promise.all(posts.map(async (request) => ({
+            type: request.resourceType(), hasAlertCookie: /(?:nuxt|sveltekit)_alerts=/.test((await request.allHeaders()).cookie ?? ""),
+          })));
+          assert.deepEqual(rows, expected, JSON.stringify({ app, locale, disabledWhilePending, posts: probes, replies, rows }));
+          assert.equal(disabledWhilePending, true);
+          assert.equal(posts.length, 1, "pending implicit submission must not start another native request");
+          assert.deepEqual(replies, [200]);
+          assert.equal(probes[0].hasAlertCookie, false);
+          await expect(message).toContainText("first@example.test");
+
+          await fill("second@example.test"); await button.click();
+          await expect(message).toContainText("second@example.test", { timeout: 15000 });
+          await expect(button).toBeEnabled();
+          expected.push({ item_id: "item_1", email: "second@example.test", target_minor: 125 });
+          assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+          assert.equal(posts.length, 2);
+          assert.deepEqual(replies, [200, 200]);
+          assert.equal(new RegExp(app + "_alerts=").test((await posts[1].allHeaders()).cookie ?? ""), true);
+          assert.ok(posts.every((request) => request.resourceType() !== "document"));
+          assert.equal(calls.length, app === "sveltekit" ? 4 : 2,
+            "Svelte retains native action plus loader revalidation; Nuxt retains one API source fetch per submission");
+
+          state.delay = 0;
+          await fill("rejected@example.test", "0"); await button.click();
+          await expect(message).not.toContainText("second@example.test", { timeout: 15000 });
+          await expect(message).not.toBeEmpty();
+          await expect(button).toBeEnabled();
+          assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+          await fill("recovered@example.test"); await button.click();
+          await expect(message).toContainText("recovered@example.test", { timeout: 15000 });
+          await expect(button).toBeEnabled();
+          expected.push({ item_id: "item_1", email: "recovered@example.test", target_minor: 125 });
+          assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+
+          state.failed = true;
+          await fill("failed@example.test");
+          const failedPost = page.waitForResponse((response) => response.request().method() === "POST");
+          await button.click();
+          assert.equal((await failedPost).status(), 500);
+          if (app === "nuxt") {
+            await expect(message).not.toContainText("recovered@example.test", { timeout: 15000 });
+            await expect(message).not.toBeEmpty();
+            await expect(button).toBeEnabled();
+          } else {
+            // Keep Svelte's default error action handling rather than replacing its native update.
+            await expect(page.locator(".marketplace__alert form")).toHaveCount(0, { timeout: 15000 });
+          }
+          assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+          state.failed = false;
+          if (app === "sveltekit") {
+            assert.equal((await page.goto(base + "/marketplace/" + locale + "/item_1")).status(), 200);
+            await page.waitForFunction(() => window.__hydratedAt !== undefined, undefined, { timeout: 15000 });
+          }
+          await fill("retry@example.test"); await button.click();
+          await expect(message).toContainText("retry@example.test", { timeout: 15000 });
+          await expect(button).toBeEnabled();
+          expected.push({ item_id: "item_1", email: "retry@example.test", target_minor: 125 });
+          assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+          assert.deepEqual(errors, []);
+        } finally { await context.close(); }
+      });
+    } finally { await browser.close(); }
+  });
+});
+
 for (const app of ["nextjs", "tanstack-start"]) test(app + ": fresh native JS form serializes first submissions without readback prewarm", { timeout: 60000 }, async () => {
   await withApp(app, async ({ base, state, calls }) => {
     const browser = await chromium.launch({ headless: true, args: ["--renderer-process-limit=2"] });

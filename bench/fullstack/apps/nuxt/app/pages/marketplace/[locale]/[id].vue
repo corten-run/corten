@@ -24,17 +24,22 @@ if (error.value) throw createError({
 });
 if (!data.value) throw createError({ statusCode: 500, statusMessage: "Missing marketplace record", fatal: true });
 const view = computed(() => marketplaceView(data.value!.record, locale, new URLSearchParams(route.fullPath.split("?")[1] ?? "")));
+const pending = ref(false);
 async function submitAlert(event: Event) {
-  const form = new FormData(event.currentTarget as HTMLFormElement);
-  form.set("locale", locale);
-  data.value = { ...data.value!, message: "" };
+  if (pending.value) return;
+  pending.value = true;
   try {
+    const form = new FormData(event.currentTarget as HTMLFormElement);
+    form.set("locale", locale);
+    data.value = { ...data.value!, message: "" };
     const result = await $fetch<{ message: string }>(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, {
       method: "POST", body: form, retry: 0,
     });
     data.value = { ...data.value!, message: result.message };
   } catch {
     data.value = { ...data.value!, message: alertErrors[locale] };
+  } finally {
+    pending.value = false;
   }
 }
 useHead({ title: "Marketplace | Card Market", htmlAttrs: { lang: locale },
@@ -80,7 +85,7 @@ useHead({ title: "Marketplace | Card Market", htmlAttrs: { lang: locale },
       <form method="post" :action="view.path" @submit.prevent="submitAlert">
         <label>{{ view.words.email }} <input type="email" name="email" /></label>
         <label>{{ view.words.target }} <input type="text" inputmode="decimal" name="target_price" /></label>
-        <button type="submit">{{ view.words.submit }}</button>
+        <button type="submit" :disabled="pending">{{ view.words.submit }}</button>
       </form>
       <p class="marketplace__message">{{ data?.message }}</p>
     </section>
