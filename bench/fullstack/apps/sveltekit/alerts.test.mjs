@@ -32,12 +32,16 @@ test("localized targets produce safe positive integer minor units", () => {
   for (const locale of ["en-US", "fr-FR", "de-DE"]) {
     const local = (text) => locale === "en-US" ? text : text.replace(".", ",");
     for (const [text, minor] of [["70368744177664.01", 7036874417766401], ["90071992547409.91", Number.MAX_SAFE_INTEGER],
-      ["0.01", 1], ["1.01", 101], ["0001.20", 120]]) {
+      ["0.01", 1], ["1.01", 101], ["0001.20", 120], ["1.005", 101], ["2.005", 201], ["12.505", 1251],
+      ["9.995", 1000], ["0.005", 1], ["2.004999", 200], ["70368744177664.015", 7036874417766402],
+      ["90071992547409.914", Number.MAX_SAFE_INTEGER]]) {
       assert.equal(targetMinor(locale, local(text)), minor, text);
-      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(text);
+      const digits = String(minor).padStart(3, "0");
+      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(
+        digits.slice(0, -2) + "." + digits.slice(-2));
       assert.ok(alertMessage(locale, "Synthetic", "exact@example.test", local(text)).includes(price), text);
     }
-    for (const text of ["90071992547409.92", "1.005", "0.001", "1e2", "Infinity", "+1"]) {
+    for (const text of ["90071992547409.92", "90071992547409.915", "0.001", "0.004999", "1e2", "Infinity", "+1"]) {
       assert.equal(targetMinor(locale, local(text)), null, text);
     }
     assert.equal(targetMinor(locale, locale === "en-US" ? "1234.50" : "1234,50"), 123450);

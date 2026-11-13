@@ -19,7 +19,7 @@ function client() {
     return response;
   };
 }
-test("native HTTP targets preserve exact cents and reject unsafe or over-precision input", { timeout: 60000 }, async () => {
+test("native HTTP targets round exact decimals and reject unsafe or zero minor amounts", { timeout: 60000 }, async () => {
   const request = client(), expected = [];
   assert.deepEqual(await (await request("/api/alerts")).json(), []);
   const normalize = (text) => text.replace(/&nbsp;|&#160;|&#8239;|[\u00a0\u202f]/g, " ");
@@ -30,16 +30,21 @@ test("native HTTP targets preserve exact cents and reject unsafe or over-precisi
       body: new URLSearchParams({ email: "exact@example.test", target_price }),
     });
     for (const [target, minor] of [["70368744177664.01", 7036874417766401],
-      ["90071992547409.91", Number.MAX_SAFE_INTEGER], ["0.01", 1], ["1.01", 101]]) {
+      ["90071992547409.91", Number.MAX_SAFE_INTEGER], ["0.01", 1], ["1.01", 101],
+      ["1.005", 101], ["2.005", 201], ["12.505", 1251], ["9.995", 1000], ["0.005", 1],
+      ["2.004999", 200], ["70368744177664.015", 7036874417766402],
+      ["90071992547409.914", Number.MAX_SAFE_INTEGER]]) {
       const response = await post(local(target));
       assert.equal(response.status, 200);
       const body = normalize(await response.text());
-      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(target);
+      const digits = String(minor).padStart(3, "0");
+      const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(
+        digits.slice(0, -2) + "." + digits.slice(-2));
       assert.ok(body.includes(normalize(price)), `${locale} ${target}: confirmation must match stored cents`);
       expected.push({ item_id: "item_1", email: "exact@example.test", target_minor: minor });
       assert.deepEqual(await (await request("/api/alerts")).json(), expected);
     }
-    for (const target of ["90071992547409.92", "1.005", "0.001", "1e2", "Infinity", "+1"]) {
+    for (const target of ["90071992547409.92", "90071992547409.915", "0.001", "0.004999", "1e2", "Infinity", "+1"]) {
       const response = await post(local(target));
       assert.equal(response.status, 200);
       const body = await response.text();

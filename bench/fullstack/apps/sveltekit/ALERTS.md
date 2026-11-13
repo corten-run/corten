@@ -9,10 +9,13 @@ item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
 SvelteKit's enhance sends the native form action. The same action renders the full page without JavaScript.
 
-Targets are ungrouped locale-decimal inputs with at most two fractional digits.
-Extra precision is rejected rather than rounded. Parsing constructs the positive
-integer minor amount directly from the digits, rejects unsafe integers, and
-formats the confirmation from that same exact amount with native Intl.
+Targets are ungrouped locale-decimal inputs. Fractional cents round half away
+from zero using decimal digits, not binary-float dollar arithmetic. The rounded
+minor amount must be positive and a safe integer; the native Intl confirmation
+is formatted from that same exact stored amount. Thus 2.005 becomes 201 minor
+units, 12.505 becomes 1251, and a rounded zero or unsafe integer is rejected.
+Extra-fraction acceptance follows this app's pre-persistence native form;
+other adapters' existing precision policies are unchanged.
 
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
