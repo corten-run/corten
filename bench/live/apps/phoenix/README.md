@@ -56,7 +56,9 @@ Bounds are explicitly queue 2/history 4 or queue 1024/history 1025. Inventory
 reports actual BEAM memory/runtime/process counts, source/client/replay rows,
 in-flight work and store mailbox occupancy. Application queues are bounded;
 kernel socket bytes and native transport buffering are not observable through
-the LiveView public API and are marked unknown, not zero. This does not establish
+the LiveView public API and are marked unknown (`null`), not zero. Per-consumer
+cleanup requires explicit numeric zeroes or absence from the complete native
+consumer inventory; unknown counters cannot prove release. This does not establish
 TCP slow-reader bounds, restart durability, distributed operation or load readiness.
 
 Dependencies retain the fullstack Phoenix lock's existing versions. No new

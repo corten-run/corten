@@ -417,7 +417,7 @@ defmodule NativeLive.Store do
           ),
         stagedStatesLimitPerClient: 1,
         storeMailboxMessages: elem(Process.info(self(), :message_queue_len), 1),
-        nativeSocketBufferBytes: "not-observable-through-LiveView-public-API"
+        nativeSocketBufferBytes: nil
       }
     }
   end

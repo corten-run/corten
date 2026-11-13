@@ -50,6 +50,7 @@ defmodule NativeLive.StoreTest do
   end
 
   test "authoritative independent snapshots count actual reads without resetting rows" do
+    assert Store.call(:resources).inventory.nativeSocketBufferBytes == nil
     assert publish(1).seq == 1
 
     assert %{through: 1, rows: [%{"version" => 1}], work: %{reads: 1, rows: 1}} =
