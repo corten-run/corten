@@ -5,7 +5,8 @@ import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { once, EventEmitter } from "node:events";
 import { chromium } from "@playwright/test";
-import { PlatformLifecycle } from "./lifecycle.mjs";
+import { PlatformLifecycle, validatePlatformRetirement } from "./lifecycle.mjs";
+import { performance } from "node:perf_hooks";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 
 test("only the specific unique-context protocol rejection is terminal evidence", async () => {
@@ -38,7 +39,8 @@ test("CDP correlates real realms/frames/worker targets and WebSocket closure wit
     try {
       const page = await context.newPage(), cdp = await context.newCDPSession(page);
       journal = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession()); await journal.enable();
-      await cdp.send("Runtime.enable"); await cdp.send("Page.enable"); await cdp.send("Network.enable");
+      await journal.enableDomains();
+      await journal.startObservation(); journal.markApplicationStart();
       const audit = new ResourceAudit(page, cdp, true, journal), base = `http://127.0.0.1:${server.address().port}`;
       await page.goto(base + "/before?token=SECRET"); const before = await audit.checkpoint();
       assert.equal((await journal.probeRealm(before.realm)).outcome, "still-executable");
@@ -47,9 +49,10 @@ test("CDP correlates real realms/frames/worker targets and WebSocket closure wit
         const socket = new WebSocket(location.origin.replace("http:", "ws:") + "/socket?token=SECRET");
         socket.onopen = () => socket.close(); socket.onclose = () => resolve(); socket.onerror = reject;
       }));
-      await page.goto(base + "/after"); const after = await audit.checkpoint();
+      const retiredAt = performance.now(); await page.goto(base + "/after"); const after = await audit.checkpoint();
       const terminal = await journal.probeRealm(before.realm); assert.equal(terminal.outcome, "context-not-found", JSON.stringify(terminal));
       assert.equal((await journal.probeRealm("unobserved-realm")).outcome, "unavailable");
+      await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
       const snapshot = journal.snapshot(), old = snapshot.realms.find((r) => r.realm === before.realm), next = snapshot.realms.find((r) => r.realm === after.realm);
       assert.ok(old && next); assert.notEqual(old.uniqueId, next.uniqueId); assert.equal(old.frame, next.frame); assert.notEqual(old.loader, next.loader);
       assert.ok(snapshot.events.some((e) => e.event === "Runtime.executionContextDestroyed" && e.context === old.context
@@ -58,6 +61,11 @@ test("CDP correlates real realms/frames/worker targets and WebSocket closure wit
       assert.ok(created); assert.ok(snapshot.events.some((e) => e.event === "Network.webSocketHandshakeResponseReceived" && e.request === created.request && e.status === 101));
       assert.ok(snapshot.events.some((e) => e.event === "Network.webSocketClosed" && e.request === created.request));
       assert.ok(snapshot.events.some((e) => e.event === "Target.targetCreated" && e.type === "worker"));
+      const proof = validatePlatformRetirement(snapshot, { realm: before.realm, retiredAt, observationMs: 25 });
+      assert.equal(proof.outcome, "unknown"); assert.ok(proof.reasons.some((r) => r.includes("worker")));
+      assert.ok(proof.sockets.some((s) => s.closed), "Native closed socket remains in terminal ledger even when worker coverage blocks proof");
+      const unclosed = structuredClone(snapshot); unclosed.events = unclosed.events.filter((e) => e.event !== "Network.webSocketClosed");
+      assert.ok(validatePlatformRetirement(unclosed, { realm: before.realm, retiredAt, observationMs: 25 }).reasons.some((r) => r.includes("no native close receipt")));
       assert.equal(snapshot.coverage.sharedWorkerOwnership, false); assert.equal(snapshot.coverage.serverSocketPeerClosure, false);
       assert.ok(!JSON.stringify(snapshot).includes("SECRET"));
       const retired = audit.retired(before, after); assert.equal(retired.owned, null); assert.equal(retired.probeAvailable, false);

@@ -129,7 +129,10 @@ export function nativeDOM() {
   }
   return { scriptPaths, nextPage, turbo, turboDisabled, components: [...new Set(wire.map((el) => el.getAttribute("wire:id")))],
     hasMetaCsp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy" i]')),
-    preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, path: new URL(el.href).pathname })),
+    preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, path: new URL(el.href).pathname, sameOrigin: new URL(el.href).origin === location.origin })),
+    assets: [...document.querySelectorAll('link[rel~="stylesheet"][href],img[src]')].map((el) => ({
+      type: el.localName === "link" ? "Stylesheet" : "Image", path: new URL(el.localName === "link" ? el.href : el.currentSrc || el.src).pathname,
+      sameOrigin: new URL(el.localName === "link" ? el.href : el.currentSrc || el.src).origin === location.origin })),
     markers: { corten: /"corten"\s*:/.test(inline), nuxt: Boolean(document.getElementById("__NUXT_DATA__")),
       reactRouter: /__reactRouter/.test(inline), sveltekit: /__sveltekit/.test(inline), astro: Boolean(document.querySelector('meta[name="generator"][content^="Astro"]')) || scriptPaths.some((s) => /^\/_astro\/ClientRouter\.astro_/.test(s)),
       tanstack: /\$TSR|__TSR|tsr-stream/.test(inline), leptos: scriptPaths.some((s) => /leptos|hydrate/.test(s)) || /\.wasm|wasm_bindgen/.test(inline) },

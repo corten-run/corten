@@ -227,8 +227,13 @@ qualification; a browser context closing is not that proof.
 contexts, frame/loader commits, target discovery and page WebSocket/EventSource receipts.
 The native journal is frozen before harness context closure; the post-harness journal is
 separate. Worker network coverage, shared-worker ownership and server peer socket cleanup
-remain explicitly unproved. See [the separate evidence proposal](LIFECYCLE.md); no oracle
-variant or platform-destruction exemption is implemented.
+remain explicitly unproved. The v2 journal captures initial/terminal target inventories,
+continuous runtime-context lifetimes, bounded terminal probes and actual no-JS parser/CSP
+provenance. The separate pure `validatePlatformRetirement` and `classifyNoJSRequests` exports
+produce raw diagnostic proofs only, never a local qualification waiver. Workers, unknown
+ownership/coverage or missing terminal receipts block the platform predicate. See
+[the exact interfaces and evidence proposal](LIFECYCLE.md); no shared-oracle variant or
+platform-destruction exemption is accepted here.
 
 For a retained same-realm root, `retired.mjs` freshly extracts text, rows, forms and component
 IDs from that actual detached node. It never reattaches the root or copies the previous page
