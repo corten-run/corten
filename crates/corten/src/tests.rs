@@ -10157,6 +10157,10 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let routes = Table::new()
         .route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(echo) }))
         .route(
+            "/ws-400",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::BAD_REQUEST)) }),
+        )
+        .route(
             "/tunnel",
             get(|upgrade: Upgrade| async move {
                 let mut headers = http::HeaderMap::new();
@@ -10224,33 +10228,71 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let (head, _) = handshake("/ws", "chat", "").await;
     assert!(head.starts_with("http/1.1 400"), "only a WebSocket handshake is accepted as one: {head}");
 
-    for path in ["/ws", "/either", "/api/ws"] {
-        for accept in ["text/html", "application/json"] {
-            let refused = raw_get(
-                addr,
-                path,
-                &format!("connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\naccept: {accept}\r\n"),
-            )
-            .await;
-            let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
-            assert!(head.starts_with("http/1.1 426"), "{refused}");
-            assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
-            assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
-            assert!(
-                head.lines()
-                    .filter_map(|line| line.strip_prefix("connection: "))
-                    .flat_map(|line| line.split(','))
-                    .any(|token| token.trim() == "upgrade"),
-                "{refused}"
-            );
-            if path == "/api/ws" || accept == "application/json" {
-                assert!(head.contains("content-type: application/problem+json"), "{refused}");
-            }
-            if path == "/ws" && accept == "text/html" {
-                assert!(refused.contains("Something went wrong"), "the custom error page keeps the headers: {refused}");
+    // Another version, or none (taken as one it does not support): a 426 that says which.
+    for version in ["sec-websocket-version: 8\r\n", ""] {
+        for path in ["/ws", "/either", "/api/ws"] {
+            for accept in ["text/html", "application/json"] {
+                let refused = raw_get(
+                    addr,
+                    path,
+                    &format!("connection: upgrade\r\nupgrade: websocket\r\n{version}sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\naccept: {accept}\r\n"),
+                )
+                .await;
+                let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+                assert!(head.starts_with("http/1.1 426"), "{refused}");
+                assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+                assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+                assert!(connection_upgrade(&head), "{refused}");
+                if path == "/api/ws" || accept == "application/json" {
+                    assert!(head.contains("content-type: application/problem+json"), "{refused}");
+                }
+                if path == "/ws" && accept == "text/html" {
+                    assert!(refused.contains("Something went wrong"), "the custom error page keeps the headers: {refused}");
+                }
             }
         }
     }
+    // A handler that answers it at another status still says which version (RFC 6455, 4.2.2),
+    // but only a 426 names a protocol to switch to.
+    let refused = raw_get(
+        addr,
+        "/ws-400",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 400"), "{refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+
+    // The connection a 426 went out on (with `Connection: upgrade`) serves the next request.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: keep-alive, upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let (head, _) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 426") && connection_upgrade(&head), "{head}");
+    stream.write_all(b"GET /either HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 200") && body == "not a socket", "{head}{body}");
+
+    // HTTP/1.0 cannot switch, so its `Upgrade` is ignored (RFC 9110, 7.8): `/either` answers its
+    // page, and a route that only switches a plain 400.
+    let http10 = |path: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET {path} HTTP/1.0\r\nhost: localhost\r\nconnection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+    let answer = http10("/either").await;
+    assert!(answer.starts_with("HTTP/1.") && answer.contains(" 200 ") && answer.ends_with("not a socket"), "{answer}");
+    let answer = http10("/ws").await;
+    assert!(answer.contains(" 400 ") && !answer.to_ascii_lowercase().contains("\r\nupgrade:"), "{answer}");
 
     for path in ["/ws", "/tunnel"] {
         let plain = raw_get(addr, path, "").await;
@@ -10285,6 +10327,73 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     assert!(head.starts_with("http/1.1 101") && head.contains("x-upstream: yes") && head.contains("upgrade: remote"), "{head}");
     assert!(echoes(stream).await);
 
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Whether a lowercased response head has `upgrade` among its `Connection` tokens.
+fn connection_upgrade(head: &str) -> bool {
+    head.lines()
+        .filter_map(|line| line.strip_prefix("connection: "))
+        .flat_map(|line| line.split(','))
+        .any(|token| token.trim() == "upgrade")
+}
+
+/// One answer read from a kept-alive connection: its lowercased head and its body, which must
+/// have a `Content-Length`.
+async fn read_answer(stream: &mut tokio::net::TcpStream) -> (String, String) {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        assert_eq!(stream.read(&mut byte).await.unwrap(), 1, "the connection closed: {}", String::from_utf8_lossy(&head));
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+    let length: usize = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length: "))
+        .unwrap_or_else(|| panic!("no content-length: {head}"))
+        .trim()
+        .parse()
+        .unwrap();
+    let mut body = vec![0u8; length];
+    stream.read_exact(&mut body).await.unwrap();
+    (head, String::from_utf8(body).unwrap())
+}
+
+/// An API's own error shape (`Api::errors`) keeps a 426's headers.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape() {
+    use crate::upgrade::Upgrade;
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::new()).api::<ApiRoot>(|api| {
+        api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })))
+            .errors(|status, message| ShapedError {
+                r#type: "error",
+                error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+            })
+    });
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let refused = raw_get(
+        addr,
+        "/api/ws",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let (head, body) = refused.split_once("\r\n\r\n").unwrap();
+    let head = head.to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 426"), "{refused}");
+    assert!(head.lines().any(|line| line == "content-type: application/json"), "{refused}");
+    assert!(body.starts_with(r#"{"type":"error","error":{"code":426,"#), "the API's own shape: {refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+    assert!(connection_upgrade(&head), "{refused}");
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }

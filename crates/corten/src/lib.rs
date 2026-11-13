@@ -1371,10 +1371,12 @@ impl IntoResponse for Error {
                 Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
             }
             Err(source) => {
-                let wrong_version = self.status == StatusCode::UPGRADE_REQUIRED && source.is::<upgrade::WrongVersion>();
+                // A second error that carries headers should share one mechanism with `Refused`
+                // and `WrongVersion`, not add another downcast here.
+                let wrong_version = self.status.is_client_error() && source.is::<upgrade::WrongVersion>();
                 let mut res = Error { status: self.status, source }.answer();
                 if wrong_version {
-                    upgrade::WrongVersion::headers(res.headers_mut());
+                    upgrade::WrongVersion::headers(self.status, res.headers_mut());
                 }
                 res
             }

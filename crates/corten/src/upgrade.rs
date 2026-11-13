@@ -18,6 +18,7 @@ use http::HeaderName;
 use http::HeaderValue;
 use http::Method;
 use http::StatusCode;
+use http::Version;
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -85,21 +86,29 @@ impl std::fmt::Display for WrongVersion {
 impl std::error::Error for WrongVersion {}
 
 impl WrongVersion {
-    pub(crate) fn headers(headers: &mut HeaderMap) {
-        // RFC 6455, 4.2.2 and 4.4; a 426 also needs Upgrade, with its Connection option
-        // (RFC 9110, 15.5.22 and 7.8). Only `websocket` knows which protocol to name.
+    /// The headers its refusal at `status` carries: the version this server speaks, whatever
+    /// the status (RFC 6455, 4.2.2 and 4.4), and on a 426 the `Upgrade` it must have, with its
+    /// `Connection` option (RFC 9110, 15.5.22 and 7.8). Only `websocket` knows which protocol
+    /// to name.
+    pub(crate) fn headers(status: StatusCode, headers: &mut HeaderMap) {
         headers.insert(header::SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13"));
-        headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
-        headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+        if status == StatusCode::UPGRADE_REQUIRED {
+            headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+            headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+        }
     }
 }
 
 /// Whether a request asks to switch protocols: a `GET` with `Upgrade` and `upgrade` among its
-/// `Connection` tokens.
-pub(crate) fn asks(method: &Method, headers: &HeaderMap) -> bool {
-    *method == Method::GET
-        && headers.contains_key(header::UPGRADE)
-        && headers
+/// `Connection` tokens, over HTTP/1.1 or later. An HTTP/1.0 request's `Upgrade` is ignored
+/// (RFC 9110, 7.8), so it is answered as one that does not ask; an HTTP/2 request goes on to
+/// `Upgrade::take`, which says its connection cannot switch.
+pub(crate) fn asks(parts: &Parts) -> bool {
+    parts.method == Method::GET
+        && parts.version >= Version::HTTP_11
+        && parts.headers.contains_key(header::UPGRADE)
+        && parts
+            .headers
             .get_all(header::CONNECTION)
             .iter()
             .filter_map(|v| v.to_str().ok())
@@ -111,10 +120,12 @@ impl<S: Send + Sync> FromRequestParts<S> for Upgrade {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
-        if !asks(&parts.method, &parts.headers) {
-            return Err(Error::new("this route switches protocols: send a GET with Connection: upgrade and an Upgrade header")
-                .with_status(StatusCode::BAD_REQUEST)
-                .into_response());
+        if !asks(parts) {
+            return Err(Error::new(
+                "this route switches protocols: send an HTTP/1.1 GET with Connection: upgrade and an Upgrade header",
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+            .into_response());
         }
         Upgrade::take(parts).map_err(IntoResponse::into_response)
     }
@@ -126,7 +137,7 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for Upgrade {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Option<Self>, Response> {
-        if !asks(&parts.method, &parts.headers) {
+        if !asks(parts) {
             return Ok(None);
         }
         Upgrade::take(parts).map(Some).map_err(IntoResponse::into_response)
@@ -170,8 +181,9 @@ impl Upgrade {
 
     /// Accepts a WebSocket handshake (RFC 6455): a 101 with its `Sec-WebSocket-Accept`, and
     /// `run` on the connection once it has switched. A handshake that is not a WebSocket's is a
-    /// 400; one not version 13 is a 426 with `Sec-WebSocket-Version: 13`, `Upgrade: websocket`
-    /// and `Connection: upgrade`, including on the app's error page.
+    /// 400; one not version 13, or with no version, is a 426 with `Sec-WebSocket-Version: 13`,
+    /// `Upgrade: websocket` and `Connection: upgrade`, including on the app's error page. Given
+    /// another 4xx with [`Error::with_status`], it keeps only `Sec-WebSocket-Version: 13`.
     pub fn websocket<F, Fut>(self, run: F) -> crate::Result<Switch>
     where
         F: FnOnce(Stream, Signal) -> Fut + Send + 'static,
