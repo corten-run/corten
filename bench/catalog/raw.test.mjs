@@ -4,13 +4,17 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { syncBuiltinESMExports } from "node:module";
 import { allApps } from "../fullstack/apps.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, parseArgs, phases, readLoad, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog } from "./report.mjs";
 import { rawSchema, replayCatalog, containerEvidence } from "./raw.mjs";
-import { summarizeSamples } from "./stats.mjs";
+import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
@@ -63,13 +67,16 @@ function fixture() {
       put(`${raw}/${phase}.json`, load); put(`${raw}/${phase}.log`, "");
       const metrics = readLoad(load);
       if (phase !== "warmup") {
-        const samples = Object.fromEntries(names.map((name) => [name, [{ t: 100, cpu: 99, mem: 8 }, { t: 101, cpu: 99, mem: 8 }]]));
+        const index = phases.indexOf(phase), before = 100 + index * 60000000;
+        const startedAt = Date.parse("2026-11-07T16:00:01Z") + index * 70000;
+        const finishedAt = startedAt + 60000;
+        const samples = Object.fromEntries(names.map((name) => [name, [{ t: startedAt + 100, cpu: 99, mem: 8 }, { t: startedAt + 101, cpu: 99, mem: 8 }]]));
         const stats = Object.fromEntries(names.map((name) => [name, summarizeSamples(samples[name])]));
         put(`${raw}/${phase}-stats.log.json`, { samples, summary: stats });
         put(`${raw}/${phase}-stats.log`, names.flatMap((Name) => samples[Name].map(() => JSON.stringify({ Name, CPUPerc: "99%", MemUsage: "8MiB / 1GiB" }))).join("\n") + "\n");
         put(`${raw}/${phase}-cpu.json`, Object.fromEntries(names.map((n) => [n, { usec: 55000000 }])));
         put(`${raw}/${phase}-cpu-counters.json`, { ids: Object.fromEntries(names.map((n) => [n, "c".repeat(64)])),
-          before: Object.fromEntries(names.map((n) => [n, 100])), after: Object.fromEntries(names.map((n) => [n, 55000100])) });
+          startedAt, finishedAt, before: Object.fromEntries(names.map((n) => [n, before])), after: Object.fromEntries(names.map((n) => [n, before + 55000000])) });
         Object.assign(metrics, stats[appName], { cpuUsec: 55000000, perCpuSecond: 6000 / 55, upstream: profile.source === "api"
           ? { ...stats[upstreamName], cpuUsec: 55000000, highCpu: true, interpretation: "single-process upstream; a busy API may be the throughput limit, not the app" } : null });
       }
@@ -137,4 +144,36 @@ test("native container receipt retains measured identity/configuration but no un
   assert.deepEqual(containerEvidence({ Id: "id", Image: "image", State: { StartedAt: "start" }, HostConfig: { NanoCpus: 1e9, CpusetCpus: "0", Memory: 1024 },
     Config: { Env: ["CATALOG_SOURCE=fixture", "UNRELATED=private"], Labels: { "run.corten.catalog": "run" } } }),
   { id: "id", imageId: "image", startedAt: "start", quotaNanoCpus: 1e9, cpuset: "0", memoryBytes: 1024, source: "fixture", runId: "run" });
+});
+
+test("native cumulative counters and sample clocks retain cross-phase chronology", () => {
+  const root = "fixture/corten/p1-page";
+  const f = fixture();
+  const counter = JSON.parse(f.files.get(`${root}/sat64-cpu-counters.json`));
+  for (const name of Object.keys(counter.before)) { counter.before[name] += 1e12; counter.after[name] += 1e12; }
+  f.put(`${root}/sat64-cpu-counters.json`, counter);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), "same container's cumulative CPU cannot move backwards in the following phase");
+  const g = fixture();
+  const samples = JSON.parse(g.files.get(`${root}/sat64-stats.log.json`));
+  for (const rows of Object.values(samples.samples)) for (const row of rows) row.t = 1;
+  g.put(`${root}/sat64-stats.log.json`, samples);
+  assert.throws(() => replayCatalog(g.summary, g.reader, g.commit), "sample time outside measured window cannot verify");
+});
+
+test("native sampler rejects a trailing incomplete record and retains its bytes", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "catalog-stats-framing-"));
+  const old = childProcess.spawn;
+  const fake = new EventEmitter(); fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
+  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  childProcess.spawn = () => fake; syncBuiltinESMExports();
+  try {
+    const path = join(folder, "stats.log");
+    const sampler = sampleStats(["app"], path, 10);
+    fake.stdout.write('{"Name":"app","CPUPerc":"50%","MemUsage":"8MiB / 1GiB"}\n{"Name":');
+    await assert.rejects(sampler.stop(), /incomplete.*record/);
+    assert.ok(readFileSync(path, "utf8").endsWith('{"Name":'), "failed evidence is retained");
+  } finally {
+    childProcess.spawn = old; syncBuiltinESMExports();
+    assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true });
+  }
 });

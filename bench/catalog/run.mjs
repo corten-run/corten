@@ -191,10 +191,11 @@ async function load(name, target, phase, seconds, raw) {
   let runError;
   let stats;
   let identities = {};
+  let startedAt, finishedAt;
   try {
     await owned(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...env,
       k6Image, "run", "--quiet", "--summary-export", "/tmp/catalog-summary.json", "/bench/catalog/load.js"], container);
-    if (samples.length) { const observed = await cpu(samples); before = observed.values; identities = observed.ids; }
+    if (samples.length) { startedAt = Date.now(); const observed = await cpu(samples); before = observed.values; identities = observed.ids; }
     sampler = samples.length ? sampleStats(samples, join(raw, `${phase}-stats.log`), seconds + 35) : null;
     await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
   } catch (e) { runError = e; }
@@ -205,6 +206,7 @@ async function load(name, target, phase, seconds, raw) {
     const observed = await cpu(samples);
     assert.deepEqual(observed.ids, identities, "CPU counter container identity changed");
     after = observed.values;
+    finishedAt = Date.now();
   } }
   catch (e) { runError ??= e; }
   try {
@@ -213,7 +215,7 @@ async function load(name, target, phase, seconds, raw) {
     catch (e) { runError ??= e; }
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
-    if (samples.length) writeFileSync(join(raw, `${phase}-cpu-counters.json`), JSON.stringify({ ids: identities, before, after }, null, 2));
+    if (samples.length) writeFileSync(join(raw, `${phase}-cpu-counters.json`), JSON.stringify({ ids: identities, before, after, startedAt, finishedAt }, null, 2));
     if (runError) throw runError;
     const metrics = readLoad(JSON.parse(readFileSync(output, "utf8")));
     if (samples.length) {

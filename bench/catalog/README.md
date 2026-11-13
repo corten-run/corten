@@ -92,8 +92,10 @@ Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
 The native producer preserves the fixture, checker receipts, native build/image
 receipts, cold probe and container identity, k6 summaries, before/after cgroup
 counters, raw Docker memory/CPU samples and a final owned-resource query. The
-validator checks the complete registry matrix and recomputes every saved metric
-and aggregate. Exit 0 means native evidence replay passed; exit 2 means required
+validator checks the complete registry matrix, phase clock windows, cumulative
+counter continuity, and recomputes every saved metric and aggregate. Truncated
+stats framing fails in the producer as well as replay, preserving its raw bytes.
+Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
 This is not host-isolation or independent source-audit approval. Those remain
 separate campaign gates. Old summaries remain reportable, but cannot acquire the

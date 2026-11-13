@@ -56,6 +56,7 @@ export function sampleStats(names, file, seconds) {
       await done;
       clearTimeout(kill);
       writeFileSync(file, raw);
+      if (buffer.length) failed("stats ended with an incomplete JSON record");
       if (errors.length) throw Object.assign(new Error(errors.map((e) => e.message).join("; ")), { errors });
       const summary = Object.fromEntries(names.map((name) => [name, summarizeSamples(samples[name])]));
       writeFileSync(`${file}.json`, JSON.stringify({ summary, samples }, null, 2));
