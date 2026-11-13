@@ -1,8 +1,17 @@
 # Grouped cloud controller checkpoint
 
 Row 7 checkpoint, not official-run readiness. Expected USD is unknown; no price or
-runtime estimate is supplied. No cloud executable, allocation, deletion, restart,
+runtime estimate is supplied. No real-account provider operation, allocation, deletion, restart,
 publication, schedule change or shared-state mutation was performed for this slice.
+
+**Current blocker:** independent exact-head review found that a saved doctl
+context name plus pre/post account probes does not freeze
+credentials. Rebinding and restoring the named context between probes can target
+a foreign account. Follow-up exact-head review of the in-memory repair found that
+native HTTPS diagnostics could emit its Authorization value. The diagnostic
+preflight repair below awaits fresh exact-head independent review; no P1 clearance
+or cloud-action approval is claimed.
+The separate mixed-inbox/inspection bridge below does not repair or waive it.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
@@ -12,10 +21,12 @@ deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
 
 **Production is operator gated, not a fake-only transport.** `cloud-production.mjs`
-composes the reviewed lifecycle with actual bounded doctl/OpenSSH subprocesses;
+composes the lifecycle with bounded read-only doctl credential consumption,
+fixed-endpoint DigitalOcean REST and OpenSSH subprocesses;
 the `droplet.mjs` CLI delegates to that same composition. Direct core imports keep
 their default cloud-execution guard so they cannot accidentally bypass approval.
-No cloud executable has been invoked in this development session. There is no
+Only synthetic configurations and a loopback fake API are used for native credential
+checks; no real account store or provider operation is used. There is no
 hidden launcher: an approved detach provisions once, verifies uploads, starts the
 fixed systemd job and returns. Do not approve any action until the new transport
 and native producer/OS/validator closure have passed independent review and merged.
@@ -29,7 +40,8 @@ The program separately checks the merged Git ancestry; it cannot authenticate wh
 performed a human review. Never feed the preview hash back automatically.
 
 An approval subject binds the loaded controller's exact committed source, round,
-mode, measured commit/SSH-key ID for detach, absolute state path, exact saved state
+mode, measured commit/SSH-key ID and account UUID/named doctl context for detach,
+absolute state path and its verified physical root, exact saved state
 bytes for collect/delivery, and exact audit delivery bytes and approved audit
 subject for delivery. Preview uses local Git and read-only files only; it creates
 no state and contacts no provider. It returns 2 with explicit missing integration
@@ -44,8 +56,8 @@ collector checkout. This compatibility limit must be revisited with the agreed
 intrinsic API, not misreported as failed native evidence after allocation.
 
 ```text
-node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --state-dir ABSOLUTE_LOCAL_ROOT --print-approval
-node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --state-dir ABSOLUTE_LOCAL_ROOT --approve-reviewed-merged-ready EXACT_ACTION_SHA256
+node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --print-approval
+node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --approve-reviewed-merged-ready EXACT_ACTION_SHA256
 ```
 
 Those are the eventual operator interface, not permission to run now. Collection
@@ -75,7 +87,11 @@ returning a completed action's result.
 The bounded subprocess itself remains synchronous and is not interrupted by the
 controller's signal handler: an in-flight create/start/delete may already have
 happened and cannot safely be undone. An acquired operation lock stays held until that
-local call settles or reaches its existing timeout. At the post-call checkpoint,
+local call settles. A timeout, signal exit, output overflow or spawn exception does
+not prove descendant termination: the operation lock and any acquired root launch
+lock remain durable on every platform. No further command/retry is issued, even
+for an allow-failure call. Operator recovery must establish that the entire local
+owned process tree is gone before touching those locks. At the post-call checkpoint,
 cancellation rejects with exit 2, retains the durable intent/state/evidence and
 issues no recovery mutation or reconciliation command. The host may already be
 absent if deletion was in flight; it is never reported confirmed by a cancelled
@@ -109,16 +125,19 @@ cannot be interrupted by an event-loop timer; the default worker avoids that lim
 
 Options are exact: `round` (`r17` onward), absolute local `stateDir`, and one mode:
 
-1. `detach:true`, full 40-character `commit`, numeric `sshKey`.
+1. `detach:true`, full 40-character `commit`, numeric `sshKey`, stable account UUID
+   `accountId` and explicit named doctl `context`. Account identity is `team:UUID`
+   when the provider reports a team, otherwise `user:UUID`; UUIDs are opaque
+   provider identifiers, not assumed to be RFC-4122 strings.
 2. `collect:true`, using only the saved reservation identity.
 3. Absolute `deliverAudit` file, exact `campaign` ID, explicit `approveSubject` SHA256.
 
 The core mode grammar, with a production approval/preview option appended:
 
 ```text
-rN --detach --commit SHA --ssh-key ID --state-dir ABSOLUTE_LOCAL_ROOT
+rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT
 rN --collect --state-dir SAME_ROOT
-rN --deliver-audit ABSOLUTE_FILE --campaign rN-TOKEN --approve-subject SHA256 --state-dir SAME_ROOT
+rN --deliver-audit ABSOLUTE_FILE --audit-group json-api|mixed-production --campaign rN-TOKEN --approve-subject SHA256 --state-dir SAME_ROOT
 ```
 
 Exit/result conventions are 3 for a single running observation or delivered audit,
@@ -126,8 +145,15 @@ Exit/result conventions are 3 for a single running observation or delivered audi
 2 for CLI errors/uncertainty with no further host mutation. A lost deletion response
 can mean the host is already absent, not that it was definitely preserved. API failures reject;
 the caller maps them to 2 using `publicError()`, never a raw exception stack or
-provider output. Exit 0 is reserved for a future strictly valid reviewed contract;
-**this checkpoint cannot return it**. `fullGroupQualified` must always be false.
+provider output. Exit 0 means complete intrinsic native replay plus all independent
+controller ownership, terminal, archive and confirmed-deletion checks, not external
+qualification or readiness. `fullGroupQualified` must always be false. A verified
+inspection must use the exact current schema, complete ordered registry selection,
+all native-validated groups/app outcomes, no blockers/pending roots, sealed manifest,
+observed terminal command lifecycle and native CLI marker 0. Complete sealed
+blocked/failed inspection requires marker 1; marker 2 or disagreement preserves
+the host. A failed framework outcome remains failed even within intrinsically
+complete apparatus evidence; it does not become comparison-eligible.
 
 ## Reservation And Ownership
 
@@ -187,23 +213,65 @@ Production preflight checks both the supplied state path and its physical
 resolution before approval output or provider access. Existing directory aliases
 are resolved even when trailing state directories do not yet exist; a plain alias
 cannot hide expansion characters in its physical parent. Ordinary aliases remain
-usable for preview and launch. The transport repeats its known_hosts-path check
+usable for preview, launch and collection. Saved state is read through the verified
+physical root, which is included in approval and passed unchanged to the core.
+Retargeting an alias invalidates approval. The transport repeats its known_hosts-path check
 as a final guard.
 Production and the core share a bounded physical-root walk: a missing drive/root
 refuses when no parent remains, and permission, non-directory or symlink-loop
 errors refuse immediately rather than being treated as missing directories.
 Preview never creates missing directories; core setup may create normal new ones.
-Only doctl inherits the existing DigitalOcean token; SSH/SCP may use the existing
+No control child inherits a DigitalOcean token override. SSH/SCP may use the existing
 agent/default keys. No credential is accepted in CLI arguments or remote scripts.
-The provider endpoint is fixed and doctl HTTP retries are explicitly zero, so its
-429/5xx retry policy cannot repeat an ambiguous create/delete. The commands follow
-[doctl's documented flags](https://docs.digitalocean.com/reference/doctl/reference/compute/droplet/create/)
-and [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
+The inherited noncredential config locations are captured once per action. After
+approval and under the lifecycle lock, `doctl auth token --context NAMED_CONTEXT`
+consumes the selected existing stored credential exactly once through private,
+bounded stdout capture. It does not switch/default a context or copy its config.
+All subsequent provider calls use that same private in-memory value, never another
+doctl config read, token environment/argument, persisted token or config snapshot.
+The token command does not refresh OAuth state; expiration or unavailable identity
+fails closed rather than reloading mutable credentials mid-action.
+Before and after every provider command, the account endpoint must report exactly the
+saved scoped account UUID: `team.uuid` when present, otherwise the user's `uuid`.
+Switching teams under the same login is therefore an account change. Malformed
+or missing team identity never falls back to user identity. A mismatch or
+unavailable identity refuses further effects
+and cannot confirm absence/deletion. The UUID and context are non-secret approval
+and reservation fields; credentials remain in their existing store and private
+process memory, never printed or persisted by this controller. Legacy reservations
+without this binding fail closed and need operator inspection, not automatic adoption.
+Named-context consumption follows [doctl's auth-token command](https://docs.digitalocean.com/reference/doctl/reference/auth/token/)
+and its [read-only implementation](https://github.com/digitalocean/doctl/blob/main/commands/auth.go).
+Account/team fields follow [DigitalOcean's account schema](https://github.com/digitalocean/openapi/blob/main/specification/resources/account/models/account.yml).
+Before consuming any credential, the provider refuses configured `NODE_DEBUG`,
+`NODE_DEBUG_NATIVE` or TLS key logging, active inspection, and enabling native
+trace/key-log/heap/profile/report options from `NODE_OPTIONS` or CLI flags.
+It checks Node's cached HTTP/HTTPS debug enablement as well: deleting an environment
+variable after Node cached it is not a safety boundary. The same check runs before
+every native HTTPS construction, without changing process-wide diagnostics or
+trying to redact their output after a secret was exposed. Inactive diagnostic
+parameter defaults and ordinary non-diagnostic Node options remain usable.
+`NODE_OPTIONS` is decoded with Node's own double-quote/backslash argument rules,
+so quoting or escaping an enabling option cannot hide it from the preflight.
+This follows [Node's documented diagnostic controls](https://nodejs.org/docs/latest-v24.x/api/cli.html#node_debugmodule).
+
+`cloud-provider.mjs` supports only account lookup, complete bounded droplet census,
+one exact-host create, matching create-action polling and one exact-ID delete.
+The HTTPS origin is fixed, certificate verification is explicit, redirects are
+never followed and no HTTP error/network failure is retried. Census pagination
+must remain on the fixed endpoint, contain unique IDs and match its stable total;
+an incomplete census cannot prove absence. Create waits only through bounded
+read-only polling of its exact droplet/action identity, never a repeated POST.
+Responses have a body bound and whole-request deadline; in-flight timeout,
+cancellation or malformed responses conservatively retain lifecycle locks.
+The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
+SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
 
 No tool version/configuration, agent-key availability, network, provisioning,
 Linux systemd behavior or image-install supply chain has been exercised here.
-Timeouts force termination of the local CLI child only, never of the remote unit.
+Timeouts force termination of the local CLI child only, never prove descendant
+termination, and retain the lifecycle locks as described above; they never stop the remote unit.
 Synchronous control calls cannot process an in-process cancellation callback until
 the current bounded call returns; cancellation is checked before subsequent calls.
 An SSH timeout never proves a remote command stopped. No recovery path stops a
@@ -257,18 +325,26 @@ the preserved bytes and confirm that exact ID is absent; it never repeats an
 uncertain deletion while that ID is still present. No name-based fallback,
 foreign-host SSH, resource restart or blanket cleanup exists.
 
-## Independent JSON Audit
+## Independent Native Audits
 
 Audit delivery is a separate live-owned-host operation, never collection of a
 review-waiting host. An explicit operator-approved exact subject hash is a separate
 option; a receipt's `decision:approved` cannot grant authority. The caller must
-obtain the actual independent review. The controller checks the full 36-receipt
-envelope, saves exact bytes and durable one-attempt intent, verifies the live
+obtain the actual independent review. `--audit-group` selects one of the two fixed
+native contracts; omission retains JSON compatibility, never schema-driven routing.
+JSON receipt cells come from its native descriptor; mixed receipts follow the
+ordered native registry apps, with no hardcoded counts. The controller saves exact
+bytes and one durable attempt per group in `auditIntents`; a legacy `auditIntent`
+still consumes the JSON attempt. It verifies the live
 campaign journal/plan/reservation/subject, and recomputes the subject's canonical
-body hash. It uploads a private mode-0600 staging file outside the campaign root.
+body hash. The requested group, waiting inbox and subject field must all match.
+It uploads a private mode-0600 group-specific staging file outside the campaign root.
 Immediately before publication it rechecks the live unit and exact waiting subject.
 The fixed program uses bounded GNU `mv --no-clobber` for atomic same-filesystem
-inbox publication, and checks that staging disappeared and inbox bytes still match.
+inbox publication into `json-audit-delivery.json` or `mixed-audit-delivery.json`,
+and checks that staging disappeared and inbox bytes still match. Delivered receipt
+identities must exactly match that independently approved live subject. JSON
+decisions/hashes cannot choose a group, path, module or grant their own authority.
 An existing/racing inbox is never overwritten. Failure preserves the attempt and
 bytes, not automatic retry authority. The native live process owns full receipt
 and source/image validation; this transport never resumes it from serialized JSON.
@@ -276,8 +352,23 @@ Real OS behavior of that publication step remains an integration/host check.
 
 ## Readiness And Verification
 
-Base read: `41a84f57273b8c1c40e5822e815fc3e94edc6df0`. Historical campaign source read:
-`69bc0ffc62ec73ad4b4671ee57ae3e47a2afdead`. That API unconditionally returns
+The current bridge was read with `git show` against the parent-integrated core
+Git tree `sha1:b37727d761c0726af36d41e77d6693c59cb0033c`; no core files were
+imported into this cloud-owned branch. Exact inspected LF blob bytes are:
+
+- `isolated/campaign-entry.mjs`: `sha256:b99b5e44231ac7cf7c268a30684d3d403468b264860577d4cc63ccd1d92ab5b0`.
+- `isolated/campaign-verify.mjs`: `sha256:1218b873813508491a5ea05290e3152909abbde33373d9beaba80c90f190eb4d`.
+- `isolated/json-staging.mjs`: `sha256:12127bb9e95034ebbb0c3ddcd72d15c06fdc58599b79b345c43ef66fe547277c`.
+- `isolated/mixed-staging.mjs`: `sha256:21b6907e0c328ca7285db2212b69465ec166073fd88aa1bcf338b680fc787ea8`.
+
+These are content/Git-tree digests, not published commit references. Its entry supports both fixed inboxes
+and its inspection returns `verified` for intrinsic all-group completion. The
+mapping above consumes that exact schema, not the historical proposal below.
+Bridge re-review and the separate credential-binding P1 remain gates. The following
+base-read/proposed-seam notes are historical evidence, not current readiness.
+
+Base read: `41a84f57273b8c1c40e5822e815fc3e94edc6df0`. An earlier private
+campaign checkpoint's API unconditionally returned
 blocked/failed/invalid, `qualified:false`, `controllerReady:false` and
 `deletionAuthorized:false`. Even manifest-verified is byte integrity, not independent
 review, complete native production/OS evidence, source qualification or readiness.
@@ -291,18 +382,17 @@ The catalog raw work and client saved-verifier imports reported by the parent do
 not change this pinned base or remove those remaining producer/OS/native blockers.
 No real campaign, native benchmark, cost measurement or cloud resource was used.
 
-The parent reported the reviewed `616a8a245`/`7452abc90` lifecycle imported byte
-identically at integration `5e2c6b6e9`, with 40 passing tests. This worktree remains
+The parent reported an earlier reviewed lifecycle imported byte-identically at
+an earlier integration, with 40 passing tests. This worktree remains
 on its original base plus its own commits; no integration files were imported.
 The production continuation read the campaign entry, saved verifier, journal,
-source/worker and import closure at author HEAD
-`bc2264f52b055af9550f5d44efc1155d301ec472`. That worktree has active author edits;
+source/worker and import closure in the then-active author worktree. That worktree had active author edits;
 none were imported or executed. Its API still uses
 `validateCampaign({folder, round, commit})`, current statuses blocked/failed/invalid,
 manifest integrity, command lifecycle and pending-root diagnostics. The local
 pinned integration does not contain the complete 13-module production closure;
 the approval preview lists the missing paths. Presence is only an integration
-check, not native readiness. On `d2c68e583fdae6d00d4a774fe0d6b640b29ead37`, a real
+check, not native readiness. At that historical checkpoint, a real
 local-only detach preview returned 2, listed 12 missing modules (the offline
 contract already exists), reported `fullGroupQualified:false`, and created no
 state directory. That preview invoked local Git only, never doctl/SSH/SCP.
@@ -343,8 +433,7 @@ these proposed fields has been invented as passing native evidence in this slice
 
 ### Exact API Proposal Pending Agreement
 
-Read-only inspection of the author tree at
-`d03a019d8e7d26a7bbefa8b8d2f5c748479daaf2` confirms the three-key API and fixed
+Read-only inspection of an earlier private author tree confirmed the three-key API and fixed
 entry above. Its verifier is still synchronous, has only three native adapters,
 and returns blocked/failed/invalid, never verified. The worker already awaits an
 async return without changing those input keys or passing host/approval context.
@@ -428,7 +517,7 @@ Focused tests (fake provider/process controls, local temporary files, a local
 lock-holder child and synthetic local validator workers only):
 
 ```sh
-node --test --test-concurrency=1 bench/workloads/cloud-contract.test.mjs bench/workloads/cloud-controller.test.mjs bench/workloads/cloud-audit.test.mjs bench/workloads/cloud-validation.test.mjs bench/workloads/cloud-transport.test.mjs bench/workloads/cloud-production.test.mjs bench/workloads/cloud-remote.test.mjs bench/workloads/cloud-signals.test.mjs
+node --test --test-concurrency=1 bench/workloads/cloud-contract.test.mjs bench/workloads/cloud-controller.test.mjs bench/workloads/cloud-audit.test.mjs bench/workloads/cloud-bridge.test.mjs bench/workloads/cloud-native.test.mjs bench/workloads/cloud-validation.test.mjs bench/workloads/cloud-transport.test.mjs bench/workloads/cloud-provider.test.mjs bench/workloads/cloud-diagnostics.test.mjs bench/workloads/cloud-credentials.test.mjs bench/workloads/cloud-production.test.mjs bench/workloads/cloud-remote.test.mjs bench/workloads/cloud-signals.test.mjs
 ```
 
 The existing cloud-contract suite passed before implementation. The added suites
@@ -436,7 +525,7 @@ exercise lost/crashed creates, start loss, active/missing/foreign units, live an
 dead locks, concurrent collect, state/path aliases, hostile archives, hash/tree
 mutation, interrupted extraction, cancellation, uncertain deletion and audit races.
 The test fixtures are manufactured apparatus inputs, never passing native results.
-The independent review of `616a8a245f7988d1505ec9e1c97cd0d144382e4a`
+The earlier independent exact-head review
 identified high-bit exit-marker acceptance and implicit-directory expansion before
 the tree limit. Permanent tests reproduced both failures before these repairs;
 the original 30 tests still passed. A separate test reproduced the unbounded
@@ -510,7 +599,7 @@ ENOTDIR and ELOOP, plus an actual missing Windows drive. Child scratch state is
 owned by the parent test so timeout cleanup remains possible. Normal missing
 directory tails still preview read-only and can be created by core setup.
 Windows cloud checks: 65 passed, 0 failed, 1 explicit Linux-signal-suite skip.
-An initial bind-mounted Linux run at `2f761f967` was not green: 66 passed,
+An initial bind-mounted Linux run at the alias-repair checkpoint was not green: 66 passed,
 4 failed and 2 cancelled, with empty signal-probe JSON and the signal parent's
 60-second timeout. A later staged attempt also omitted an audit dependency;
 neither result is full verification or clearance.

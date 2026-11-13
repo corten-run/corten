@@ -57,7 +57,8 @@ test("native worker fixed deadline terminates synchronous validator work", { tim
 
 test("worker missing/throwing native validator errors are sanitized and settled", { timeout: 5000 }, async (t) => {
   const input = { folder: "/not-used", round: "r21", commit }; let retained = false;
-  await assert.rejects(inspectCampaign(input, { preserveLock: () => { retained = true; } }), /validation unavailable/);
+  const missing = await fakeNative(t, 'export const syntheticMissingApi = true;');
+  await assert.rejects(missing.inspect(input, { preserveLock: () => { retained = true; } }), /validation unavailable/);
   const h = await fakeNative(t, 'export function validateCampaign() { console.error("synthetic-private-value"); throw new Error("synthetic-private-value"); }');
   await assert.rejects(h.inspect(h.input), (error) => !error.message.includes("synthetic-private-value"));
   assert.equal(retained, false);

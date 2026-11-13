@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { quote, shellTransport } from "./cloud-transport.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
+import { harness } from "./cloud-fixtures.mjs";
 
 test("production shell boundary uses argv, fixed provider endpoint, no HTTP retry or raw errors", () => {
   const calls = [], run = shellTransport({ repo: resolve("."), spawn: (...args) => { calls.push(args); return { status: 0, stdout: "[]", stderr: "synthetic-private-value" }; } });
@@ -34,25 +38,69 @@ test("SCP stays in batch SFTP mode with one remote and one absolute local endpoi
   assert.throws(() => run("scp", ["relative", "root@192.0.2.10:/bench/job.sh"]));
 });
 
+test("unsettled control process retains both lifecycle locks and forbids retries", async (t) => {
+  for (const result of [null, { status: null, error: { code: "ETIMEDOUT" } }, { status: null, error: { code: "ENOBUFS" } }, { status: 0, signal: "SIGTERM" }]) {
+    const h = harness(t), run = shellTransport({ repo: h.repo, spawn: () => { if (!result) throw new Error("synthetic spawn failure"); return result; } });
+    await assert.rejects(h.launch({ run: (binary, ...args) => binary === "git" ? h.run(binary, ...args) : run(binary, ...args) }).launch(),
+      (error) => error.controlTreeUncertain === true);
+    assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+    await assert.rejects(h.task().collect()); await assert.rejects(h.launch().launch());
+    assert.equal(h.creates, 0); assert.equal(h.deletes, 0);
+  }
+});
+
+test("real timed-out Linux child cannot release locks while its descendant can still write", { skip: process.platform !== "linux", timeout: 10000 }, async (t) => {
+  const h = harness(t), ready = join(h.temp, "descendant-ready"), late = join(h.temp, "descendant-write");
+  let spawned = false;
+  const run = shellTransport({ repo: h.repo, spawn: (_binary, _argv, options) => {
+    spawned = true;
+    return spawnSync(process.execPath, ["-e", `
+      const { spawn } = require('node:child_process');
+      const { writeFileSync } = require('node:fs');
+      spawn(process.execPath, ['-e', 'setTimeout(() => { require("node:fs").writeFileSync(process.argv[1], "synthetic descendant"); }, 1800)', ${JSON.stringify(late)}], { stdio: 'ignore' });
+      writeFileSync(${JSON.stringify(ready)}, 'synthetic parent');
+      setInterval(() => {}, 1000);
+    `], { ...options, timeout: 1000 });
+  } });
+  try {
+    await assert.rejects(h.launch({ run: (binary, ...args) => binary === "git" ? h.run(binary, ...args) : run(binary, ...args) }).launch(),
+      (error) => error.controlTreeUncertain === true);
+    assert.ok(existsSync(ready), "parent ran before the timeout");
+    assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+    await assert.rejects(h.task().collect()); await assert.rejects(h.launch().launch());
+  } finally {
+    // The synthetic descendant exits on its own; leave no test process behind.
+    if (spawned) for (let i = 0; i < 60 && !existsSync(late); i++) await delay(50);
+  }
+  assert.equal(readFileSync(late, "utf8"), "synthetic descendant");
+  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.equal(h.creates, 0); assert.equal(h.deletes, 0);
+});
+
 test("spawn throws, timeouts, signal exits and output overflows never masquerade as success", () => {
   for (const result of [null, { status: 0, signal: "SIGTERM" }, { status: null, error: { code: "ETIMEDOUT" } }, { status: null, error: { code: "ENOBUFS" } }, { status: 1 }]) {
     let calls = 0; const run = shellTransport({ repo: resolve("."), spawn: () => { calls++; if (!result) throw new Error("synthetic-private-value"); return { ...result, stderr: "synthetic-private-value" }; } });
     assert.throws(() => run("doctl", []), (e) => !e.message.includes("synthetic-private-value")); assert.equal(calls, 1);
-    const allowed = run("ssh", ["root@192.0.2.10", "true"], 30000, true);
-    assert.notEqual(allowed.status, 0); assert.ok(allowed.error); assert.equal(allowed.stderr, ""); assert.equal(calls, 2);
+    if (result?.status === 1) {
+      const allowed = run("ssh", ["root@192.0.2.10", "true"], 30000, true);
+      assert.notEqual(allowed.status, 0); assert.ok(allowed.error); assert.equal(allowed.stderr, "");
+    } else assert.throws(() => run("ssh", ["root@192.0.2.10", "true"], 30000, true), (error) => error.controlTreeUncertain === true);
+    assert.equal(calls, 2);
   }
 });
 
-test("existing provider token is inherited only by doctl, never SSH or Git", () => {
-  const previous = process.env.DIGITALOCEAN_ACCESS_TOKEN, envs = [];
-  process.env.DIGITALOCEAN_ACCESS_TOKEN = "synthetic-token-not-a-credential";
+test("control children never inherit a provider token override", () => {
+  const envs = [];
+  const run = shellTransport({ repo: resolve("."), spawn: (_binary, _args, options) => { envs.push(options.env); return { status: 0 }; } });
+  run("doctl", []); run("git", ["rev-parse", "HEAD"]); run("ssh", ["root@192.0.2.10", "true"]);
+  assert.equal(envs[0].DIGITALOCEAN_ACCESS_TOKEN, undefined);
+  assert.equal(envs[1].DIGITALOCEAN_ACCESS_TOKEN, undefined); assert.equal(envs[2].DIGITALOCEAN_ACCESS_TOKEN, undefined);
+});
+
+test("control environment locations are frozen for the lifetime of a transport", () => {
+  const previous = process.env.HOME, envs = [];
+  const run = shellTransport({ repo: resolve("."), spawn: (_binary, _args, options) => { envs.push(options.env); return { status: 0 }; } });
   try {
-    const run = shellTransport({ repo: resolve("."), spawn: (_binary, _args, options) => { envs.push(options.env); return { status: 0 }; } });
-    run("doctl", []); run("git", ["rev-parse", "HEAD"]); run("ssh", ["root@192.0.2.10", "true"]);
-    assert.equal(envs[0].DIGITALOCEAN_ACCESS_TOKEN, "synthetic-token-not-a-credential");
-    assert.equal(envs[1].DIGITALOCEAN_ACCESS_TOKEN, undefined); assert.equal(envs[2].DIGITALOCEAN_ACCESS_TOKEN, undefined);
-  } finally {
-    if (previous === undefined) delete process.env.DIGITALOCEAN_ACCESS_TOKEN;
-    else process.env.DIGITALOCEAN_ACCESS_TOKEN = previous;
-  }
+    process.env.HOME = resolve("synthetic-changed-home"); run("doctl", []); run("doctl", []);
+    assert.ok(envs.every((env) => env.HOME === previous));
+  } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; }
 });

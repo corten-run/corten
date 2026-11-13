@@ -21,8 +21,8 @@ try {
     fs.statSync = () => { throw Object.assign(new Error("synthetic filesystem failure"), { code }); };
     syncBuiltinESMExports();
   }
-  const options = { round: "r21", stateDir, detach: true, commit: "a".repeat(40), sshKey: "42" };
-  await assert.rejects(productionMain(["r21", "--state-dir", stateDir, "--detach", "--commit", options.commit, "--ssh-key", "42", "--print-approval"],
+  const options = { round: "r21", stateDir, detach: true, commit: "a".repeat(40), sshKey: "42", accountId: "user:synthetic-user-0001", context: "synthetic-cloud-control" };
+  await assert.rejects(productionMain(["r21", "--state-dir", stateDir, "--detach", "--commit", options.commit, "--ssh-key", "42", "--account-id", options.accountId, "--context", options.context, "--print-approval"],
     { repo, spawn() { calls++; assert.fail("unexpected process"); }, write() { assert.fail("unexpected approval"); } }), /state path missing or inaccessible/);
   assert.throws(() => controller(options, { repo, run() { calls++; assert.fail("unexpected process"); } }), /state path missing or inaccessible/);
   assert.equal(calls, 0);

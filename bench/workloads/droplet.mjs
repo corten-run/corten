@@ -8,8 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { ownedDroplet, reservation, tags, terminalUnit } from "./cloud-contract.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { archiveMembers, digest, durable, extractArchive, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
-import { campaignOutcome, controllerState, full, validateOptions } from "./cloud-options.mjs";
-import { auditDelivery, auditScript } from "./cloud-audit.mjs";
+import { campaignOutcome, controllerState, full, providerAccount, validateOptions } from "./cloud-options.mjs";
+import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -22,7 +22,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false } = {}) {
+  inspect, interrupted = () => false, settle = async () => {} } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   const requested = resolve(options.stateDir), physicalRequest = resolveStateRoot(requested);
   assert.ok(outside(repo, physicalRequest) && outside(physicalRequest, repo), "state and checkout must be disjoint");
@@ -39,9 +39,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
   };
   async function execute(binary, args, timeout = 60000, allowFail = false) {
-    check(); const r = await run(binary, args, timeout, allowFail); check();
-    if (!allowFail) assert.ok(!r.error && r.status === 0, "control process failed; host preserved");
-    return r;
+    const invoke = async (argv, permittedFailure = false) => {
+      check();
+      let r;
+      try { r = await run(binary, argv, timeout, permittedFailure); }
+      catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
+      if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
+      check();
+      if (!permittedFailure) assert.ok(!r.error && r.status === 0, "control process failed; host preserved");
+      return r;
+    };
+    if (binary !== "doctl") return invoke(args, allowFail);
+    const scoped = (argv) => [...argv, "--context", state.provider.context];
+    const account = async () => {
+      const value = JSON.parse((await invoke(scoped(["account", "get", "--output", "json"]))).stdout);
+      assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
+    };
+    await account();
+    const result = await invoke(scoped(args), allowFail);
+    await account(); // A changed context cannot supply absence/deletion authority.
+    return result;
   }
   const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
   const own = async () => {
@@ -70,7 +87,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
     try { state = read(); check(); return await fn(); }
-    finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
+    finally {
+      try { await settle(); }
+      catch {
+        preserveOperationLock = true;
+        throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true });
+      }
+      finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
+    }
   }
   const verifyArchive = () => {
     const bytes = regular(archive); assert.equal(digest(bytes), state.archiveSha256, "archive changed; preserve host"); return bytes;
@@ -97,7 +121,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
   }
-  const deletedCode = () => 1; // Exit zero is reserved for a future reviewed, fully valid contract.
+  const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
     async launch() {
@@ -111,7 +135,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.ok(read(join(base, entry), match[1]).destroyedAt, "unresolved reservation blocks launch");
         }
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
-        state = { ...reservation({ round: options.round, commit: options.commit, token: randomBytes(8).toString("hex") }), fullGroupQualified: false };
+        state = { ...reservation({ round: options.round, commit: options.commit, token: randomBytes(8).toString("hex") }),
+          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false };
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
           assert.equal(realpathSync((await execute("git", ["rev-parse", "--show-toplevel"])).stdout.trim()), repo);
@@ -123,6 +148,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const existing = await list();
           assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
+          assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
           assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
@@ -144,7 +170,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
           await unit(); state.status = "running"; save(); return structuredClone(state);
         });
-      } finally { unlinkSync(launchLock); syncDirectory(base); }
+      } finally { if (!preserveOperationLock) { unlinkSync(launchLock); syncDirectory(base); } }
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
@@ -193,15 +219,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.deliverAudit, "audit delivery options required");
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
-        assert.ok(!state.auditIntent, "audit delivery already attempted; inspect, never repeat");
+        const { group, prefix } = auditProtocol(options.auditGroup);
+        assert.ok(!state.auditIntents?.[group] && !(group === "json-api" && state.auditIntent), "audit delivery already attempted; inspect, never repeat");
         const bytes = regular(resolve(options.deliverAudit), 16 * 1024 ** 2), intent = auditDelivery(bytes, options);
         assert.equal(await unit(), false, "terminal campaign cannot accept delivery");
         assert.equal((await ssh(auditScript(state, intent))).stdout.trim(), intent.subjectSha256);
-        durable(join(local, "json-audit-delivery.json"), bytes);
-        state.auditIntent = intent; save();
-        const stage = `/bench/cloud-audit-${state.token}.json`;
+        durable(join(local, `${prefix}-audit-delivery.json`), bytes);
+        (state.auditIntents ??= {})[group] = intent; save();
+        const stage = `/bench/cloud-${prefix}-audit-${state.token}.json`;
         await ssh(`test ! -e ${stage} && test ! -L ${stage} && install -m 600 /dev/null ${stage}`);
-        await scp(join(local, "json-audit-delivery.json"), `root@${state.ip}:${stage}`);
+        await scp(join(local, `${prefix}-audit-delivery.json`), `root@${state.ip}:${stage}`);
         assert.equal(await unit(), false, "campaign ended during audit transfer");
         assert.equal((await ssh(auditScript(state, intent, true))).stdout.trim(), intent.subjectSha256);
         return 3;

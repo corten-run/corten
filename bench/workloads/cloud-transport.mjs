@@ -12,15 +12,18 @@ export async function controlCheckpoint(interrupted) {
 }
 
 export const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
-const environment = (binary) => {
+export const controlEnvironment = (binary) => {
   const env = {};
-  for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
-    ...(binary === "doctl" ? ["DIGITALOCEAN_ACCESS_TOKEN"] : []), ...(["ssh", "scp"].includes(binary) ? ["SSH_AUTH_SOCK"] : [])])
+  for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "TEMP", "TMP",
+    ...(["ssh", "scp"].includes(binary) ? ["SSH_AUTH_SOCK"] : [])])
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };
 export function shellTransport({ repo, spawn = spawnSync } = {}) {
   assert.ok(isAbsolute(repo));
+  // Capture inherited credentials/config locations once, never re-read mutable
+  // process.env between account proof and a mutation. Nothing is logged or saved.
+  const environments = new Map(["git", "doctl", "ssh", "scp"].map((binary) => [binary, controlEnvironment(binary)]));
   return (binary, args, timeout = 60000, allowFail = false) => {
     assert.ok(["git", "doctl", "ssh", "scp"].includes(binary), "unsupported control executable");
     assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string" && !v.includes("\0")));
@@ -50,9 +53,14 @@ export function shellTransport({ repo, spawn = spawnSync } = {}) {
     let result;
     try {
       result = spawn(binary, argv, { cwd: repo, shell: false, windowsHide: true, encoding: "utf8", input,
-        stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 ** 2, env: environment(binary) });
+        stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 ** 2, env: { ...environments.get(binary) } });
     } catch { result = { status: null, error: new Error("control spawn uncertain"), stdout: "", stderr: "" }; }
     const failed = result.error || result.status !== 0 || result.signal;
+    // spawnSync only proves the direct child has ended. On every platform a
+    // timeout/signal/overflow can leave descendants alive. Never retry, and keep
+    // the lifecycle locks until an operator establishes the whole tree is gone.
+    if (result.error || result.signal || !Number.isInteger(result.status))
+      throw Object.assign(new Error("control tree uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
     if (failed && !allowFail) throw new Error("control process failed or uncertain; preserve state/evidence/host");
     // Keep stdout only for fixed parsers. Never return credentials/stacks/stderr.
     return { status: failed ? result.status === 0 ? null : result.status ?? null : 0, stdout: result.stdout ?? "", stderr: "", ...(failed ? { error: new Error("control result uncertain") } : {}) };

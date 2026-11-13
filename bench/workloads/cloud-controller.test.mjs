@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import test from "node:test";
 import { command, controller, publicError } from "./droplet.mjs";
-import { archive, campaign, commit, harness, metadata, subject } from "./cloud-fixtures.mjs";
+import { archive, campaign, commit, harness, metadata, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 import { archiveMembers, extractArchive } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
 import { validationLimit } from "./cloud-validation.mjs";
@@ -72,7 +72,7 @@ test("terminal blocked native report never becomes qualification, archive kept b
   assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1);
 });
 test("failed terminal job stays failed, even with blocked native validation", async (t) => {
-  const h = harness(t); h.seed(); const entries = metadata(); entries[2].body = "2\n";
+  const h = harness(t, { reportStatus: "failed" }); h.seed(); const entries = metadata(); entries[2].body = "1\n";
   h.setArchive(archive([...entries, { name: "campaign/" }])); assert.equal(await h.task().collect(), 1);
   assert.equal(h.saved().evidenceOutcome, "failed"); assert.equal(h.saved().fullGroupQualified, false);
 });
@@ -282,22 +282,20 @@ test("fixed validation deadline preserves archive/host and lock despite late rej
 });
 test("JSON audit needs explicit approved exact subject, live ownership and one durable delivery attempt", async (t) => {
   const h = harness(t, { active: true }); h.seed(); const path = join(h.temp, "delivery.json");
-  const delivery = { schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject, review: { subjectSha256: subject, decision: "approved", findings: [] },
-    bundle: { schema: "json-api-native-audits/v1", receipts: Array.from({ length: 36 }, () => ({})) } };
+  const delivery = syntheticDelivery();
   writeFileSync(path, JSON.stringify(delivery));
   const options = { collect: undefined, deliverAudit: path, campaign, approveSubject: subject };
   assert.throws(() => h.task({}, { ...options, approveSubject: undefined }), /approved subject/);
   await assert.rejects(h.task({}, { ...options, approveSubject: "e".repeat(64) }).deliverAudit(), /cannot approve/);
-  assert.equal(await h.task({}, options).deliverAudit(), 3); assert.equal(h.saved().auditIntent.subjectSha256, subject);
+  assert.equal(await h.task({}, options).deliverAudit(), 3); assert.equal(h.saved().auditIntents["json-api"].subjectSha256, subject);
   await assert.rejects(h.task({}, options).deliverAudit(), /already attempted/); assert.equal(h.deletes, 0);
 });
 test("JSON audit collision, transfer cancellation and terminal host preserve intent/evidence", async (t) => {
   for (const flags of [{ active: false }, { active: true, auditCollision: true }, { active: true, cancelAt: (binary) => binary === "scp" }]) {
     const h = harness(t, flags); h.seed(); const path = join(h.temp, "delivery.json");
-    writeFileSync(path, JSON.stringify({ schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject,
-      review: { subjectSha256: subject, decision: "approved", findings: [] }, bundle: { schema: "json-api-native-audits/v1", receipts: Array(36).fill({}) } }));
+    writeFileSync(path, JSON.stringify(syntheticDelivery()));
     await assert.rejects(h.task({}, { collect: undefined, deliverAudit: path, campaign, approveSubject: subject }).deliverAudit());
     assert.equal(h.deletes, 0);
-    if (flags.cancelAt) { assert.ok(h.saved().auditIntent); assert.ok(existsSync(join(h.local, "json-audit-delivery.json"))); }
+    if (flags.cancelAt) { assert.ok(h.saved().auditIntents["json-api"]); assert.ok(existsSync(join(h.local, "json-audit-delivery.json"))); }
   }
 });
