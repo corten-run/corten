@@ -75,7 +75,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
   verifyNativeLimits(settings, lifecycle);
   const expected = records().item_1;
-  for (const row of raw.filter((r) => r.type === "legitimate")) validateLegitimate(row, expected);
+  for (const row of raw.filter((r) => r.type === "legitimate")) validateLegitimate(row, expected, b.recovery.requestTimeoutMs);
   if (settings.nativeSource === "api") { assert.equal(source, "api"); assessTimedSource(raw); }
   const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
   for (const type of ["control-before", "control-after"]) {
@@ -105,7 +105,10 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     const rows = raw.filter((r) => r.type === "legitimate" && r.window === window).sort((a, c) => a.index - c.index);
     assert.deepEqual(rows.map((r) => r.index), w.scheduledAtMs.map((_, i) => i), "legitimate attempt indices incomplete");
     const paths = ["/marketplace/en-US/item_1", "/marketplace/fr-FR/item_1", "/marketplace/de-DE/item_1", "/api/marketplace/item_1"];
-    for (const row of rows) assert.equal(row.path, paths[row.index % paths.length], "scheduled native request path was substituted");
+    for (const row of rows) {
+      assert.equal(row.path, paths[row.index % paths.length], "scheduled native request path was substituted");
+      if (row.bodyComplete) assert.ok(row.endedAtMs <= endMs, "completed response escaped its observation window");
+    }
     const times = rows.filter((r) => r.ok).map((r) => r.latencyMs).sort((a, c) => a - c);
     legitimate[window] = { startMs, endMs, counts: { sent: rows.length, ok: times.length, errors: rows.length - times.length },
       startedAtMs: rows.map((r) => r.startedAtMs), latency: times.length ? { p50Ms: percentile(times, 0.5), p99Ms: percentile(times, 0.99), maxMs: times.at(-1) } : unavailable("no successful legitimate requests"), evidence: `raw.jsonl#legitimate/${window}` };
@@ -140,7 +143,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   const established = attack.filter((r) => r.established), closed = established.filter((r) => r.targetClosedAtMs !== null);
   const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
   const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
-  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle);
+  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle, source);
   const rejected = established.filter((r) => defensiveRejection(settings.phase, r));
   const missing = ["slow-headers", "slow-bodies", "idle-connections"].includes(settings.phase) && established.length > 0 && closed.length === 0;
   // Closing a slow reader is not proof it reached write backpressure. No generic cap/timeout attribution.
@@ -155,7 +158,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     attack: { attempted: attack.length, established: established.length, failed: attack.length - established.length, closed: closed.length, held: established.length - closed.length,
       startedAtMs: attack.map((r) => r.startedAtMs), evidence: "raw.jsonl#attack" }, legitimate, resources,
     recovery: { attempted: true, startMs: recoveryStart, endMs: terminal.disposition === "recovered" ? recovered.endedAtMs : legitimate.after.endMs,
-      ...terminal, evidence: "raw.jsonl#legitimate/after and native application lifecycle after snapshots" },
+      ...terminal, evidence: "raw.jsonl#legitimate/after and service-critical native lifecycle after snapshots" },
     defense: { protection, reason: rejected.length ? "native HTTP rejection observed; see exact statuses and incomplete sends" : missing ? "connections retained to the declared release; no closure protection observed within this profile" : "bounded observations do not identify a protection mechanism",
       attribution: [{ layer: "unknown", mechanism: "raw closure/rejection/unread-queue evidence only; no inferred server/proxy mechanism", evidence: "raw.jsonl#attack" }] } };
   return validateHardeningOutcome(capture, settings);

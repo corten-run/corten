@@ -11,6 +11,8 @@ const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 export function verify(folder) {
   const summary = read(join(folder, "summary.json")); assert.equal(summary.schema, schema); assert.equal(summary.registryDigest, registryDigest);
+  assert.equal(summary.semanticReceiptsVersion, 2, "historical capture predates full-duration pressure and response deadline gates; do not backfill or promote it");
+  assert.equal(summary.lifecycleVersion, 2, "historical capture predates all-service terminal lifecycle gates");
   assert.equal(digest(readFileSync(join(folder, "fixtures/marketplace.json"))), summary.fixtureSha256, "native fixture bytes changed");
   groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
   if (summary.nativeControlsVersion === 1) assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
@@ -24,11 +26,13 @@ export function verify(folder) {
     if (summary.nativeControlsVersion === 1) {
       assert.deepEqual(cell.nativeAssessment, assessNative(read(join(out, "native-controls.json")), qualification));
       assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure");
+      assert.ok(!cell.nativeAssessment.targetFunctionalFailures?.length);
       if (cell.mode === "deployed-edge") {
         const effective = summary.deploymentQualificationVersion === 1 ? validateQualification(read(join(out, "edge-qualification.json"))) : qualification;
         if (summary.deploymentQualificationVersion === 1) assert.deepEqual(effective.missing, cell.edgeMissingFeatures);
         assert.deepEqual(cell.edgeAssessment, assessNative(read(join(out, "edge-native-controls.json")), effective, summary.deploymentQualificationVersion === 1 ? "deployed-edge" : "direct"));
         assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure");
+        assert.ok(!cell.edgeAssessment.targetFunctionalFailures?.length);
       }
     }
     assert.equal(settings.case, cell.mode); assert.equal(settings.phase, cell.phase); assert.equal(settings.review, summary.options.review);

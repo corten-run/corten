@@ -11,7 +11,7 @@ import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits,
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { payload } from "./probe.mjs";
 import { emissionIdentity } from "./receipts.mjs";
-import { trackedImageBuild, removeOwnedImage, requireSourceControl, failureKind } from "./lifecycle.mjs";
+import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind } from "./lifecycle.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -27,18 +27,19 @@ export async function run(args) {
   assert.ok(scoped && !scoped.startsWith(".."), "output must be a new directory under bench/hardening/results");
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   const runId = `hardening-${randomBytes(6).toString("hex")}`, label = "run.corten.hardening";
-  const network = `${runId}-net`, active = new Set(), children = new Set();
-  let interrupted = false, networkCreated = false;
-  const interrupt = () => { interrupted = true; for (const child of children) child.kill(); };
+  const network = `${runId}-net`, active = new Set(), children = new Set(), settling = new Set();
+  let interrupted = false;
+  const interrupt = () => { interrupted = true; for (const child of children) if (!settling.has(child)) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 2, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
-  async function command(binary, args, { timeout, file, cleanup = false } = {}) {
+  async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false } = {}) {
     timeout ??= cleanup ? budget.cleanup.timeoutMs : 30000;
     if (interrupted && !cleanup) throw new Error("run interrupted");
     const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+    if (settleOnInterrupt) settling.add(child);
     let output = "", error = "", timedOut = false;
     child.stdout.on("data", (c) => { output = (output + c).slice(-16 * 2 ** 20); if (file) appendFileSync(file, c); });
     child.stderr.on("data", (c) => { error = (error + c).slice(-65536); if (file) appendFileSync(file, c); });
@@ -47,7 +48,7 @@ export async function run(args) {
       const code = await new Promise((res, rej) => { child.once("error", rej); child.once("close", res); });
       assert.ok(code === 0 && !timedOut && (cleanup || !interrupted), `${binary} ${args.slice(0, 2).join(" ")}: ${timedOut ? "deadline" : code}\n${error || output}`);
       return output.trim();
-    } finally { clearTimeout(timer); children.delete(child); }
+    } finally { clearTimeout(timer); children.delete(child); settling.delete(child); }
   }
   const docker = (args, opts) => command("docker", args, opts);
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
@@ -259,7 +260,8 @@ export async function run(args) {
     summary.commit = state.commit; summary.fixtureSha256 = digest(readFileSync(join(fixtureDir, "marketplace.json")));
     for (const [key, ref] of Object.entries(toolRefs)) tools[key] = JSON.parse(await docker(["image", "inspect", ref]))[0];
     summary.tools = tools; save();
-    await docker(["network", "create", ...labels, network]); networkCreated = true;
+    await trackedNetworkCreate(summary, network, save, () => docker(["network", "create", ...labels, network],
+      { settleOnInterrupt: true, timeout: budget.cleanup.timeoutMs }));
     for (const cell of summary.cells) {
       if (!selected(cell, options)) { cell.reason = "not run by explicit apparatus-verification filter; remains in selected group"; continue; }
       if (interrupted || summary.cleanupFailures.length) break;
@@ -271,10 +273,7 @@ export async function run(args) {
   } catch (e) { summary.failures.push({ stage: "apparatus", error: e.stack }); }
   finally {
     for (const name of [...active]) try { await remove(name); } catch (e) { summary.cleanupFailures.push(e.message); }
-    if (networkCreated) try {
-      const info = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0]; assert.equal(info.Labels?.[label], runId);
-      assert.equal(Object.keys(info.Containers).length, 0); await docker(["network", "rm", info.Id], { cleanup: true });
-    } catch (e) { summary.cleanupFailures.push(e.message); }
+    for (const name of summary.ownedNetworks ?? []) try { await removeOwnedNetwork(name, runId, docker); } catch (e) { summary.cleanupFailures.push(e.message); }
     for (const image of summary.ownedImages ?? []) try { await removeOwnedImage(image, runId, docker); } catch (e) { summary.cleanupFailures.push(e.message); }
     if (summary.cleanupFailures.length) summary.groupReady = false;
     summary.finishedAt = new Date().toISOString(); save();

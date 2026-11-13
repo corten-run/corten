@@ -51,7 +51,7 @@ test("control assertions reject corrupted receipts rather than trusting a passin
     assert.throws(() => validateControl(changed));
     if (phase === "slow-headers") {
       const row = structuredClone(measured.rows[0]); row.drips = 0; row.dripAtMs = []; row.writes = 1; row.bytesQueued = row.firstBytes;
-      assert.throws(() => validateAttack(row, measured.emissionPlan[0], { attack: { everyMs: 40 }, timing: { maxStartLagMs: 0 } }), /no trickles/);
+      assert.throws(() => validateAttack(row, measured.emissionPlan[0], { attack: { everyMs: 40, releaseAtMs: row.releasedAtMs }, timing: { maxStartLagMs: 0, maxWindowDriftMs: 0 } }), /trickles/);
     }
     if (phase === "oversized-requests") { const wrong = structuredClone(measured); wrong.rows[2].variant = "header-count"; assert.throws(() => validateControl(wrong)); }
   }
