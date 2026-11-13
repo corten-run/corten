@@ -28,7 +28,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!record) return res.status(404).json({ error: "not found" });
     const form = new URLSearchParams();
     for (const name of ["email", "target_price"]) form.set(name, typeof req.body?.[name] === "string" ? req.body[name] : "");
-    return res.json({ message: submitAlert(req, res, locale, record, form) });
+    try {
+      return res.json({ message: submitAlert(req, res, locale, record, form) });
+    } catch (error) {
+      if (error instanceof URIError) return res.status(502).json({ error: "marketplace source failed" });
+      throw error;
+    }
   }
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.setHeader("Allow", "GET, HEAD, POST");

@@ -34,6 +34,15 @@ const record = {
 const query = model.readQuery(new URLSearchParams());
 const spaces = (value) => value.replace(/[\u00a0\u202f]/g, " ");
 
+test("native URL encoding rejects unpaired surrogates and preserves Unicode pairs", () => {
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    for (const id of ["\ud800", "\udc00", "item/\ud800", "item/\udc00"]) {
+      assert.throws(() => model.marketplacePath(locale, id), URIError);
+    }
+    assert.equal(model.marketplacePath(locale, "item/\ud83d\ude00"), "/marketplace/" + locale + "/item%2F%F0%9F%98%80");
+  }
+});
+
 test("native Intl formats signed money, half-away ratings, grouped counts and cardinal plurals", () => {
   const expected = {
     "en-US": ["-$1,234.50", "$0.01", "4.3", "5", "1,000", "other"],

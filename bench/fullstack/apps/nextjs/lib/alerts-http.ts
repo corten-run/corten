@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { alertCookie, alertLifetime, appendAlert, ensureSession, readAlerts } from "./alerts.server";
-import { alertMessage, targetMinor, type Locale, type MarketplaceRecord } from "./marketplace";
+import { alertMessage, marketplacePath, targetMinor, type Locale, type MarketplaceRecord } from "./marketplace";
 
 type RequestWithCookies = IncomingMessage & { cookies: Partial<Record<string, string>> };
 function setCookie(req: RequestWithCookies, res: ServerResponse, token: string) {
@@ -15,6 +15,10 @@ export function alertsFor(req: RequestWithCookies, res: ServerResponse) {
 }
 export function submitAlert(req: RequestWithCookies, res: ServerResponse, locale: Locale,
   record: MarketplaceRecord, form: URLSearchParams) {
+  // Check the native view's URL encodings before the alert can be committed.
+  marketplacePath(locale, record.id);
+  for (const line of record.contents) marketplacePath(locale, line.item_id);
+  for (const line of record.included_in) marketplacePath(locale, line.item_id);
   const email = form.get("email") ?? "";
   const minor = targetMinor(locale, form.get("target_price") ?? "");
   const message = alertMessage(locale, record.title, form);

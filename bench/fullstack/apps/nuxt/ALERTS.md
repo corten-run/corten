@@ -29,6 +29,24 @@ This is request-to-request persistence in a single server process, not a
 restart-durable database or a multi-instance session service. Ordinary read-only
 page and item-JSON requests do not establish an alert session.
 
+## Write Boundaries
+
+Before committing, the POST checks the same native URL encodings used by the
+page, including contents and included-in links. Malformed link identifiers fail
+without appending an alert. Read-only source and page paths are unchanged.
+
+Separate simultaneous first requests with no cookie have no established shared
+identity. In particular, parallel no-JS first submissions from separate tabs
+cannot be correlated safely; their unknown sessions are not merged. Once the
+cookie is established, concurrent writes use that same session. This is not a
+global idempotency guarantee.
+
+The cross-app native write-boundary regression is
+`node --test --test-concurrency=1 ../nextjs/alerts-boundary.test.mjs`.
+Build all six apps first. It checks malformed links and retries in every locale,
+and fresh Next/TanStack JS forms without a readback prewarm against a delayed
+synthetic HTTP upstream, including failure recovery and independent readback.
+
 ## Checks
 
 Build with `npm run build`, then run `node --test alerts.test.mjs` for token

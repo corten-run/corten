@@ -1,6 +1,6 @@
 import { data, useActionData, useLoaderData, type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
 import { Marketplace } from "../marketplace-page";
-import { alertMessage, isLocale, readQuery, sameOrigin, targetMinor, type MarketplaceRecord } from "../marketplace";
+import { alertMessage, isLocale, marketplacePath, readQuery, sameOrigin, targetMinor, type MarketplaceRecord } from "../marketplace";
 import { appendAlert } from "../alerts.server";
 import { sessionCookie } from "../alert-cookie.server";
 import { fetchMarketplaceRecord } from "../marketplace.server";
@@ -25,6 +25,10 @@ export async function action({ request, params, context }: ActionFunctionArgs) {
   const form = await request.formData();
   const record = await fetchMarketplaceRecord(params.id ?? "");
   if (!record) throw new Response("Not found", { status: 404 });
+  // Check the native view's URL encodings before the alert can be committed.
+  marketplacePath(locale, record.id);
+  for (const line of record.contents) marketplacePath(locale, line.item_id);
+  for (const line of record.included_in) marketplacePath(locale, line.item_id);
   const email = String(form.get("email") ?? "");
   const minor = targetMinor(locale, String(form.get("target_price") ?? ""));
   const message = alertMessage(locale, record.title, form);
