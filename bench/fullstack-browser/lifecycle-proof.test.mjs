@@ -12,7 +12,8 @@ import { nativeDOM } from "./observe.mjs";
 
 test("real no-JS document replacement proves only platform retirement and journals parser failures", { timeout: 30000 }, async () => {
   const server = createServer((req, res) => {
-    if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); }
+    if (req.url === "/redirect") { res.writeHead(303, { location: "/before?secret=SECRET" }); res.end(); }
+    else if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); }
     else if (req.url === "/module.js") { res.setHeader("content-type", "text/javascript"); res.end('throw new Error("must not execute")'); }
     else { res.setHeader("content-type", "text/html"); res.end('<!doctype html><html lang="en-US"><head><link rel="stylesheet" href="/site.css"><link rel="modulepreload" href="/module.js"></head><body>Actual native document</body></html>'); }
   });
@@ -32,7 +33,7 @@ test("real no-JS document replacement proves only platform retirement and journa
         journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
         return resources;
       };
-      await page.goto(base + "/before?secret=SECRET"); const before = await observe(), retiredAt = performance.now();
+      await page.goto(base + "/redirect"); const before = await observe(), retiredAt = performance.now();
       await page.goto(base + "/after"); await observe();
       await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
       const snapshot = journal.snapshot(), options = { realm: before.realm, retiredAt, observationMs: 25 }, original = JSON.stringify(snapshot);
@@ -44,9 +45,20 @@ test("real no-JS document replacement proves only platform retirement and journa
       assert.equal(Object.hasOwn(proof, "owned"), false); assert.equal(Object.hasOwn(proof, "dom"), false);
       const classified = classifyNoJSRequests(snapshot);
       assert.equal(classified.outcome, "classified", JSON.stringify(classified));
+      assert.ok(classified.requests.some((r) => r.terminal?.event === "native-redirect" && r.terminal.status === 303));
       assert.ok(classified.requests.some((r) => r.classification === "parser-asset" && r.dispatch.path === "/site.css"));
       assert.ok(classified.requests.some((r) => r.classification === "intentionally-disabled-preload" && r.dispatch.path === "/module.js" && r.terminal.event === "Network.loadingFailed"));
       assert.equal(JSON.stringify(snapshot), original); assert.ok(!original.includes("SECRET"));
+
+      for (const remove of [
+        (e) => e.event.startsWith("Network."),
+        (e) => e.event === "Network.responseReceived" && e.type !== "Document",
+        (e) => e.event.startsWith("Network.") && e.request === snapshot.events.find((r) => r.event === "Network.requestWillBeSent" && r.type === "Document").request,
+      ]) {
+        const reduced = structuredClone(snapshot); reduced.events = reduced.events.filter((e) => !remove(e));
+        assert.equal(validatePlatformRetirement(reduced, options).outcome, "unknown", "Committed HTTP loaders require native network coverage");
+        assert.equal(classifyNoJSRequests(reduced).outcome, "unknown", "Missing native request/response coverage cannot classify as empty success");
+      }
 
       // A malformed reduced journal must not classify documents merely because
       // no remaining asset happens to expose their missing response receipts.
@@ -55,7 +67,7 @@ test("real no-JS document replacement proves only platform retirement and journa
       documentsOnly.events = documentsOnly.events.filter((e) => e.event !== "Network.responseReceived");
       const missingResponses = classifyNoJSRequests(documentsOnly);
       assert.equal(missingResponses.outcome, "unknown", "Document success requires its own native response, independent of assets");
-      assert.ok(missingResponses.requests.every((r) => r.classification === "unknown"));
+      for (const row of missingResponses.requests) assert.equal(row.classification, row.terminal?.event === "native-redirect" ? "document" : "unknown");
 
       const mutations = [
         (j) => { j.schema = "native-browser-platform-lifetimes/v1"; },
@@ -85,6 +97,7 @@ test("real no-JS document replacement proves only platform retirement and journa
         (j) => { j.events.find((e) => e.event === "unique-context-read-probe").timeoutMs = 1001; },
         (j) => { j.events = j.events.filter((e) => e.event !== "Network.loadingFinished"); },
         (j) => { j.events = j.events.filter((e) => e.event !== "Network.loadingFailed"); },
+        (j) => { j.events.find((e) => e.event === "Network.requestWillBeSent" && e.redirectStatus).redirectStatus = 200; },
         (j) => { j.events.find((e) => e.event === "Network.requestWillBeSent").frame = null; },
       ];
       for (const [index, mutate] of mutations.entries()) {
@@ -94,6 +107,8 @@ test("real no-JS document replacement proves only platform retirement and journa
       const live = structuredClone(snapshot); live.events.find((e) => e.event === "unique-context-read-probe").outcome = "still-executable";
       assert.equal(validatePlatformRetirement(live, options).outcome, "failed");
       const parserMutations = [
+        (j) => { j.coverage.pageFrames = false; },
+        (j) => { j.events = j.events.filter((e) => e.event !== "domain-enabled" || e.domain !== "Network"); },
         (j) => { j.contextConfiguration.javaScriptEnabled = true; },
         (j) => { j.documents = []; },
         (j) => { j.documents.forEach((d) => { d.preloads = []; }); },

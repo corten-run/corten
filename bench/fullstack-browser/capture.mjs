@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { browserCaptureSchema, validateBrowserCapture } from "../workloads/browser.mjs";
 import { candidates, sha256 } from "./contract.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
+import { reconcileRequests } from "./ledger.mjs";
+import { reconcileUpstream } from "./upstream.mjs";
 
 const keys = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
 const owned = (value) => {
@@ -34,6 +36,14 @@ export function oracleSettings(settings) {
 }
 export function projectCase(cell, profile, app, settings) {
   const e = cell.evidence;
+  const requests = reconcileRequests(e ?? {});
+  assert.equal(requests.outcome, "reconciled", requests.reasons.join("; "));
+  const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: e.steps.map((s) => s.action.id), observationMs: settings.cleanupObservationMs });
+  assert.equal(upstream.outcome, "reconciled", upstream.reasons.join("; "));
+  for (const row of e.steps) {
+    const { phase, ...delta } = upstream.phases.find((p) => p.phase === row.action.id);
+    assert.deepEqual(row.upstream, delta, "Step upstream outcome differs from final raw ledger");
+  }
   assert.ok(e && e.functionalChecksPassed && Array.isArray(e.failures) && !e.failures.length && Array.isArray(e.gaps) && !e.gaps.length, "Native failures or unresolved evidence gaps remain");
   assert.ok(e.clock?.origin === "node.performance.now" && Number.isFinite(e.clock.startedAt), "Native timestamp origin missing");
   assert.ok(e.provenance?.stillSameProcess, "Native process continuity not observed");

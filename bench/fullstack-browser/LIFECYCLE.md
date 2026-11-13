@@ -84,6 +84,13 @@ not classified away. Neither validator filters the strict export or changes qual
 Document classification also requires its own matched frame/loader/status response receipt
 (or native redirect receipt); absent responses remain unknown even in a document-only ledger.
 Asset classification cannot borrow an unverified document's CSP/ownership facts.
+Both validators reconcile every observed HTTP commit's frame/loader/path with its final
+native document request, response and loading-finished receipt, preserving redirect hops.
+Every successful asset needs its own ordered, identity-matched response and terminal receipt.
+Missing whole network streams, missing committed loaders and deleted asset responses are
+unknown coverage, not proof of no work. Page/Network enable receipts are required as well as
+the declared coverage flags. The Chromium apparatus tests exercise these deletions against
+actual journals and keep intact native redirect/parser/preload cases positive.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
@@ -99,8 +106,14 @@ not pass. BFCache requires its own policy and post-freeze/resume probes, not thi
 
 The terminal strategy should use the unique-context constant-read probe, then a fresh complete
 target/request/socket journal over the approved observation interval, before harness teardown.
-All known old-loader requests need terminal receipts and upstream requests need actual terminal
-server counters. A missing socket close or worker destruction stays unknown. No-event silence
+All known old-loader requests need terminal receipts. `upstreamLedger` now retains and
+reconciles actual numeric-source counters through actions, mutation probes, cleanup and the
+final pre-harness interval, using stable source/request IDs and append-only snapshot checks.
+Its terminal finish/close receipts are not application-server socket peer closure. Missing
+phases, pending work, changed history and new requests outside the recorded phases stay unknown.
+The final browser request ledger is also checked against every action and cleanup assignment
+before export; a late failed POST or body-capture error cannot disappear in projection.
+A missing socket close or worker destruction stays unknown. No-event silence
 cannot replace a missing native lifecycle endpoint, and page-session network silence cannot
 prove worker-network silence. Only observations with declared complete relevant coverage can
 support an absence-of-work claim.

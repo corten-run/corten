@@ -3,7 +3,8 @@ import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
 import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM } from "./observe.mjs";
-import { upstreamDelta } from "./upstream.mjs";
+import { UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
+import { reconcileRequests } from "./ledger.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
@@ -90,7 +91,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   const runtimeErrors = [];
   const started = performance.now();
   evidence.clock = { origin: "node.performance.now", startedAt: started };
+  const upstream = new UpstreamAudit(counters);
+  evidence.upstreamLedger = upstream.ledger;
   try {
+    await upstream.start();
     await context.route("**/*", (route) => new URL(route.request().url()).origin === base ? route.continue() : route.abort("blockedbyclient"));
     const page = await context.newPage();
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
@@ -110,6 +114,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.resourceBaseline = await resources.checkpoint();
     await network.drain(); network.rows.length = 0; network.failures.length = 0; runtimeErrors.length = 0;
     lifecycle.markApplicationStart();
+    const initialStore = await upstream.begin("initial-store");
     try {
       evidence.storeBefore = await readStore(base, readback, context.request);
       if (evidence.storeBefore.outcome === "read") assert.deepEqual(evidence.storeBefore.alerts, [], "fresh case must start with an empty independent alert store");
@@ -118,12 +123,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.storeBefore = e.readback ?? { outcome: "failed", alerts: null, reason: e.message };
       evidence.failures.push(`initial independent store read: ${e.message}`);
     }
+    await upstream.end(initialStore);
     let previousResources = null;
     for (const step of profile.steps) {
       const row = { action: step, at: performance.now() - started, requests: [], dom: null, document: null, readback: null, upstream: null, formBefore: null, componentsBefore: [], domPassed: false,
         timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [], lifecycleFailures: [] };
       evidence.steps.push(row);
-      const beforeCounters = await counters();
+      const upstreamPhase = await upstream.begin(step.id);
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
       const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
@@ -177,7 +183,6 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           row.failurePage = { native: sanitizeNative(await page.evaluate(nativeDOM)), text: (await page.locator("body").innerText()).slice(0, 4096) };
         } catch (error) { row.failurePage = { error: error.message }; }
       }
-      const afterCounters = await counters(); row.upstream = upstreamDelta(beforeCounters, afterCounters);
       if (step.input) {
         try {
           row.readback = await readStore(base, readback, context.request);
@@ -204,6 +209,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       row.requests = structuredClone(network.rows.slice(offset));
       classifyDisabledPreloads(row.requests, row.dom, profile.js);
       row.errors = [...runtimeErrors.slice(errorsAt), ...network.failures.slice(networkErrorsAt)];
+      row.upstream = await upstream.end(upstreamPhase);
       if (row.errors.length) row.failures.push("Browser/runtime/network-observer errors recorded");
       const posts = row.requests.filter((r) => r.method === "POST");
       if (step.input) {
@@ -225,11 +231,15 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     }
     evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
+    const probePhase = await upstream.begin("mutation-probes");
     evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback });
+    evidence.mutationProbes.upstream = await upstream.end(probePhase);
     evidence.failures.push(...evidence.mutationProbes.failures);
     evidence.functionalChecksPassed = evidence.steps.length === profile.steps.length && !evidence.failures.length;
     evidence.failures.push(...evidence.steps.flatMap((s) => s.lifecycleFailures.map((f) => `${s.action.kind}: ${f}`)));
+    const cleanupPhase = await upstream.begin("cleanup");
     evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
+    evidence.nativeCleanup.upstream = await upstream.end(cleanupPhase);
     if (evidence.nativeCleanup.after) try {
       const terminalResources = await resources.checkpoint();
       lifecycle.recordDocument({ observer: randomUUID(), scope: terminalResources.scope, url: { path: new URL(page.url()).pathname },
@@ -250,13 +260,28 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           retiredAt: evidence.nativeCleanup.navigation.at, observationMs: settings.observationMs });
       if (!profile.js) evidence.noJSRequestProof = classifyNoJSRequests(evidence.platformLifecycle);
     }
-    if (network) { await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows); }
+    if (network) {
+      try { await network.settle(0, performance.now() + settings.maxCleanupMs); }
+      catch (error) { evidence.gaps.push(`Final native network observation: ${error.message}`); }
+    }
+    await upstream.finish();
+    evidence.upstreamReconciliation = reconcileUpstream(evidence.upstreamLedger, { source: profile.source,
+      actions: profile.steps.map((s) => s.id), observationMs: settings.observationMs });
+    if (evidence.upstreamReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.upstreamReconciliation.reasons);
+    if (network) {
+      await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows);
+      evidence.networkFailures = structuredClone(network.failures); evidence.runtimeErrors = structuredClone(runtimeErrors);
+      evidence.requestLedgerEndedAt = performance.now();
+    }
+    evidence.requestReconciliation = reconcileRequests(evidence);
+    if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
     const beforeClose = performance.now();
     try {
       await context.close();
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,
         nativePageScope: evidence.nativeCleanup ?? null };
     } catch (e) { evidence.cleanup = { contextClosed: false, error: e.message, nativePageScope: null }; evidence.failures.push("Browser context cleanup failed"); }
+    if (network) { await network.drain(); network.annotate(); evidence.harnessClosedRequestLedger = structuredClone(network.rows); }
     evidence.harnessClosedLifecycle = lifecycle?.snapshot() ?? null;
     if (lifecycle) try { await lifecycle.close(); } catch (error) { evidence.failures.push(`Platform observer detach: ${error.message}`); }
   }

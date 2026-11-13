@@ -142,6 +142,33 @@ export class PlatformLifecycle {
   async close() { if (this.targets) await this.targets.detach(); }
 }
 
+function networkCoverage(journal, requests) {
+  const reasons = [], events = journal.events, b = journal.boundaries ?? {};
+  if (journal.coverage?.pageFrames !== true || journal.coverage?.pageNetwork !== true
+    || !["Page", "Network"].every((domain) => events.some((e) => e.event === "domain-enabled" && e.domain === domain && e.receivedAt <= b.startedAt))) reasons.push("Native Page/Network domain coverage unavailable");
+  if (!Number.isFinite(b.startedAt) || !Number.isFinite(b.endedAt) || b.endedAt < b.startedAt
+    || events.some((e, i) => !Number.isFinite(e.receivedAt) || i && e.receivedAt < events[i - 1].receivedAt)) reasons.push("Native network observation bounds/order unavailable");
+  for (const { dispatch: d, response: r, terminal: t } of requests) {
+    if (!d.request || !d.frame || !d.loader || !Number.isFinite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt) reasons.push("Native request identity/observation coverage unavailable");
+    if (!t || t.receivedAt < d.receivedAt || t.receivedAt > b.endedAt) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
+    if (t?.event === "native-redirect" && !(t.status >= 300 && t.status < 400)) reasons.push(`Request ${d.request} lacks a valid redirect receipt`);
+    if (t?.event === "Network.loadingFinished" && !r) reasons.push(`Request ${d.request} lacks its native response receipt`);
+    if (r && (r.frame !== d.frame || r.loader !== d.loader || r.type !== d.type || !Number.isInteger(r.status) || r.status < 100 || r.status > 599
+      || r.receivedAt < d.receivedAt || r.receivedAt > (t?.receivedAt ?? b.endedAt))) reasons.push(`Request ${d.request} has unmatched response identity/status/order`);
+  }
+  // Page commits are independent positive receipts: deleting the entire Network
+  // stream cannot turn an observed HTTP navigation into empty-network success.
+  if (events.some((e) => e.event === "Page.frameNavigated" && (!e.frame || typeof e.loader !== "string" || typeof e.scheme !== "string"))) reasons.push("Native committed document identity/scheme unavailable");
+  for (const commit of events.filter((e) => e.event === "Page.frameNavigated" && ["http:", "https:"].includes(e.scheme)
+    && e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt)) {
+    const matches = requests.filter(({ dispatch: d, terminal: t }) => t?.event !== "native-redirect" && d.type === "Document" && d.frame === commit.frame && d.loader === commit.loader
+      && d.scheme === commit.scheme && d.path === commit.path);
+    if (matches.length !== 1 || !matches[0].response || matches[0].terminal?.event !== "Network.loadingFinished"
+      || matches[0].response.receivedAt > commit.receivedAt) reasons.push(`Committed HTTP loader ${commit.loader} lacks matched document/request/response/terminal receipts`);
+  }
+  return reasons;
+}
+
 // This proof is deliberately separate from the shared DOM/event-probe oracle.
 // Native loading failures are terminal receipts, NOT successful functional work.
 export function validatePlatformRetirement(journal, { realm, retiredAt, observationMs = 250, maxProbeMs = 1000 } = {}) {
@@ -260,6 +287,7 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
       const row = requests.get(e.request);
       if (!row) unknown(`Unmatched page network receipt ${e.request}`);
       else if (e.event === "Network.responseReceived") {
+        if (row.response || row.terminal) unknown(`Duplicate/late native response receipt ${e.request}`);
         row.response = e;
         if (e.frame !== row.dispatch.frame || e.loader !== row.dispatch.loader || !Number.isInteger(e.status)) unknown("Response document identity/status differs from native dispatch");
       }
@@ -272,6 +300,7 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
     }
   }
   for (const row of result.requests) if (!row.terminal || row.terminal.event === "Network.loadingFinished" && !row.response) unknown(`Request ${row.dispatch.request} lacks terminal/response evidence`);
+  result.reasons.push(...networkCoverage(journal, result.requests));
   // CDP socket creation lacks a reliable initiator execution-context ID. An open
   // socket on this page is unknown ownership, not an exemption or a forced close.
   for (const row of result.sockets) if (!row.closed) unknown(`Page socket ${row.created.request} has no native close receipt`);
@@ -294,19 +323,30 @@ export function classifyNoJSRequests(journal) {
     if (event.event === "Network.requestWillBeSent") {
       if (typeof event.type !== "string") { result.reasons.push("Request resource type unavailable"); continue; }
       const previous = latest.get(event.request);
-      if (previous && event.redirectStatus) previous.terminal = { event: "native-redirect", status: event.redirectStatus };
+      if (previous && (!event.redirectStatus || previous.terminal)) result.reasons.push("Reused request ID lacks native redirect binding");
+      if (previous && event.redirectStatus) previous.terminal = { event: "native-redirect", status: event.redirectStatus, receivedAt: event.receivedAt };
       const row = { dispatch: event, response: null, terminal: null, classification: "unknown", proof: null };
       result.requests.push(row); latest.set(event.request, row);
     }
     if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(event.event)) {
       const row = latest.get(event.request);
       if (!row) result.reasons.push(`Unmatched network receipt ${event.request}`);
-      else if (event.event === "Network.responseReceived") row.response = event; else row.terminal = event;
+      else if (event.event === "Network.responseReceived") {
+        if (row.response || row.terminal) result.reasons.push(`Duplicate/late response receipt ${event.request}`);
+        row.response = event;
+      } else {
+        if (row.terminal) result.reasons.push(`Duplicate terminal receipt ${event.request}`);
+        row.terminal = event;
+      }
     }
   }
   for (const row of result.requests) {
     const r = row.dispatch;
     if (!row.terminal) { result.reasons.push(`Unfinished request ${r.request}`); continue; }
+    if (row.terminal.event === "Network.loadingFinished" && (!row.response || row.response.frame !== r.frame || row.response.loader !== r.loader
+      || row.response.type !== r.type || !Number.isInteger(row.response.status) || row.response.status < 100 || row.response.status > 599)) {
+      result.reasons.push(`Request ${r.request} lacks a matched native response/status receipt`); continue;
+    }
     if (r.type === "Document") {
       if (!r.frame || !r.loader) result.reasons.push(`Document ${r.request} lacks native frame/loader ownership`);
       else if (row.terminal.event === "Network.loadingFailed") row.classification = "failed-document";
@@ -316,7 +356,7 @@ export function classifyNoJSRequests(journal) {
       else result.reasons.push(`Document ${r.request} lacks a matched native response/status receipt`);
       continue;
     }
-    const documentRequest = result.requests.find((d) => d.dispatch.type === "Document" && d.dispatch.frame === r.frame && d.dispatch.loader === r.loader);
+    const documentRequest = result.requests.find((d) => d.dispatch.type === "Document" && d.dispatch.frame === r.frame && d.dispatch.loader === r.loader && d.terminal?.event === "Network.loadingFinished");
     const observed = journal.documents.find((d) => d.observer && d.scope && d.frame === r.frame && d.loader === r.loader
       && d.path === r.document?.path && d.observedAt >= r.receivedAt);
     if (documentRequest?.classification !== "document" || !documentRequest.response || !observed || r.sameDocumentOrigin !== true || !r.frame || !r.loader) {
@@ -344,6 +384,8 @@ export function classifyNoJSRequests(journal) {
       row.classification = "parser-asset"; row.proof.stylesheetRequest = stylesheet?.dispatch.request ?? null;
     } else result.reasons.push(`Request ${r.request} has no independently observed parser asset provenance`);
   }
+  result.reasons.push(...networkCoverage(journal, result.requests));
+  if (!result.requests.length) result.reasons.push("No native document requests observed");
   result.outcome = result.reasons.length || result.requests.some((r) => ["unknown", "failed-document", "failed-request", "application-transport"].includes(r.classification)) ? "unknown" : "classified";
   return structuredClone(result);
 }
