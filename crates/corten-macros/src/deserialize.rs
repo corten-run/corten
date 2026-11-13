@@ -63,7 +63,16 @@ fn default_arg(derive: &str, arg: &Arg) -> Result<DefaultValue, Error> {
 fn string_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
     match &arg.value {
         Value::Str(s) => Ok(s.clone()),
-        _ => err(arg.span, format!("{derive}: use #[serde({} = \"...\")], one name for reading and writing", arg.key)),
+        _ => {
+            // `rename(serialize = "..", deserialize = "..")` is serde's too; one string is all
+            // the derives here take.
+            let one = match arg.key.as_str() {
+                "rename" => ", one name for reading and writing",
+                "rename_all" => ", one rule for reading and writing",
+                _ => "",
+            };
+            err(arg.span, format!("{derive}: use #[serde({} = \"...\")]{one}", arg.key))
+        }
     }
 }
 
@@ -1064,11 +1073,38 @@ fn tuple_members(group: &Group) -> Vec<Member> {
     members
 }
 
-/// Whether `ty`'s last path segment is `PhantomData`, which a `transparent` struct does not read.
+/// Whether a `transparent` struct leaves `ty` out of its pick, as serde_derive (1.0.229,
+/// `allow_transparent`) decides it: a path type (`PhantomData<T>`, `std::marker::PhantomData<T>`,
+/// `<X as Tr>::PhantomData`) whose last segment is `PhantomData`. A reference, pointer, tuple,
+/// array or parenthesized type is not a path, whatever it holds.
 fn is_phantom(ty: &TokenStream) -> bool {
     let tokens: Vec<TokenTree> = ungroup(ty).into_iter().collect();
-    let head = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '<')).unwrap_or(tokens.len());
-    matches!(tokens[..head].iter().rev().find(|t| matches!(t, TokenTree::Ident(_))), Some(TokenTree::Ident(id)) if id.to_string() == "PhantomData")
+    let path = match tokens.first() {
+        Some(TokenTree::Ident(id)) => !matches!(id.to_string().as_str(), "dyn" | "impl" | "fn" | "unsafe" | "extern" | "for"),
+        Some(TokenTree::Punct(p)) => matches!(p.as_char(), ':' | '<'),
+        _ => false,
+    };
+    // The last segment is the last identifier outside the `<..>`s, before any `-> R` of `Fn(A) -> R`.
+    let (mut depth, mut last) = (0usize, None);
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Punct(p) => {
+                let arrow =
+                    i > 0 && matches!(&tokens[i - 1], TokenTree::Punct(d) if d.as_char() == '-' && d.spacing() == Spacing::Joint);
+                match p.as_char() {
+                    '<' => depth += 1,
+                    '>' if arrow && depth == 0 => break,
+                    '>' if !arrow => depth = depth.saturating_sub(1),
+                    // A trait object (`A + B`) or a macro (`m!(..)`) is not a path.
+                    '+' | '!' if depth == 0 => return false,
+                    _ => {}
+                }
+            }
+            TokenTree::Ident(id) if depth == 0 => last = Some(id.to_string()),
+            _ => {}
+        }
+    }
+    path && last.as_deref() == Some("PhantomData")
 }
 
 /// The name serde gives the deserializer (`rename`, else the type's, without `r#`), and the
@@ -1164,7 +1200,7 @@ fn tuple(item: &Item, container: &Container, fields: &[Field]) -> TokenStream {
 }
 
 /// The field a `#[serde(transparent)]` struct is read as, picked as serde_derive picks it: the one
-/// that is neither skipped, defaulted nor a `PhantomData`.
+/// that is neither skipped, defaulted nor a `PhantomData` ([`is_phantom`]).
 pub fn transparent_field<'a>(item: &Item, fields: &'a [Field]) -> Result<&'a Field, Error> {
     let mut read = fields.iter().filter(|f| !f.skip && f.default.is_none() && !is_phantom(&f.ty));
     let Some(one) = read.next() else {

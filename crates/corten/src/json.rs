@@ -158,8 +158,9 @@
 //! ```
 //!
 //! A `transparent` struct is read as its one field that is neither skipped, defaulted nor a
-//! `PhantomData`, as serde's derive picks it, and each other field is its default. One with no
-//! such field, or more than one, does not compile:
+//! `PhantomData`, as serde's derive picks it (by the type's path: `PhantomData<T>` by any path,
+//! but not a `&PhantomData<T>` or another type holding one), and each other field is its
+//! default. One with no such field, or more than one, does not compile:
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
@@ -171,6 +172,12 @@
 //! #[derive(corten::FromJson)]
 //! #[serde(transparent)]
 //! struct Pair { id: u64, kind: String }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Tagged { id: u64, kind: &'static std::marker::PhantomData<String> }
 //! ```
 //!
 //! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and

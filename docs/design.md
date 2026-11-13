@@ -1373,8 +1373,11 @@ rules something out.
     Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
     at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
     the branch merged onto the integration tip); 2026-11-12, one reading for `FromJson`'s reader and
-    `Deserialize`, with the `transparent` twins `Tagged` (beside a `PhantomData`) and `Named`
-    (beside a defaulted field), on the branch from `24062789`.
+    `Deserialize`, with the `transparent` twins `Phantom` (beside a `PhantomData`) and `Named`
+    (beside a defaulted field), on the branch from `24062789`; 2026-11-13, serde_derive 1.0.229's
+    `allow_transparent` (a path type whose last segment is `PhantomData`), with the twins `Count`
+    (a tuple), `Scored` (a `default = "path"` field), `Wrapped<T>` and `Qualified`
+    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

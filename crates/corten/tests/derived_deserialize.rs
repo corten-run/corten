@@ -759,9 +759,9 @@ twin! { cents, corten::FromJson,
 
 // Transparent beside a field serde does not read: a `PhantomData` and a defaulted field are
 // left out of the pick as a skipped one is.
-twin! { tagged, corten::FromJson,
+twin! { phantom, corten::FromJson,
     #[serde(transparent)]
-    pub struct Tagged {
+    pub struct Phantom {
         pub id: u64,
         pub kind: PhantomData<String>,
     }
@@ -773,6 +773,46 @@ twin! { named, corten::FromJson,
         pub text: String,
         #[serde(default)]
         pub hits: u8,
+    }
+}
+
+twin! { count, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Count(pub u64, pub PhantomData<u8>);
+}
+
+twin! { scored, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Scored {
+        pub text: String,
+        #[serde(default = "crate::seven")]
+        pub score: u32,
+    }
+}
+
+twin! { wrapped, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Wrapped<T> {
+        pub value: T,
+        pub kind: PhantomData<T>,
+    }
+}
+
+/// A trait whose associated type is named `PhantomData`: serde_derive goes by a path's last
+/// segment, so `<u8 as Marked>::PhantomData` is left out of a transparent struct's pick.
+pub trait Marked {
+    type PhantomData;
+}
+
+impl Marked for u8 {
+    type PhantomData = PhantomData<String>;
+}
+
+twin! { qualified, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Qualified {
+        pub id: u64,
+        pub kind: <u8 as crate::Marked>::PhantomData,
     }
 }
 
@@ -853,8 +893,13 @@ fn from_json_reads_what_serde_s_derive_reads() {
         same_read::<cents::ours::Cents, cents::theirs::Cents>(text);
     }
     for text in ["7", "\"x\"", "-1", "null", "[7]", r#"{"id":7}"#] {
-        same_read::<tagged::ours::Tagged, tagged::theirs::Tagged>(text);
+        same_read::<phantom::ours::Phantom, phantom::theirs::Phantom>(text);
         same_read::<named::ours::Named, named::theirs::Named>(text);
+        same_read::<count::ours::Count, count::theirs::Count>(text);
+        same_read::<scored::ours::Scored, scored::theirs::Scored>(text);
+        same_read::<wrapped::ours::Wrapped<u64>, wrapped::theirs::Wrapped<u64>>(text);
+        same_read::<wrapped::ours::Wrapped<String>, wrapped::theirs::Wrapped<String>>(text);
+        same_read::<qualified::ours::Qualified, qualified::theirs::Qualified>(text);
     }
     for text in [r#"{}"#, r#"{"page":2}"#, r#"{"page":2,"search":"red"}"#, r#"{"page":2,"x":1}"#, "[3]", "[]", "null"] {
         same_read::<filters::ours::Filters, filters::theirs::Filters>(text);
@@ -893,8 +938,12 @@ fn corten_s_reader_reads_each_type_itself() {
     read_alone::<marker::ours::Marker, marker::theirs::Marker>("null");
     read_alone::<name::ours::Name, name::theirs::Name>("\"Ada\"");
     read_alone::<cents::ours::Cents, cents::theirs::Cents>("250");
-    read_alone::<tagged::ours::Tagged, tagged::theirs::Tagged>("7");
+    read_alone::<phantom::ours::Phantom, phantom::theirs::Phantom>("7");
     read_alone::<named::ours::Named, named::theirs::Named>("\"x\"");
+    read_alone::<count::ours::Count, count::theirs::Count>("7");
+    read_alone::<scored::ours::Scored, scored::theirs::Scored>("\"x\"");
+    read_alone::<wrapped::ours::Wrapped<u64>, wrapped::theirs::Wrapped<u64>>("7");
+    read_alone::<qualified::ours::Qualified, qualified::theirs::Qualified>("7");
     read_alone::<filters::ours::Filters, filters::theirs::Filters>(r#"{"page":2,"search":"red"}"#);
     read_alone::<status::ours::Status, status::theirs::Status>("\"sent\"");
 }
@@ -1110,8 +1159,12 @@ fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
     // Another word is one of the enum's.
     assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
     // A transparent struct is described as the field it is read as.
-    assert_eq!(Generator::root_for_read::<tagged::ours::Tagged>()["type"], "integer");
+    assert_eq!(Generator::root_for_read::<phantom::ours::Phantom>()["type"], "integer");
     assert_eq!(Generator::root_for_read::<named::ours::Named>()["type"], "string");
+    assert_eq!(Generator::root_for_read::<count::ours::Count>()["type"], "integer");
+    assert_eq!(Generator::root_for_read::<scored::ours::Scored>()["type"], "string");
+    assert_eq!(Generator::root_for_read::<wrapped::ours::Wrapped<String>>()["type"], "string");
+    assert_eq!(Generator::root_for_read::<qualified::ours::Qualified>()["type"], "integer");
 }
 
 #[test]
@@ -1135,8 +1188,21 @@ fn from_json_passes_the_deserializer_serde_s_names() {
 fn from_json_reads_serde_s_value_deserializers_the_same() {
     same_from::<id::ours::Id, id::theirs::Id, _>(|| 7u64.into_deserializer(), "an integer as a newtype");
     same_from::<cents::ours::Cents, cents::theirs::Cents, _>(|| 7i64.into_deserializer(), "an integer as a transparent");
-    same_from::<tagged::ours::Tagged, tagged::theirs::Tagged, _>(|| 7u64.into_deserializer(), "beside a PhantomData");
-    same_from::<tagged::ours::Tagged, tagged::theirs::Tagged, _>(|| "x".into_deserializer(), "a string beside a PhantomData");
+    same_from::<phantom::ours::Phantom, phantom::theirs::Phantom, _>(|| 7u64.into_deserializer(), "beside a PhantomData");
+    same_from::<phantom::ours::Phantom, phantom::theirs::Phantom, _>(|| "x".into_deserializer(), "a string beside a PhantomData");
+    same_from::<count::ours::Count, count::theirs::Count, _>(|| 7u64.into_deserializer(), "a tuple beside a PhantomData");
+    same_from::<scored::ours::Scored, scored::theirs::Scored, _>(
+        || "x".into_deserializer(),
+        "beside a field defaulted by a path",
+    );
+    same_from::<wrapped::ours::Wrapped<u64>, wrapped::theirs::Wrapped<u64>, _>(
+        || 7u64.into_deserializer(),
+        "a generic beside a PhantomData",
+    );
+    same_from::<qualified::ours::Qualified, qualified::theirs::Qualified, _>(
+        || 7u64.into_deserializer(),
+        "beside <u8 as Marked>::PhantomData",
+    );
     same_from::<named::ours::Named, named::theirs::Named, _>(|| "x".into_deserializer(), "beside a defaulted field");
     same_from::<named::ours::Named, named::theirs::Named, _>(|| 7u64.into_deserializer(), "an integer beside a defaulted field");
     same_from::<marker::ours::Marker, marker::theirs::Marker, _>(|| ().into_deserializer(), "a unit");

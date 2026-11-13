@@ -328,8 +328,14 @@ Corten is pre-1.0, so any minor version may change the API.
   `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
   is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
   reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
-  reads it, where before the reader's stricter rule refused it. Each other attribute it refused is
-  still refused. `corten-macros` is 123 lines shorter (measured: line count)
+  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
+  field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
+  `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
+  as serde refuses it. Each other attribute it refused is still a compile error, some with reworded
+  messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
+  for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
+  than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
+  count)
   ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
 
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
