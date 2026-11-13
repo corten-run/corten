@@ -23,6 +23,10 @@ Corten is pre-1.0, so any minor version may change the API.
   images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
   and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
   historical results; the new toolchain and dependency graph are new-round inputs.
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure. Livewire saves must
+  match the native component, item, locale and submitted values.
 
 - Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
   lifecycle, gate and cleanup observations. A read-only validator replays their
