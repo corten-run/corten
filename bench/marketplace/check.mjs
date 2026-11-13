@@ -152,16 +152,19 @@ export async function alertResponse(response, action, fields) {
   const request = response.request(), url = new URL(response.url()), target = new URL(action);
   if (request.method() !== "POST" || url.origin !== target.origin) return false;
   if (url.pathname.includes("/marketplace/")) return true;
-  // TanStack Start's native server action has a generated endpoint, not the form URL.
+  // Enhanced forms can post to native server-function endpoints, not the page action.
   const headers = request.headers();
-  if (headers["x-tsr-serverfn"] !== "true" || !headers["content-type"]?.startsWith("multipart/form-data;")) return false;
+  const leptos = url.pathname === "/api/marketplace-alert"
+    && headers["content-type"]?.split(";", 1)[0] === "application/x-www-form-urlencoded";
+  if (!leptos && (headers["x-tsr-serverfn"] !== "true" || !headers["content-type"]?.startsWith("multipart/form-data;"))) return false;
   const [, section, locale, id] = target.pathname.split("/");
   if (section !== "marketplace" || !locale || !id) return false;
   try {
     const data = await new Response(request.postDataBuffer(), { headers: { "content-type": headers["content-type"] } }).formData();
-    return ["email", "target_price", "locale", "item_id"].every((key) => data.getAll(key).length === 1)
+    const localeField = leptos ? "tag" : "locale";
+    return ["email", "target_price", localeField, "item_id"].every((key) => data.getAll(key).length === 1)
       && data.get("email") === fields.email && data.get("target_price") === fields.target_price
-      && data.get("locale") === decodeURIComponent(locale) && data.get("item_id") === decodeURIComponent(id);
+      && data.get(localeField) === decodeURIComponent(locale) && data.get("item_id") === decodeURIComponent(id);
   } catch { return false; }
 }
 
