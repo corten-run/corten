@@ -46,6 +46,7 @@ class NativeStoreTest < Minitest::Test
   end
 
   def test_rejected_publication_does_not_mutate_and_snapshot_is_authoritative
+    assert_nil NativeStore.resources[:inventory][:nativeSocketBufferBytes]
     assert_raises(ArgumentError) { NativeStore.publish(event(2)) }
     assert_raises(ArgumentError) { NativeStore.publish(event(1).merge("seq" => 1.0)) }
     assert_equal 0, NativeStore.snapshot[:through]

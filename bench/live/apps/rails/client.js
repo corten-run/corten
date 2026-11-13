@@ -125,7 +125,8 @@ window.liveApp = {
       const value = await resources();
       if (!consumerId || !value.inventory?.consumers) throw new Error('missing native consumer inventory');
       const own = value.inventory.consumers[consumerId];
-      if (!own || (!own.subscriptions && !own.connections && !own.pendingTasks && !own.queueEvents)) return;
+      if (own === undefined || (own !== null &&
+          ['subscriptions', 'connections', 'pendingTasks', 'queueEvents'].every(key => own[key] === 0))) return;
       if (performance.now() >= end) throw new Error('native cleanup timeout');
       await new Promise(resolve => setTimeout(resolve, 10));
     }
