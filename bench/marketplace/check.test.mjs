@@ -104,6 +104,21 @@ for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? 
   }
 });
 
+test("LiveView pre-fill readiness retains the intended case and original failure", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage(); page.setDefaultTimeout(500);
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: "text/html", body:
+      '<div id="phx-alert" data-phx-session="fixture"><form phx-submit="save"><input name="email"><input name="target_price"></form><p class="marketplace__message">connecting</p></div>' }));
+    await page.goto("http://localhost/marketplace/fr-FR/item_1");
+    await assert.rejects(alertReady(page, page.locator("form"), true, { email: "native@example.test", target_price: "1234,50" }), (error) => {
+      assert.match(error.message, /Alert LiveView .*\/marketplace\/fr-FR\/item_1; JS=true; fields=.*native@example.test.*1234,50.*message="connecting"/);
+      assert.match(error.cause.message, /page.waitForFunction: Timeout 500ms exceeded/);
+      return true;
+    });
+  } finally { await browser.close(); }
+});
+
 test("LiveView long-poll saves require a unique native session, exact form and correlated reply", () => {
   const action = "https://localhost/marketplace/fr-FR/item_1", poll = "https://localhost/live/longpoll?vsn=2.0.0&token=native";
   const fields = [["email", "native@example.test"], ["target_price", "1234,50"], ["_csrf_token", "fixture"]];

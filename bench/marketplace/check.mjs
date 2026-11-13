@@ -285,10 +285,28 @@ export function observeAlertTransport(page) {
   });
 }
 
-export async function alertReady(page, form, javaScriptEnabled) {
+async function alertFailure(page, { action, fields, javaScriptEnabled, response, liveViewAcknowledged = false }, error) {
+  let timer;
+  const diagnostic = await Promise.race([
+    Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response ? response.text().catch(() => "unavailable") : liveViewAcknowledged ? "matching phx_reply received" : "matching phx_reply not received"]),
+    new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
+  ]).finally(() => clearTimeout(timer));
+  const transport = response ? `POST ${response.status()} ${response.url()}` : `LiveView ${action}`;
+  return new Error(`Alert ${transport}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response ? response.request().isNavigationRequest() : false}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
+}
+
+export async function alertReady(page, form, javaScriptEnabled, expectedFields) {
   if (!javaScriptEnabled) return;
-  const rootId = await form.evaluate((f) => f.matches('[phx-submit="save"]') ? f.closest("[data-phx-session]")?.id : null);
-  if (rootId) await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), rootId);
+  const { rootId, action, fields } = await form.evaluate((f) => {
+    const data = new FormData(f);
+    return { rootId: f.matches('[phx-submit="save"]') ? f.closest("[data-phx-session]")?.id : null,
+      action: f.action, fields: { email: data.get("email"), target_price: data.get("target_price") } };
+  });
+  if (rootId) try {
+    await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), rootId);
+  } catch (error) {
+    throw await alertFailure(page, { action, fields: expectedFields ?? fields, javaScriptEnabled }, error);
+  }
 }
 
 export async function submitAlert(page, form, javaScriptEnabled) {
@@ -318,13 +336,7 @@ export async function submitAlert(page, form, javaScriptEnabled) {
     await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
     await page.waitForLoadState("networkidle");
   } catch (error) {
-    let timer;
-    const diagnostic = await Promise.race([
-      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response ? response.text().catch(() => "unavailable") : liveViewAcknowledged ? "matching phx_reply received" : "matching phx_reply not received"]),
-      new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
-    ]).finally(() => clearTimeout(timer));
-    const transport = response ? `POST ${response.status()} ${response.url()}` : `LiveView ${action}`;
-    throw new Error(`Alert ${transport}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response ? response.request().isNavigationRequest() : false}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
+    throw await alertFailure(page, { action, fields, javaScriptEnabled, response, liveViewAcknowledged }, error);
   }
 }
 async function control(upstream, value) {
@@ -400,7 +412,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         ["todd@example.test", locale === "en-US" ? "1234.50" : "1234,50", labels[locale].alert_set.replace("{email}", "todd@example.test").replace("{title}", catalog.item_1.title).replace("{price}", new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1234.5))]]) {
         await visit("item_1");
         const form = page.locator(".marketplace__alert form");
-        await alertReady(page, form, javaScriptEnabled);
+        await alertReady(page, form, javaScriptEnabled, { email, target_price: price });
         await form.locator('[name="email"]').fill(email); await form.locator('[name="target_price"]').fill(price);
         // HTML email validation would otherwise prevent the invalid-email server case.
         await form.evaluate((f) => { f.noValidate = true; });
