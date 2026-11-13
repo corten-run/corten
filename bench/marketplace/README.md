@@ -282,7 +282,7 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
-New native runs retain `evidenceVersion: "marketplace-raw/v1"` alongside the unchanged
+New native runs retain `evidenceVersion: "marketplace-raw/v2"` alongside the unchanged
 `marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
 above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
@@ -295,9 +295,30 @@ exact per-pass metrics and aggregates, raw qualification and browser/content gat
 image IDs and clean source labels, the saved fixture bytes and local source commit tree,
 container configuration and capacity settings, cold probe output and Docker clock, cgroup
 CPU before/after counters, and Docker memory/CPU sample histories. Gate containers must
-finish before load. Stopped profiles use the existing stop/event rules, not invented zero
+finish before load. Runs must follow the native rotated serial pass plan without overlapping
+windows. Tool entrypoints/commands and exact, non-overlaid checkout/fixture/output mounts
+must match the native invocation. Stopped profiles use the existing stop/event rules, not invented zero
 measurements. Missing or malformed receipts (including deleted raw files) are invalid, not
 an absent-proof fallback. No capability requirement or nightly capacity policy is relaxed.
+
+Each phase also retains `<phase>-clock.json`, written by the real load script's
+`handleSummary` callback. Its `state.testRunDurationMs` is k6's counter-rate denominator,
+including graceful completion, not the configured duration or Docker lifetime. The legacy
+metric export remains unchanged. Replay checks count/rate against that clock with relative
+`1e-12` float64/JSON rounding tolerance. The configured-duration lower bound allows only
+1 ns of conversion rounding. The Docker/engine window comparison allows 2 ms for
+sub-millisecond Docker timestamps truncated by `Date.parse`; engine startup,
+shutdown and graceful-stop jitter are not waived as rate error. Generator success and
+clock consistency are required even when the app stops. The producer-path mock executes
+the actual callback and copy helper with sub-ms and graceful-completion durations; it does
+not claim a real load measurement. Setting `MARKETPLACE_PRODUCER_MOCK=1` when running
+`node --test bench/marketplace/load-evidence.test.mjs` additionally exercises the pinned
+real k6 image against an isolated, delayed HTTP mock, then removes both containers and
+temporary receipts. It requires cached images, never pulls, publishes no ports, and has
+no external network. Saved replay itself never invokes this test or Docker.
+See [k6's summary clock and metric conversion](https://github.com/grafana/k6/blob/master/internal/js/summary.go).
+Earlier raw versions without this independent clock remain historical and fail saved replay;
+do not synthesize clocks from their counts/rates.
 
 Cleanup retains the actually created/removed container, network and anonymous-volume
 identities, checks anonymous volumes after `docker rm -f -v`, and records the final owned

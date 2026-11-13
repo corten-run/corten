@@ -13,6 +13,7 @@ import { admitted, featureProfile, qualificationSettings, validateQualification 
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, k6Image, nodeImage, sourceTree } from "./raw-contract.mjs";
+import { retainLoadEvidence } from "./load-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -199,7 +200,6 @@ async function cpu(containers) {
 }
 async function load(name, target, phase, seconds, raw, pass) {
   const container = `${runId}-k6`;
-  const output = join(raw, `${phase}.json`);
   const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
     "-e", `RATE=${options.rate}`, "-e", `VUS=${phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64}`];
   const samples = phase === "warmup" ? [] : [name, ...(summary.currentSource === "api" ? [upstreamName] : [])];
@@ -238,7 +238,7 @@ async function load(name, target, phase, seconds, raw, pass) {
       app: async () => { appReceipt = await receipt(name); return appReceipt.state; },
       counters: async () => (samples.length && Object.keys(before).length ? cpu(samples) : {}),
       // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
-      summary: async () => { await docker(["cp", `${container}:/tmp/marketplace-summary.json`, output]); return JSON.parse(readFileSync(output, "utf8")); },
+      summary: () => retainLoadEvidence(docker, container, raw, phase),
       sidecars: () => Promise.all([cpuName, ...(reads ? [upstreamName] : [])].map(async (n) => ({ name: n, startedAt: startedAt[n], state: await inspect(n).then((i) => i.State, () => null) }))),
       events: async () => {
         const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);

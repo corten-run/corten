@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { stageAggregate } from "./run-contract.mjs";
+import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -29,6 +29,7 @@ test("native saved validation rejects summary-only, historical and malformed pro
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summaryFixture(commit)));
   invalid(() => validateSaved(args));
   writeFileSync(join(folder, "summary.json"), JSON.stringify({ ...summaryFixture(commit), evidenceVersion })); invalid(() => validateSaved(args));
+  writeFileSync(join(folder, "summary.json"), JSON.stringify({ ...summaryFixture(commit), evidenceVersion: "marketplace-raw/v1" })); invalid(() => validateSaved(args));
   writeFileSync(join(folder, "summary.json"), "{"); invalid(() => validateSaved(args));
   unlinkSync(join(folder, "summary.json")); invalid(() => validateSaved(args));
 });
@@ -36,6 +37,7 @@ test("native saved validation rejects summary-only, historical and malformed pro
 test("complete native fixture replays every raw profile, pass, phase, gate and cleanup", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const expected = writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.equal(JSON.parse(readFileSync(join(folder, "fixture/corten/check-container.json"))).memoryBytes, 2 * 2 ** 30, "native browser gate uses 2 GiB, not the app's 1 GiB");
   const hashes = () => Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter((d) => d.isFile()).map((d) => {
     const path = join(d.parentPath, d.name); return [path, createHash("sha256").update(readFileSync(path)).digest("hex")];
   }));
@@ -55,7 +57,7 @@ test("hostile saved edits fail replay, even when the summary remains internally 
     try { const value = JSON.parse(saved); mutate(value); writeFileSync(full, JSON.stringify(value)); invalid(() => validateSaved(args)); }
     finally { writeFileSync(full, saved); }
   };
-  for (const path of ["source.json", "images.json", "tools.json", "cleanup.json", "fixture.json", "fixture/corten/checks.json", "api/corten/qualification.json", `${base}/cold.log`, `${base}/fixed.json`, `${base}/fixed-cpu.json`, `${base}/fixed-stats.log`, `${base}/fixed-stats.log.json`, `${base}/fixed-receipt.json`]) {
+  for (const path of ["source.json", "images.json", "tools.json", "cleanup.json", "fixture.json", "fixture/corten/checks.json", "api/corten/qualification.json", `${base}/cold.log`, `${base}/fixed.json`, `${base}/fixed-clock.json`, `${base}/fixed-cpu.json`, `${base}/fixed-stats.log`, `${base}/fixed-stats.log.json`, `${base}/fixed-receipt.json`]) {
     const full = join(folder, path), saved = readFileSync(full);
     try { unlinkSync(full); invalid(() => validateSaved(args)); writeFileSync(full, saved); truncateSync(full, 1); invalid(() => validateSaved(args)); }
     finally { writeFileSync(full, saved); }
@@ -69,6 +71,15 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   change(`${base}/fixed-receipt.json`, (v) => { v.app.cpuset = "4-7"; });
   change(`${base}/fixed-receipt.json`, (v) => { v.app.memoryBytes--; });
   change(`${base}/fixed-receipt.json`, (v) => { v.load.env.RATE = "1"; });
+  change(`${base}/fixed-receipt.json`, (v) => { v.load.entrypoint = ["/bin/sh", "-c", "sleep 15"]; });
+  change(`${base}/fixed-receipt.json`, (v) => { v.load.mounts.push({ type: "bind", source: "/different/load.js", destination: "/bench/marketplace/load.js", readOnly: true }); });
+  change("fixture/corten/check-container.json", (v) => { v.mounts.find((m) => m.destination === "/repo").source = "/unrelated-checkout"; });
+  change("fixture/corten/check-container.json", (v) => { v.mounts.find((m) => m.destination === "/results").source = "/unrelated-results"; });
+  change("fixture/corten/check-container.json", (v) => { v.entrypoint = ["/bin/sh", "-c", "true"]; });
+  change("fixture/corten/check-container.json", (v) => { v.memoryBytes = 2 ** 30; });
+  change("fixture/corten/check-container.json", (v) => { v.mounts.push({ type: "bind", source: "/other/check.mjs", destination: "/repo/bench/marketplace/check.mjs", readOnly: true }); });
+  change("tools.json", (v) => { v.k6.entrypoint = ["/bin/sh"]; });
+  change(`${base}/fixed-clock.json`, (v) => { v.testRunDurationMs = 0.0015; });
   change(`${base}/fixed-receipt.json`, (v) => { v.load.state.FinishedAt = v.load.state.StartedAt; });
   change(`${base}/fixed-receipt.json`, (v) => { v.cpu.state.StartedAt = "2026-01-01T00:01:00Z"; });
   change(`${api}/fixed-receipt.json`, (v) => { v.upstreamReads.after.answers[503] = 1; });
@@ -119,6 +130,17 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   writeFileSync(path, JSON.stringify(raw)); writeFileSync(join(folder, base, "sat64-cpu.json"), "{}");
   writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
   assert.equal(validateSaved(args).complete, true);
+  const original = readFileSync(path);
+  for (const mutate of [
+    (v) => { v.load.state.OOMKilled = true; v.load.state.ExitCode = 137; },
+    (v) => { v.load.state.ExitCode = 1; },
+    (v) => { v.load.state.Running = true; },
+    (v) => { v.load.state.StartedAt = "2025-01-01T00:00:00.000Z"; v.load.state.FinishedAt = "2025-01-01T00:00:00.001Z"; },
+    (v) => { v.app.state.FinishedAt = new Date(Date.parse(v.seen.phaseStart) + 1).toISOString(); v.seen.app = v.app.state; v.seen.events[0].ms = Date.parse(v.app.state.FinishedAt); },
+  ]) {
+    const v = JSON.parse(original); mutate(v); writeFileSync(path, JSON.stringify(v)); invalid(() => validateSaved(args));
+    writeFileSync(path, original);
+  }
   cleanup.removed.pop(); writeFileSync(cleanupPath, JSON.stringify(cleanup)); invalid(() => validateSaved(args));
   cleanup.removed.push(volume); writeFileSync(cleanupPath, JSON.stringify(cleanup));
   raw.upstreamReads.after.answers[503] = 1; writeFileSync(path, JSON.stringify(raw)); invalid(() => validateSaved(args));
@@ -132,6 +154,27 @@ test("source lookup ignores inherited Git redirects/config and never admits an a
   const before = Object.fromEntries(Object.keys(edits).map((k) => [k, process.env[k]]));
   try { Object.assign(process.env, edits); assert.equal(sourceTree(commit), expected); assert.throws(() => sourceTree("f".repeat(40))); }
   finally { for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+});
+
+test("native run windows follow the serial rotated pass plan and cannot overlap", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const s = writeSavedFixture(folder, commit, sourceTree(commit));
+  const plan = [...passPlan(s.options.passes, s.options.apps, timedProfiles, () => [])];
+  const runs = plan.map(({ app, profile, pass }) => s.apps[app].runs[profile.key].find((r) => r.pass === pass));
+  assert.equal(new Set(runs.map((r) => r.startedAt)).size, runs.length, "fixture must model distinct serial runs");
+  for (let i = 1; i < runs.length; i++) assert.ok(Date.parse(runs[i].startedAt) >= Date.parse(runs[i - 1].finishedAt));
+  runs[1].startedAt = runs[0].startedAt;
+  writeFileSync(join(folder, "summary.json"), JSON.stringify(s)); invalid(() => validateSaved(args));
+});
+
+test("coherent summary aggregates cannot hide a k6 count/rate/elapsed contradiction", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const s = writeSavedFixture(folder, commit, sourceTree(commit));
+  const path = join(folder, "fixture/corten/p1-en-US-page/fixed.json"), raw = JSON.parse(readFileSync(path));
+  raw.metrics.http_reqs.rate = 1e9; writeFileSync(path, JSON.stringify(raw));
+  const a = s.apps.corten, runs = a.runs["fixture-en-US-page"];
+  runs[0].phases.fixed.rps = 1e9; a.phases["fixture-en-US-page"].fixed = stageAggregate(runs, "fixed", 3);
+  validateSummary(s); writeFileSync(join(folder, "summary.json"), JSON.stringify(s)); invalid(() => validateSaved(args));
 });
 
 test("safe entry rejects UNC, links, hardlinks, oversized files and deep trees", (t) => {

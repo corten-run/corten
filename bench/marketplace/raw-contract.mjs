@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const evidenceVersion = "marketplace-raw/v1";
+export const evidenceVersion = "marketplace-raw/v2";
 export const ownerLabel = "run.corten.marketplace";
 export const nodeImage = "node:24-bookworm-slim";
 export const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";

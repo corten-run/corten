@@ -2,11 +2,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { posix } from "node:path";
 import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateSummary } from "./report.mjs";
-import { imageProvenance, inventory, loadPhases, parseArgs, phaseEnd, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
 
@@ -36,6 +38,19 @@ function replay({ folder, round, commit }) {
   for (const [key, flag] of [["passes", "--passes"], ["duration", "--duration"], ["warmup", "--warmup"], ["rate", "--rate"], ["startupTimeout", "--startup-timeout"]]) args.push(flag, String(s.options[key]));
   assert.deepEqual(s.options, parseArgs(args, inventory), "saved settings differ from the native runner's allowed options");
   const firstLoad = Math.min(...Object.values(s.apps).flatMap((a) => Object.values(a.runs).flatMap((rs) => rs.map((r) => time(r.startedAt)))));
+  const completed = new Map();
+  const measuredApps = s.options.apps.filter((app) => !s.options.group || admitted(s.apps[app]));
+  const runsOf = (app, key) => completed.get(`${app}/${key}`) ?? [];
+  let lastRun = time(s.startedAt);
+  for (const { pass, profile, app, skip } of passPlan(s.options.passes, measuredApps, timedProfiles, runsOf)) {
+    if (skip) continue;
+    const run = s.apps[app].runs[profile.key].find((r) => r.pass === pass);
+    assert.ok(run, "missing serial-plan run");
+    assert.ok(time(run.startedAt) >= lastRun && time(run.finishedAt) >= time(run.startedAt) && time(run.finishedAt) <= time(s.finishedAt), "run windows overlap or differ from native serial pass plan");
+    lastRun = time(run.finishedAt);
+    completed.set(`${app}/${profile.key}`, [...runsOf(app, profile.key), run]);
+  }
+  for (const app of measuredApps) for (const profile of timedProfiles) assert.equal(runsOf(app, profile.key).length, s.apps[app].runs[profile.key].length, "extra run outside serial plan");
   assert.match(s.runId, new RegExp(`^marketplace-${round}-[a-f0-9]{10}$`));
   const source = files.json("source.json");
   assert.deepEqual(source, { evidenceVersion, commit, tree: sourceTree(commit), dirty: false, finishedCommit: commit, finishedDirty: false });
@@ -77,6 +92,14 @@ function replay({ folder, round, commit }) {
     assert.ok(typeof m.source === "string" && m.source.length > 0);
     return m.source;
   }
+  function mounts(c, expected, { volumes = false } = {}) {
+    for (const [destination, source, readOnly = true] of expected) assert.equal(mount(c, destination, readOnly), source, "mount source differs from native checkout/output");
+    for (const m of c.mounts) {
+      assert.ok(typeof m.destination === "string" && m.destination.startsWith("/") && posix.normalize(m.destination) === m.destination && !m.destination.includes("\\"), "noncanonical mount destination");
+      if (expected.some(([d]) => d === m.destination)) continue;
+      assert.ok(volumes && m.type === "volume" && !expected.some(([d]) => d.startsWith(`${m.destination}/`) || m.destination.startsWith(`${d}/`) || m.destination === "/"), "unexpected/overlay source mount");
+    }
+  }
   const network = files.json("network.json");
   id(network.id); assert.equal(network.name, `${s.runId}-net`); assert.equal(network.owner, s.runId);
   const upstream = runtime(files.json("upstream-container.json"), s.tools.upstream.imageId, "api", 512 * 2 ** 20, { running: true });
@@ -84,16 +107,25 @@ function replay({ folder, round, commit }) {
   assert.equal(upstream.image, nodeImage); assert.equal(s.tools.upstream.image, nodeImage);
   assert.deepEqual(upstream.cmd, ["node", "/bench/marketplace/upstream.mjs"]);
   const fixtureMount = mount(upstream, "/fixtures", true), benchMount = mount(upstream, "/bench", true);
+  assert.ok(benchMount.startsWith("/") && posix.normalize(benchMount) === benchMount && !benchMount.includes("\\") && posix.basename(benchMount) === "bench", "invalid native source root");
+  const repoMount = posix.dirname(benchMount);
+  assert.equal(fixtureMount, posix.join(benchMount, "marketplace/fixtures"), "fixture is not from the source checkout");
+  mounts(upstream, [["/fixtures", fixtureMount], ["/bench", benchMount]]);
   const cpu = runtime(files.json("cpu-container.json"), s.tools.upstream.imageId, "load", 128 * 2 ** 20, { quota: 1, running: true });
   assert.equal(cpu.name, `${s.runId}-cpu`); assert.equal(cpu.network, "none");
   assert.equal(cpu.image, nodeImage);
-  assert.equal(mount(cpu, "/bench", true), benchMount); mount(cpu, "/sys/fs/cgroup", true);
+  mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
+  assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
   const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
   for (const tool of Object.keys(toolImages)) {
     imageId(toolImages[tool].id); assert.equal(toolImages[tool].id, s.tools[tool].imageId, "tool image receipt differs");
   }
   assert.equal(s.tools.k6.image, k6Image); assert.deepEqual(toolImages.k6.repoDigests, s.tools.k6.repoDigests);
   assert.ok(toolImages.k6.repoDigests.includes(k6Image), "k6 image does not carry the pinned digest");
+  assert.deepEqual(toolImages.k6.entrypoint, ["k6"]);
+  assert.deepEqual(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"]);
+  assert.equal(toolImages.checker.entrypoint, null);
+  assert.deepEqual(upstream.entrypoint, toolImages.upstream.entrypoint); assert.deepEqual(cpu.entrypoint, toolImages.upstream.entrypoint);
   function appRuntime(c, app, source, { running = true } = {}) {
     const a = s.apps[app], rawImage = images[app];
     runtime(c, a.imageId, "app", 2 ** 30, { running });
@@ -103,17 +135,19 @@ function replay({ folder, round, commit }) {
       PORT: "8080", HOSTS: `${c.name},localhost,127.0.0.1`, ...(s.options.group ? { PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) } : {}) };
     for (const [k, v] of Object.entries(env)) assert.equal(c.env[k], v, `wrong app ${k}`);
     if (s.options.group) assert.ok(c.ulimits?.some((u) => u.Name === "nofile" && u.Soft === 65536 && u.Hard === 65536), "missing native capacity setting");
-    assert.equal(mount(c, "/fixtures", true), fixtureMount);
+    mounts(c, [["/fixtures", fixtureMount]], { volumes: true });
     return c;
   }
   function checker(c, appContainer, source, script, output, memory) {
     runtime(c, s.tools.checker.imageId, "load", memory);
     assert.equal(c.image, s.tools.checker.imageId);
+    assert.deepEqual(c.entrypoint, toolImages.checker.entrypoint);
     assert.ok([`container:${appContainer.id}`, `container:${appContainer.name}`].includes(c.network), "checker did not use the checked app's network namespace");
     assert.deepEqual(c.cmd, ["node", `/repo/bench/marketplace/${script}.mjs`, "http://127.0.0.1:8080", source, `http://${upstream.name}:8080`, `/results/${output}.json`]);
     assert.equal(c.state.Running, false); assert.equal(c.state.OOMKilled, false); assert.equal(c.state.ExitCode, 0);
     assert.ok(time(c.state.StartedAt) >= time(s.startedAt) && time(c.state.FinishedAt) >= time(c.state.StartedAt) && time(c.state.FinishedAt) <= firstLoad, "gate did not finish before load");
-    mount(c, "/repo", true); mount(c, "/results", false);
+    const outputRoot = posix.join(benchMount, "marketplace/results", round, ...(s.options.part ? [`d${s.options.part.index}`] : []), source, appContainer.name.slice(s.runId.length + 1));
+    mounts(c, [["/repo", repoMount], ["/results", outputRoot, false]]);
   }
   const images = files.json("images.json"); exactKeys(images, s.options.apps);
   for (const app of s.options.apps) {
@@ -130,7 +164,7 @@ function replay({ folder, round, commit }) {
         if (!q.eligible) continue;
       }
       assert.deepEqual(files.json(`${base}/checks.json`), a.checks[source], "saved browser/content gate differs from raw check result");
-      checker(files.json(`${base}/check-container.json`), checkedApp, source, "check", "checks", 2 ** 30);
+      checker(files.json(`${base}/check-container.json`), checkedApp, source, "check", "checks", 2 * 2 ** 30);
     }
     if (s.options.group && !admitted(a)) continue;
     for (const profile of timedProfiles) for (const run of a.runs[profile.key]) {
@@ -138,12 +172,14 @@ function replay({ folder, round, commit }) {
       const coldReceipt = files.json(`${base}/cold-container.json`);
       assert.ok(!used.has(coldReceipt.id), "cold start reused an app container");
       const coldApp = appRuntime(coldReceipt, app, profile.source);
+      assert.ok(time(coldApp.state.StartedAt) >= time(run.startedAt), "cold start precedes its run");
       const probe = runtime(files.json(`${base}/probe-container.json`), s.tools.upstream.imageId, "load", 256 * 2 ** 20, { running: true });
       assert.ok(!probeIds.has(probe.id), "cold start reused a probe container"); probeIds.add(probe.id);
       assert.equal(probe.image, nodeImage);
+      assert.deepEqual(probe.entrypoint, toolImages.upstream.entrypoint);
       assert.equal(probe.name, `${coldApp.name}-probe`);
-      assert.ok(time(probe.state.StartedAt) <= time(coldApp.state.StartedAt), "cold probe did not precede app start");
-      assert.equal(probe.network, network.name); assert.equal(mount(probe, "/bench", true), benchMount);
+      assert.ok(time(probe.state.StartedAt) >= time(run.startedAt) && time(probe.state.StartedAt) <= time(coldApp.state.StartedAt), "cold probe outside run/before app start");
+      assert.equal(probe.network, network.name); mounts(probe, [["/bench", benchMount]]);
       assert.deepEqual(probe.cmd, ["node", "/bench/catalog/cold.mjs", `http://${coldApp.name}:8080`, run.cold.path, String(s.options.startupTimeout)]);
       const lines = files.text(`${base}/cold.log`).trim().split("\n");
       assert.equal(lines[0], "catalog-probe-ready"); assert.equal(lines.length, 2, "incomplete/extra cold probe observations");
@@ -152,6 +188,7 @@ function replay({ folder, round, commit }) {
         clock: "Docker host wall clock; container start, not process exec; polling interval 10ms", measuredBeforeReadinessOrWarmup: true };
       assert.deepEqual(files.json(`${base}/cold.json`), cold); assert.deepEqual(run.cold, cold, "cold summary differs from raw probe/clock");
       let previous = time(observed.first200At);
+      assert.ok(previous >= time(coldApp.state.StartedAt) && previous <= time(run.finishedAt), "cold observation outside run window");
       for (const phase of loadPhases) {
         if (run.stopped && loadPhases.indexOf(phase) > loadPhases.indexOf(run.stopped.phase)) break;
         const raw = files.json(`${base}/${phase}-receipt.json`);
@@ -171,11 +208,13 @@ function replay({ folder, round, commit }) {
         } else assert.equal(raw.upstream, null);
         const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 ** 30);
         assert.equal(k6.image, k6Image);
+        assert.deepEqual(k6.entrypoint, toolImages.k6.entrypoint);
         assert.equal(k6.name, `${s.runId}-k6`); assert.ok(!loadIds.has(k6.id), "load phase reused a k6 container"); loadIds.add(k6.id);
-        assert.equal(k6.network, network.name); assert.equal(mount(k6, "/bench", true), benchMount);
+        assert.equal(k6.network, network.name); mounts(k6, [["/bench", benchMount]]);
         assert.deepEqual(k6.env, loadEnvironment(s, profile, phase, coldApp.name));
         assert.deepEqual(k6.cmd, ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
         const k6Summary = files.json(`${base}/${phase}.json`);
+        validateLoadExecution({ load: k6, summary: k6Summary, clock: files.json(`${base}/${phase}-clock.json`), start, end, seconds: phase === "warmup" ? s.options.warmup : s.options.duration });
         const rawCounters = files.json(`${base}/${phase}-cpu.json`);
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
         assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
@@ -184,15 +223,14 @@ function replay({ folder, round, commit }) {
         const stop = phaseEnd({ ...raw.seen, errors: raw.seen.errors.map((e) => ({ ...e, error: new Error(e.error) })), summary: k6Summary });
         if (stop) {
           assert.deepEqual(stop, run.stopped, "raw stop differs");
-          if (!raw.app.state.Running) assert.ok(time(raw.app.state.FinishedAt) <= end, "app stop is outside the phase window");
+          const loadStart = time(k6.state.StartedAt), loadEnd = time(k6.state.FinishedAt);
+          if (!raw.app.state.Running) assert.ok(time(raw.app.state.FinishedAt) >= loadStart && time(raw.app.state.FinishedAt) <= loadEnd, "app stop is outside generator execution");
+          else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
           assert.ok(raw.seen.events.every((e) => Number.isFinite(e.ms) && e.ms >= start && e.ms <= end), "Docker stop events are outside the phase window");
           const sidecars = [cpu, ...(profile.source === "api" ? [upstream] : [])];
           assert.deepEqual(raw.seen.sidecars.map((c) => [c.name, c.startedAt]), sidecars.map((c) => [c.name, c.state.StartedAt]), "stop sidecar identities differ");
           break;
         }
-        assert.equal(k6.state.Running, false); assert.equal(k6.state.OOMKilled, false); assert.equal(k6.state.ExitCode, 0);
-        assert.ok(time(k6.state.StartedAt) >= start && time(k6.state.FinishedAt) <= end && time(k6.state.FinishedAt) - time(k6.state.StartedAt) >= (phase === "warmup" ? s.options.warmup : s.options.duration) * 1000, "k6 run truncated/outside phase window");
-        assert.ok(end - start >= (phase === "warmup" ? s.options.warmup : s.options.duration) * 1000, "truncated phase window");
         const metrics = readOutcome(k6Summary);
         if (profile.source === "api") {
           assert.ok((raw.upstreamReads.after.answers[200] ?? 0) > (raw.upstreamReads.before.answers[200] ?? 0), "API load performed no upstream reads");

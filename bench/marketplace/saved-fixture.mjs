@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { cpuSettings, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { cpuSettings, passPlan, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { qualification, featureProfile, qualificationSettings } from "./feature-contract.mjs";
 import { qualificationProbes } from "./qualification-fixture.mjs";
 import { splitApps } from "./run-contract.mjs";
@@ -39,6 +39,13 @@ export function summaryFixture(commit) {
       a.phases[key] = Object.fromEntries(["fixed", "sat64", "sat256"].map((p) => [p, stageAggregate(a.runs[key], p, 3)]));
     }
   }
+  let clock = Date.parse("2026-01-01T00:01:00.000Z");
+  for (const { pass, profile, app } of passPlan(s.options.passes, apps, timedProfiles, () => [])) {
+    const run = s.apps[app].runs[profile.key].find((r) => r.pass === pass);
+    run.startedAt = new Date(clock).toISOString(); run.finishedAt = new Date(clock + 70000).toISOString();
+    run.cold.containerStartedAt = new Date(clock + 2000).toISOString(); run.cold.first200At = new Date(clock + 3000).toISOString();
+    clock += 75000;
+  }
   return s;
 }
 
@@ -49,56 +56,64 @@ export function writeSavedFixture(folder, commit, tree) {
   const resources = [];
   let next = 0;
   const freshId = () => (++next).toString(16).padStart(64, "0");
-  const state = (running, startedAt = "2026-01-01T00:00:01.000Z", finishedAt = "2026-01-01T00:00:02.000Z") => ({ Running: running, OOMKilled: false, ExitCode: 0, Error: "", StartedAt: startedAt, FinishedAt: finishedAt });
+  const state = (running, startedAt = "2026-01-01T00:00:01.000Z", finishedAt = "2026-01-01T00:00:02.000Z") => ({ Running: running, OOMKilled: false, ExitCode: 0, Error: "", StartedAt: startedAt, FinishedAt: running ? "0001-01-01T00:00:00Z" : finishedAt });
   const network = { id: freshId(), name: `${s.runId}-net`, owner: s.runId };
   resources.push({ kind: "network", id: network.id, name: network.name }); write("network.json", network);
-  const mount = (destination, readOnly = true) => ({ type: "bind", source: `/synthetic${destination}`, destination, readOnly });
+  const benchRoot = "/synthetic/repo/bench";
+  const mount = (destination, readOnly = true, source = ({ "/bench": benchRoot, "/repo": "/synthetic/repo", "/fixtures": `${benchRoot}/marketplace/fixtures`, "/sys/fs/cgroup": "/sys/fs/cgroup" })[destination]) => ({ type: "bind", source, destination, readOnly });
   const runtime = (name, role, memoryBytes, { quota = s.measurement.cpus[role].quota, ...extra } = {}) => {
     const c = { id: freshId(), name: `${s.runId}-${name}`, imageId: `sha256:${"b".repeat(64)}`, image: `sha256:${"b".repeat(64)}`,
       env: {}, cmd: [], entrypoint: null, owner: s.runId, state: state(true), memoryBytes, nanoCpus: quota * 1e9, cpuPeriod: 0, cpuQuota: 0,
       cpuset: s.measurement.cpus[role].cpuset ?? "", network: network.name, ulimits: [], mounts: [], ...extra };
     resources.push({ kind: "container", id: c.id, name: c.name }); return c;
   };
-  const upstream = runtime("upstream", "api", 512 * 2 ** 20, { image: nodeImage, cmd: ["node", "/bench/marketplace/upstream.mjs"], mounts: [mount("/fixtures"), mount("/bench")] });
+  const upstream = runtime("upstream", "api", 512 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], cmd: ["node", "/bench/marketplace/upstream.mjs"], mounts: [mount("/fixtures"), mount("/bench")] });
   write("upstream-container.json", upstream);
-  const cpu = runtime("cpu", "load", 128 * 2 ** 20, { image: nodeImage, quota: 1, network: "none", mounts: [mount("/bench"), mount("/sys/fs/cgroup")] }); write("cpu-container.json", cpu);
   const images = Object.fromEntries(s.options.apps.map((app) => [app, { id: s.apps[app].imageId, cmd: ["native"], entrypoint: null,
     labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": featureProfile } }]));
-  write("images.json", images); write("tools.json", Object.fromEntries(Object.keys(s.tools).map((k) => [k, { id: s.tools[k].imageId, ...(k === "k6" ? { repoDigests: [k6Image] } : {}) }])));
+  write("images.json", images); write("tools.json", Object.fromEntries(Object.keys(s.tools).map((k) => [k, { id: s.tools[k].imageId, cmd: k === "upstream" ? ["node"] : k === "checker" ? ["/bin/bash"] : null,
+    entrypoint: k === "k6" ? ["k6"] : k === "upstream" ? ["docker-entrypoint.sh"] : null, ...(k === "k6" ? { repoDigests: [k6Image] } : {}) }])));
   const appRuntime = (app, source, extra = {}) => runtime(app, "app", 2 ** 30, { cmd: images[app].cmd,
     env: { MARKETPLACE_SOURCE: source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: `http://${upstream.name}:8080`, PORT: "8080", HOSTS: `${s.runId}-${app},localhost,127.0.0.1`,
       PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }, ulimits: [{ Name: "nofile", Soft: 65536, Hard: 65536 }], mounts: [mount("/fixtures")], ...extra });
-  for (const app of s.options.apps) {
+  let gateClock = Date.parse("2026-01-01T00:00:02.000Z");
+  for (const source of sources) for (const app of s.options.apps) {
     const a = s.apps[app];
-    for (const source of sources) {
-      const base = `${source}/${app}`, c = appRuntime(app, source); write(`${base}/app-container.json`, c);
-      for (const [script, output, memory] of [["qualify", "qualification", 512 * 2 ** 20], ["check", "checks", 2 ** 30]]) {
-        const check = runtime(`${app}-${script}`, "load", memory, { state: state(false), network: `container:${c.id}`, mounts: [mount("/repo"), mount("/results", false)],
-          cmd: ["node", `/repo/bench/marketplace/${script}.mjs`, "http://127.0.0.1:8080", source, `http://${upstream.name}:8080`, `/results/${output}.json`] });
-        write(`${base}/${output === "checks" ? "check" : output}-container.json`, check);
-        write(`${base}/${output}.json`, output === "checks" ? a.checks[source] : a.qualification[source]);
-      }
+    const base = `${source}/${app}`, c = appRuntime(app, source, { state: state(true, new Date(gateClock).toISOString()) }); write(`${base}/app-container.json`, c);
+    for (const [script, output, memory] of [["qualify", "qualification", 512 * 2 ** 20], ["check", "checks", 2 * 2 ** 30]]) {
+      const check = runtime(`${app}-${script}`, "load", memory, { state: state(false, new Date(gateClock + 1000).toISOString(), new Date(gateClock + 2000).toISOString()), network: `container:${c.id}`, mounts: [mount("/repo"), mount("/results", false, `${benchRoot}/marketplace/results/${s.round}/d1/${source}/${app}`)],
+        cmd: ["node", `/repo/bench/marketplace/${script}.mjs`, "http://127.0.0.1:8080", source, `http://${upstream.name}:8080`, `/results/${output}.json`] });
+      write(`${base}/${output === "checks" ? "check" : output}-container.json`, check);
+      write(`${base}/${output}.json`, output === "checks" ? a.checks[source] : a.qualification[source]);
+      gateClock += 3000;
     }
-    for (const profile of timedProfiles) for (const run of a.runs[profile.key]) {
+    gateClock += 1000;
+  }
+  const cpu = runtime("cpu", "load", 128 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], cmd: ["node", "-e", "setInterval(() => {}, 1000)"], quota: 1, network: "none", state: state(true, new Date(gateClock).toISOString()), mounts: [mount("/bench"), mount("/sys/fs/cgroup")] }); write("cpu-container.json", cpu);
+  for (const { pass, profile, app } of passPlan(s.options.passes, s.options.apps, timedProfiles, () => [])) {
+      const run = s.apps[app].runs[profile.key].find((r) => r.pass === pass);
       const base = `${profile.source}/${app}/p${run.pass}-${profile.locale ?? "neutral"}-${profile.target}`;
       const coldApp = appRuntime(app, profile.source, { state: state(true, run.cold.containerStartedAt) }); write(`${base}/cold-container.json`, coldApp);
-      const probe = runtime(`${app}-probe`, "load", 256 * 2 ** 20, { image: nodeImage, mounts: [mount("/bench")],
+      const probe = runtime(`${app}-probe`, "load", 256 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], state: state(true, new Date(Date.parse(run.startedAt) + 1000).toISOString()), mounts: [mount("/bench")],
         cmd: ["node", "/bench/catalog/cold.mjs", `http://${coldApp.name}:8080`, run.cold.path, String(s.options.startupTimeout)] }); write(`${base}/probe-container.json`, probe);
       const observed = Object.fromEntries(["first200At", "successfulRequestMs", "bytes", "attempts", "path"].map((k) => [k, run.cold[k]]));
       run.cold.clock = "Docker host wall clock; container start, not process exec; polling interval 10ms";
       write(`${base}/cold.log`, `catalog-probe-ready\n${JSON.stringify(observed)}\n`); write(`${base}/cold.json`, run.cold);
       let start = Date.parse(run.cold.first200At) + 1000;
       for (const phase of ["warmup", "fixed", "sat64", "sat256"]) {
-        const seconds = phase === "warmup" ? s.options.warmup : s.options.duration, end = start + seconds * 1000;
-        const load = runtime("k6", "load", 2 ** 30, { image: k6Image, mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
-          cmd: ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], state: state(false, new Date(start).toISOString(), new Date(end).toISOString()) });
+        const seconds = phase === "warmup" ? s.options.warmup : s.options.duration, end = start + seconds * 1000 + 600;
+        const elapsed = seconds * 1000 + 137.123456, rate = seconds * 100 / (elapsed / 1000);
+        (phase === "warmup" ? run.warmup : run.phases[phase]).rps = rate;
+        const load = runtime("k6", "load", 2 ** 30, { image: k6Image, entrypoint: ["k6"], mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
+          cmd: ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], state: state(false, new Date(start + 100).toISOString(), new Date(end - 100).toISOString()) });
         const names = phase === "warmup" ? [] : [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
         const before = Object.fromEntries(names.map((n) => [n, 1000000])), after = Object.fromEntries(names.map((n) => [n, 2000000]));
         const raw = { evidenceVersion, identity: { app, source: profile.source, locale: profile.locale, target: profile.target, pass: run.pass, phase }, app: coldApp, load, cpu, upstream: profile.source === "api" ? upstream : null,
           before, after, upstreamReads: profile.source === "api" ? { before: { answers: { 200: 1 } }, after: { answers: { 200: 1 + seconds * 100 } } } : null,
           finishedAt: new Date(end).toISOString(), seen: { pass: run.pass, phase, phaseStart: new Date(start).toISOString(), app: coldApp.state, errors: [] } };
         write(`${base}/${phase}-receipt.json`, raw);
-        write(`${base}/${phase}.json`, { metrics: { http_reqs: { count: seconds * 100, rate: 100 }, http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 }, http_req_failed: { value: 0 }, checks: { passes: seconds * 200, fails: 0 } },
+        write(`${base}/${phase}-clock.json`, { testRunDurationMs: elapsed });
+        write(`${base}/${phase}.json`, { metrics: { http_reqs: { count: seconds * 100, rate }, http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 }, http_req_failed: { value: 0 }, checks: { passes: seconds * 200, fails: 0 } },
           root_group: { checks: { "marketplace status 200": { passes: seconds * 100, fails: 0 }, "marketplace content type": { passes: seconds * 100, fails: 0 } } } });
         write(`${base}/${phase}-cpu.json`, Object.fromEntries(names.map((n) => [n, { usec: 1000000 }])));
         if (phase !== "warmup") {
@@ -110,12 +125,13 @@ export function writeSavedFixture(folder, commit, tree) {
         }
         start = end + 1000;
       }
-    }
   }
+  for (const a of Object.values(s.apps)) for (const { key } of timedProfiles) for (const phase of ["fixed", "sat64", "sat256"]) a.phases[key][phase] = stageAggregate(a.runs[key], phase, s.options.passes);
   write("source.json", { evidenceVersion, commit, tree, dirty: false, finishedCommit: commit, finishedDirty: false });
   write("host.txt", `Synthetic test kernel\nmodel name : ${s.host.cpu}\n${s.host.onlineCpus}\n`);
   write("fixture.json", JSON.stringify(records()));
-  write("cleanup.json", { evidenceVersion, runId: s.runId, startedAt: "2026-01-01T01:00:00.000Z", finishedAt: "2026-01-01T01:00:01.000Z", created: resources, removed: resources, remaining: { containers: "", networks: "" } });
+  const cleanupStart = Math.max(...Object.values(s.apps).flatMap((a) => Object.values(a.runs).flatMap((runs) => runs.map((r) => Date.parse(r.finishedAt))))) + 1000;
+  write("cleanup.json", { evidenceVersion, runId: s.runId, startedAt: new Date(cleanupStart).toISOString(), finishedAt: new Date(cleanupStart + 1000).toISOString(), created: resources, removed: resources, remaining: { containers: "", networks: "" } });
   write("summary.json", s);
   return s;
 }
