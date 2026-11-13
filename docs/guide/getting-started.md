@@ -12,6 +12,9 @@ cd my-app
 corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 ```
 
+`cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
+build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary).
+
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a
 test and a Dockerfile.
@@ -86,10 +89,12 @@ if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
 }
 ```
 
-`cargo binstall` does not consume `SHA256SUMS` or GitHub attestations automatically: its
+`cargo binstall` does not consume `SHA256SUMS` or GitHub attestations, so today it checks the
+download only by HTTPS: its
 [supported metadata](https://github.com/cargo-bins/cargo-binstall/blob/main/SUPPORT.md) has no
 checksum-file setting, and its [signature support](https://github.com/cargo-bins/cargo-binstall/blob/main/SIGNING.md)
-uses minisign, not GitHub attestations. To verify a prebuilt binary before installing it,
+uses minisign, not GitHub attestations, and Corten's releases are not minisign-signed. To verify
+a prebuilt binary before installing it,
 download and verify it as above, then extract it and put `corten` (`corten.exe` on Windows) in
 a directory on your `PATH`. Alternatively, `cargo install corten-cli` builds from the source
 crate whose checksum crates.io stores.

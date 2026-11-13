@@ -13,6 +13,20 @@ const needs = (job) => [jobs[job].needs ?? []].flat();
 const step = (job, uses) => jobs[job].steps.find((s) => s.uses?.startsWith(`${uses}@`));
 const gate = jobs["verify-archives"].steps.find((s) => s.name === "Verify every release archive");
 const create = jobs["github-release"].steps.find((s) => s.run?.includes("gh release create"));
+const downloads = (job) => jobs[job].steps.filter((s) => s.uses?.startsWith("actions/download-artifact@"));
+
+test("each job downloads only the artifacts it means to", () => {
+  for (const job of ["attest", "verify-archives", "github-release"]) {
+    const matched = downloads(job).filter((s) => s.with?.pattern !== undefined);
+    assert.equal(matched.length, 1, job);
+    assert.deepEqual(matched[0].with, { pattern: "corten-*", "merge-multiple": true }, job);
+  }
+  assert.equal(downloads("attest").length, 1);
+  assert.equal(downloads("verify-archives").length, 1);
+  const named = downloads("github-release").filter((s) => s.with?.name).map((s) => s.with);
+  assert.deepEqual(named, [{ name: "notes" }, { name: "sha256sums" }]);
+  assert.equal(downloads("github-release").length, 3, "no download of every artifact at once");
+});
 
 test("one archive list names every matrix target's archive", () => {
   const targets = jobs.binaries.strategy.matrix.include.map(({ target }) => target);
@@ -50,17 +64,27 @@ test("every archive is verified before crates.io publishing and the GitHub relea
   assert.match(gate.run, /\[ "\$found" = "\$expected" \] \|\| \{/, "exactly the expected archives");
   assert.ok(gate.run.includes('gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY"'));
   assert.ok(gate.run.includes("--signer-workflow corten-run/corten/.github/workflows/release.yml"));
-  assert.ok(gate.run.includes('--source-ref "$GITHUB_REF"'));
+  assert.ok(gate.run.includes('--source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF"'));
   assert.equal(gate.env.GH_TOKEN, "${{ github.token }}");
   assert.ok(!gate.run.includes("|| true"), "verification failures must fail the job");
+  assert.equal(gate.id, "verify");
+  assert.ok(gate.run.trimEnd().endsWith('echo "sha256sums=$(sha256sum SHA256SUMS | cut -d\' \' -f1)" >> "$GITHUB_OUTPUT"'), "digest of the file uploaded");
+  assert.equal(jobs["verify-archives"].outputs.sha256sums, "${{ steps.verify.outputs.sha256sums }}");
   const sums = jobs["verify-archives"].steps.at(-1);
   assert.ok(sums.uses.startsWith("actions/upload-artifact@") && sums.with.path === "SHA256SUMS");
   assert.equal(sums.with["if-no-files-found"], "error");
 
   const release = jobs["github-release"].steps;
+  assert.ok(needs("github-release").includes("verify-archives"), "reads the digest verify-archives gave");
   const check = release.findIndex((s) => s.run?.includes("sha256sum --check --strict SHA256SUMS"));
   assert.ok(check >= 0 && check < release.indexOf(create), "checksums gate the release");
   assert.match(release[check].run, /^set -euo pipefail$/m);
+  assert.equal(release[check].env.SHA256SUMS_DIGEST, "${{ needs.verify-archives.outputs.sha256sums }}");
+  const lines = release[check].run.split("\n");
+  const digest = lines.findIndex((l) => l === 'echo "$SHA256SUMS_DIGEST  SHA256SUMS" | sha256sum --check --strict');
+  const empty = lines.findIndex((l) => l.startsWith('[ -n "$SHA256SUMS_DIGEST" ] ||'));
+  const archivesCheck = lines.indexOf("sha256sum --check --strict SHA256SUMS");
+  assert.ok(empty >= 0 && empty < digest && digest < archivesCheck, "SHA256SUMS is checked before the archives");
   assert.ok(release[check].run.includes('[ "$(sha256sum $ARCHIVES)" = "$(cat SHA256SUMS)" ]'), "SHA256SUMS lists exactly the archives");
 });
 

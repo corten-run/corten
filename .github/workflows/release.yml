@@ -25,6 +25,9 @@ env:
     corten-x86_64-pc-windows-msvc.zip
 
 jobs:
+  # Reuses CI, whose actions follow tags. It holds only contents: read (ci.yml asks for no more and
+  # is passed no secrets) and produces nothing the release uses; the jobs below pin every action
+  # to a commit.
   checks:
     uses: ./.github/workflows/ci.yml
 
@@ -33,7 +36,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      # This workflow runs its actions at the commits read, not at tags that can move.
+      # This workflow's own jobs run their actions at the commits read, not at tags that can move.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -116,12 +119,16 @@ jobs:
     permissions:
       contents: read
       attestations: read
+    outputs:
+      # github-release accepts only the SHA256SUMS with this digest.
+      sha256sums: ${{ steps.verify.outputs.sha256sums }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: corten-*
           merge-multiple: true
-      - name: Verify every release archive
+      - id: verify
+        name: Verify every release archive
         run: |
           set -euo pipefail
           expected=$(printf '%s\n' $ARCHIVES | sort)
@@ -133,6 +140,7 @@ jobs:
               --signer-workflow corten-run/corten/.github/workflows/release.yml \
               --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF"
           done
+          echo "sha256sums=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -163,27 +171,39 @@ jobs:
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - id: auth
         if: env.HAS_TOKEN != 'true'
-        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       # Publishes every crate without publish = false, each after the crates it depends on.
       - run: cargo publish --workspace --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
 
   github-release:
-    needs: [version, publish]
+    needs: [version, verify-archives, publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
+          pattern: corten-*
           merge-multiple: true
-      # The archives released are the bytes verify-archives checked, and SHA256SUMS lists exactly them.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: notes
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: sha256sums
+      # SHA256SUMS is the file verify-archives wrote (its digest is that job's output), and the
+      # archives released are exactly the ones it lists, byte for byte.
       - name: The archives match the verified SHA256SUMS
         run: |
           set -euo pipefail
+          [ -n "$SHA256SUMS_DIGEST" ] || { echo "verify-archives gave no SHA256SUMS digest"; exit 1; }
+          echo "$SHA256SUMS_DIGEST  SHA256SUMS" | sha256sum --check --strict
           sha256sum --check --strict SHA256SUMS
           [ "$(sha256sum $ARCHIVES)" = "$(cat SHA256SUMS)" ] || { echo "SHA256SUMS does not list exactly the archives in ARCHIVES"; exit 1; }
+        env:
+          SHA256SUMS_DIGEST: ${{ needs.verify-archives.outputs.sha256sums }}
       # CHANGELOG-<version>.md is there only when the notes were too long for the release itself.
       - run: |
           shopt -s nullglob
