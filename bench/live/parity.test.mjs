@@ -9,7 +9,7 @@ import { selectedApps } from "../workloads/registry.mjs";
 import { inventory, nativePorts, portFor, recordedInventory, scenarios, settingsFor, workloadFor } from "./native.mjs";
 import { wireEvents, wireSnapshots, wireResources, wireResumes } from "./wire.mjs";
 import { fanoutProfile, verifyFanout } from "./fanout.mjs";
-import { select, runRound, verifyArtifact } from "./parity.mjs";
+import { select, runRound, verifyArtifact, browserJourney } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
 
 const delivery = new URL("./evidence/native-delivery/", import.meta.url);
@@ -17,6 +17,31 @@ const recovery = new URL("../recoverable-live/evidence/native-feed-aspnet/", imp
 const fanout = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name = "express-normal", base = fanout) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
+
+test("failed native journeys retain observed configuration and negative HTTP controls", async () => {
+  for (const rejectedStatus of [400, 200]) {
+    const workload = workloadFor("native-feed"), settings = settingsFor("recoverable-live", "normal", "native-feed");
+    let closed = false;
+    const page = { on() {}, setDefaultTimeout() {},
+      async goto() { throw new Error("diagnostic navigation failure"); },
+      async evaluate() { return []; } };
+    const context = { async newPage() { return page; },
+      async newCDPSession() { return { async send() {}, on() {} }; },
+      request: { async post(url) { return url.endsWith("/configure")
+        ? { status: () => 200, json: async () => ({ framework: "laravel", configured: true }) }
+        : { status: () => rejectedStatus, text: async () => "original native rejection body" }; } },
+      async close() { closed = true; } };
+    await assert.rejects(browserJourney({ newContext: async () => context }, "http://127.0.0.1:8080", workload, settings,
+      nativePorts.laravel), error => {
+      assert.deepEqual(error.evidence.configuration, { framework: "laravel", configured: true });
+      assert.equal(error.evidence.controls.length, rejectedStatus === 400 ? 4 : 1);
+      assert.ok(error.evidence.controls.every(control => control.status === rejectedStatus && control.body === "original native rejection body"));
+      assert.match(error.message, rejectedStatus === 400 ? /navigation failure/ : /accepted malformed/);
+      return true;
+    });
+    assert.equal(closed, true);
+  }
+});
 async function measured() {
   const base = new URL("./evidence/review-v3-express/", import.meta.url);
   const a = await artifact("express-fanout-4", base), normal = await artifact("express-normal", base);

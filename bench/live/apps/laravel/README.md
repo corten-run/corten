@@ -107,3 +107,18 @@ registered its real HTTP/Reverb capture and removed redundant observed-cursor re
 No general failed-Livewire-HTTP retry behavior or load/campaign qualification is
 claimed. Fresh independent review and the full repository check matrix remain
 outside this bounded owned-path checkpoint.
+
+The native-feed profile remains unqualified. Its steady delivery path performs
+three serialized HTTP operations per event: publication, native Livewire receive
+and morph, then native Livewire acknowledgement of the observed DOM. The shared
+driver waits for that acknowledgement before publishing the next steady event.
+The four 1044-event steady journeys exhaust the unchanged 180000ms deadline while
+still progressing; the expired-cursor/slow-reader cases snapshot-cover most of
+the same published work and need only 18/20 individual native deliveries.
+This is cumulative critical-path latency, not evidence of a stuck reconnect.
+Moving the browser Linux-local, using memory-backed native file cache and running
+Laravel's standard production optimizer were diagnostic isolation attempts, not
+adopted repairs or qualification. None established that all six meet the deadline.
+Failed shared captures now retain actual negative HTTP control responses and
+native request-finished timing observations instead of discarding those controls
+when the journey fails. These observations do not replace native wire/DOM evidence.

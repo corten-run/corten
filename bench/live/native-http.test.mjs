@@ -40,15 +40,19 @@ test("Livewire projection retains original effects and calls but excludes reusab
 test("native HTTP capture joins original request/response and awaits actual response bytes", async () => {
   const page = new EventEmitter(), network = [], pending = [];
   captureHttp(page, network, pending, "laravel-livewire");
-  const request = { url: () => "http://localhost/livewire/update", method: () => "POST", postData: () => JSON.stringify({ _token: "secret-token", components: [{ snapshot: "secret-snapshot", calls: [], updates: {} }] }) };
+  const timing = { startTime: 100, requestStart: 1, responseStart: 15, responseEnd: 16 };
+  const request = { url: () => "http://localhost/livewire/update", method: () => "POST", timing: () => timing,
+    postData: () => JSON.stringify({ _token: "secret-token", components: [{ snapshot: "secret-snapshot", calls: [], updates: {} }] }) };
   page.emit("request", request);
   page.emit("response", { request: () => request, url: request.url, status: () => 200,
     headers: () => ({ "content-type": "application/json", "set-cookie": "secret-cookie" }),
     text: async () => JSON.stringify({ components: [{ snapshot: "secret-snapshot", effects: {} }] }) });
+  page.emit("requestfinished", request);
   await Promise.all(pending);
   assert.equal(network[0].requestId, network[2].requestId);
   assert.equal(network[2].kind, "native-livewire-response");
   assert.match(network[2].bodySha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(network[3], { kind: "native-http-timing", requestId: network[0].requestId, url: request.url(), timing });
   assert.doesNotMatch(JSON.stringify(network), /secret/);
 });
 

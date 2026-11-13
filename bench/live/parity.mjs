@@ -55,6 +55,8 @@ export async function browserJourney(browser, base, workload, settings, port = {
   const context = await browser.newContext();
   const deadline = setTimeout(() => { context.close().catch(() => {}); }, workload.eventCount > 24 ? 180000 : 45000);
   let page;
+  let configuration;
+  const controls = [];
   const network = [], failures = [], observations = [];
   try {
     page = await context.newPage();
@@ -71,12 +73,11 @@ export async function browserJourney(browser, base, workload, settings, port = {
     page.on("pageerror", (e) => failures.push(e.message));
     const configured = await context.request.post(`${base}/parity/configure`, { data: { initial: workload.initial, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit } });
     assert.equal(configured.status(), 200, "native configure failed");
-    const configuration = await configured.json();
-    const controls = [];
+    configuration = await configured.json();
     for (const request of negativeRequests(workload, settings.queueLimit > 2 ? "native-feed" : "bounded")) {
       const r = await context.request.post(`${base}/parity/publish`, { data: request });
-      assert.equal(r.status(), 400, "native batch accepted malformed/nonconsecutive work");
       controls.push({ request, status: r.status(), body: await r.text() });
+      assert.equal(r.status(), 400, "native batch accepted malformed/nonconsecutive work");
     }
     await page.goto(base, { waitUntil: "load" });
     await page.waitForFunction(() => !!window.liveApp);
@@ -132,7 +133,7 @@ export async function browserJourney(browser, base, workload, settings, port = {
       costs: await page.evaluate(() => ({ resources: performance.getEntriesByType("resource").map((r) => r.toJSON()),
         navigation: performance.getEntriesByType("navigation").map((r) => r.toJSON()) })) };
   } catch (error) {
-    error.evidence = { capture: { schema: liveCaptureSchema, contract: liveContracts[settings.group],
+    error.evidence = { configuration, controls, capture: { schema: liveCaptureSchema, contract: liveContracts[settings.group],
       records: page ? await page.evaluate(() => window.liveApp?.records ?? []).catch(() => []) : [] }, network, failures,
       html: page ? await captureHtml(page, port.wire).catch(() => "") : "" };
     throw error;

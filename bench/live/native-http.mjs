@@ -38,6 +38,10 @@ export function captureHttp(page, network, pending, wire) {
       pending.push(response.text().then(body => { observation.body = body; }, error => { observation.bodyError = error.message; }));
     }
   });
+  if (wire === "laravel-livewire") page.on("requestfinished", (request) => {
+    network.push({ kind: "native-http-timing", requestId: identities.get(request),
+      url: request.url(), timing: request.timing() });
+  });
 }
 
 export async function captureHtml(page, wire) {
