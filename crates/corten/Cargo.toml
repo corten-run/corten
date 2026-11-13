@@ -73,6 +73,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat",
 # corten-macros has no dependencies. Everything else is opt-in except `log`.
 [features]
 default = ["log"]
+http2 = ["hyper/http2", "hyper-util/server-auto"]
 # App::serve prints logs (errors, startup, shutdown) to stdout unless the app set a subscriber:
 # a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
 log = []
