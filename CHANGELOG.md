@@ -19,6 +19,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
+  images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
+  and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
+  historical results; the new toolchain and dependency graph are new-round inputs.
+
 - Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
   lifecycle, gate and cleanup observations. A read-only validator replays their
   complete matrix and exact aggregates; older results remain historical when
