@@ -1,0 +1,42 @@
+{
+  "schema": "benchmark-latest-stable-policy/v1",
+  "checkedOn": "2026-11-13",
+  "targets": [
+    {
+      "id": "browser-babel8",
+      "groups": ["client-heavy"],
+      "manifest": "bench/browser/package.json",
+      "lockfile": "bench/browser/package-lock.json",
+      "package": "@babel/core",
+      "latestStable": "8.1.2",
+      "resolved": "7.29.13",
+      "status": "blocked",
+      "latestSource": "https://registry.npmjs.org/@babel%2fcore/latest",
+      "versionSource": "https://registry.npmjs.org/@babel%2fcore/8.1.2",
+      "reason": "The latest stable Solid compiler and its JSX plugin require Babel 7. Retain the native compiler and record the unmet Babel 8 target separately from native correctness outcomes.",
+      "blockers": [
+        {
+          "package": "babel-preset-solid",
+          "version": "1.9.19",
+          "peerPackage": "@babel/core",
+          "peerRange": "^7.0.0",
+          "latestSource": "https://registry.npmjs.org/babel-preset-solid/latest",
+          "versionSource": "https://registry.npmjs.org/babel-preset-solid/1.9.19"
+        },
+        {
+          "package": "babel-plugin-jsx-dom-expressions",
+          "version": "0.40.14",
+          "peerPackage": "@babel/core",
+          "peerRange": "^7.20.12",
+          "latestSource": "https://registry.npmjs.org/babel-plugin-jsx-dom-expressions/latest",
+          "versionSource": "https://registry.npmjs.org/babel-plugin-jsx-dom-expressions/0.40.14"
+        }
+      ],
+      "compilerDependency": {
+        "from": "babel-preset-solid",
+        "package": "babel-plugin-jsx-dom-expressions",
+        "range": "^0.40.14"
+      }
+    }
+  ]
+}
