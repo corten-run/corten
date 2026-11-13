@@ -1884,12 +1884,20 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    [design Limit 26](../design.md#limit-origin-scheme)), so an app served only over HTTPS says
    so with `hsts`. A route whose callers must not be browsers at all refuses them in its
    `Identify` (a request with `Origin` or `Sec-Fetch-Site`).
-2. A request that does not ask to switch gets a 426, and a route that does not take `Upgrade`
-   never switches: only an `Upgrade` makes the 101, so a socket opens only where a route
-   declared one. A URL that is a socket and also something else (a page, or a gateway's relayed
-   answer) takes `Option<Upgrade>`, `None` when the request does not ask, and returns
-   `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or `SwitchOr::Answer(page)`. Its failures
-   are answered as `A`'s are, and a switch it asks for is checked as above.
+2. A request that does not ask to switch gets a 400: the extractor serves tunnels too, so it
+   cannot name a required protocol in the `Upgrade` header a 426 must carry. An HTTP/1.0
+   request does not ask, whatever its headers say, since HTTP/1.0 cannot switch (RFC 9110,
+   7.8). A WebSocket handshake with a version other than 13 gets a 426 with
+   `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade`, kept on the
+   error page and JSON failures; one with no version is taken as one of another version, which
+   tells the client which to send. A handler that gives that error a 400 (`with_status`) keeps
+   only `Sec-WebSocket-Version: 13`; any other status (a 404 that hides the socket) carries none
+   of the three. A route that does not take `Upgrade` never switches: only an `Upgrade` makes
+   the 101, so a socket opens only where a route declared one. A URL that is a socket and also
+   something else (a page, or a gateway's relayed answer) takes `Option<Upgrade>`, `None` when
+   the request does not ask, and returns `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or
+   `SwitchOr::Answer(page)`. Its failures are answered as `A`'s are, and a switch it asks for is
+   checked as above.
 3. The request's own `Signal` ends with the 101, so the work gets its own, which aborts with
    `Abort::Shutdown` when the app begins to shut down; the work is not waited for.
    `App::send_timeout` still holds on the switched connection: a write the client has made no
@@ -1905,7 +1913,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    tunnel that relays another server's switch and then passes bytes both ways
    (`tokio::io::copy_bidirectional`).
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
-   `CONNECT`) and a test's `app().test()` get a 426.
+   `CONNECT`) and a test's `app().test()` get a 400. A 400 needs no `Upgrade`, so it has none
+   (nor `Connection`), and HTTP/2 forbids both headers anyway.
 
 `corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
 gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body

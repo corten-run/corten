@@ -34,8 +34,10 @@ http-body = "1"
 # without `unsafe` in Corten.
 pin-project-lite = "0.2"
 # HTTP/1.1 on each connection (`corten::serve`), and a connection that switches protocols
-# (`corten::upgrade`).
-hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+# (`corten::upgrade`). 1.12 is the first release that appends `close` to a response's
+# `Connection` when keep-alive is off; earlier ones replace it, dropping the `upgrade` a 426 must
+# keep (RFC 9110, 7.8).
+hyper = { version = "1.12", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service"] }
 # The layer and service traits `App::layer` takes and `corten::Router` implements, so a tower
 # layer (a rate limit, a trace span) goes around the app.
