@@ -97,7 +97,8 @@ frame parser in Corten merely to recover them; first investigate supported hooks
    removes observed browser queuing, with the transport costs measured above. Neither benefit
    nor instruction cost alone excuses lost timeouts.
 2. **Standards first:** HTTP/2 is the right multiplexing protocol. A Corten-specific stream
-   envelope would be a new wire format under Rule 10, and still hit the cap at about six tabs.
+   envelope would be a new wire format under [Rule 10](../design.md#rule-standard-formats), and
+   still hit the cap at about six tabs.
 3. **HTML on its own:** the prototype changes no markup or no-script path. Its checks do not
    establish every HTTP/2 behavior needed for a production deployment.
 4. **Compile-time mistakes:** a Cargo feature and preface detection need no new TLS trait;
@@ -115,13 +116,15 @@ frame parser in Corten merely to recover them; first investigate supported hooks
    full runtime smoke over HTTP/2.
 
 The conflict order puts correctness and reliability first, performance second, typed seams
-and one way third, convenience last. Keep Limit 14 while the two missing bounds remain.
+and one way third, convenience last. Keep [Limit 14](../design.md#limit-http1) while the two
+missing bounds remain.
 Reopen option 1 when those bounds can be enforced without a second protocol parser, with a
 reset flood, a stalled single stream beside a progressing sibling, shutdown with open streams,
 header limits, explicit WebSocket behavior and the three-engine TLS smoke tested. Keep the
 issue open for that work; this decision records the costs rather than claiming the requirement
-has been removed. Choice 25 still ships only hyper's HTTP/1.1 and must be reopened when HTTP/2
-actually ships. HTTP/3 remains out for the reasons in Limit 14.
+has been removed. [Choice 25](../design.md#choice-axum-router) still ships only hyper's HTTP/1.1
+and must be reopened when HTTP/2 actually ships. HTTP/3 remains out for the reasons in
+[Limit 14](../design.md#limit-http1).
 
 ## Reproduction
 
