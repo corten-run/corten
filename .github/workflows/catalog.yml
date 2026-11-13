@@ -113,6 +113,8 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund --prefix bench/fullstack/apps/express
           node --test bench/fullstack/apps/express/marketplace.test.mjs
+          node --test bench/fullstack/apps/express/request-lifetime.test.mjs bench/fullstack/apps/express/traceparent.test.mjs
+          node --test bench/marketplace/corten/tests/deadline-contract.test.mjs
       - name: Test native Razor alert persistence and render failures
         if: matrix.app == 'aspnet'
         run: >-

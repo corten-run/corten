@@ -11,7 +11,7 @@ import { fetchCatalogRecord } from "./lib/catalog.mjs";
 import { alertResult, fetchMarketplaceRecord, isLocale, pageModel, readQuery } from "./lib/marketplace.mjs";
 import { appendAlert, readAlerts } from "./lib/alerts.mjs";
 import { recordJson, recordMethod, recordError } from "./lib/record-json.mjs";
-import { requestLifetime } from "./lib/request-lifetime.mjs";
+import { requestLifetime, readForm } from "./lib/request-lifetime.mjs";
 import { hostFilter } from "./lib/hosts.mjs";
 
 const profile = process.env.PROFILE === "matched";
@@ -144,10 +144,7 @@ async function marketplace(req, res, next) {
 }
 app.get("/marketplace/:locale/:id", requestLifetime, marketplace);
 app.post("/marketplace/:locale/:id", requestLifetime, (req, res, next) => {
-  form(req, res, (error) => {
-    // The timeout response owns the socket; a cancelled parser must not resume routing.
-    if (!res.locals.requestSignal.aborted && !res.destroyed && !req.timedout) next(error);
-  });
+  readForm(form, req, res, next);
 }, marketplace);
 
 app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord,
