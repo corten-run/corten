@@ -25,7 +25,8 @@ test("new legacy rounds record tools, and identical continuation leaves metadata
 }));
 
 test("unidentified historical and partially completed loads cannot acquire today's identity", () => {
-  for (const file of ["summary.json", "summary.partial.json", "instructions.json", "raw.tar.xz", "raw.txt", "fixture/app-fixed.json", "api/app-warmup.json"]) scratch((dir) => {
+  for (const file of ["summary.json", "summary.partial.json", "instructions.json", "raw.tar.xz", "raw.txt", "fixture/app-fixed.json", "api/app-warmup.json",
+    "count-warmup.json", "count-corten-page-1.json", "corten-page-identity-warmup-r1.json", "corten-json-br-vus64-r1-stats.json", "unrecognized-load.json"]) scratch((dir) => {
     mkdirSync(join(dir, "fixture")); mkdirSync(join(dir, "api"));
     writeFileSync(join(dir, file), "historical bytes");
     assert.throws(() => keepLoadTool(dir, tool), /earlier load tool is unknown/);
@@ -34,7 +35,8 @@ test("unidentified historical and partially completed loads cannot acquire today
 });
 
 test("non-load steps do not prevent a first load-tool record", () => scratch((dir) => {
-  writeFileSync(join(dir, "cold-start.json"), "{}");
+  for (const name of ["cold-start.json", "bytes.json", "build.json", "conformance.json", "browser.json"])
+    writeFileSync(join(dir, name), "{}");
   mkdirSync(join(dir, "fixture")); writeFileSync(join(dir, "fixture/passes.json"), "{\"passes\":3}");
   keepLoadTool(dir, tool);
   assert.equal(JSON.parse(readFileSync(join(dir, "tools.json"), "utf8")).k6.version, k6Version);

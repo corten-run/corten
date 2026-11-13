@@ -16,7 +16,9 @@ export function keepLoadTool(dir, k6) {
     return;
   }
   const measured = (folder) => existsSync(folder) && readdirSync(folder).some((name) => /\.json$/.test(name) && !["passes.json", "edge.json"].includes(name));
-  assert.ok(!["instructions.json", "summary.json", "summary.partial.json", "raw.tar.xz", "raw.txt"].some((name) => existsSync(join(dir, name)))
+  const nonLoad = new Set(["passes.json", "edge.json", "cold-start.json", "bytes.json", "build.json", "conformance.json", "browser.json"]);
+  const rootLoad = readdirSync(dir).some((name) => name.endsWith(".json") && !nonLoad.has(name));
+  assert.ok(!rootLoad && !["raw.tar.xz", "raw.txt"].some((name) => existsSync(join(dir, name)))
     && !["fixture", "api"].some((source) => measured(join(dir, source))), "earlier load tool is unknown; use a new result directory");
   writeFileSync(file, JSON.stringify({ k6 }, null, 2));
 }
