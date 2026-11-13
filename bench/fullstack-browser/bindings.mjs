@@ -1,5 +1,7 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
+import { createBindingArtifact, indexBindingArtifact, bindingHash } from "./binding-artifact.mjs";
+import { checkBindingEffects } from "./binding-effects.mjs";
 
 // Read the real mounted React handler and owning component. This does not invoke
 // either function, attach an enhancement, or infer a binding from a sent POST.
@@ -57,11 +59,10 @@ function ordinaryDeclarations(list) {
   return kind === ts.NodeFlags.Let || kind === ts.NodeFlags.Const;
 }
 
-const renderConstructors = new Set(["_jsx", "_jsxs"]);
-function renderConstructor(node) {
+function renderConstructor(node, component, approved) {
   if (!(ts.isCallExpression(node) && !(node.flags & ts.NodeFlags.OptionalChain)
-    && ts.isIdentifier(node.expression) && renderConstructors.has(node.expression.text)
-    && node.arguments.length === 2 && ts.isStringLiteral(node.arguments[0])
+    && approved.has(node.getStart() - component.body.getStart())
+    && [2, 3].includes(node.arguments.length) && ts.isStringLiteral(node.arguments[0])
     && ts.isObjectLiteralExpression(node.arguments[1]))) return false;
   const props = node.arguments[1].properties;
   return props.every((p) => ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)))
@@ -79,7 +80,7 @@ function supportedComponentBody(body) {
     && statements.slice(0, -1).every((node) => ts.isVariableStatement(node) && ordinaryDeclarations(node.declarationList));
 }
 
-function directHandlerBinding(handler, component) {
+function directHandlerBinding(handler, component, approved) {
   let value = handler;
   while (ts.isParenthesizedExpression(value.parent)) value = value.parent;
   const parent = value.parent;
@@ -87,7 +88,7 @@ function directHandlerBinding(handler, component) {
   if (ts.isVariableDeclaration(parent)) return ts.isIdentifier(parent.name) && parent.initializer === value && parent.parent.parent.parent === component.body;
   if (!ts.isPropertyAssignment(parent) || parent.initializer !== value || parent.name.text !== "onSubmit") return false;
   const props = parent.parent, form = props.parent;
-  if (!ts.isObjectLiteralExpression(props) || !renderConstructor(form)
+  if (!ts.isObjectLiteralExpression(props) || !renderConstructor(form, component, approved)
     || form.arguments[1] !== props || form.arguments[0].text !== "form") return false;
   // Only the explicit JSX host-element constructor path installs this handler.
   // A props-shaped object inside an arbitrary terminal factory is not a render.
@@ -97,7 +98,7 @@ function directHandlerBinding(handler, component) {
     if (ts.isParenthesizedExpression(owner) && owner.expression === node
       || ts.isPropertyAssignment(owner) && owner.initializer === node
       || ts.isObjectLiteralExpression(owner) || ts.isArrayLiteralExpression(owner)) continue;
-    if (renderConstructor(owner) && owner.arguments[1] === node) continue;
+    if (renderConstructor(owner, component, approved) && owner.arguments[1] === node) continue;
     return false;
   }
   return false;
@@ -110,7 +111,23 @@ function invokedExpression(node) {
     || ts.isTaggedTemplateExpression(parent) && parent.tag === node;
 }
 
-export function discoverReactEndpoint(candidates) {
+// Syntax-only controls have no native authority. Production observation always
+// requires a separately captured, immutable-artifact-linked proof below.
+function syntaxEffects(candidate) {
+  const artifact = createBindingArtifact({ imageId: `sha256:${"0".repeat(64)}`, sourceCommit: "0".repeat(40),
+    scripts: [{ path: "/syntax-control.js", source: candidate.componentSource }] });
+  const index = indexBindingArtifact(artifact), functions = [...index.functions.values()];
+  const root = functions.find((f) => f.node.getText() === candidate.componentSource);
+  const handler = functions.find((f) => f.node.getText() === candidate.handlerSource);
+  if (!root || !handler) return { outcome: "unknown", reason: "Unsupported syntax control" };
+  const frames = [root, handler].map((f) => ({ function: f.id, location: { scriptId: "syntax", ...Object.fromEntries(Object.entries(f.script.file.getLineAndCharacterOfPosition(f.start)).map(([k, v]) => [k === "line" ? "lineNumber" : "columnNumber", v])) }, bindings: {} }));
+  return checkBindingEffects(candidate, artifact, { schema: "native-binding-links/v1", artifactSha256: artifact.sha256,
+    component: root.id, handler: handler.id, recordId: candidate.recordId, locale: candidate.locale, frames,
+    scripts: [{ scriptId: "syntax", path: root.script.path, sha256: root.script.sha256 }], intrinsicIdentities: [],
+    props: { kind: "borrowed", fields: { record: { kind: "borrowed", fields: { id: { kind: "scalar", type: "string" } } }, locale: { kind: "scalar", type: "string" } } } });
+}
+
+export function discoverReactEndpoint(candidates, linked = null, diagnostics = []) {
   for (const candidate of candidates) {
     const component = functionNode(candidate.componentSource), parsedHandler = functionNode(candidate.handlerSource);
     if (!component || !parsedHandler || !component.parameters[0] || !supportedComponentBody(component.body)) continue;
@@ -122,11 +139,14 @@ export function discoverReactEndpoint(candidates) {
     findHandler(component.body);
     if (matches.length !== 1) continue;
     const handler = matches[0];
+    const effects = linked ? checkBindingEffects(candidate, linked.artifact, linked.receipt) : syntaxEffects(candidate);
+    if (effects.outcome !== "proved") { diagnostics.push(effects.reason); continue; }
+    const approved = new Set(effects.renderCalls);
     // Props describe only the owning component's lexical parameter. A nested
     // function between it and the mounted handler needs independent bindings.
     let nestedOwner = false;
     for (let node = handler.parent; node && node !== component; node = node.parent) if (ts.isFunctionLike(node)) nestedOwner = true;
-    if (nestedOwner || !directHandlerBinding(handler, component) || component.asteriskToken || handler.asteriskToken
+    if (nestedOwner || !directHandlerBinding(handler, component, approved) || component.asteriskToken || handler.asteriskToken
       || component.parameters[0].initializer || component.parameters[0].dotDotDotToken
       || handler.parameters.some((p) => !ts.isIdentifier(p.name) || p.initializer || p.dotDotDotToken)) continue;
     const native = { record: { id: candidate.recordId }, locale: candidate.locale }, variables = new Map();
@@ -139,7 +159,7 @@ export function discoverReactEndpoint(candidates) {
     const bindsName = (name, text) => ts.isIdentifier(name) ? name.text === text
       : (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) && name.elements.some((e) => ts.isBindingElement(e) && bindsName(e.name, text));
     const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
-    const protectedName = (name) => variables.has(name) || renderConstructors.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
+    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
     const bindingScope = (node) => {
       if (ts.isFunctionExpression(node)) return node;
       if (ts.isCatchClause(node.parent)) return node.parent;
@@ -162,10 +182,6 @@ export function discoverReactEndpoint(candidates) {
       ts.forEachChild(node, inspectDeclarations);
     };
     inspectDeclarations(component);
-    // Constructor names denote the supported JSX runtime surface, not locals
-    // supplied by the component or a factory with a similar-looking call site.
-    if (declarations.some((d) => [...renderConstructors].some((name) => bindsName(d.name, name))
-      && within(handler, bindingScope(d)))) continue;
     let handlerValue = handler;
     while (ts.isParenthesizedExpression(handlerValue.parent)) handlerValue = handlerValue.parent;
     if (ts.isVariableDeclaration(handlerValue.parent)) {
@@ -178,7 +194,7 @@ export function discoverReactEndpoint(candidates) {
           && !declarations.some((d) => d !== binding && bindsName(d.name, node.text) && within(node, bindingScope(d)))) {
           // A handler value may be returned or installed as onSubmit, not
           // aliased, captured by another closure, or consumed by a factory.
-          if (ts.isVariableDeclaration(node.parent) || !directHandlerBinding(node, component)) escaped = true;
+          if (ts.isVariableDeclaration(node.parent) || !directHandlerBinding(node, component, approved)) escaped = true;
         }
         ts.forEachChild(node, references);
       };
@@ -304,7 +320,16 @@ export function discoverReactEndpoint(candidates) {
       || [...url.searchParams.keys()].some((key) => key !== "locale")) continue;
     return { path: url.pathname, transport: "fetch", basis: candidate.basis, recordId: candidate.recordId, locale: candidate.locale,
       handlerSha256: createHash("sha256").update(candidate.handlerSource).digest("hex"),
-      componentSha256: createHash("sha256").update(candidate.componentSource).digest("hex") };
+      componentSha256: createHash("sha256").update(candidate.componentSource).digest("hex"),
+      ...(linked ? { bindingProof: { schema: "native-binding-proof/v1", artifactSha256: linked.artifact.sha256,
+        candidate, links: linked.receipt, effects } } : {}) };
   }
   return null;
+}
+
+export function replayBindingProof(enhancement, artifact) {
+  const proof = enhancement?.bindingProof;
+  if (!proof || proof.schema !== "native-binding-proof/v1" || proof.artifactSha256 !== artifact?.sha256) return false;
+  const replayed = discoverReactEndpoint([proof.candidate], { artifact, receipt: proof.links });
+  return Boolean(replayed && bindingHash(JSON.stringify(replayed)) === bindingHash(JSON.stringify(enhancement)));
 }

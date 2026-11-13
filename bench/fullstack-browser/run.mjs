@@ -13,6 +13,7 @@ import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
+import { bindingArtifactFromImage } from "./binding-image.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -148,7 +149,7 @@ export async function run(args) {
       runnerDiffSha256: sha256(await command("git", ["diff", "HEAD", "--", "bench/fullstack-browser"])) },
     host: { hostname: hostname(), platform: platform(), release: release(), node: process.version },
     fixtureSha256: sha256(JSON.stringify(records)), targetsSha256: sha256(JSON.stringify(targets)),
-    options, images: {}, builds: {}, browser: null, cells: emptyCells(plan), complete: false, qualificationPassed: false, readyForLoad: false,
+    options, images: {}, builds: {}, bindingArtifacts: {}, browser: null, cells: emptyCells(plan), complete: false, qualificationPassed: false, readyForLoad: false,
     retainedFamilies: retainedFamilies.map((f) => ({ ...f, outcome: "not-run", reason: "Retained; not replaced by native browser diagnostics" })),
     limits: ["No comparative result until all selected native capabilities and exact-image source provenance pass",
       "Browser-primitive resource observations do not invent framework ownership or probes into destroyed realms",
@@ -204,6 +205,10 @@ export async function run(args) {
       try {
         image = JSON.parse(await docker(["image", "inspect", targets[app].image]))[0];
         summary.images[app] = { ...imageEvidence(image, commit), sourceTreeSha256: sha256(await command("git", ["ls-tree", "-r", "HEAD", "--", app === "corten" ? "bench/marketplace/corten" : `bench/fullstack/apps/${app}`])) };
+        if (app === "nextjs") {
+          try { summary.bindingArtifacts[app] = await bindingArtifactFromImage(command, { imageId: image.Id, sourceCommit: commit, task }); }
+          catch (error) { summary.images[app].bindingArtifactError = error.message; }
+        }
       } catch (e) {
         for (const cell of summary.cells[app]) if (!options.cases || options.cases.includes(cell.case)) Object.assign(cell, { outcome: "failed", reason: e.message });
         save(); continue;
@@ -221,7 +226,7 @@ export async function run(args) {
           const base = await address(id);
           const before = await inspect(id);
           await ready(base, profile.steps[0].path, () => interrupted);
-          const cell = await runJourney({ browser, app, base, profile, records, readback: targets[app].readback, counters });
+          const cell = await runJourney({ browser, app, base, profile, records, readback: targets[app].readback, counters, bindingArtifact: summary.bindingArtifacts[app] ?? null });
           const after = await inspect(id);
           cell.evidence.provenance = { containerId: id, imageId: before.Image, startedAt: before.State.StartedAt, source: profile.source,
             stillSameProcess: after.State.Running && before.State.StartedAt === after.State.StartedAt && before.RestartCount === after.RestartCount,

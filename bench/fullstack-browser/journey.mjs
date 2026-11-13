@@ -11,6 +11,7 @@ import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
+import { BindingLinkObserver } from "./binding-links.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -76,7 +77,7 @@ export async function dispatch(page, step) {
   return form.locator('[type="submit"]').click();
 }
 
-export async function runJourney({ browser, app, base, profile, records, readback, counters }) {
+export async function runJourney({ browser, app, base, profile, records, readback, counters, bindingArtifact = null }) {
   const environment = structuredClone(settings.profiles[profile.device]);
   const result = { case: profile.key, outcome: "failed", qualificationPassed: false, evidence: {
     environment: { ...environment, js: profile.js }, architecture: null, steps: [], failures: [], gaps: [], cleanup: null,
@@ -87,7 +88,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
-  let network, lifecycle;
+  let network, lifecycle, bindings;
   const runtimeErrors = [];
   const started = performance.now();
   evidence.clock = { origin: "node.performance.now", startedAt: started };
@@ -100,6 +101,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
+    if (app === "nextjs" && profile.js) {
+      bindings = new BindingLinkObserver(cdp, bindingArtifact); await bindings.enable();
+      evidence.bindingArtifact = bindingArtifact ? { sha256: bindingArtifact.sha256, imageId: bindingArtifact.imageId, sourceCommit: bindingArtifact.sourceCommit } : null;
+    }
     lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
     network.attachCDP(cdp);
     const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
@@ -276,6 +281,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.requestReconciliation = reconcileRequests(evidence);
     if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
     const beforeClose = performance.now();
+    if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
     try {
       await context.close();
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,

@@ -143,19 +143,19 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`)]).path, "/api/marketplace/item_2");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, ";;const unused=[];")])?.path,
     "/api/marketplace/item_2", "Empty statements and unrelated declarations are supported");
-  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>r.id);')])?.path,
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const rows=[{id:"other"}];const view=rows.map(r=>r.id);')])?.path,
     "/api/marketplace/item_2", "An unrelated nested callback cannot shadow the mounted handler's props");
-  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>{const alias=r;return alias.id;});')])?.path,
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const rows=[{id:"other"}];const view=rows.map(r=>{const alias=r;return alias.id;});')])?.path,
     "/api/marketplace/item_2", "An alias of an unrelated callback parameter is not an escape of the component prop");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const id=r.id;const title=r.title;')])?.path,
     "/api/marketplace/item_2", "Pure property reads are not receiver invocations");
-  assert.equal(discoverReactEndpoint([candidate(`async e=>{const unused="safe";return fetch(${endpoint},{method:"POST"})}`, 'const view=rows.map(submit=>submit.id);')])?.path,
+  assert.equal(discoverReactEndpoint([candidate(`async e=>{const unused="safe";return fetch(${endpoint},{method:"POST"})}`, 'const rows=[{id:"other"}];const view=rows.map(submit=>submit.id);')])?.path,
     "/api/marketplace/item_2", "Pure prefix declarations and unrelated handler-name shadows are supported");
   assert.equal(discoverReactEndpoint([candidate(`async e=>{let unused="safe";e.preventDefault();return fetch(${endpoint},{method:"POST"})}`)])?.path,
     "/api/marketplace/item_2", "Ordinary let declarations preserve the native event binding");
   for (const [name, returned, prefix = "", supported = false] of [
-    ["JSX form constructor", '_jsx("form",{onSubmit:submit})', "", true],
-    ["nested JSX host constructors", '_jsxs("article",{children:[_jsx("form",{onSubmit:submit})]})', "", true],
+    ["JSX form constructor", '_jsx("form",{onSubmit:submit})', 'const _jsx=(tag,props)=>({tag,props});', true],
+    ["nested JSX host constructors", '_jsxs("article",{children:[_jsx("form",{onSubmit:submit})]})', 'const _jsx=(tag,props)=>({tag,props});const _jsxs=_jsx;', true],
     ["terminal props factory", 'retain(r,{onSubmit:submit})'],
     ["nested props factory", '_jsx("article",{children:retain(r,{onSubmit:submit})})'],
     ["factory around JSX form", 'retain(r,_jsx("form",{onSubmit:submit}))'],
@@ -468,7 +468,7 @@ test("row7: the repository's native Next marketplace handler remains supported",
   visit(component);
   const observed = { handlerSource: handler.getText(), componentSource: component.getText().replace(/^export /, ""), recordId: "item_2", locale: "fr-FR",
     action: "http://local/marketplace/fr-FR/item_2", base: "http://local", basis: "source-control-only-not-a-mounted-capture" };
-  assert.equal(discoverReactEndpoint([observed])?.path, "/api/marketplace/item_2");
+  assert.equal(discoverReactEndpoint([observed]), null, "Source-only Next discovery lacks imported callable evidence; emitted linked positives are tested separately");
   const requests = [], server = createServer(async (req, res) => {
     if (req.url.startsWith("/api/")) {
       let body = ""; for await (const chunk of req) body += chunk;
@@ -493,7 +493,7 @@ test("row7: the repository's native Next marketplace handler remains supported",
       form.__reactFiber$control = { type: component, memoizedProps: { record, locale } };
     }, observed);
     const candidates = await page.locator("form").evaluate(reactHandlerSources);
-    assert.equal(discoverReactEndpoint(candidates)?.path, "/api/marketplace/item_2");
+    assert.equal(discoverReactEndpoint(candidates), null, "Evaluated test closures are not immutable emitted module provenance");
     await page.evaluate(() => {
       const form = document.querySelector("form");
       return form.__reactProps$control.onSubmit({ currentTarget: form, preventDefault() {} });
@@ -553,7 +553,7 @@ test("row7: native Next helper effects are not resolved by identical component s
       await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
       assert.deepEqual(requests, [{ path: `/api/marketplace/${mode === "native" ? "item_2" : "item_1"}?locale=fr-FR`, method: "POST" }]);
       assert.equal(await page.locator("p").textContent(), "native accepted");
-      if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
+      if (mode === "native") assert.equal(discovered, null, "Source-only native helper identities are unresolved; the emitted linked positive is required separately");
       else {
         assert.deepEqual(candidates, captures[0], "The current capture cannot distinguish the real helper from one retaining the record");
         assert.equal(discovered, null, "Unobserved helper identity cannot certify request intent from component source alone");

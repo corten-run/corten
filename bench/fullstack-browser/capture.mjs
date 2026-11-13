@@ -4,6 +4,8 @@ import { candidates, sha256 } from "./contract.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
+import { replayBindingProof } from "./bindings.mjs";
+import { validateBindingArtifact } from "./binding-artifact.mjs";
 
 const keys = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
 const owned = (value) => {
@@ -34,8 +36,14 @@ export function oracleSettings(settings) {
     viewport: structuredClone(value.viewport), network: JSON.stringify({ network: value.network, cpu: value.cpu }), cache: value.cache, serviceWorker: value.serviceWorker,
   }])), maxCleanupMs: settings.maxCleanupMs, cleanupObservationMs: settings.observationMs };
 }
-export function projectCase(cell, profile, app, settings) {
+export function projectCase(cell, profile, app, settings, bindingArtifact = null) {
   const e = cell.evidence;
+  if (app === "nextjs" && profile.js) {
+    validateBindingArtifact(bindingArtifact);
+    assert.equal(e?.bindingArtifact?.sha256, bindingArtifact.sha256, "Case/code artifact correspondence missing");
+    for (const row of e.steps.filter((r) => r.action.input))
+      assert.ok(replayBindingProof(row.formBefore?.enhancement, bindingArtifact), "Native Next binding effects do not replay from emitted bytes/native links");
+  }
   const requests = reconcileRequests(e ?? {});
   assert.equal(requests.outcome, "reconciled", requests.reasons.join("; "));
   const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id),
@@ -96,7 +104,11 @@ export function exportBrowserCaptures(summary, records) {
       }
       try {
         assert.ok(summary.images[app]?.imageSourceVerified, "Exact clean native image source correspondence not verified");
-        capture.cases[index] = projectCase(cell, profile, app, settings);
+        if (app === "nextjs" && profile.js) {
+          assert.equal(summary.bindingArtifacts?.[app]?.imageId, summary.images[app].id, "Binding artifact is from another image");
+          assert.equal(summary.bindingArtifacts[app].sourceCommit, summary.code.commit, "Binding artifact is from another source commit");
+        }
+        capture.cases[index] = projectCase(cell, profile, app, settings, summary.bindingArtifacts?.[app]);
       } catch (error) {
         capture.cases[index] = unavailable(cell, "unsupported", error.message); diagnostics.push({ case: cell.case, stage: "projection", error: error.message }); continue;
       }

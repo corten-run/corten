@@ -106,8 +106,34 @@ origin matches the document. Next's custom React enhancement is discovered from 
 form's real `onSubmit`, owning fiber props and containing component function before dispatch.
 `bindings.mjs` uses the already-installed TypeScript parser to resolve only a single supported
 native POST expression, without invoking that function or evaluating its source. Unresolved,
-shadowed, cross-origin or mismatched bindings remain failures. Source hashes and public native
-props establish the receipt; a sent POST is not used to invent a positive binding.
+shadowed, cross-origin or mismatched bindings remain failures. A sent POST is not used to invent
+a positive binding. Function text and sampled props alone do not prove imported helper effects.
+
+The Next observation additionally requires `native-binding-code/v1`: exact public emitted script
+bytes extracted from the stopped immutable image, with image/source identity and content hashes.
+`binding-image.mjs` only copies those bytes; it does not execute an image or rebuild its code.
+`binding-links.mjs` records CDP function locations, exact executed-script correspondence and
+descriptor-only native lexical edges. Getters, proxies, bound functions, foreign/evaluated
+scripts and unavailable links remain unknown. Candidate/helper functions are never called by
+discovery. Identity comparisons use only a harness-authored reference equality operation.
+
+`binding-effects.mjs` checks the linked component's declarations and entire render expression,
+including all prop/child siblings, operands, branches and invoked local callbacks. Calls must
+resolve to artifact bodies or document-start identity-checked platform operations. Imported
+function edges must also match the emitted import/export declaration. There are no app-helper
+name or caller-supplied purity exceptions. Borrowed data needs plain own descriptors; writes,
+retention through unmodeled calls, unknown coercions/getters and escaping render callbacks block
+the proof. Array callbacks are checked against observed data; `filter`/`map`/`slice` create fresh
+results, and `sort` requires a fresh receiver on every relevant path. The limited cache/Intl/
+URLSearchParams value construction needed by the emitted repository Next control is modeled;
+arbitrary JavaScript, bundler loaders and framework internals are not inferred pure.
+
+The raw summary embeds artifacts and each positive binding retains its native links and effect
+derivation. Capture projection and saved validation recompute the proof, including image/source
+identity, rather than trusting `proved` or a stored endpoint. All browser `.mjs` producer/checker
+files enter the existing runner-file source closure automatically. Missing historical receipts
+remain unqualified and saved evidence is not rewritten. Unknown production-bundle effects stay
+explicit blockers; the apparatus ESM/JSX adapter is not a React runtime purity contract.
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property
 and destructuring writes), intervening function scopes, conditional/unreachable or uncalled
 nested fetches, duplicate method properties and option spreads are unsupported, not inferred POSTs.
@@ -121,12 +147,12 @@ a statement-kind check: sequences, assignments, updates, deletes, awaits, tags a
 expressions are unsupported. The mounted handler must be a direct declaration, direct return,
 or direct `onSubmit` property in that return. Handler values cannot pass through aliases,
 captures or opaque factories, either as function literals or via a declaration's references.
-An `onSubmit` property is supported only in a two-argument `_jsx`/`_jsxs` host `form`
-constructor with plain, unique static props (no spreads or computed keys), connected to the
-terminal return through literal props/children and the same host-element constructors.
-Locally bound or reassigned constructor names, arbitrary
-props factories and calls wrapping that constructor path are unsupported. This limited JSX
-source grammar is not a general render-function or factory interpreter.
+An `onSubmit` property is supported only in a linked, effect-checked host `form` constructor
+with plain, unique static props (no spreads or computed keys), connected to the terminal return
+through literal props/children and effect-checked constructors. Every sibling is checked too,
+not only that ancestor path. Arbitrary props factories are unsupported. This limited JSX source
+grammar is not a general render-function or factory interpreter. Syntax-only regression controls
+can resolve local pure constructors, but production observation never uses that path as evidence.
 Standalone calls, branches, loops and other executable component statements remain unsupported.
 
 A prop-object field read is distinct from invoking that field with the prop as receiver.
@@ -166,9 +192,11 @@ mounted React parameter shadowing, component-alias/container/return-factory/rece
 native socket receipt mutations. The closed-grammar controls compare Node and Chromium errors
 and HTTP receipts for event shadows/resource declarations; a real native submit capture listener
 also demonstrates the terminal props-factory escape independently of discovery.
-The Next source positive also executes the repository's actual submit function in
-Chromium and compares its independently received POST path, method and fields. Its test-only
-closure setup is not a compiled Next deployment or new contender evidence. These are apparatus
+`binding-effects.test.mjs` serves actual emitted repository component/helper ESM modules and
+checks their CDP-linked native POST, renamed-safe helper, effectful substitution, sibling effects,
+initializer/callback retention and altered proof bytes/locations. The source-only Next controls
+still execute the actual submit function but now require rejection without emitted provenance.
+The test-only JSX/runtime adapter is not a compiled Next deployment or new contender evidence. These are apparatus
 tests, not new contender evidence; historical saved observations are not rewritten.
 
 The initial response is parsed again in a separate script-disabled browser context from its

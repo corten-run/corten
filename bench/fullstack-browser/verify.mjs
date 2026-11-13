@@ -15,6 +15,8 @@ import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
+import { validateBindingArtifact } from "./binding-artifact.mjs";
+import { replayBindingProof } from "./bindings.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
 const hash = /^[a-f0-9]{64}$/, commitId = /^[a-f0-9]{40}$/;
@@ -455,6 +457,14 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
       if (step.input) {
         need(posts.length === 1 && isDeepStrictEqual(posts[0].input, step.input), "Native write/input coverage missing");
         const enhancement = profile.js ? row.formBefore?.enhancement : null;
+        if (app === "nextjs" && profile.js) {
+          const artifact = summary.bindingArtifacts?.[app];
+          if (artifact) same(e.bindingArtifact, { sha256: artifact.sha256, imageId: artifact.imageId, sourceCommit: artifact.sourceCommit }, "Native case/code artifact identity differs");
+          if (!artifact || !replayBindingProof(enhancement, artifact)) {
+            block("Next emitted-code/native-binding effect proof unavailable or inconsistent");
+            need(!e.functionalChecksPassed && row.failures.length, "Stored Next native pass lacks replayable binding effects");
+          }
+        }
         const endpoint = profile.js && posts[0].transport === "livewire" ? row.formBefore?.updatePath : enhancement?.path ?? row.formBefore?.action;
         need(endpoint && writeDestination(posts[0], { app, architecture: e.architecture, js: profile.js, form: row.formBefore }) === endpoint, "Native write lacks independent form binding");
         if (enhancement) same(posts[0].transport, enhancement.transport, "Native enhancement transport mismatch");
@@ -631,6 +641,14 @@ export function validateSaved(input = {}) {
       same(image.imageSourceVerified, image.builtCommit === commit && image.builtDirty === "false", "Image clean-source flag contradicts labels");
       need(hash.test(image.sourceTreeSha256), "Malformed native image source tree hash");
       if (!image.imageSourceVerified || code.dirty) block("Clean exact-image source correspondence unavailable");
+    }
+    if (summary.bindingArtifacts !== undefined) {
+      need(object(summary.bindingArtifacts) && Object.keys(summary.bindingArtifacts).every((app) => app === "nextjs"), "Unknown emitted binding artifact candidate");
+      for (const [app, artifact] of Object.entries(summary.bindingArtifacts)) {
+        validateBindingArtifact(artifact);
+        same(artifact.imageId, summary.images[app]?.id, "Binding artifact/image identity differs");
+        same(artifact.sourceCommit, commit, "Binding artifact/source identity differs");
+      }
     }
     for (const [app, build] of Object.entries(summary.builds)) {
       need(options.build && options.apps.includes(app) && build.image === `${summary.task}-${app}` && build.commit === commit && build.dirty === code.dirty && typeof build.passed === "boolean" && hash.test(build.sourceSnapshot), "Malformed native build provenance");
