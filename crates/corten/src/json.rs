@@ -121,7 +121,7 @@
 //! ```
 //!
 //! `borrow` is one, since a `FromJson` reads owned values, and so are `skip` and `default` on a
-//! tuple struct's field:
+//! field of a tuple struct that is not `transparent`:
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]

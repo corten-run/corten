@@ -331,7 +331,9 @@ Corten is pre-1.0, so any minor version may change the API.
   reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
   field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
   `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
-  as serde refuses it. Each other attribute it refused is still a compile error, some with reworded
+  as serde refuses it. A transparent struct whose one read field is a path ending in
+  `PhantomData` (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde
+  refuses it. Each other attribute it refused is still a compile error, some with reworded
   messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
   for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
   than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
