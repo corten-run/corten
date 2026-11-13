@@ -29,6 +29,12 @@ those observed values against the acknowledged or staged state: a dropped frame
 must replay its effect, while a dropped acknowledgement must not apply it twice.
 Each rendered page receives a fresh signed consumer token bound to its native
 cookie session, so tabs sharing the cookie jar retain independent cursors.
+Native ready messages identify that consumer; resource inventory attributes its
+actual connection, reader, task and queued entries separately from peers. A
+disconnect/detach waits only for its own native resources, not global zero.
+Final all-reader cleanup still requires aggregate zero. Overlapping publisher
+calls are serialized so a later HTTP response cannot release an earlier call's
+delivery barrier.
 
 Supported explicit bounds: queue 2/history 4, or queue 1024/history 1025. Peaks are
 updated at mutation time. Inventory includes retained client rows, replay copies,
@@ -57,6 +63,8 @@ dispatch, expiry, duplicate/gap effects and real bounded queue saturation.
 `node bench/live/apps/rails/test/adversarial.mjs http://localhost:8080` intercepts
 the actual WebSocket to drop the first native event or its browser acknowledgement,
 requires recovery within two seconds, and checks two tabs sharing one cookie jar.
+It also disconnects, reconnects and detaches one tab while its peer keeps receiving,
+and withholds the first HTTP response/native event during overlapping publishes.
 
 The publisher also accepts `{events:[...]}` as an ordinary bulk input, mutually
 exclusive with `event`. It prevalidates every event (at most 1,044) and sequence

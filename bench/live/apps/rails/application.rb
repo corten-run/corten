@@ -42,6 +42,9 @@ class NativeChannel < ActionCable::Channel::Base
       return
     end
     @client = identity.fetch("consumer")
+    NativeStore.bind_connection(connection, @client)
+  rescue ArgumentError
+    reject
   end
 
   def start(data)

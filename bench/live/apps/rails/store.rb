@@ -34,7 +34,15 @@ module NativeStore
     end
 
     def connection(connection)
-      @mutex.synchronize { @connections[connection] = true }
+      @mutex.synchronize { @connections[connection] = [] }
+    end
+
+    def bind_connection(connection, client)
+      @mutex.synchronize do
+        identities = @clients.keys | @connections.values.flatten
+        raise ArgumentError, "consumer limit reached" unless identities.include?(client) || identities.size < 16
+        @connections.fetch(connection) << client unless @connections.fetch(connection).include?(client)
+      end
     end
 
     def disconnection(connection)
@@ -61,7 +69,7 @@ module NativeStore
         expired = from < @through && (@history.empty? || from < @history.first["seq"] - 1)
         replay = initial || expired ? [] : @history.select { |event| event["seq"] >= from }
         @readers[channel] = { client: client, queue: [], replay: replay, inflight: false, overflowed: false }
-        { from: from, status: expired ? "expired" : "accepted", needs_snapshot: !@clients[client][:initialized], resources: resources_locked }
+        { consumer: client, from: from, status: expired ? "expired" : "accepted", needs_snapshot: !@clients[client][:initialized], resources: resources_locked }
       end
     end
 
@@ -231,11 +239,16 @@ module NativeStore
     end
 
     def resources_locked
+      consumers = (@clients.keys | @connections.values.flatten).to_h do |id|
+        readers = @readers.values.select { |reader| reader[:client] == id }
+        [id, { subscriptions: readers.size, connections: @connections.values.count { |ids| ids.include?(id) },
+          pendingTasks: readers.size, queueEvents: readers.sum { |reader| reader[:queue].size } }]
+      end
       { subscriptions: @readers.size, connections: @connections.size, pendingTasks: @readers.size,
         queueLimit: @queue_limit, queueEvents: @readers.values.sum { |r| r[:queue].size }, queuePeak: @queue_peak,
         historyLimit: @history_limit, historyEvents: @history.size, historyPeak: @history_peak,
         process: { pid: Process.pid, ruby: RUBY_VERSION, cpu: Process.times.to_h, gc: GC.stat },
-        inventory: { applicationQueues: @readers.size, inflightEvents: @readers.values.count { |r| r[:inflight] },
+        inventory: { consumers: consumers, applicationQueues: @readers.size, inflightEvents: @readers.values.count { |r| r[:inflight] },
           inflightLimitPerReader: 1, overflowSlotsLimit: 1, replayCopyEvents: @readers.values.sum { |r| r[:replay].size },
           replayCopyLimitEvents: @history_limit, snapshotReads: @reads, sourceRows: @rows.size,
           retainedClientRows: @clients.values.sum { |c| c[:rows].size }, retainedClients: @clients.size, retainedClientLimit: 16,
