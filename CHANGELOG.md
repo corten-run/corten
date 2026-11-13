@@ -19,6 +19,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Register the native Rails, Phoenix and Laravel live ports without promoting
+  historical captures. Retain Livewire/Reverb wire and DOM evidence, including
+  negative HTTP controls and request timings on failed journeys; Laravel's
+  observed native-feed deadline misses remain unqualified outcomes.
+
 - Align server build recipes with the refreshed Python 3.15 and Java 27 images,
   the native Spring JSON check with its production toolchain, deployment runtime
   descriptions with their current sources, and the Express Node/Bun comparison

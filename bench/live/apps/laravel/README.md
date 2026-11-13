@@ -83,9 +83,10 @@ Livewire HTTP, native morphs, HTTP writes/ACKs and independent DOM/oracle checks
 `wire.mjs` extracts original native packets without sorting or manufacturing
 events. Browser raw receipts omit signed Livewire snapshots and CSRF material.
 
-See [test/receipts/README.md](test/receipts/README.md) for the retained port's
-original commands, results, failed routed-close proof and limits. Those are
-historical app-local receipts, not qualification of this refreshed image.
+The operator retains the port's original commands, results, failed routed-close
+proof and limits separately from these sources. Those historical app-local
+receipts do not qualify this refreshed image. The commands above produce fresh
+native observations; the shared runner preserves failed attempts as failures.
 No workload validator, assertion bound or deadline was relaxed.
 The shared runner registers this port as `laravel-livewire`. It retains native
 Livewire HTTP calls/effects and raw Reverb frames, binds their request/socket

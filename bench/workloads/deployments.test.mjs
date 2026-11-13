@@ -176,7 +176,7 @@ test("live representatives use dispatched native ports and missing recovery port
   assert.deepEqual(gin.command, ["./server"]);
   assert.equal(gin.builds.app.context, "bench/live/apps/gin");
   assert.match(gin.runtime, /Go 1\.27\.3/);
-  assert.equal(manifest("recoverable-live", "laravel").implementation, "pending-implementation");
+  assert.equal(manifest("recoverable-live", "laravel").implementation, "source-present");
   assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /implementation.*source-present/);
   for (const app of ["topcoat", "leptos"]) {
     const entry = manifest("recoverable-live", app);
@@ -209,7 +209,7 @@ test("live representatives use dispatched native ports and missing recovery port
 });
 
 test("every required native live input gates source registration independently", () => {
-  for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"], ["corten", "src/parity_screen.js"]]) {
+  for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"], ["corten", "src/parity_screen.js"], ["rails", "client.js"], ["phoenix", "client.js"], ["laravel", "client.js"]]) {
     const original = manifest("recoverable-live", app);
     assert.ok(original.configuration.sourceRefs.includes(`bench/live/apps/${app}/${bridge}`));
     for (const ref of original.configuration.sourceRefs) {
@@ -228,6 +228,18 @@ test("every required native live input gates source registration independently",
       }
       assert.equal(manifest("recoverable-live", app).implementation, "source-present");
     }
+  }
+});
+
+test("registered framework-native live ports have concrete unqualified source manifests", () => {
+  for (const app of ["rails", "phoenix", "laravel"]) {
+    const entry = manifest("recoverable-live", app);
+    assert.equal(entry.implementation, "source-present", app);
+    assert.equal(entry.qualification, "pending");
+    assert.deepEqual(entry.evidence, []);
+    assert.ok(entry.configuration.sourceRefs.includes(`bench/live/apps/${app}/wire.mjs`));
+    assert.equal(entry.configuration.builds.app.context, `bench/live/apps/${app}`);
+    assert.ok(!JSON.stringify(entry).includes("bench/fullstack/apps/"));
   }
 });
 
