@@ -50,6 +50,8 @@ export async function dispatchOperation({ op, measure }) {
   const o = window.clientObserver, start = measure ? performance.now() : null;
   if (op.kind === "filter") {
     const input = document.getElementById("filter");
+    if (!input || input.disabled) throw new Error("native-control-missing");
+    if (!o.visible(input)) throw new Error("native-control-not-visible");
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, op.text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   } else {
@@ -57,6 +59,7 @@ export async function dispatchOperation({ op, measure }) {
       : op.kind === "sort" ? `#sort-${op.direction}` : op.kind === "tick" ? (op.count === o.loaded().cards.length ? "#tick-all" : "#tick-small") : `#${op.kind}`;
     const control = document.querySelector(selector);
     if (!control || control.disabled) throw new Error("native-control-missing");
+    if (!o.visible(control)) throw new Error("native-control-not-visible");
     control.click();
   }
   await o.settle();
@@ -132,6 +135,18 @@ export async function qualifyAndMeasure(capture) {
   return { qualification, measurement, readyForMeasurement: !!measurement.oracle.functionalPassed };
 }
 
+export async function finishRun(output, out, { browser, server, interruptCleanup, isInterrupted }) {
+  output.cleanupFailures = [];
+  for (const [resource, close] of [["browser-interrupt", () => interruptCleanup], ["browser", () => browser?.close()], ["server", () => server?.close()]]) {
+    try { await close(); }
+    catch (error) { output.cleanupFailures.push({ resource, name: error.name, diagnosticSha256: sha256(String(error)) }); }
+  }
+  const interrupted = isInterrupted();
+  if (interrupted || output.cleanupFailures.length) output.passed = false;
+  for (const app of output.selectedApps) output.cells[app] ??= { outcome: "not-run", reason: interrupted ? "native-runner-interrupted" : "runner-failed-before-adapter", qualification: null, measurement: null, readyForMeasurement: false };
+  await writeFile(join(out, "result.json"), JSON.stringify(output, null, 2) + "\n");
+}
+
 export async function run(args) {
   const config = options(args);
   // Refuse reuse: stale artifacts must never become evidence for this invocation.
@@ -149,7 +164,9 @@ export async function run(args) {
   let server, browser, interrupted = false, interruptCleanup;
   const interrupt = () => {
     interrupted = true;
-    interruptCleanup ??= browser?.close().catch(() => {});
+    interruptCleanup ??= browser && Promise.resolve().then(() => browser.close());
+    // Handle the rejection immediately, but retain it for final cleanup evidence.
+    interruptCleanup?.catch(() => {});
   };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   try {
@@ -178,11 +195,7 @@ export async function run(args) {
     output.failure = { reason: interrupted ? "native-runner-interrupted" : "runner-failed", name: error.name, diagnosticSha256: sha256(String(error)) };
   } finally {
     try {
-      await interruptCleanup;
-      await browser?.close(); await server?.close();
-      if (interrupted) output.passed = false;
-      for (const app of output.selectedApps) output.cells[app] ??= { outcome: "not-run", reason: interrupted ? "native-runner-interrupted" : "runner-failed-before-adapter", qualification: null, measurement: null, readyForMeasurement: false };
-      await writeFile(join(config.out, "result.json"), JSON.stringify(output, null, 2) + "\n");
+      await finishRun(output, config.out, { browser, server, interruptCleanup, isInterrupted: () => interrupted });
     } finally { process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt); }
   }
   return output;

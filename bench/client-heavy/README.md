@@ -37,23 +37,34 @@ rows, a reducer, expected snapshots or DOM. Native effects subscribe and native
 unmount/disposal releases them. The observer retains the actual screen element
 before unmount, then reads that detached DOM after an independently dispatched
 tick. It does not clone the screen or reconstruct it from the oracle.
+While connected, the screen, dispatched controls and extracted row/card/total text
+must pass the browser's `checkVisibility` with CSS visibility and opacity checks.
+Hidden descendants cannot supply visible text. Post-unmount reads intentionally
+inspect the retained detached DOM, whose layout is no longer visible.
 
 Resources are observed by wrapping the browser's actual EventTarget, timer,
 animation/idle/microtask/MessageChannel/scheduler, fetch/XHR/beacon and socket APIs
-before scripts load. The source's real listener set supplies subscription counts.
+before scripts load. The source's real listener set supplies subscription counts,
+including subscriptions registered before `begin()`. Socket connections are tracked
+from construction, not from mount, and every WebSocket send attempt is recorded,
+including bootstrap sends and sends that fail. A live bootstrap source subscription
+or socket makes the required zero baseline fail; `begin()` never subtracts it away.
+Removing a bootstrap subscription or closing a connection releases its count normally.
 Workers are refused, service workers blocked, rather than left unobserved.
 Element-bound input handlers on detached elements cannot receive browser input;
-they are not active owned listeners. Global app listeners *are* counted, including
-event-handler properties on the window, document, document element and body; replacing
+they are not active owned listeners. Mount-installed global app listeners *are*
+counted, including event-handler properties on the window, document, document element and body; replacing
 a bootstrap handler is counted too. The one
 explicit infrastructure classification is Corten's pair of document delegates for
 `click` and `input`: these are page-lifetime listeners installed lazily by the
 runtime's `listen`, not component subscriptions. Only each first capture/bubble
 registration whose immediate caller is the hashed `/corten/runtime.js` qualifies;
 the retained `resourceDetails` names them. An app's global input listener still
-fails the hostile test. No subscription, connection, timer or queued task is
-exempted. Promise chains without a scheduled browser task are not globally
-enumerable; the native apps own no such asynchronous work.
+fails the hostile test. Bootstrap document listeners and event-handler properties
+remain page infrastructure, but source subscriptions and sockets never gain that
+exemption. Mounted timers and queued tasks are counted. Promise chains without a
+scheduled browser task are not globally enumerable; the native apps own no such
+asynchronous work.
 
 The runner records operation dispatch-to-two-animation-frames elapsed time,
 including scheduling and rendering, not pure handler CPU. Observer overhead is
@@ -74,12 +85,22 @@ with the required round. The returned/saved `result.json` uses
 `timeoutMs`, `provenance`, `selectedApps`, `builds`, `cells`, `passed`, and
 `readyForLoad: false`. Each cell has `outcome`, `qualification`, `measurement`
 and `readyForMeasurement`. Failed builds/runs retain reasons, never timing zeros.
+`cleanupFailures` records sanitized resource/error identities and diagnostic hashes.
+Browser shutdown failures do not skip server shutdown or the final evidence write,
+and any cleanup failure makes the overall run fail.
 Captures inside each pass retain `client-capture/v1` unchanged. A failed journey
 has `records: null` in that capture and its partial observations under `failure`.
 No measured action timings are released for a failing measured journey.
 
 Set `CLIENT_NATIVE_DIR` to the run's `native` directory before running
-`native.test.mjs` to exercise deliberate faults in the actual React app
-and Corten-specific subscription/global-listener cleanup faults.
-Without it only that integration test is explicitly skipped; the observer and
+`native.test.mjs` to exercise both passes for all six native assets, deliberate
+visibility/content faults in React, Corten-specific cleanup/visibility faults,
+and an in-memory React bootstrap socket/subscription retained through cleanup.
+That socket probe uses a loopback peer and verifies actual outgoing operation and
+cleanup frames, resource counts, and refusal to enter measurement.
+Reusing assets for these tests is diagnostic harness regression coverage only:
+check their recorded artifact/input hashes against the assets and current native
+sources, and disclose that the observer/runner are newer than the build receipt.
+This does not bypass the runner's mandatory fresh build or create a new baseline.
+Without it the native integration tests are explicitly skipped; the observer and
 dispatch-gate tests need no build. The hostile cases are not framework evidence.
