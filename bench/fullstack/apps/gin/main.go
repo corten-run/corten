@@ -44,6 +44,9 @@ func main() {
 	}
 
 	r := gin.Default()
+	if err := configureProduction(r); err != nil {
+		log.Fatal(err)
+	}
 	r.StaticFile("/catalog.css", "static/catalog.css")
 	catalog.routes(r)
 	marketplace.routes(r)
@@ -102,7 +105,7 @@ func main() {
 	r.NoRoute(func(c *gin.Context) {
 		render(c, http.StatusNotFound, notFoundPage())
 	})
-	if err := r.Run(":" + envOr("PORT", "8080")); err != nil {
+	if err := runGin(r); err != nil {
 		log.Fatal(err)
 	}
 }

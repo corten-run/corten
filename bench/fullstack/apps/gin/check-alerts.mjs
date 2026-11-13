@@ -12,8 +12,8 @@ import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
 
-const [app, image] = process.argv.slice(2);
-assert.ok(['gin', 'drogon', 'topcoat', 'leptos'].includes(app) && image, 'usage: node check-alerts.mjs APP IMAGE');
+const [app, image, profile = 'defaults'] = process.argv.slice(2);
+assert.ok(['gin', 'drogon', 'topcoat', 'leptos'].includes(app) && image && ['defaults', 'matched'].includes(profile), 'usage: node check-alerts.mjs APP IMAGE [defaults|matched]');
 const docker = (...args) => {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
   assert.ifError(result.error);
@@ -55,6 +55,7 @@ try {
     active = `compiled-alerts-${app}-${source}-${process.pid}`;
     docker('run', '-d', '--name', active, '--cpus', '1', '--memory', '512m',
       '--label', 'agent.owner=codex', '--label', 'agent.task=compiled-alerts',
+      '-e', `PROFILE=${profile}`,
       '-p', '127.0.0.1::8080', '-v', `${folder}:/fixtures:ro`,
       '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json', '-e', 'CATALOG_SOURCE=fixture',
       '-e', `MARKETPLACE_SOURCE=${source}`, '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
