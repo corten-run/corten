@@ -8,6 +8,13 @@ const settings = { group: 'recoverable-live', scenario: 'disconnect', queueLimit
   slowOutcome: 'resnapshot', maxRecoveryMs: 2000, maxCleanupMs: 5000,
   cleanupObservationMs: 150, maxSlowMs: 10000, maxPublishLagMs: 5000 };
 const workload = createLiveWorkload({ seed: 17, rowCount: 5, eventCount: 24 });
+const rowCountAt = through => {
+  const rows = new Map(workload.initial.map(row => [row.id, row]));
+  for (const event of workload.events.slice(0, through)) {
+    if (event.op === 'remove') rows.delete(event.key); else rows.set(event.key, event.row);
+  }
+  return rows.size;
+};
 const browser = await chromium.launch({ headless: true });
 const failures = [];
 async function bounded(promise, ms) {
@@ -25,7 +32,12 @@ async function run(name, body) {
     assert.equal((await response.json()).framework, framework);
     await body(context);
     console.log(`${framework} native adversarial ${name}: passed`);
-  } catch (error) { failures.push(`${name}: ${error.message}`); console.error(`${framework} ${name}: ${error.message}`); }
+  } catch (error) {
+    failures.push(`${name}: ${error.message}`); console.error(`${framework} ${name}: ${error.message}`);
+    for (const page of context.pages()) console.error('Actual consumer state:', await page.evaluate(() => ({
+      consumer: window.liveApp?.consumerId, through: window.liveApp?.through,
+      count: document.querySelector('#effects')?.value, recent: window.liveApp?.records.slice(-4) })).catch(() => null));
+  }
   finally { clearTimeout(deadline); await context.close(); }
 }
 const call = (page, method, arg) => page.evaluate(async ({ method, arg }) => window.liveApp[method](arg), { method, arg });
@@ -100,6 +112,85 @@ try {
     await Promise.all(pages.map(page => call(page, 'detach')));
     const resources = await (await context.request.get(base + '/parity/resources')).json();
     for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueEvents']) assert.equal(resources[key], 0);
+  });
+  await run('one consumer disconnects and detaches while its peer keeps receiving', async context => {
+    const pages = [await context.newPage(), await context.newPage()];
+    for (const page of pages) {
+      await page.goto(base); await page.waitForFunction(() => !!window.liveApp);
+      await call(page, 'setup', settings);
+    }
+    await call(pages[0], 'publish', workload.events[0]);
+    await Promise.all(pages.map(page => page.waitForFunction(() => window.liveApp.through === 1)));
+    await bounded(call(pages[0], 'disconnect'), settings.maxCleanupMs + 500);
+    const ids = await Promise.all(pages.map(page => page.evaluate(() => window.liveApp.consumerId)));
+    assert.ok(ids.every(id => typeof id === 'string' && id.length > 20));
+    assert.notEqual(ids[0], ids[1]);
+    const resources = async () => (await context.request.get(base + '/parity/resources')).json();
+    const remaining = await resources();
+    for (const key of ['subscriptions', 'connections', 'pendingTasks']) {
+      assert.equal(remaining[key], 1, 'peer remains active');
+      assert.equal(remaining.inventory.consumers[ids[0]][key], 0, 'only disconnected consumer is released');
+      assert.equal(remaining.inventory.consumers[ids[1]][key], 1);
+    }
+    await call(pages[1], 'publish', workload.events[1]);
+    await pages[1].waitForFunction(() => window.liveApp.through === 2);
+    assert.equal((await observed(pages[0])).through, 1);
+    await bounded(call(pages[0], 'reconnect'), settings.maxRecoveryMs);
+    await pages[0].waitForFunction(() => window.liveApp.through === 2);
+    for (const page of pages) assert.deepEqual(await observed(page), {
+      through: 2, count: 2, effects: workload.events.slice(0, 2).map(event => event.effectId), rows: rowCountAt(2) });
+    await bounded(call(pages[0], 'detach'), settings.maxCleanupMs + 500);
+    const detached = await resources();
+    assert.equal(detached.connections, 1); assert.equal(detached.subscriptions, 1);
+    assert.equal(detached.inventory.consumers[ids[0]], undefined);
+    await call(pages[1], 'publish', workload.events[2]);
+    await pages[1].waitForFunction(() => window.liveApp.through === 3);
+    assert.equal((await observed(pages[0])).through, 2);
+    await call(pages[1], 'detach');
+    const empty = await resources();
+    for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueEvents']) assert.equal(empty[key], 0);
+  });
+  await run('overlapping publications cannot bypass the earlier native acknowledgement', async context => {
+    const page = await context.newPage();
+    let written, releaseHttp, releaseFrame;
+    const firstWritten = new Promise(resolve => { written = resolve; });
+    const httpGate = new Promise(resolve => { releaseHttp = resolve; });
+    const frameGate = new Promise(resolve => { releaseFrame = resolve; });
+    await page.route('**/parity/publish', async route => {
+      if (route.request().postDataJSON().event.seq !== 1) { await route.continue(); return; }
+      const response = await route.fetch();
+      assert.equal(response.status(), 200);
+      written(); await httpGate; await route.fulfill({ response });
+    });
+    await page.routeWebSocket(url => ['/cable', '/live/websocket'].includes(url.pathname), ws => {
+      const server = ws.connectToServer();
+      server.onMessage(async data => {
+        const frame = JSON.parse(data.toString());
+        const messages = framework === 'rails' ? [frame.message] : (frame[4]?.e || frame[4]?.response?.diff?.e || []).filter(([name]) => name === 'parity').map(([, value]) => value);
+        if (messages.some(message => message?.kind === 'event' && message.event.seq === 1)) await frameGate;
+        ws.send(data);
+      });
+    });
+    await page.goto(base); await page.waitForFunction(() => !!window.liveApp);
+    await call(page, 'setup', settings);
+    const pending = [call(page, 'publish', workload.events[0])];
+    try {
+      await bounded(firstWritten, 5000);
+      pending.push(call(page, 'publish', workload.events[1]));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      releaseFrame();
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.deepEqual(await observed(page), { through: 0, count: 0, effects: [], rows: 5 },
+        'actual native DOM must not advance before the held first publication acknowledgement');
+      assert.equal(await page.evaluate(() => window.liveApp.records.filter(r => r.kind === 'publish').length), 0);
+    } finally {
+      releaseHttp(); releaseFrame();
+      await Promise.all(pending);
+    }
+    await page.waitForFunction(() => window.liveApp.through === 2);
+    assert.deepEqual(await observed(page), { through: 2, count: 2,
+      effects: workload.events.slice(0, 2).map(event => event.effectId), rows: rowCountAt(2) });
+    await call(page, 'detach');
   });
 } finally { await browser.close(); }
 assert.deepEqual(failures, [], failures.join('\n'));

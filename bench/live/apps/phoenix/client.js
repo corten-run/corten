@@ -5,6 +5,8 @@ import { LiveSocket } from 'phoenix_live_view';
 const records = [], effects = [];
 let settings, hook, detached = false, through = 0, resume = false;
 let lastObserved;
+let consumerId, connected = false, publications = Promise.resolve();
+function enqueuePublication(work) { return publications = publications.then(work); }
 let chain = Promise.resolve(), publication = Promise.resolve(), resolveReady, resolveFinished;
 const record = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
 const rows = () => [...document.querySelector('#rows').children].map(tr => ({ id: tr.id,
@@ -23,6 +25,15 @@ const observed = () => ({ through: +document.querySelector('#effects').dataset.t
   effectCount: +document.querySelector('#effects').value, rowCount: rows().length });
 function acknowledge() { hook.pushEvent('acknowledge', observed()); }
 function snapshot() { record('snapshot-request'); hook.pushEvent('snapshot', {}); }
+function credit(paused) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('native delivery credit deadline')), settings.maxPublishLagMs);
+    hook.pushEvent(paused ? 'pause' : 'resume', {}, reply => {
+      clearTimeout(timer);
+      if (reply.paused !== paused) reject(new Error('native delivery credit mismatch')); else resolve();
+    });
+  });
+}
 function received(message) {
   const receivedAt = performance.now(), barrier = publication;
   chain = chain.then(async () => {
@@ -31,6 +42,7 @@ function received(message) {
     if (detached) return;
     if (message.kind === 'error') throw new Error(message.message);
     if (message.kind === 'ready') {
+      consumerId = message.consumer;
       record('resources', message.resources);
       if (resume) {
         record('resume', { from: message.from, status: message.status });
@@ -61,14 +73,17 @@ const liveSocket = new LiveSocket('/live', Socket, {
   params: { _csrf_token: document.querySelector('meta[name="csrf-token"]').content },
   hooks: { Parity: {
     mounted() {
+      connected = true;
       hook = this;
       this.handleEvent('parity', received);
       this.pushEvent('start', { from: through, initial: !resume, observed: resume ? lastObserved : observed() });
     },
     reconnected() {
+      connected = true;
       hook = this;
       this.pushEvent('start', { from: through, initial: !resume, observed: resume ? lastObserved : observed() });
     },
+    disconnected() { connected = false; },
   } },
 });
 async function connect(value) {
@@ -80,39 +95,51 @@ async function connect(value) {
 window.liveApp = {
   records,
   async setup(value) { settings = value; await resources(); await connect(false); },
-  async publish(event, probe = false) {
-    let release; publication = new Promise(resolve => { release = resolve; });
-    const scheduledAt = performance.now(), startedAt = performance.now();
-    try {
-      const ack = await request('/parity/publish', { event });
-      if (ack.seq !== event.seq) throw new Error('publication acknowledgement mismatch');
-      record(probe ? 'cleanup-probe' : 'publish', probe ? { event } : { seq: ack.seq, scheduledAt, startedAt });
-      record('resources', ack.resources);
-    } finally { release(); }
+  publish(event, probe = false) {
+    const scheduledAt = performance.now();
+    return enqueuePublication(async () => {
+      const startedAt = performance.now();
+      const paused = connected && !detached;
+      if (paused) { await credit(true); await chain; }
+      let release; publication = new Promise(resolve => { release = resolve; });
+      try {
+        const ack = await request('/parity/publish', { event });
+        if (ack.seq !== event.seq) throw new Error('publication acknowledgement mismatch');
+        record(probe ? 'cleanup-probe' : 'publish', probe ? { event } : { seq: ack.seq, scheduledAt, startedAt });
+        record('resources', ack.resources);
+      } finally { release(); if (paused && connected && !detached) await credit(false); }
+    });
   },
-  async publishBatch(events) {
-    let release; publication = new Promise(resolve => { release = resolve; });
-    const scheduledAt = performance.now(), startedAt = performance.now();
-    try {
-      const response = await request('/parity/publish', { events });
-      if (response.acks?.length !== events.length || response.acks.some((ack, index) => ack.seq !== events[index].seq)) {
-        throw new Error('bulk publication acknowledgement mismatch');
-      }
-      for (const ack of response.acks) {
-        record('publish', { seq: ack.seq, scheduledAt, startedAt }); record('resources', ack.resources);
-      }
-    } finally { release(); }
+  publishBatch(events) {
+    const scheduledAt = performance.now();
+    return enqueuePublication(async () => {
+      const startedAt = performance.now();
+      const paused = connected && !detached;
+      if (paused) { await credit(true); await chain; }
+      let release; publication = new Promise(resolve => { release = resolve; });
+      try {
+        const response = await request('/parity/publish', { events });
+        if (response.acks?.length !== events.length || response.acks.some((ack, index) => ack.seq !== events[index].seq)) {
+          throw new Error('bulk publication acknowledgement mismatch');
+        }
+        for (const ack of response.acks) {
+          record('publish', { seq: ack.seq, scheduledAt, startedAt }); record('resources', ack.resources);
+        }
+      } finally { release(); if (paused && connected && !detached) await credit(false); }
+    });
   },
   async released() {
     const end = performance.now() + settings.maxCleanupMs;
     for (;;) {
       const value = await resources();
-      if (!value.subscriptions && !value.connections && !value.pendingTasks && !value.queueEvents) return;
+      if (!consumerId || !value.inventory?.consumers) throw new Error('missing native consumer inventory');
+      const own = value.inventory.consumers[consumerId];
+      if (!own || (!own.subscriptions && !own.connections && !own.pendingTasks && !own.queueEvents)) return;
       if (performance.now() >= end) throw new Error('native cleanup timeout');
       await new Promise(resolve => setTimeout(resolve, 10));
     }
   },
-  async disconnect() { await chain; record('disconnect', { reason: 'forced' }); liveSocket.disconnect(); await this.released(); },
+  async disconnect() { await chain; record('disconnect', { reason: 'forced' }); connected = false; liveSocket.disconnect(); await this.released(); },
   async reconnect() { await connect(true); },
   async hold() { record('slow'); await request('/parity/control', { action: 'hold' }); },
   async drop(seq) { await request('/parity/control', { action: 'drop', seq }); },
@@ -126,4 +153,5 @@ window.liveApp = {
     liveSocket.disconnect(); await this.released();
   },
   get through() { return through; },
+  get consumerId() { return consumerId; },
 };

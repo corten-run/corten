@@ -23,6 +23,13 @@ staged candidate before suppressing any effect. The browser retains that actual
 observation because a native LiveView remount replaces the old DOM before its hook
 starts. A dropped event replays; an applied event with a dropped acknowledgement
 does not increment the counter or append its effect twice.
+Overlapping publication calls are serialized. Every attached publisher pauses
+only its own native consumer using real LiveView actions, waits for preceding
+native deliveries, and resumes credit after the HTTP acknowledgement. This is
+required because LiveView patches the DOM before invoking the observation hook;
+delaying a hook record alone would hide an already-visible update. Writes still
+take the identical authoritative queue/history path, with normal bounded overflow.
+The extra native action round trips are real application work, not excluded cost.
 
 The ordinary Phoenix router/controller JSON endpoints implement configure,
 snapshot, resources, publish and control. Snapshot reads are independent reads,
@@ -39,6 +46,11 @@ jar. Forced disconnect retains last-applied client state for replay; final detac
 deletes it, and process monitors remove readers/connections. Native CSRF/session
 and WebSocket origin checks remain enabled. Synthetic publisher/control endpoints
 are deliberately unauthenticated, not a production authorization policy.
+The per-page identity is explicit extra `live_session` state signed into LiveView's
+native token; a later tab's cookie cannot replace it on reconnect. Ready messages
+identify the consumer and resource inventory attributes actual readers, connections,
+tasks and queue entries per identity. Teardown waits for that consumer while peers
+remain active, then final all-reader cleanup separately requires aggregate zero.
 
 Bounds are explicitly queue 2/history 4 or queue 1024/history 1025. Inventory
 reports actual BEAM memory/runtime/process counts, source/client/replay rows,
@@ -75,3 +87,5 @@ intercepts the actual WebSocket to drop the first native event or its browser
 acknowledgement, requires recovery within two seconds, and independently checks
 two pages sharing one browser cookie jar. These are correctness regressions, not
 load qualification or measurement admission.
+It also reconnects/detaches one page while its peer keeps receiving and withholds
+the first HTTP acknowledgement/native event during overlapping publication calls.
