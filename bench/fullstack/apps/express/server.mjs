@@ -121,7 +121,7 @@ async function marketplace(req, res, next) {
   if (req.method === "POST" && crossSite(req)) return res.status(403).type("text").send("Forbidden");
   const signal = res.locals.requestSignal;
   let record;
-  try { record = await fetchMarketplaceRecord(id, { signal }); }
+  try { record = await fetchMarketplaceRecord(id, { signal, traceparent: res.locals.marketplaceTraceparent }); }
   catch (error) {
     if (res.destroyed || res.headersSent || req.timedout) return;
     if (signal.reason?.name === "TimeoutError") return res.status(504).type("text").send("Marketplace source timed out");
@@ -150,7 +150,8 @@ app.post("/marketplace/:locale/:id", requestLifetime, (req, res, next) => {
   });
 }, marketplace);
 
-app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord)).all(recordMethod);
+app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord,
+  (req) => ({ traceparent: req.get("traceparent") }))).all(recordMethod);
 app.get("/api/alerts", readAlerts);
 
 app.get("/catalog/:id", async (req, res) => {

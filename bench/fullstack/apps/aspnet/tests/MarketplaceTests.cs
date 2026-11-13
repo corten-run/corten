@@ -79,16 +79,42 @@ public sealed class MarketplaceTests
     sealed class Upstream : HttpMessageHandler
     {
         public int Requests;
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string?> Parents = new();
         public MarketplaceRecord Record = Sample();
         public HttpStatusCode Status = HttpStatusCode.OK;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
+            Parents.Enqueue(request.Headers.TryGetValues("traceparent", out var parents) ? parents.Single() : null);
             var json = request.RequestUri!.AbsolutePath.StartsWith("/catalog/")
                 ? JsonSerializer.Serialize(new CatalogRecord("record_1", "Title", "Subtitle", "Description", [], [], []), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
                 : JsonSerializer.Serialize(Record, MarketplaceSource.Json);
             return Task.FromResult(new HttpResponseMessage(Status) { Content = new StringContent(json) });
         }
+    }
+
+    [Fact]
+    public async Task DelayedSourceReadsRetainExplicitTraceInsteadOfAnotherOperation()
+    {
+        var upstream = new Upstream();
+        using var app = new App(upstream);
+        var source = app.Services.GetRequiredService<MarketplaceSource>();
+        const string a = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-aaaaaaaaaaaaaaaa-00";
+        const string b = "00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bbbbbbbbbbbbbbbb-00";
+        var start = new TaskCompletionSource();
+        async Task Delayed(string? parent)
+        {
+            await start.Task;
+            await source.Get("late", traceParent: parent);
+        }
+        var delayed = Delayed(a);
+        await source.Get("current", traceParent: b);
+        start.SetResult();
+        await delayed;
+        await source.Get("invalid", traceParent: "bad");
+        await source.Get("untraced");
+        Assert.Equal(new string?[] { b, a, null, null }, upstream.Parents.ToArray());
+        Assert.Equal(4, upstream.Requests);
     }
     sealed class App(Upstream upstream) : WebApplicationFactory<Program>
     {

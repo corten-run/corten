@@ -144,8 +144,8 @@ app.MapRazorPages().WithStaticAssets();
 string[] get = matched ? ["GET", "HEAD"] : ["GET"];
 app.MapMethods("/api/items/{id}", get, async (string id, ItemSource items) => await items.Get(id) is { } item ? Results.Ok(item) : Results.NotFound());
 app.MapMethods("/api/catalog/{id}", ["GET", "HEAD"], async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
-app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source, CancellationToken cancellationToken) =>
-    await source.Get(id, cancellationToken) is { } record ? Results.Ok(record) : Results.NotFound())
+app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source, HttpRequest request, CancellationToken cancellationToken) =>
+    await source.Get(id, cancellationToken, request.Headers["traceparent"].ToString()) is { } record ? Results.Ok(record) : Results.NotFound())
     .WithRequestTimeout(TimeSpan.FromSeconds(10));
 app.MapGet("/api/alerts", (HttpContext context, AlertStore alerts) =>
 {

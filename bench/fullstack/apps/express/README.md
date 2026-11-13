@@ -107,3 +107,15 @@ allowlisted public hostname proves a safe same-origin write. The edge owner must
 preserve the public authority and configure a narrowly trusted scheme/forwarding
 contract before deployed-edge forms can qualify. This change does not edit that
 proxy or claim TLS deployment compatibility.
+
+## Marketplace Trace Context
+
+Marketplace page/form middleware captures its own incoming traceparent before
+body parsing; the record-JSON handler captures it on entry. The existing native
+fetch receives the immutable string as an optional argument, alongside its
+unchanged AbortSignal. Valid W3C contexts become headers of that request only;
+invalid/duplicate/zero-ID input adds no header. Known future-version fields are
+down-versioned to 00. There is no shared default header, ambient current operation,
+exporter, new fetch, parser or runtime setting. Catalog and legacy item source
+clients are unchanged. The scoped native trace driver linked above exercises
+overlap, delayed bodies/source starts, accepted forms and independent readback.
