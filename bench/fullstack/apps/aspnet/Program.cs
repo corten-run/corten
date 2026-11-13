@@ -1,9 +1,15 @@
 using System.Text.Encodings.Web;
+using System.Text;
 using System.Text.Json;
 using System.Text.Unicode;
 using ItemPage;
 using Microsoft.AspNetCore.Http.Timeouts;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.WebEncoders;
+using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
 
 var builder = WebApplication.CreateBuilder(args);
 // The matched tier's production profile (bench/fullstack/README.md, "The matched tier"), from
@@ -97,6 +103,35 @@ app.UseWhen(c => c.Request.Path.StartsWithSegments("/api/catalog") || c.Request.
 // follow routing and sit inside those handlers so they see cancellation exceptions first.
 app.UseRouting();
 app.UseRequestTimeouts();
+app.Use(async (context, next) =>
+{
+    // MVC antiforgery otherwise starts FormFeature's cached read without cancellation.
+    // Read the native URL-encoded form once, before MVC, then let antiforgery validate
+    // that same collection. FormPipeReader cancels without FormFeature's context.Abort(),
+    // which would prevent the request-timeout middleware from writing its native 504.
+    if (HttpMethods.IsPost(context.Request.Method)
+        && context.GetEndpoint()?.Metadata.GetMetadata<PageActionDescriptor>()?.ViewEnginePath == "/Marketplace"
+        && MediaTypeHeaderValue.TryParse(context.Request.ContentType, out var type)
+        && type.MediaType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
+    {
+        var options = context.RequestServices.GetRequiredService<IOptions<FormOptions>>().Value;
+        var encoding = type.Encoding;
+        if (encoding is null || encoding.CodePage == 65000) encoding = Encoding.UTF8;
+        var reader = new FormPipeReader(context.Request.BodyReader, encoding)
+        {
+            ValueCountLimit = options.ValueCountLimit,
+            KeyLengthLimit = options.KeyLengthLimit,
+            ValueLengthLimit = options.ValueLengthLimit
+        };
+        try { context.Request.Form = new FormCollection(await reader.ReadFormAsync(context.RequestAborted)); }
+        catch (InvalidDataException)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+    }
+    await next(context);
+});
 if (matched)
 {
     app.MapHealthChecks("/health/live");

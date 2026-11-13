@@ -49,6 +49,9 @@ request deadline and matched connection limit remain unchanged.
 and Express. Build each app with its existing Dockerfile, then run from the root:
 
 ```sh
+node bench/marketplace/corten/tests/build-lifetime.mjs corten <corten-image>
+node bench/marketplace/corten/tests/build-lifetime.mjs aspnet <aspnet-image>
+node bench/marketplace/corten/tests/build-lifetime.mjs express <express-image>
 node bench/marketplace/corten/tests/lifetime.mjs corten <corten-image>
 node bench/marketplace/corten/tests/lifetime.mjs aspnet <aspnet-image>
 node bench/marketplace/corten/tests/lifetime.mjs express <express-image>
@@ -74,3 +77,25 @@ leave its independently read store unchanged and a recovered POST appends once.
 `deadlines` checks header-hold deadlines and slow-read recovery for all locales
 and JSON in both profiles. Deadline evidence also requires a contract content
 type, not just a status on an empty untyped response.
+
+API deadline checks require application/json with a nonempty error message or
+application/problem+json with a matching status and nonempty title. Empty,
+invalid JSON and HTML/plain-text API errors fail. The small negative-contract
+suite runs with `node --test bench/marketplace/corten/tests/deadline-contract.test.mjs`.
+
+`uploads` checks genuine native forms unfinished at 1000 bytes/s, in all locales
+and both profiles; `upload-baseline` limits that diagnostic to en-US. The driver
+captures native ASP.NET antiforgery fields and cookies and first establishes a
+real alert session. It verifies deadline response before finishing the body,
+socket closure, no source work, independent unchanged alert state and successful
+recovery. On failure only, it finishes the body after the observation bound to
+record a late response, never crediting that response as timely. Corten retains
+its native 30-second body deadline (408); ASP.NET/Express retain ten seconds.
+The full mode includes these checks as well as source header/body holds.
+
+The build helper uses the existing production Dockerfiles and labels images with
+the source commit and a digest of scoped source input hashes. Results record the
+image ID/labels, complete input manifest, fixture and driver hashes. Labelled
+input digests must match the current inputs before execution. Images built
+without the helper are explicitly recorded as sourceInputsVerified=false; the
+host driver's HEAD is never presented as proof of an image's build source.
