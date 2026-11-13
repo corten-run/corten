@@ -245,6 +245,7 @@ npm run check:marketplace
 node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
 node bench/marketplace/run.mjs w2 --group production --build --passes 3
+node bench/marketplace/validate.mjs bench/marketplace/results/w2 w2 <measured-full-commit>
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
 
@@ -278,6 +279,39 @@ this way are schema `marketplace-results/v5`, with raw feature qualification for
 The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
 failed the round). Historical full-inventory results do not compare with qualified groups.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
+
+### Saved raw evidence
+
+New native runs retain `evidenceVersion: "marketplace-raw/v1"` alongside the unchanged
+`marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
+`validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
+above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
+the merged summary alone is not a producer folder. The historical summary reporter remains
+available, but its success is not raw-evidence validation. Old folders without the new
+receipts fail closed; do not backfill them with inferred observations.
+
+The replay checks both sources, every localized page and neutral JSON profile/pass/phase,
+exact per-pass metrics and aggregates, raw qualification and browser/content gate results,
+image IDs and clean source labels, the saved fixture bytes and local source commit tree,
+container configuration and capacity settings, cold probe output and Docker clock, cgroup
+CPU before/after counters, and Docker memory/CPU sample histories. Gate containers must
+finish before load. Stopped profiles use the existing stop/event rules, not invented zero
+measurements. Missing or malformed receipts (including deleted raw files) are invalid, not
+an absent-proof fallback. No capability requirement or nightly capacity policy is relaxed.
+
+Cleanup retains the actually created/removed container, network and anonymous-volume
+identities, checks anonymous volumes after `docker rm -f -v`, and records the final owned
+container/network inventories. Empty failure arrays alone do not establish cleanup.
+These are replayable observations, not tamper-proof image/build attestations or a new
+qualification system; functional checks alone do not establish native implementation.
+
+Saved replay never runs Docker or a browser, contacts a service, writes files, or fetches
+Git objects. The exact source commit must already exist locally; Git replacement objects
+and lazy fetching are disabled. Supply a stationary local evidence folder, not a live
+runner output. UNC/device paths, symbolic links/junctions, multiply linked files and
+non-regular entries are rejected. Reads check file identity/size before and after opening,
+with bounds of 25,000 entries, depth 8, 32 MiB per read and 512 MiB total. The validator
+does not follow artifact-controlled paths or execute artifact content.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace
 fixture with a new label: normal records have 25 listings, 12 offers, images, badges, fields,
