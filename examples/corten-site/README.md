@@ -20,7 +20,8 @@ node examples/corten-site/smoke.mjs http://localhost:18488
 ```
 
 [`deploy/`](deploy/README.md) is how it is hosted: one binary behind nginx on one small machine,
-shipped by a workflow on every change.
+shipped by a workflow on every change, with the machine itself made from the configuration in
+`deploy/infra/`.
 
 | Part | What it says | What it shows |
 |---|---|---|

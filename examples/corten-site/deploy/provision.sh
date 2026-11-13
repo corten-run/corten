@@ -17,13 +17,21 @@ machine=${4:-}
 here=$(cd "$(dirname "$0")" && pwd)
 # What the machine is, as the page states it: the argument, or what an earlier run was given.
 [ -n "$machine" ] || machine=$(sed -n 's/^CORTEN_SITE_MACHINE=//p' /etc/corten-site.env 2>/dev/null || true)
-# systemd reads quotes and backslashes in an environment file as its own, not as the text.
+# systemd reads quotes and backslashes in an environment file as its own, not as the text, and
+# ends a value at a control character such as a carriage return.
 case $machine in
-*[\"\'\\]*) echo "say what the machine is without quotes or backslashes" >&2; exit 1 ;;
+*[\"\'\\]* | *[[:cntrl:]]*) echo "say what the machine is without quotes, backslashes or control characters" >&2; exit 1 ;;
 esac
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
+# The machine's own nightly update may hold the package lists' lock, and apt-get update does
+# not wait for it: it is asked again, for five minutes.
+tries=0
+until apt-get update; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 20 ] || exit 1
+    sleep 15
+done
 # sudo and sshd are on a cloud image already; the deploy's one sudo rule and the firewall's
 # OpenSSH profile need them wherever this runs.
 apt-get install -y --no-install-recommends nginx certbot ufw sudo openssh-server

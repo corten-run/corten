@@ -17,11 +17,122 @@ what is in use of that limit instead, and each gauge says which it is.
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
 | `hold.mjs` | measures what the site holds: memory idle and with streams open, uncompressed or as a browser asks for them, and pages a second meanwhile, with the CPU and memory the server says are in use |
 | [`site.yml`](../../../.github/workflows/site.yml) | the workflow that builds and ships each change on `main` |
+| `infra/` | the machine, its address and its DNS as OpenTofu configuration, with what a new machine runs as it starts (`boot.sh`, `corten-site-boot.service`) and what gives the repository its keys (`bootstrap.sh`) |
+| [`site-machine.yml`](../../../.github/workflows/site-machine.yml) | the workflow that checks `infra/` and applies it on `main` |
 
 No container runs on the machine. The workflow builds on Ubuntu 24.04, the same release the
 machine runs, so the binary finds the C library it was linked against.
 
 ## Once
+
+There are two ways to the first deploy. On DigitalOcean the machine is made from `infra/`, and
+nobody signs in to it. Anywhere else, the same scripts are run by hand.
+
+### From `infra/`, on DigitalOcean
+
+`infra/` is OpenTofu configuration for what the site runs on: one droplet (the smallest,
+`s-1vcpu-512mb-10gb`, with Ubuntu 24.04), an address that stays when the droplet is replaced, a
+firewall, and the DNS zone with the name's record. The `Site machine` workflow checks it on a
+pull request and applies it on `main`, keeping its state in a Spaces bucket. A droplet made this
+way is handed `provision.sh`, `nginx.conf` and the service file as it starts (cloud-init), waits
+until the site's name reaches it, and runs them itself.
+
+1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
+   droplets, reserved addresses, firewalls, tags, and domains with their records; one with
+   full access is the simple choice. A Spaces key with full access lets the workflow make the
+   bucket on its first run and keep each version of the state in it. A key limited to one
+   bucket has not been tried: the workflow sets versioning on the bucket in every run.
+2. From a clone of the repository, with `gh` signed in as someone who administers it:
+
+   ```sh
+   sh examples/corten-site/deploy/infra/bootstrap.sh <domain> <email> <state bucket> https://<region>.digitaloceanspaces.com
+   ```
+
+   It makes the environments `site` and `site-machine`, which only `main` may use; makes the
+   deploy key and the machine's SSH host key, and stores each half with the workflow that uses
+   it; and sets the variables both workflows read. A fifth argument, `refuse-mail`, adds
+   records that say the zone sends no mail (`v=spf1 -all`, and DMARC's `p=reject`): only for a
+   zone that has none. Run again, it keeps the keys.
+3. Type the three secrets that are yours alone, each at `gh`'s prompt:
+
+   ```sh
+   gh secret set DIGITALOCEAN_TOKEN --env site-machine
+   gh secret set SPACES_ACCESS_KEY_ID --env site-machine
+   gh secret set SPACES_SECRET_ACCESS_KEY --env site-machine
+   ```
+
+4. Run the workflow (`gh workflow run site-machine.yml`). It makes everything in `infra/`, then
+   waits up to half an hour for the machine to answer and ends with a warning when it does not,
+   as it will not while the name points elsewhere. A zone of the site's name already in the
+   DigitalOcean account makes this run fail. Removing it there removes its records, and its
+   answers at once if the registrar already names DigitalOcean's servers: add its records to
+   `infra/main.tf` first, or leave the zone where it is with `SITE_DNS_ELSEWHERE`.
+5. At the name's registrar, name `ns1.digitalocean.com`, `ns2.digitalocean.com` and
+   `ns3.digitalocean.com` as the zone's name servers. Records the zone had elsewhere do not
+   come along: add each to `infra/main.tf` first. The machine waits for the name to reach it,
+   however long that takes, then asks for its certificate and finishes setting itself up.
+6. When `https://<domain>/` answers (502, with no release yet), turn deploys on and ship:
+
+   ```sh
+   gh variable set SITE_HOST --body <domain>
+   gh workflow run site.yml
+   ```
+
+From then on a change on `main` under `infra/`, or to `provision.sh`, `nginx.conf` or the service
+file, is applied by the workflow. The Site workflow does not run for a change to those files
+and this guide alone. A merge that also changes the site starts both, and that Site run may
+ship to the machine being replaced or fail against the new one while it sets itself up: the
+run the `Site machine` workflow starts afterwards is the one that ships. A droplet is never
+changed in place. A change to anything it is handed, a comment in one
+of those files included, makes a new droplet, moves the address to it once it exists, and
+removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
+the workflow asks the machine at the address for the site, and starts the Site workflow when a
+machine it made answers or the one there answers 502, as nginx does with no release behind it
+and also while the service is down.
+
+The site is down from the move until that release is served. That is the time a machine takes
+to install its packages and get a certificate, and then a whole run of the Site workflow, which
+tests and builds before it ships; none of it has been timed yet. The old machine and its
+certificate are gone by then, and Let's Encrypt issues the same name five certificates a week:
+a sixth replacement inside a week leaves the site down until its limit allows another. So
+gather changes to those files into one merge. When an apply fails, run the workflow again
+(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
+to a machine that answers 502. With deploys on, a run fails when the machine does not answer.
+If a second run fails the same way, see in DigitalOcean's control panel whether the address is
+on the droplet: an apply does not notice an address that is on none, and puts it back only
+when it moves it.
+
+| Where | Name | What it is |
+|---|---|---|
+| environment `site` | `SITE_SSH_KEY`, `SITE_KNOWN_HOSTS` (secrets) | the deploy key, and the machine's host key under the site's name |
+| environment `site-machine` | `DIGITALOCEAN_TOKEN`, `SPACES_ACCESS_KEY_ID`, `SPACES_SECRET_ACCESS_KEY` (secrets) | what makes the machine and keeps the state |
+| environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC` (variables) | what a new machine is handed |
+| repository variables | `SITE_DOMAIN`, `SITE_STATE_BUCKET`, `SITE_STATE_ENDPOINT`, `SITE_REFUSES_MAIL` | set by `bootstrap.sh` |
+| repository variables | `SITE_HOST` | set last, by hand: the Site workflow ships once it is |
+| repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE` | below |
+
+`SITE_MACHINE` is what the page adds after the machine's own count of itself (without it, the
+droplet's size and region). `SITE_ADMIN_KEYS` is a JSON list of the fingerprints of SSH keys in
+the DigitalOcean account that may sign in as root; with none, root is reached through the
+control panel's console alone, with the password DigitalOcean emails the account for each
+droplet made without a key (its practice, not checked here), and no password signs in over SSH
+either way. `SITE_ZONE` names
+the zone where it is not the site's name itself (`example.com` for `www.example.com`), and
+`SITE_DNS_ELSEWHERE` set to `true` leaves the zone where it is: point an A record at the address
+the workflow's apply prints. Changing `SITE_MACHINE` or `SITE_ADMIN_KEYS` replaces the droplet
+on the next apply.
+
+The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
+keeps each version of the state, and nothing locks it but the workflow running one apply at a
+time, so do not run `tofu apply` from a second place while it runs. The host key is the same on
+every droplet made here, which is what lets the Site workflow know a new one as the host it
+trusts. What a droplet is handed, the host key and the email among it, can be read on it from
+the metadata address by any process there. The site's service cannot reach that address or any
+other but the machine's own (`IPAddressDeny=` in the service file). nginx's workers and whoever
+signs in as `deploy` can: the holder of the deploy key can read the host key, so the two keys
+are kept apart on GitHub and not on the machine.
+
+### By hand, on any machine
 
 1. Create the machine. On DigitalOcean the smallest droplet is `s-1vcpu-512mb-10gb`:
 
@@ -244,5 +355,46 @@ messages each held an apostrophe, which `sh` and bash pair across the two lines.
 fixes that, shown by running those lines in Ubuntu 24.04's `sh`; the runs above skip the one
 place the argument is used, so they could not show it.
 
-certbot's request for a certificate and the workflow on GitHub have not been run from this
+`infra/` was checked without DigitalOcean, at `3211fe4f5` and, for what a review changed,
+at `a8d7663eb`. `tofu validate` passes, and a plan made with no state and stand-in values
+lists the six things it would make, eight with the two records that refuse mail. A plan made
+from a hand-written state in which the droplet's hash differs makes the new droplet, changes
+the address in place and then removes the old droplet; with the address assigned by a resource
+of its own, as `3211fe4f5` had it, the same plan took the address off the old droplet before
+making the new one. Plans are refused for a control character in what the machine is, a size
+or region that is not a slug, an empty host key, and a name outside its zone.
+
+What the plan hands a droplet passes `cloud-init schema`, and was given to cloud-init in a
+container like the one above (with sudo and sshd, as a cloud image has): the files arrived as
+they are in the repository, the host key was the one given, SSH took no password, and the boot
+unit ran `boot.sh`, which finished `provision.sh`. Where the name pointed elsewhere it waited.
+It went on, in one container, once the name reached the machine itself, and in another, where
+the name's address answered nothing, once a stand-in for the metadata address said that address
+was the machine's; while the stand-in named another address it kept waiting. At `3211fe4f5`
+the ship step then shipped to such a machine, knowing it by the host key under the site's name
+as `bootstrap.sh` writes it, and a restart did not set the machine up again. With the service
+held to loopback, a command run under the same two settings could not reach an outside
+address, and the site answered through nginx. With the package lists' lock held, a bare
+`apt-get update` ended at once with status 100, and the scripts' loop went on when the lock
+was let go.
+
+The step the workflow runs after an apply was run as GitHub runs it (`bash -eo pipefail`)
+against that container, with a stand-in for `gh`: it started the Site workflow for a machine
+answering 502, whether or not the run had made it; with deploys off it only said so; and for an
+address that answers nothing it failed after 90 seconds with deploys on and warned with them
+off. `bootstrap.sh` was run in Ubuntu 24.04's `sh` against a stand-in for `gh` that records
+what it is asked: it made both environments with their rule for `main`, stored the four secrets
+and the variables, and on a second run kept the keys and wrote the host's line again under the
+new name; after a run that had stopped between the keys' halves it made the keys again; it
+stopped, writing nothing more, when the host key could not be read back; and interrupted with
+the keys on disk it left nothing in its temporary directory.
+
+None of this has met DigitalOcean or GitHub. Not run: `tofu apply`, the Spaces bucket, the
+`Site machine` workflow's apply on GitHub, `bootstrap.sh` against GitHub, the address moving
+from one droplet to the next, and the metadata address itself: the two paths `boot.sh` reads
+there (`reserved_ip/ipv4/active` and `ip_address`) have not been asked of a droplet. Whether a
+droplet can reach its own reserved address from inside is not known either, which is why
+`boot.sh` has both ways. The first apply is their test.
+
+certbot's request for a certificate and the Site workflow on GitHub have not been run from this
 repository yet: the first deploy is their test.
