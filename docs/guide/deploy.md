@@ -8,6 +8,17 @@ in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
 the release profile an app builds with.
 
+For live streams this is a requirement, not just a choice of where to end TLS: another server
+to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
+row 5 is conditional on a shared cache, while health checks (9) and HTTPS policy (12) also apply
+without a proxy. Not every row is a new cost caused by the HTTP/2 requirement.
+An opt-in prototype passed an eight-tab h2 check but missed a flow-controlled send timeout;
+its idle watch also remained permanently busy by inspection. The partial-header probe kept
+a response open, which leaves the HTTP/1.1 watch busy too, so it did not establish a lost
+header-timeout guarantee. The idle h2 case and a connection-level body-stall detector remain
+untried. [Choice 25](../design.md#choice-axum-router) and the
+[partial weighing](../../bench/http2/README.md) record the evidence and reopening tests.
+
 ## What the proxy must do
 
 | | What | Why |
@@ -113,6 +124,10 @@ nginx's page. A prefix that also serves downloads keeps
 `keepalive` needs `proxy_http_version 1.1` and a `Connection` header other than `close`, which
 the map gives a request that is not a WebSocket. Leave `proxy_ignore_headers` without `Vary`
 and `Cache-Control`.
+
+A WebSocket needs `proxy_http_version 1.1` too: a proxy that passes `Upgrade` on over HTTP/1.0
+gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since
+a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
 
 [`examples/corten-site/deploy`](../../examples/corten-site/deploy/README.md) is a whole deploy
 written out: this configuration with a certificate, a limit on the live streams one reader

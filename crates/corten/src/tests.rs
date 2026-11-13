@@ -3866,7 +3866,7 @@ async fn an_upgrade_under_a_nested_api_takes_its_origins() {
             router.oneshot(req).await.unwrap().status()
         }
     };
-    assert_eq!(status("https://inner.example").await, StatusCode::UPGRADE_REQUIRED, "allowed: a oneshot cannot switch");
+    assert_eq!(status("https://inner.example").await, StatusCode::BAD_REQUEST, "allowed: a oneshot cannot switch");
     assert_eq!(status("https://outer.example").await, StatusCode::FORBIDDEN, "the outer API's origin is not the inner's");
     // An inner API that allows no site: the outer's partner may not switch under it either.
     let router = App::new(Routes::new())
@@ -4084,6 +4084,91 @@ fn a_route_reaches_an_api_through_a_parameter_before_it() {
     assert!(!reaches("/{*rest}", "/"), "nothing is outside the root");
 }
 
+/// `/api/items`'s routes that can match under it with no empty value, so in every matchit 0.8.
+const CAN_UNDER_API_ITEMS: [&str; 7] =
+    ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/ap{*rest}"];
+
+/// Each prefix, a route written outside it, and whether the route can match a path at or under
+/// the prefix, as matchit 0.8.4 matches (#1213).
+fn can_match_under_cases() -> Vec<(&'static str, &'static str, bool)> {
+    let mut cases = Vec::new();
+    let mut add = |prefix: &'static str, can: bool, routes: &[&'static str]| {
+        cases.extend(routes.iter().map(|&route| (prefix, route, can)));
+    };
+    add("/api/items", true, &CAN_UNDER_API_ITEMS);
+    // An empty value before a `/` (`/api{x}/items` matches `/api/items`), and one byte at the end.
+    add("/api/items", true, &["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}", "/api/item{x}"]);
+    add("/api/items", false, &["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/api/items/{id}"]);
+    // A value that ends the route is never empty: `/api{x}` is never `/api`.
+    add("/api/items", false, &["/b{*rest}", "/api{x}", "/api/items{x}"]);
+    // Corten's own `/corten/` holds only paths with a segment after it.
+    add("/corten/", true, &["/{a}/{b}", "/{*rest}", "/{a}/", "/corten{x}/{b}", "/cor{x}/{b}"]);
+    add("/corten/", false, &["/{slug}", "/cor{x}", "/corten{x}", "/x/{a}", "/corten/{file}"]);
+    // Beside an inner area at `/shop/desk`, and beside one at `/shop`.
+    add("/shop/desk", true, &["/shop/{id}", "/shop{x}/desk", "/{a}/{b}", "/shop/{id}/more"]);
+    add("/shop/desk", false, &["/{slug}", "/shop/x{id}", "/{a}/x/{b}", "/shops/{id}"]);
+    add("/shop", true, &["/{slug}"]);
+    // Text after a parameter, which the router does not hold: one byte or more before it.
+    add("/api/a.json", true, &["/api/{x}.json"]);
+    add("/api/.json", false, &["/api/{x}.json"]);
+    // The root holds every route, so none is outside it.
+    add("/", false, &["/{*rest}"]);
+    cases
+}
+
+/// Counted by segment, a route can match under a prefix only where each of its segments can
+/// match the prefix's, as matchit 0.8.4 matches: a parameter the rest of one segment after the
+/// text before it, empty only before a `/` the route goes on with, a catch-all the rest (#1213).
+#[test]
+fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
+    for (prefix, route, can) in can_match_under_cases() {
+        assert_eq!(crate::api::can_match_under(route, prefix), can, "{route} under {prefix}");
+    }
+}
+
+/// Never a false no: with each route alone in a router of the matchit this build resolves, every
+/// path at or under a prefix that it matches is one `can_match_under` says it can reach. A route
+/// that matchit refuses (text after a parameter, before 0.8.6) is left out (#1213).
+#[test]
+fn can_match_under_never_says_no_where_matchit_matches() {
+    use crate::api::{can_match_under, under};
+    let cases = can_match_under_cases();
+    let mut prefixes: Vec<&str> = cases.iter().map(|&(prefix, _, _)| prefix).collect();
+    let mut routes: Vec<&str> = cases.iter().map(|&(_, route, _)| route).collect();
+    for list in [&mut prefixes, &mut routes] {
+        list.sort_unstable();
+        list.dedup();
+    }
+    let (mut held, mut matched) = (Vec::new(), std::collections::BTreeSet::new());
+    for route in routes {
+        let mut router = matchit::Router::new();
+        if router.insert(route, ()).is_err() {
+            continue;
+        }
+        held.push(route);
+        for &prefix in &prefixes {
+            // A route written inside the prefix is the prefix's own, never asked about.
+            if under(prefix.strip_suffix('/').filter(|inner| !inner.is_empty()).unwrap_or(prefix), route) {
+                continue;
+            }
+            let base = prefix.trim_end_matches('/');
+            for tail in ["", "/", "//", "/a", "/a/", "/a//", "/a/b", "//b", "/a.json", "/.json"] {
+                let path = format!("{base}{tail}");
+                // As the router's scopes hold them: Corten's own prefixes by their start.
+                let at = if prefix.ends_with('/') { path.starts_with(prefix) } else { under(prefix, &path) };
+                if at && router.at(&path).is_ok() {
+                    assert!(can_match_under(route, prefix), "{route} matches {path}, under {prefix}");
+                    matched.insert((route, prefix));
+                }
+            }
+        }
+    }
+    // The paths tried reach every route that can match with no empty value, so the check is not empty.
+    for route in CAN_UNDER_API_ITEMS.into_iter().filter(|route| held.contains(route)) {
+        assert!(matched.contains(&(route, "/api/items")), "no path tried under /api/items matches {route}");
+    }
+}
+
 /// A top-level API owns its prefix too: a page's catch-all does not answer a path under it (#539).
 #[cfg(feature = "json")]
 #[tokio::test]
@@ -4241,6 +4326,289 @@ async fn an_area_or_an_api_has_middleware_of_its_own() {
     let (status, _, _) = flood("/slow", "text/html").await;
     assert_eq!(status, StatusCode::OK, "the app's other routes never meet the limit");
     assert!(!body.is_empty());
+}
+
+paths! {
+    Shop = "/shop",
+    ShopItem = "/shop/item",
+    ShopDesk = "/shop/desk",
+    ShopDeskItem = "/shop/desk/item",
+}
+
+#[cfg(feature = "json")]
+paths! { ApiQuote = "/api/quote" }
+
+/// A JSON answer for [`what_a_request_in_an_area_costs`].
+#[cfg(feature = "json")]
+#[derive(crate::ToJson)]
+struct CostQuote {
+    id: u32,
+    price: u32,
+}
+
+/// What a staged request costs where it is found: `SCOPE_REQUESTS` (200) requests in process,
+/// one at a time, in an app with two areas (one inside the other) and an API, each with a
+/// deadline, a body limit and middleware of its own and the areas a CSP source (`SCOPE_AREAS=1`),
+/// or in an app with none, where the same handlers are the app's own routes. `SCOPE_TARGET` is
+/// the request: `page` (the inner area's page), `json` (the API's JSON), `slug` (the same page at
+/// an app route `/{slug}`), or `routed` and `rest` (the same page outside every area, at an app
+/// route `/elsewhere/item` and through an app catch-all `/{*rest}` beside it). Counting it under
+/// callgrind at two numbers of requests gives the instructions per request. The test binary has
+/// no global allocator, so preload the one to count with. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `SCOPE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_request_in_an_area_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[cfg(feature = "json")]
+#[test]
+#[ignore]
+fn what_a_request_in_an_area_costs() {
+    let requests: usize = std::env::var("SCOPE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let areas = std::env::var("SCOPE_AREAS").is_ok_and(|v| v == "1");
+    let target = std::env::var("SCOPE_TARGET").unwrap_or_else(|_| "page".to_string());
+    async fn cost_item(req: Req) -> HtmlResult {
+        req.test_page("Item", html! { <p>"item"</p> })
+    }
+    async fn cost_quote() -> crate::JsonResult<CostQuote> {
+        Ok(crate::Json(CostQuote { id: 7, price: 1250 }))
+    }
+    let page = || get(cost_item);
+    let quote = || get(cost_quote);
+    // The app's own routes a target adds.
+    let own = |table: Table| match target.as_str() {
+        "slug" => table.route("/{slug}", page()),
+        "routed" | "rest" => table.route("/elsewhere/item", page()).route("/{*rest}", page()),
+        _ => table,
+    };
+    let router = if areas {
+        App::new(Routes::from(own(Table::new().route("/", page()))))
+            .deadline(Duration::from_secs(5))
+            .area::<Shop>(|shop| {
+                shop.route::<ShopItem>(crate::Methods::reads(page()))
+                    .deadline(Duration::from_secs(8))
+                    .body_limit(64 << 10)
+                    .policy(|p| p.img_src("https://img.example"))
+                    .middleware(Step("shop", false))
+            })
+            .area::<ShopDesk>(|desk| {
+                desk.route::<ShopDeskItem>(crate::Methods::reads(page()))
+                    .deadline(Duration::from_secs(9))
+                    .body_limit(32 << 10)
+                    .policy(|p| p.script_src("https://js.example"))
+                    .middleware(Step("desk", false))
+            })
+            .api::<ApiRoot>(|api| {
+                api.route::<ApiQuote>(crate::Methods::reads(quote()))
+                    .deadline(Duration::from_secs(7))
+                    .body_limit(16 << 10)
+                    .middleware(Step("api", false))
+            })
+            .router()
+    } else {
+        App::new(Routes::from(own(Table::new().route("/", page()).route("/shop/desk/item", page()).route("/api/quote", quote()))))
+            .router()
+    };
+    let (path, answer) = match target.as_str() {
+        "json" => ("/api/quote", r#"{"id":7,"price":1250}"#),
+        "slug" => ("/item", "<p>item</p>"),
+        "routed" => ("/elsewhere/item", "<p>item</p>"),
+        "rest" => ("/elsewhere/other", "<p>item</p>"),
+        _ => ("/shop/desk/item", "<p>item</p>"),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+            assert!(status == StatusCode::OK && body.contains(answer), "{status}: {body}");
+        }
+    });
+}
+
+/// Adds its name to the answer's `x-met`, so a test reads the middleware a request met, the
+/// innermost first, a `404`'s too.
+struct Met(&'static str);
+
+impl crate::Middleware for Met {
+    async fn call(&self, req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().append("x-met", http::HeaderValue::from_static(self.0));
+        res
+    }
+}
+
+/// A parameter route of the area `/shop`, which can match the prefix of the area inside it.
+#[derive(crate::Route)]
+#[route("/shop/{id}")]
+struct ShopAny<'a> {
+    id: &'a str,
+}
+
+/// A parameter route of the area `/shop/desk`, which no other prefix holds a path of.
+#[derive(crate::Route)]
+#[route("/shop/desk/{id}")]
+struct ShopDeskAny<'a> {
+    id: &'a str,
+}
+
+/// An app whose area `/shop`, and `/shop/desk` inside it, each set a CSP source and middleware,
+/// the outer one a deadline and both a body limit, over the app's shorter deadline and smaller
+/// limit; with `catch_all`, the app's `/{*rest}` answers every path no other route does, and with
+/// `shop_any`, the outer area's `/shop/{id}` every segment under `/shop`, `/shop/desk` among them,
+/// and the inner area's `/shop/desk/{id}` every segment under `/shop/desk`.
+/// Each route waits 200 ms for a `GET` with `x-slow`, and answers a `POST` with the length of
+/// its body.
+fn shop_app(catch_all: bool, shop_any: bool) -> Router {
+    let answer = || {
+        get(|headers: http::HeaderMap| async move {
+            if headers.contains_key("x-slow") {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            "done"
+        })
+        .post(|body: crate::http::Bytes| async move { body.len().to_string() })
+    };
+    let routes = if catch_all { Table::new().route("/{*rest}", answer()) } else { Table::new() };
+    App::new(Routes::from(routes))
+        .error_page(test_error_page, ())
+        .deadline(Duration::from_millis(50))
+        .body_limit(1 << 10)
+        .middleware(Met("app"))
+        .area::<Shop>(|shop| {
+            let shop = if shop_any { shop.route::<ShopAny>(crate::Methods::reads(answer())) } else { shop };
+            shop.route::<ShopItem>(crate::Methods::reads(answer()))
+                .deadline(Duration::from_secs(10))
+                .body_limit(4 << 10)
+                .policy(|p| p.img_src("https://img.example"))
+                .middleware(Met("shop"))
+        })
+        .area::<ShopDesk>(|desk| {
+            let desk = if shop_any { desk.route::<ShopDeskAny>(crate::Methods::reads(answer())) } else { desk };
+            desk.route::<ShopDeskItem>(crate::Methods::reads(answer()))
+                .body_limit(8 << 10)
+                .policy(|p| p.script_src("https://js.example"))
+                .middleware(Met("desk"))
+        })
+        .router()
+}
+
+/// A request to `shop_app`, from the app's own page: its status, the middleware it met (the
+/// innermost first, between spaces), its CSP and its body.
+async fn shop_call(router: &Router, method: &str, path: &str, slow: bool, body: usize) -> (StatusCode, String, String, String) {
+    let mut req = Request::builder().method(method).uri(path).header("sec-fetch-site", "same-origin");
+    if slow {
+        req = req.header("x-slow", "1");
+    }
+    let res = router.clone().oneshot(req.body(Body::from(vec![b'a'; body])).unwrap()).await.unwrap();
+    let (parts, body) = res.into_parts();
+    let met = parts.headers.get_all("x-met").iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join(" ");
+    let csp = parts.headers.get(http::header::CONTENT_SECURITY_POLICY).map_or("", |v| v.to_str().unwrap()).to_string();
+    (parts.status, met, csp, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+}
+
+/// A route in an area meets its area's deadline, body limit, CSP and middleware, and in an area
+/// inside another those of both, the inner one's limit over the outer's and the outer's deadline
+/// where the inner sets none; read from the route the router matched (#1213).
+#[tokio::test]
+async fn a_route_in_an_area_meets_its_areas_deadline_body_limit_csp_and_middleware() {
+    let router = shop_app(false, false);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/item", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline, not the app's 50 ms");
+    assert_eq!(met, "desk shop app", "the app's middleware, then the outer area's, then the inner one's");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/item", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/item", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/item", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "the outer area's alone: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/item", false, 3 << 10).await.3, "3072", "the outer area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/item", false, 5 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// An unknown URL's `404` belongs to the area its path is under: it meets that area's middleware
+/// and has its CSP, and one outside every area the app's alone (#1213).
+#[tokio::test]
+async fn an_unknown_url_under_an_areas_prefix_is_answered_with_the_areas_settings() {
+    let router = shop_app(false, false);
+    let (status, met, csp, _) = shop_call(&router, "GET", "/shop/desk/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "desk shop app"));
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "{csp}");
+    let (status, met, csp, _) = shop_call(&router, "GET", "/shop/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+    let (status, met, csp, _) = shop_call(&router, "GET", "/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "app"));
+    assert!(!csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+}
+
+/// A catch-all of the app's that matches a path under an area answers it with that area's
+/// settings, its deadline, body limit, CSP and middleware, and every other path with the app's:
+/// a route that can reach under another prefix is read by the request's path (#1213).
+#[tokio::test]
+async fn a_catch_all_outside_an_area_answers_under_it_with_the_areas_settings() {
+    let router = shop_app(true, false);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/other", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline");
+    assert_eq!(met, "desk shop app");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "{csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/other", false, 3 << 10).await.3, "3072", "the area's limit");
+    let (status, met, csp, body) = shop_call(&router, "GET", "/other", false, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "app"), "the app's alone outside the areas");
+    assert!(!csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+    assert_eq!(shop_call(&router, "GET", "/other", true, 0).await.0, StatusCode::SERVICE_UNAVAILABLE, "the app's deadline");
+    assert_eq!(shop_call(&router, "POST", "/other", false, 3 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE, "the app's limit");
+}
+
+/// An outer area's parameter route that matches the prefix of an area inside it (`/shop/{id}` at
+/// `/shop/desk`) answers it with the inner area's settings, as every request under that prefix
+/// meets: its middleware, CSP and body limit, and the outer area's deadline where it sets none.
+/// Another segment keeps the outer area's alone (#1213).
+#[tokio::test]
+async fn an_outer_areas_parameter_route_at_an_inner_areas_prefix_meets_the_inner_areas_settings() {
+    let router = shop_app(false, true);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline, not the app's 50 ms");
+    assert_eq!(met, "desk shop app", "the inner area's middleware too");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/other", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "the outer area's alone: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/other", false, 6 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    // The inner area's own parameter route, which has its scope from when the router is built.
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/other", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "desk shop app"), "the outer area's deadline too");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/other", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/other", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// An app's catch-all that answers a path under Corten's own `/corten/` or the assets' prefix
+/// answers it with the app's settings alone, beside an area: no area's middleware and no tag, as
+/// Corten's own routes are answered; elsewhere a page is tagged, and under the area it meets the
+/// area's middleware (#1213).
+#[tokio::test]
+async fn a_catch_all_at_cortens_own_prefixes_answers_with_the_apps_settings() {
+    let router = App::new(Routes::from(Table::new().route("/{*rest}", get(|| async { "done" }))))
+        .middleware(Met("app"))
+        .assets(RefusedStatic)
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(|| async { "item" }))).middleware(Met("shop")))
+        .router();
+    let call = |path: &'static str| {
+        let req = Request::get(path).header("if-none-match", r#"W/"other""#).body(Body::empty()).unwrap();
+        let router = router.clone();
+        async move {
+            let res = router.oneshot(req).await.unwrap();
+            let met = res.headers().get_all("x-met").iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join(" ");
+            (res.status(), met, res.headers().contains_key(http::header::ETAG))
+        }
+    };
+    // (`/assets/{version}/{*path}` is the assets' own route, so the catch-all never sees a path
+    // with two segments under it.)
+    for path in ["/corten/nope", "/assets/nope"] {
+        assert_eq!(call(path).await, (StatusCode::OK, "app".to_string(), false), "{path}: Corten's own, untagged");
+    }
+    assert_eq!(call("/other").await, (StatusCode::OK, "app".to_string(), true), "the app's page, tagged");
+    assert_eq!(call("/shop/other").await, (StatusCode::OK, "shop app".to_string(), true), "the area's");
 }
 
 /// A middleware reads the client's address as a handler would, and the answer is then private.
@@ -10140,7 +10508,7 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
 
 /// A route that takes `Upgrade` switches the connection: a WebSocket handshake from the page's own
 /// origin or from a client that is not a browser gets its 101 and then the bytes, one from another
-/// site is refused as a cross-site write is, and a request that does not ask to switch is a 426,
+/// site is refused as a cross-site write is, and a request that does not ask to switch is a 400,
 /// or, where the route takes `Option<Upgrade>`, its other answer.
 #[tokio::test]
 async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() {
@@ -10156,6 +10524,16 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     }
     let routes = Table::new()
         .route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(echo) }))
+        .route(
+            "/ws-400",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::BAD_REQUEST)) }),
+        )
+        .route(
+            "/ws-404",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::NOT_FOUND)) }),
+        )
+        // `Error::new` on a `corten::Error` keeps its source, here a wrong version, at 500.
+        .route("/ws-500", get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(crate::Error::new) }))
         .route(
             "/tunnel",
             get(|upgrade: Upgrade| async move {
@@ -10176,7 +10554,7 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let app = App::new(Routes::from(routes)).api::<ApiRoot>(|api| {
+    let app = App::new(Routes::from(routes)).error_page(test_error_page, ()).api::<ApiRoot>(|api| {
         api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(echo) })))
             .allow_origin("https://partner.example")
     });
@@ -10224,8 +10602,90 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let (head, _) = handshake("/ws", "chat", "").await;
     assert!(head.starts_with("http/1.1 400"), "only a WebSocket handshake is accepted as one: {head}");
 
-    let plain = raw_get(addr, "/ws", "").await;
-    assert!(plain.starts_with("HTTP/1.1 426"), "{plain}");
+    // Another version, or none (taken as one it does not support): a 426 that says which.
+    for version in ["sec-websocket-version: 8\r\n", ""] {
+        for path in ["/ws", "/either", "/api/ws"] {
+            for accept in ["text/html", "application/json"] {
+                let refused = raw_get(
+                    addr,
+                    path,
+                    &format!("connection: upgrade\r\nupgrade: websocket\r\n{version}sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\naccept: {accept}\r\n"),
+                )
+                .await;
+                let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+                assert!(head.starts_with("http/1.1 426"), "{refused}");
+                assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+                assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+                assert!(connection_upgrade(&head), "{refused}");
+                if path == "/api/ws" || accept == "application/json" {
+                    assert!(head.contains("content-type: application/problem+json"), "{refused}");
+                }
+                if path == "/ws" && accept == "text/html" {
+                    assert!(refused.contains("Something went wrong"), "the custom error page keeps the headers: {refused}");
+                }
+            }
+        }
+    }
+    // A handler that answers it at another status still says which version (RFC 6455, 4.2.2),
+    // but only a 426 names a protocol to switch to.
+    let refused = raw_get(
+        addr,
+        "/ws-400",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 400"), "{refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    // Any other status says nothing of the socket: a 404 that hides it, or a 500.
+    for (path, status) in [("/ws-404", "404"), ("/ws-500", "500")] {
+        let refused = raw_get(
+            addr,
+            path,
+            "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+        )
+        .await;
+        let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+        assert!(head.starts_with(&format!("http/1.1 {status}")), "{refused}");
+        assert!(!head.contains("\r\nsec-websocket-version:"), "{refused}");
+        assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    }
+
+    // The connection a 426 went out on (with `Connection: upgrade`) serves the next request.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: keep-alive, upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let (head, _) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 426") && connection_upgrade(&head), "{head}");
+    stream.write_all(b"GET /either HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 200") && body == "not a socket", "{head}{body}");
+
+    // HTTP/1.0 cannot switch, so its `Upgrade` is ignored (RFC 9110, 7.8): `/either` answers its
+    // page, and a route that only switches a plain 400.
+    let http10 = |path: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET {path} HTTP/1.0\r\nhost: localhost\r\nconnection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+    let answer = http10("/either").await;
+    assert!(answer.starts_with("HTTP/1.") && answer.contains(" 200 ") && answer.ends_with("not a socket"), "{answer}");
+    let answer = http10("/ws").await;
+    assert!(answer.contains(" 400 ") && !answer.to_ascii_lowercase().contains("\r\nupgrade:"), "{answer}");
+
+    for path in ["/ws", "/tunnel"] {
+        let plain = raw_get(addr, path, "").await;
+        assert!(plain.starts_with("HTTP/1.1 400"), "{plain}");
+        assert!(!plain.to_ascii_lowercase().contains("\r\nupgrade:"), "the route's protocol is not known: {plain}");
+    }
 
     let (head, stream) = handshake("/either", "websocket", "").await;
     assert!(head.starts_with("http/1.1 101"), "{head}");
@@ -10258,14 +10718,114 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     server.await.unwrap().unwrap();
 }
 
+/// Whether a lowercased response head has `upgrade` among its `Connection` tokens.
+fn connection_upgrade(head: &str) -> bool {
+    head.lines()
+        .filter_map(|line| line.strip_prefix("connection: "))
+        .flat_map(|line| line.split(','))
+        .any(|token| token.trim() == "upgrade")
+}
+
+/// One answer read from a kept-alive connection: its lowercased head and its body, which must
+/// have a `Content-Length`.
+async fn read_answer(stream: &mut tokio::net::TcpStream) -> (String, String) {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        assert_eq!(stream.read(&mut byte).await.unwrap(), 1, "the connection closed: {}", String::from_utf8_lossy(&head));
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+    let length: usize = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length: "))
+        .unwrap_or_else(|| panic!("no content-length: {head}"))
+        .trim()
+        .parse()
+        .unwrap();
+    let mut body = vec![0u8; length];
+    stream.read_exact(&mut body).await.unwrap();
+    (head, String::from_utf8(body).unwrap())
+}
+
+/// An API's own error shape (`Api::errors`) keeps a 426's headers.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape() {
+    use crate::upgrade::Upgrade;
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::new()).api::<ApiRoot>(|api| {
+        api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })))
+            .errors(|status, message| ShapedError {
+                r#type: "error",
+                error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+            })
+    });
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let refused = raw_get(
+        addr,
+        "/api/ws",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let (head, body) = refused.split_once("\r\n\r\n").unwrap();
+    let head = head.to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 426"), "{refused}");
+    assert!(head.lines().any(|line| line == "content-type: application/json"), "{refused}");
+    assert!(body.starts_with(r#"{"type":"error","error":{"code":426,"#), "the API's own shape: {refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+    assert!(connection_upgrade(&head), "{refused}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 #[derive(crate::Route)]
 #[route("/api/ws")]
 struct ApiWs;
 
+#[tokio::test]
+async fn an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade() {
+    use crate::upgrade::Upgrade;
+    let routes =
+        || Routes::from(Table::new().route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })));
+    let router = App::new(routes()).router();
+    for version in [http::Version::HTTP_11, http::Version::HTTP_2] {
+        let req = Request::get("/ws")
+            .version(version)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(!res.headers().contains_key(header::UPGRADE));
+        assert!(!res.headers().contains_key(header::CONNECTION));
+    }
+    let client = App::new(routes()).test();
+    let res = client
+        .get(&crate::Local::parse("/ws").unwrap())
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, "websocket")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(!res.headers().contains_key(header::UPGRADE));
+    assert!(!res.headers().contains_key(header::CONNECTION));
+}
+
 /// A handshake with no `Sec-Fetch-Site` (what Chromium and Firefox send) is held to its `Origin`
 /// against `Host`, scheme included once the app says it is HTTPS only: a plain-http page on the
 /// app's host cannot open a socket to the HTTPS app with the user's `Secure` cookies (#1212).
-/// Allowed, a oneshot answers 426, since it cannot switch; refused, 403.
+/// Allowed, a oneshot answers 400, since it cannot switch; refused, 403.
 #[tokio::test]
 async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     use crate::security::Policy;
@@ -10288,7 +10848,7 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
             .unwrap();
         router.oneshot(req).await.unwrap().status()
     };
-    let (open, refused) = (StatusCode::UPGRADE_REQUIRED, StatusCode::FORBIDDEN);
+    let (open, refused) = (StatusCode::BAD_REQUEST, StatusCode::FORBIDDEN);
     let https_only = app(Policy::new().hsts());
     let either = app(Policy::new());
     assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");

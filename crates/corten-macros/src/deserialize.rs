@@ -63,7 +63,16 @@ fn default_arg(derive: &str, arg: &Arg) -> Result<DefaultValue, Error> {
 fn string_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
     match &arg.value {
         Value::Str(s) => Ok(s.clone()),
-        _ => err(arg.span, format!("{derive}: use #[serde({} = \"...\")], one name for reading and writing", arg.key)),
+        _ => {
+            // `rename(serialize = "..", deserialize = "..")` is serde's too; one string is all
+            // the derives here take.
+            let one = match arg.key.as_str() {
+                "rename" => ", one name for reading and writing",
+                "rename_all" => ", one rule for reading and writing",
+                _ => "",
+            };
+            err(arg.span, format!("{derive}: use #[serde({} = \"...\")]{one}", arg.key))
+        }
     }
 }
 
@@ -123,17 +132,17 @@ fn rule_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
 
 /// What the container's attributes say about reading it.
 #[derive(Default)]
-struct Container {
+pub struct Container {
     rename_all: Option<String>,
-    default: Option<DefaultValue>,
-    deny_unknown_fields: bool,
+    pub default: Option<DefaultValue>,
+    pub deny_unknown_fields: bool,
     /// The name serde reads the type by (`rename`), passed to the deserializer.
     rename: Option<String>,
     expecting: Option<String>,
     /// `bound`: the impl's where predicates in place of the inferred ones.
     bound: Option<TokenStream>,
     /// `transparent` (`FromJson` only): read as its one field.
-    transparent: bool,
+    pub transparent: bool,
 }
 
 impl Container {
@@ -151,6 +160,9 @@ impl Container {
             match arg.key.as_str() {
                 "transparent" if json && !is_enum => c.transparent = true,
                 "rename_all_fields" if json && is_enum => {}
+                "rename_all_fields" if json => {
+                    return err(arg.span, format!("{derive}: #[serde(rename_all_fields)] can only be used on enums"))
+                }
                 "rename_all" => c.rename_all = Some(rule_arg(derive, &arg)?),
                 "default" if !is_enum => c.default = Some(default_arg(derive, &arg)?),
                 "deny_unknown_fields" => c.deny_unknown_fields = true,
@@ -522,16 +534,21 @@ fn names_const(name: &str, entries: &[BTreeSet<String>]) -> String {
     format!("#[doc(hidden)] const {name}: &'static [&'static ::core::primitive::str] = &[{}];", names.join(", "))
 }
 
-struct Field {
+pub struct Field {
     /// How the code names it: `r#type` as written, or `0` in a tuple.
-    member: String,
+    pub member: TokenTree,
+    /// Its type, each `Self` in it the type itself (inside the visitor `Self` is the visitor).
     ty: TokenStream,
-    /// Its own name, which errors give.
-    primary: String,
-    /// Every name it is read by, its own among them, sorted as serde sorts them.
-    names: BTreeSet<String>,
-    default: Option<DefaultValue>,
-    skip: bool,
+    /// Its type as written, for `FromJson`'s reader and schema, where `Self` is the type.
+    pub written: TokenStream,
+    /// Its own name, which errors give and `FromJson`'s reader matches first.
+    pub primary: String,
+    /// The other names it is read by, as written.
+    pub aliases: Vec<String>,
+    pub default: Option<DefaultValue>,
+    pub skip: bool,
+    /// Its doc comment, for `FromJson`'s schema.
+    pub doc: String,
     /// `#[serde(borrow)]` on a `Cow<'a, str>` or `Cow<'a, [u8]>`: read through
     /// `form::__private::Borrow`, borrowed from the input where it can be.
     borrow: bool,
@@ -539,6 +556,13 @@ struct Field {
     lent: BTreeSet<String>,
     /// `bound`: its where predicates in place of the inferred ones.
     bound: Option<TokenStream>,
+}
+
+impl Field {
+    /// Every name it is read by, its own among them, sorted as serde sorts them.
+    fn names(&self) -> BTreeSet<String> {
+        self.aliases.iter().chain([&self.primary]).cloned().collect()
+    }
 }
 
 /// Whether the `Deserialize` `for_struct` writes borrows from its input, as serde_derive's
@@ -553,11 +577,7 @@ pub fn struct_lends(item: &Item) -> bool {
     let Some(body) = &item.body else { return false };
     let read = || -> Result<Vec<Field>, Error> {
         let container = Container::read("Fields", &item.attrs, false, false, &unsupported)?;
-        let members = named_fields(body)?
-            .into_iter()
-            .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
-            .collect();
-        read_fields("Fields", item, &container, members, &unsupported)
+        read_fields("Fields", item, &container, named_members(body)?, &unsupported)
     };
     read().map_or(true, |fields| fields.iter().any(|f| !f.skip && (f.borrow || !f.lent.is_empty())))
 }
@@ -577,21 +597,25 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
     let Some(body) = &item.body else {
         return err(item.name.span(), "Fields can only be derived for a struct with named fields");
     };
-    let members = named_fields(body)?
-        .into_iter()
-        .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
-        .collect();
-    let fields = read_fields("Fields", item, &container, members, &unsupported)?;
-    Ok(named(item, &container, fields))
+    let fields = read_fields("Fields", item, &container, named_members(body)?, &unsupported)?;
+    Ok(named(item, &container, &fields))
 }
 
 /// A field as written: how the code names it (`r#type`, or `0` in a tuple), its name, its
 /// attributes and its type.
 struct Member {
-    member: String,
+    member: TokenTree,
     name: String,
     attrs: Vec<Group>,
     ty: TokenStream,
+}
+
+/// A struct's named fields, as [`Member`]s.
+fn named_members(body: &Group) -> Result<Vec<Member>, Error> {
+    Ok(named_fields(body)?
+        .into_iter()
+        .map(|f| Member { member: TokenTree::Ident(f.ident), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
+        .collect())
 }
 
 /// Each field's `#[serde(..)]`, as serde_derive reads it for deserializing.
@@ -608,25 +632,28 @@ fn read_fields(
     for field in members {
         let mut f = Field {
             member: field.member,
-            ty: without_self(field.ty, &this),
+            ty: without_self(field.ty.clone(), &this),
+            written: field.ty,
             primary: String::new(),
-            names: BTreeSet::new(),
+            aliases: Vec::new(),
             default: None,
             skip: false,
+            doc: crate::schema::doc(&field.attrs),
             borrow: false,
             lent: BTreeSet::new(),
             bound: None,
         };
         let mut borrows = false;
         let mut rename = None;
-        let mut aliases = Vec::new();
         for arg in serde_args_for(&field.attrs, derive)? {
             match arg.key.as_str() {
                 "rename" => rename = Some(string_arg(derive, &arg)?),
-                "alias" => aliases.push(string_arg(derive, &arg)?),
+                "alias" => f.aliases.push(string_arg(derive, &arg)?),
                 "default" => f.default = Some(default_arg(derive, &arg)?),
                 "skip" | "skip_deserializing" => f.skip = true,
-                "borrow" => {
+                // `FromJson` reads owned values, so it refuses `borrow` with the attributes it
+                // does not follow.
+                "borrow" if derive != FROM_JSON => {
                     borrows = true;
                     match &arg.value {
                         Value::Bare => borrowed(&f.ty, true, &mut f.lent),
@@ -668,8 +695,6 @@ fn read_fields(
         }
         f.primary = rename
             .unwrap_or_else(|| container.rename_all.as_deref().map_or(field.name.clone(), |rule| field_rule(&field.name, rule)));
-        f.names = aliases.into_iter().collect();
-        f.names.insert(f.primary.clone());
         if borrows {
             f.borrow = is_borrowed_cow(&f.ty);
         } else {
@@ -681,13 +706,13 @@ fn read_fields(
 }
 
 /// The `Deserialize` impl of a struct with named fields.
-fn named(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream {
+fn named(item: &Item, container: &Container, fields: &[Field]) -> TokenStream {
     let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
     this.extend(item.type_generics.clone());
     let lent: BTreeSet<String> = fields.iter().filter(|f| !f.skip).flat_map(|f| f.lent.iter().cloned()).collect();
-    let g = generics(item, &lent, where_clause(item, container, &fields, &this));
+    let g = generics(item, &lent, where_clause(item, container, fields, &this));
     let read: Vec<&Field> = fields.iter().filter(|f| !f.skip).collect();
-    let entries: Vec<BTreeSet<String>> = read.iter().map(|f| f.names.clone()).collect();
+    let entries: Vec<BTreeSet<String>> = read.iter().map(|f| f.names()).collect();
     // As written (`r#type` stays raw) for the code and serde's messages, as serde_derive writes
     // them; without `r#` for the name it passes the deserializer.
     let path = item.name.to_string();
@@ -728,7 +753,7 @@ fn named(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream 
     let build = |code: &mut Code, defaulted: &dyn Fn(&mut Code, &Field) -> bool| {
         code.push(&format!("::core::result::Result::Ok({path} {{"));
         let mut index = 0;
-        for f in &fields {
+        for f in fields {
             code.push(&format!(" {}: ", f.member));
             if f.skip {
                 if !defaulted(code, f) {
@@ -879,12 +904,38 @@ fn unit_enum(item: &Item, container: &Container, variants: &[Variant]) -> TokenS
     wrap(item, &g, code.tokens())
 }
 
-/// `Deserialize` for a type `#[derive(FromJson)]` reads, as serde_derive writes it from the same
-/// `#[serde(..)]`: a struct with named fields, a tuple or unit struct, a `transparent` one, or an
-/// enum of unit variants. `FromJson` has refused each attribute it does not follow before this
-/// runs.
-pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
-    const DERIVE: &str = "FromJson";
+/// The name of the derive whose attributes [`read_from_json`] reads.
+const FROM_JSON: &str = "FromJson";
+
+/// A type `#[derive(FromJson)]` reads, from one reading of its `#[serde(..)]`: its reader and
+/// the `Deserialize` it falls back to are both written from this.
+pub struct Reading {
+    pub container: Container,
+    pub shape: Shape,
+}
+
+/// What a [`Reading`] reads: a unit struct, its fields, or an enum's variants that are read.
+pub enum Shape {
+    Unit,
+    Named(Vec<Field>),
+    Tuple(Vec<Field>),
+    Enum(Vec<UnitVariant>),
+}
+
+/// A unit variant as `FromJson` reads it: its own name, its other names as written, its doc
+/// comment (for the schema) and whether it is `#[serde(other)]`.
+pub struct UnitVariant {
+    pub ident: Ident,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub doc: String,
+    pub other: bool,
+}
+
+/// A type's `#[serde(..)]` as `FromJson` reads it, refusing each attribute it does not follow.
+/// With `other`, a variant may be `#[serde(other)]`: a `UrlValue`'s, whose `FromJson` is written
+/// beside the `Deserialize` `UrlValue` writes; `#[derive(FromJson)]` itself refuses it.
+pub fn read_from_json(item: &Item, other: bool) -> Result<Reading, Error> {
     let unsupported = |arg: &Arg| {
         (
             arg.span,
@@ -894,61 +945,14 @@ pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
             ),
         )
     };
-    let container = Container::read(DERIVE, &item.attrs, item.is_enum, true, &unsupported)?;
-    if item.is_enum {
+    let container = Container::read(FROM_JSON, &item.attrs, item.is_enum, true, &unsupported)?;
+    let shape = if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
-        let mut variants = Vec::new();
-        for tokens in crate::component::variants(body.stream()) {
-            let mut j = 0;
-            let mut attrs = Vec::new();
-            while matches!(tokens.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
-                if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
-                    attrs.push(g.clone());
-                }
-                j += 2;
-            }
-            let Some(TokenTree::Ident(ident)) = tokens.get(j) else {
-                return err(body.span(), "FromJson: expected a variant");
-            };
-            let (mut rename, mut names, mut skip) = (None, BTreeSet::new(), false);
-            for arg in serde_args_for(&attrs, DERIVE)? {
-                match arg.key.as_str() {
-                    "rename" => rename = Some(string_arg(DERIVE, &arg)?),
-                    "alias" => {
-                        names.insert(string_arg(DERIVE, &arg)?);
-                    }
-                    "skip" | "skip_deserializing" => skip = true,
-                    "skip_serializing" | "serialize_with" | "bound" => {}
-                    "other" => {
-                        return err(
-                            arg.span,
-                            "FromJson: #[serde(other)] is not followed by FromJson's reader; derive corten::UrlValue for this enum instead, which reads any other word as this variant and is a FromJson (serde_json reads a word the reader does not know)",
-                        );
-                    }
-                    _ => return Err(unsupported(&arg)),
-                }
-            }
-            // A skipped variant is not read, nor named to the deserializer, as serde_derive's.
-            if skip {
-                continue;
-            }
-            let text = ident.to_string();
-            let text = text.strip_prefix("r#").unwrap_or(&text);
-            names
-                .insert(rename.unwrap_or_else(|| {
-                    container.rename_all.as_deref().map_or(text.to_string(), |rule| variant_rule(text, rule))
-                }));
-            variants.push(Variant { ident: ident.clone(), names, other: false });
-        }
-        return Ok(unit_enum(item, &container, &variants));
-    }
-    let members = if let Some(tuple) = &item.tuple {
-        tuple_members(tuple)
+        Shape::Enum(unit_variants(&container, body, other, &unsupported)?)
+    } else if let Some(tuple) = &item.tuple {
+        Shape::Tuple(read_fields(FROM_JSON, item, &container, tuple_members(tuple), &unsupported)?)
     } else if let Some(body) = &item.body {
-        named_fields(body)?
-            .into_iter()
-            .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
-            .collect()
+        Shape::Named(read_fields(FROM_JSON, item, &container, named_members(body)?, &unsupported)?)
     } else {
         if container.transparent {
             return err(item.name.span(), "#[serde(transparent)] is not allowed on a unit struct");
@@ -956,15 +960,89 @@ pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
         if container.default.is_some() {
             return err(item.name.span(), "#[serde(default)] can only be used on structs that have fields");
         }
-        return Ok(unit(item, &container));
+        Shape::Unit
     };
-    let fields = read_fields(DERIVE, item, &container, members, &unsupported)?;
-    if container.transparent {
-        transparent(item, &container, fields)
-    } else if item.tuple.is_some() {
-        Ok(tuple(item, &container, fields))
-    } else {
-        Ok(named(item, &container, fields))
+    Ok(Reading { container, shape })
+}
+
+/// An enum's variants that serde reads, each by its names: a skipped one is not read, nor named
+/// to the deserializer, as serde_derive's.
+fn unit_variants(
+    container: &Container,
+    body: &Group,
+    other_ok: bool,
+    unsupported: &dyn Fn(&Arg) -> Error,
+) -> Result<Vec<UnitVariant>, Error> {
+    let mut variants = Vec::new();
+    for tokens in crate::component::variants(body.stream()) {
+        let mut j = 0;
+        let mut attrs = Vec::new();
+        while matches!(tokens.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
+                attrs.push(g.clone());
+            }
+            j += 2;
+        }
+        let Some(TokenTree::Ident(ident)) = tokens.get(j) else {
+            return err(body.span(), "FromJson: expected a variant");
+        };
+        if matches!(tokens.get(j + 1), Some(TokenTree::Group(_))) {
+            return err(
+                ident.span(),
+                "FromJson: only an enum of unit variants is read; derive Deserialize alone for this enum (as a field it is then read by serde_json)",
+            );
+        }
+        let (mut rename, mut aliases, mut skip, mut other) = (None, Vec::new(), false, false);
+        for arg in serde_args_for(&attrs, FROM_JSON)? {
+            match arg.key.as_str() {
+                "rename" => rename = Some(string_arg(FROM_JSON, &arg)?),
+                "alias" => aliases.push(string_arg(FROM_JSON, &arg)?),
+                "skip" | "skip_deserializing" => skip = true,
+                "skip_serializing" | "serialize_with" | "bound" => {}
+                "other" if other_ok => other = true,
+                "other" => {
+                    return err(
+                        arg.span,
+                        "FromJson: #[serde(other)] is not followed by FromJson's reader; derive corten::UrlValue for this enum instead, which reads any other word as this variant and is a FromJson (serde_json reads a word the reader does not know)",
+                    );
+                }
+                _ => return Err(unsupported(&arg)),
+            }
+        }
+        if skip {
+            continue;
+        }
+        let text = ident.to_string();
+        let text = text.strip_prefix("r#").unwrap_or(&text);
+        let name =
+            rename.unwrap_or_else(|| container.rename_all.as_deref().map_or(text.to_string(), |rule| variant_rule(text, rule)));
+        variants.push(UnitVariant { ident: ident.clone(), name, aliases, doc: crate::schema::doc(&attrs), other });
+    }
+    Ok(variants)
+}
+
+/// `Deserialize` for a type `#[derive(FromJson)]` reads, as serde_derive writes it from the same
+/// `#[serde(..)]`: a struct with named fields, a tuple or unit struct, a `transparent` one, or an
+/// enum of unit variants. `reading` is the one its reader is written from, which has refused
+/// each attribute `FromJson` does not follow.
+pub fn for_from_json(item: &Item, reading: &Reading) -> Result<TokenStream, Error> {
+    let container = &reading.container;
+    match &reading.shape {
+        Shape::Enum(variants) => {
+            let variants: Vec<Variant> = variants
+                .iter()
+                .map(|v| Variant {
+                    ident: v.ident.clone(),
+                    names: v.aliases.iter().chain([&v.name]).cloned().collect(),
+                    other: false,
+                })
+                .collect();
+            Ok(unit_enum(item, container, &variants))
+        }
+        Shape::Unit => Ok(unit(item, container)),
+        Shape::Named(fields) | Shape::Tuple(fields) if container.transparent => transparent(item, container, fields),
+        Shape::Tuple(fields) => Ok(tuple(item, container, fields)),
+        Shape::Named(fields) => Ok(named(item, container, fields)),
     }
 }
 
@@ -989,17 +1067,44 @@ fn tuple_members(group: &Group) -> Vec<Member> {
         if j >= tokens.len() {
             continue;
         }
-        let index = members.len().to_string();
-        members.push(Member { member: index.clone(), name: index, attrs, ty: tokens[j..].iter().cloned().collect() });
+        let member = TokenTree::Literal(Literal::usize_unsuffixed(members.len()));
+        members.push(Member { member, name: members.len().to_string(), attrs, ty: tokens[j..].iter().cloned().collect() });
     }
     members
 }
 
-/// Whether `ty`'s last path segment is `PhantomData`, which a `transparent` struct does not read.
+/// Whether a `transparent` struct leaves `ty` out of its pick, as serde_derive (1.0.229,
+/// `allow_transparent`) decides it: a path type (`PhantomData<T>`, `std::marker::PhantomData<T>`,
+/// `<X as Tr>::PhantomData`) whose last segment is `PhantomData`. A reference, pointer, tuple,
+/// array or parenthesized type is not a path, whatever it holds.
 fn is_phantom(ty: &TokenStream) -> bool {
     let tokens: Vec<TokenTree> = ungroup(ty).into_iter().collect();
-    let head = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '<')).unwrap_or(tokens.len());
-    matches!(tokens[..head].iter().rev().find(|t| matches!(t, TokenTree::Ident(_))), Some(TokenTree::Ident(id)) if id.to_string() == "PhantomData")
+    let path = match tokens.first() {
+        Some(TokenTree::Ident(id)) => !matches!(id.to_string().as_str(), "dyn" | "impl" | "fn" | "unsafe" | "extern" | "for"),
+        Some(TokenTree::Punct(p)) => matches!(p.as_char(), ':' | '<'),
+        _ => false,
+    };
+    // The last segment is the last identifier outside the `<..>`s, before any `-> R` of `Fn(A) -> R`.
+    let (mut depth, mut last) = (0usize, None);
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Punct(p) => {
+                let arrow =
+                    i > 0 && matches!(&tokens[i - 1], TokenTree::Punct(d) if d.as_char() == '-' && d.spacing() == Spacing::Joint);
+                match p.as_char() {
+                    '<' => depth += 1,
+                    '>' if arrow && depth == 0 => break,
+                    '>' if !arrow => depth = depth.saturating_sub(1),
+                    // A trait object (`A + B`) or a macro (`m!(..)`) is not a path.
+                    '+' | '!' if depth == 0 => return false,
+                    _ => {}
+                }
+            }
+            TokenTree::Ident(id) if depth == 0 => last = Some(id.to_string()),
+            _ => {}
+        }
+    }
+    path && last.as_deref() == Some("PhantomData")
 }
 
 /// The name serde gives the deserializer (`rename`, else the type's, without `r#`), and the
@@ -1031,11 +1136,11 @@ fn unit(item: &Item, container: &Container) -> TokenStream {
 /// A tuple struct: one field is a newtype (its value, or a list of one), more are a list of that
 /// many, as serde_derive reads them. `FromJson` has refused `skip` and `default` on its fields;
 /// a container `default` fills a short list.
-fn tuple(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream {
+fn tuple(item: &Item, container: &Container, fields: &[Field]) -> TokenStream {
     let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
     this.extend(item.type_generics.clone());
     let lent: BTreeSet<String> = fields.iter().flat_map(|f| f.lent.iter().cloned()).collect();
-    let g = generics(item, &lent, where_clause(item, container, &fields, &this));
+    let g = generics(item, &lent, where_clause(item, container, fields, &this));
     let (name, path) = names_of(item, container);
     let expecting = container.expecting.clone().unwrap_or_else(|| format!("tuple struct {path}"));
     let read = fields.len();
@@ -1047,7 +1152,7 @@ fn tuple(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream 
     let mut code = Code::default();
     visitor_head(&mut code, item, &g, &expecting);
     let vars: Vec<String> = (0..fields.len()).map(|i| format!("__field{i}")).collect();
-    if let [only] = fields.as_slice() {
+    if let [only] = fields {
         code.push("#[inline] fn visit_newtype_struct<__E: _serde::Deserializer<'de>>(self, __e: __E) -> ::core::result::Result<Self::Value, __E::Error> { let __field0:");
         code.hole(only.ty.clone());
         code.push("= <");
@@ -1067,7 +1172,7 @@ fn tuple(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream 
         }
         None => {}
     }
-    for (index, (var, f)) in vars.iter().zip(&fields).enumerate() {
+    for (index, (var, f)) in vars.iter().zip(fields).enumerate() {
         code.push(&format!("let {var} = match _serde::de::SeqAccess::next_element::<"));
         code.hole(f.ty.clone());
         code.push(">(&mut __seq)? { ::core::option::Option::Some(__value) => __value, ::core::option::Option::None =>");
@@ -1094,9 +1199,9 @@ fn tuple(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream 
     wrap(item, &g, code.tokens())
 }
 
-/// `#[serde(transparent)]`: read as its one field that is neither skipped, defaulted nor a
-/// `PhantomData`; each other field is its default, or a `PhantomData`, as serde_derive makes it.
-fn transparent(item: &Item, container: &Container, fields: Vec<Field>) -> Result<TokenStream, Error> {
+/// The field a `#[serde(transparent)]` struct is read as, picked as serde_derive picks it: the one
+/// that is neither skipped, defaulted nor a `PhantomData` ([`is_phantom`]).
+pub fn transparent_field<'a>(item: &Item, fields: &'a [Field]) -> Result<&'a Field, Error> {
     let mut read = fields.iter().filter(|f| !f.skip && f.default.is_none() && !is_phantom(&f.ty));
     let Some(one) = read.next() else {
         return err(
@@ -1107,15 +1212,22 @@ fn transparent(item: &Item, container: &Container, fields: Vec<Field>) -> Result
     if read.next().is_some() {
         return err(item.name.span(), "#[serde(transparent)] requires struct to have at most one transparent field");
     }
+    Ok(one)
+}
+
+/// `#[serde(transparent)]`: read as its [`transparent_field`]; each other field is its default,
+/// or a `PhantomData`, as serde_derive makes it.
+fn transparent(item: &Item, container: &Container, fields: &[Field]) -> Result<TokenStream, Error> {
+    let one = transparent_field(item, fields)?;
     let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
     this.extend(item.type_generics.clone());
-    let g = generics(item, &one.lent, where_clause(item, container, &fields, &this));
+    let g = generics(item, &one.lent, where_clause(item, container, fields, &this));
     let (_, path) = names_of(item, container);
     let mut code = Code::default();
     code.push("::core::result::Result::map(<");
     code.hole(one.ty.clone());
     code.push(&format!(" as _serde::Deserialize>::deserialize(__deserializer), |__transparent| {path} {{"));
-    for f in &fields {
+    for f in fields {
         code.push(&format!("{}:", f.member));
         if std::ptr::eq(f, one) {
             code.push("__transparent");
