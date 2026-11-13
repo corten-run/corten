@@ -38,7 +38,7 @@ const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${p
 
 // These are the dispatched keyed live applications, not historical price transports.
 const liveNative = freeze({
-  rails: { framework: "Rails Turbo keyed DOM / Action Cable native application", runtime: "CRuby 3.4.11",
+  rails: { framework: "Rails Turbo keyed DOM / Action Cable native application", runtime: "CRuby 4.0.9",
     build: "bundle install; bundle exec ruby assets.rb", server: "Puma / Action Cable native async adapter / Turbo Streams",
     workers: "one Puma process; 1:4 request threads; --workers 0; in-process bounded acknowledged reader state",
     command: ["bundle", "exec", "puma", "--bind", "tcp://0.0.0.0:8080", "--threads", "1:4", "--workers", "0"],
@@ -46,7 +46,7 @@ const liveNative = freeze({
     refs: ["Gemfile", "Gemfile.lock", "application.rb", "assets.rb", "client.js", "config.ru", "store.rb", "wire.mjs",
       "views/index.html.erb", "views/application/_change.html.erb", "views/application/_counter.html.erb", "views/application/_row.html.erb", "views/application/_screen.html.erb"],
     middleware: "native /parity controls, ERB/Turbo keyed operations and Action Cable; not the fullstack marketplace app" },
-  phoenix: { framework: "Phoenix LiveView keyed streams native application", runtime: "Elixir 1.19 / OTP 28 release",
+  phoenix: { framework: "Phoenix LiveView keyed streams native application", runtime: "Elixir 1.20.5 / OTP 29.1.2 release",
     build: "MIX_ENV=prod mix compile; native_live esbuild; mix release", server: "Phoenix LiveView / native Channels and LiveSocket",
     workers: "one BEAM node; two normal schedulers and configured dirty schedulers; supervised bounded acknowledged reader state",
     command: ["/app/bin/native_live", "start"],
@@ -85,7 +85,7 @@ const liveNative = freeze({
     server: "Kestrel / TypedResults.ServerSentEvents / browser EventSource", workers: "one .NET process; bounded Channels per reader",
     command: ["dotnet", "LiveParity.dll"], environment: { ASPNETCORE_HTTP_PORTS: "8080" }, refs: ["LiveParity.csproj", "Program.cs", "wwwroot/client.js", "wwwroot/index.html"],
     middleware: "Program.cs: UseDefaultFiles, UseStaticFiles, /parity controls and TypedResults.ServerSentEvents; not Razor Pages" },
-  gin: { framework: "Gin native SSE application", runtime: "Go 1.27.3 native", build: "CGO_ENABLED=0 go build -mod=readonly -p 2 -trimpath -o /server .",
+  gin: { framework: "Gin native SSE application", runtime: "Go 1.27.4 native", build: "CGO_ENABLED=0 go build -mod=readonly -p 2 -trimpath -o /server .",
     server: "Gin SSEvent / bounded Go channel / browser EventSource", workers: "one Go process; native scheduler and bounded reader channels",
     command: ["./server"], environment: { GIN_MODE: "release" }, refs: ["go.mod", "go.sum", "main.go", "client.js", "index.html"],
     middleware: "main.go: native Gin /parity controls, SSE and static browser application; no templ marketplace rendering" },

@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Refresh the native Rails, Phoenix, Gin and Drogon live build inputs to reviewed
+  stable versions and immutable base images. Bind deployment runtime descriptions
+  to those sources; changed inputs still require new qualification evidence.
+
 - Register the native Rails, Phoenix and Laravel live ports without promoting
   historical captures. Retain Livewire/Reverb wire and DOM evidence, including
   negative HTTP controls and request timings on failed journeys; Laravel's

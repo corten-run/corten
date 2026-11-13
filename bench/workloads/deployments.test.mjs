@@ -175,7 +175,7 @@ test("live representatives use dispatched native ports and missing recovery port
   const gin = manifest("live-delivery", "gin").configuration;
   assert.deepEqual(gin.command, ["./server"]);
   assert.equal(gin.builds.app.context, "bench/live/apps/gin");
-  assert.match(gin.runtime, /Go 1\.27\.3/);
+  assert.match(gin.runtime, /Go 1\.27\.4/);
   assert.equal(manifest("recoverable-live", "laravel").implementation, "source-present");
   assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /implementation.*source-present/);
   for (const app of ["topcoat", "leptos"]) {
@@ -206,6 +206,24 @@ test("live representatives use dispatched native ports and missing recovery port
     assert.ok(corten.configuration.sourceRefs.includes(`crates/corten/js/${asset}`));
   }
   assert.ok(!corten.configuration.sourceRefs.includes("bench/live/apps/corten/Dockerfile"));
+});
+
+test("native live runtime descriptions match their checked-in build inputs", () => {
+  const sources = [
+    ["rails", "CRuby 4.0.9", "ruby:4.0.9-slim@sha256:"],
+    ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
+    ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
+  ];
+  for (const [app, runtime, image] of sources) {
+    const dockerfile = readFileSync(new URL(`../live/apps/${app}/Dockerfile`, import.meta.url), "utf8");
+    assert.ok(dockerfile.includes(image), `${app}: native image changed; review its runtime description`);
+    for (const group of ["live-delivery", "recoverable-live"]) {
+      const row = deploymentPlan(group).apps.find((entry) => entry.app === app);
+      if (!row) continue;
+      assert.equal(row.deployments[0].configuration.runtime, runtime, `${group}/${app}`);
+      assert.equal(row.deployments[0].qualification, "pending", "runtime metadata is not qualification evidence");
+    }
+  }
 });
 
 test("every required native live input gates source registration independently", () => {
