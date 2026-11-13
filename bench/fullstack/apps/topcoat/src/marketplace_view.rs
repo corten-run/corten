@@ -1,5 +1,5 @@
 use crate::{
-    COMPONENTS, Id, READY, STYLE,
+    COMPONENTS, READY, STYLE, id,
     marketplace::{self, AlertForm, Locale as PageLocale, Query, Record},
 };
 use std::sync::Arc;
@@ -19,11 +19,11 @@ path_param!(locale);
 
 #[page([GET, POST] "/marketplace/{locale}/{id}")]
 pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<impl View> {
-    let locale = PageLocale::parse(path_param::<Locale>(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
+    let locale = PageLocale::parse(locale(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
     let query = Form::<Query>::from_bytes(request::uri(cx).query().unwrap_or_default().as_bytes())?.0;
-    let record = marketplace::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let record = marketplace::source::get(id(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
     let posted = request::method(cx).as_str() == "POST";
-    if posted && !record.valid_for_alert(path_param::<Id>(cx)) {
+    if posted && !record.valid_for_alert(id(cx)) {
         return Err(topcoat::Error::msg("malformed marketplace record"));
     }
     let (message, minor) = if posted { locale.alert_result(&record, &form) } else { (String::new(), None) };
@@ -63,11 +63,11 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
 }
 #[route(GET "/api/marketplace/{id}")]
 pub async fn marketplace_json(cx: &Cx) -> Result<Json<Arc<Record>>> {
-    let record = marketplace::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let record = marketplace::source::get(id(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
     Ok(Json(record))
 }
 #[component]
-async fn detail(record: &Record, locale: PageLocale, query: &Query, message: &str) -> Result<impl View> {
+async fn detail(cx: &Cx, record: &Record, locale: PageLocale, query: &Query, message: &str) -> Result<impl View> {
     let shown = record.offers(query);
     Ok(view! {
         <article class="marketplace">
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[page("/preview")]
-    async fn preview(Form(input): Form<Preview>) -> Result<impl View> {
+    async fn preview(cx: &Cx, Form(input): Form<Preview>) -> Result<impl View> {
         let record: Record = serde_json::from_str(include_str!("../tests/marketplace.json")).unwrap();
         let locale = PageLocale::parse(&input.locale).unwrap();
         Ok(view! { detail(record: &record, locale: locale, query: &input.query, message: "<script>bad</script>") })

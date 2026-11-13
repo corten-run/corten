@@ -131,8 +131,9 @@ gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route
 a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
 
 [`examples/corten-site/deploy`](../../examples/corten-site/deploy/README.md) is a whole deploy
-written out: this configuration with a certificate, a limit on the live streams one reader
-and all readers may hold and, for a machine with 512 MB, the streams asked for as zstd or not
+written out: this configuration with a certificate, limits on what one address may ask for
+and hold, with what each was measured to do, a limit on the live streams one reader and all
+readers may hold and, for a machine with 512 MB, the streams asked for as zstd or not
 compressed at all, the app as a systemd service on one small machine, and a workflow that
 ships each change and puts the release before back when the new one does not answer.
 

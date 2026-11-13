@@ -19,6 +19,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
+  images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
+  and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
+  historical results; the new toolchain and dependency graph are new-round inputs.
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure. Livewire saves must
+  match the native component, item, locale and submitted values.
+
 - Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
   lifecycle, gate and cleanup observations. A read-only validator replays their
   complete matrix and exact aggregates; older results remain historical when
@@ -256,6 +265,19 @@ Corten is pre-1.0, so any minor version may change the API.
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
   from the metadata address.
+- `examples/corten-site`'s machine slows one address that asks as fast as it can, where
+  before one address asking for the page left another reader with none. One reader (an IPv4
+  address or an IPv6 network of 64 bits) may ask nginx for 100 things at once and 20 a second
+  after, have 100 answers on their way, and ask 100 times on a connection, and the machine's
+  firewall lets it hold 256 connections and open 19 in a second; over the first two the
+  answer is 429, and a connection over the last is let in when its sender tries again, a
+  second later at the soonest. A request refused for asking too fast is written to neither
+  of nginx's logs, nor are the redirects of port 80 and of other names. After an apply the
+  `Site machine` workflow asks the machine for 300 requests and for 40 connections at once
+  and for 250 requests one after another, and fails where it refuses, delays or ends too
+  few. No limit keeps a request under it waiting, and one request in a hundred opens a
+  connection; readers who share an address share its limits, and someone with many addresses
+  is not slowed by them. The deploy guide has what was measured (What one address can do).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
