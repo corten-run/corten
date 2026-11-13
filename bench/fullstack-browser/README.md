@@ -115,12 +115,18 @@ Object references retained by component-scope initializers, assignments, closure
 are also unsupported, even when the alias is only mutated inside the submit handler. Discovery
 does not substitute the sampled prop ID after that reference has escaped. Unrelated lexically
 shadowed objects are not treated as aliases of the component prop.
-The owning component must have a block body containing variable declarations, optional empty
+The owning component must have a block body containing `let`/`const` declarations, optional empty
 statements, then one terminal render return. That return has an expression grammar, not just
 a statement-kind check: sequences, assignments, updates, deletes, awaits, tags and unmodelled
 expressions are unsupported. The mounted handler must be a direct declaration, direct return,
 or direct `onSubmit` property in that return. Handler values cannot pass through aliases,
 captures or opaque factories, either as function literals or via a declaration's references.
+An `onSubmit` property is supported only in a two-argument `_jsx`/`_jsxs` host `form`
+constructor with plain, unique static props (no spreads or computed keys), connected to the
+terminal return through literal props/children and the same host-element constructors.
+Locally bound or reassigned constructor names, arbitrary
+props factories and calls wrapping that constructor path are unsupported. This limited JSX
+source grammar is not a general render-function or factory interpreter.
 Standalone calls, branches, loops and other executable component statements remain unsupported.
 
 A prop-object field read is distinct from invoking that field with the prop as receiver.
@@ -128,9 +134,13 @@ Calls, optional/computed calls, constructors and tags on the sampled prop/record
 unsupported regardless of the field name; parentheses do not turn invocation into a pure read.
 This also applies outside the handler, including declaration initializers and the terminal return.
 
-Before the native fetch, only empty statements, modeled scalar declarations, native
+Before the native fetch, only empty statements, modeled scalar `let`/`const` declarations, native
 `event.preventDefault()` and `new FormData(event.currentTarget)` declarations are supported.
-Earlier declarations in the same declaration list are checked too. Unknown helper calls,
+Event receivers must resolve to the handler parameter, not just share its spelling; lexical
+shadows and pre-fetch assignments cannot substitute another value. `var`, `using` and
+`await using` are unsupported in component declarations and on the pre-fetch path, including
+the fetch-containing declaration list. Earlier declarations in the same list are checked too.
+Unknown helper calls,
 alias writes, getter reads, parameter defaults, awaits, comma expressions and fetch wrappers
 are not assumed harmless. The existing URL evaluator, lexical checks and exact request
 comparison still apply. These are syntax/effect boundaries, not method-name exceptions or an
@@ -153,7 +163,10 @@ the callback must create a fresh binding with the new registration's own `once` 
 `node --test bench/fullstack-browser/row7.test.mjs` provides bounded Chromium regression controls
 for suppressed abort delivery, requested/wrong/missing record reads across all eleven phases,
 mounted React parameter shadowing, component-alias/container/return-factory/receiver escapes and
-native socket receipt mutations. The Next source positive also executes the repository's actual submit function in
+native socket receipt mutations. The closed-grammar controls compare Node and Chromium errors
+and HTTP receipts for event shadows/resource declarations; a real native submit capture listener
+also demonstrates the terminal props-factory escape independently of discovery.
+The Next source positive also executes the repository's actual submit function in
 Chromium and compares its independently received POST path, method and fields. Its test-only
 closure setup is not a compiled Next deployment or new contender evidence. These are apparatus
 tests, not new contender evidence; historical saved observations are not rewritten.

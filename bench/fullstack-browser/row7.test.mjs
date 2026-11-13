@@ -151,6 +151,30 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     "/api/marketplace/item_2", "Pure property reads are not receiver invocations");
   assert.equal(discoverReactEndpoint([candidate(`async e=>{const unused="safe";return fetch(${endpoint},{method:"POST"})}`, 'const view=rows.map(submit=>submit.id);')])?.path,
     "/api/marketplace/item_2", "Pure prefix declarations and unrelated handler-name shadows are supported");
+  assert.equal(discoverReactEndpoint([candidate(`async e=>{let unused="safe";e.preventDefault();return fetch(${endpoint},{method:"POST"})}`)])?.path,
+    "/api/marketplace/item_2", "Ordinary let declarations preserve the native event binding");
+  for (const [name, returned, prefix = "", supported = false] of [
+    ["JSX form constructor", '_jsx("form",{onSubmit:submit})', "", true],
+    ["nested JSX host constructors", '_jsxs("article",{children:[_jsx("form",{onSubmit:submit})]})', "", true],
+    ["terminal props factory", 'retain(r,{onSubmit:submit})'],
+    ["nested props factory", '_jsx("article",{children:retain(r,{onSubmit:submit})})'],
+    ["factory around JSX form", 'retain(r,_jsx("form",{onSubmit:submit}))'],
+    ["bare props object", '{onSubmit:submit}'],
+    ["unknown render constructor", 'render("form",{onSubmit:submit})'],
+    ["JSX constructor extra factory argument", '_jsx("form",{onSubmit:submit},retain(r))'],
+    ["JSX props spread", '_jsx("form",{...props,onSubmit:submit})'],
+    ["JSX computed prop", '_jsx("form",{[key]:value,onSubmit:submit})'],
+    ["JSX duplicate prop", '_jsx("form",{onSubmit:submit,onSubmit:submit})'],
+    ["component-supplied JSX constructor", '_jsx("form",{onSubmit:submit})', 'const _jsx=retain;'],
+    ["component using declaration", 'null', 'using unused="safe";'],
+    ["component var declaration", 'null', 'var unused="safe";'],
+  ]) await t.test(name, () => {
+    const observed = candidate(`async e=>{e.preventDefault();return fetch(${endpoint},{method:"POST"})}`, prefix);
+    observed.componentSource = observed.componentSource.replace("return null}", `return ${returned}}`);
+    const result = discoverReactEndpoint([observed]);
+    if (supported) assert.equal(result?.path, "/api/marketplace/item_2");
+    else assert.equal(result, null);
+  });
   await t.test("unsupported concise component execution", () => {
     const observed = candidate(`async e=>fetch(${endpoint},{method:"POST"})`);
     observed.componentSource = `({record:r,locale:l})=>(retain(r),${observed.handlerSource})`;
@@ -215,6 +239,14 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     ["pre-fetch alias write without visible prop escape", `async e=>{box[0].id="item_1";return fetch(${endpoint},{method:"POST"})}`],
     ["pre-fetch property getter", `async e=>{const value=box[0].trigger;return fetch(${endpoint},{method:"POST"})}`],
     ["pre-fetch await", `async e=>{const value=await mutate();return fetch(${endpoint},{method:"POST"})}`],
+    ["var prefix declaration", `async e=>{var value="safe";return fetch(${endpoint},{method:"POST"})}`],
+    ["using prefix declaration", `async e=>{using value="safe";return fetch(${endpoint},{method:"POST"})}`],
+    ["await using prefix declaration", `async e=>{await using value="safe";return fetch(${endpoint},{method:"POST"})}`],
+    ["var fetch declaration", `async e=>{var response=await fetch(${endpoint},{method:"POST"});}`],
+    ["using fetch declaration", `async e=>{using response=await fetch(${endpoint},{method:"POST"});}`],
+    ["await using fetch declaration", `async e=>{await using response=await fetch(${endpoint},{method:"POST"});}`],
+    ["event assignment", `async e=>{e=l;e.preventDefault();return fetch(${endpoint},{method:"POST"})}`],
+    ["lexically shadowed FormData event", `async e=>{{const e=l;const form=new FormData(e.currentTarget);return fetch(${endpoint},{method:"POST"})}}`],
     ["earlier initializer in fetch declaration", `async e=>{const value=mutate(),response=await fetch(${endpoint},{method:"POST"});}`],
     ["pre-fetch parameter default", `async (e=mutate())=>fetch(${endpoint},{method:"POST"})`],
     ["pre-fetch comma expression", `async e=>(mutate(),fetch(${endpoint},{method:"POST"}))`],
@@ -325,6 +357,62 @@ test("row7: mounted component aliases fail closed while the actual handler POST 
       assert.equal(candidates[0].recordId, "item_2", "Discovery captured props before the native handler mutated the record");
       if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
       else assert.equal(discovered, null, "An escaped prop reference is unsupported, not an invented endpoint");
+    });
+  } finally { if (browser) await browser.close(); await close(server); }
+});
+
+test("row7: closed binding grammar agrees with Node and native Chromium dispatch", { timeout: 30000 }, async (t) => {
+  const requests = [], server = createServer((req, res) => {
+    if (req.url.startsWith("/api/")) requests.push({ path: req.url, method: req.method });
+    res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>');
+  }), base = await listen(server); let browser;
+  const source = (mode, origin = "") => {
+    const prefix = { native: "e.preventDefault();", "event-var": "var e=l;e.preventDefault();",
+      "event-block": "const e=l;e.preventDefault();", using: 'using value="safe";', "await-using": 'await using value="safe";' }[mode] ?? "e.preventDefault();";
+    const handlerSource = `async e=>{${mode === "event-block" ? "{" : ""}${prefix}return fetch(${JSON.stringify(origin + "/api/marketplace/")}+r.id+"?locale="+l,{method:"POST"});${mode === "event-block" ? "}" : ""}}`;
+    const componentSource = mode === "terminal-wrapper"
+      ? `function M({record:r,locale:l}){const retain=(value,props)=>{document.addEventListener("submit",()=>{value.id="item_1"},{capture:true,once:true});return props.onSubmit;};return retain(r,{onSubmit:${handlerSource}});}`
+      : `function M({record:r,locale:l}){return ${handlerSource};}`;
+    return { handlerSource, componentSource, recordId: "item_2", locale: "fr-FR", base,
+      action: base + "/marketplace/fr-FR/item_2", basis: "native-grammar-control" };
+  };
+  try {
+    for (const mode of ["native", "event-var", "event-block", "using", "await-using"]) await t.test(`Node ${mode}`, async () => {
+      requests.length = 0;
+      const candidate = source(mode, base), component = new Function(`return (${candidate.componentSource})`)();
+      const handler = component({ record: { id: "item_2" }, locale: "fr-FR" });
+      const outcome = await handler({ preventDefault() {} }).then(() => "completed", (error) => error.name);
+      assert.equal(outcome, mode === "native" ? "completed" : "TypeError");
+      assert.deepEqual(requests, mode === "native" ? [{ path: "/api/marketplace/item_2?locale=fr-FR", method: "POST" }] : []);
+      const discovered = discoverReactEndpoint([candidate]);
+      if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
+      else assert.equal(discovered, null, "A pre-dispatch TypeError cannot certify a native POST binding");
+    });
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    for (const mode of ["terminal-wrapper", "event-var", "event-block", "using", "await-using", "native"]) await t.test(`Chromium ${mode}`, async () => {
+      await page.goto(base); requests.length = 0;
+      await page.evaluate(({ componentSource }) => {
+        const component = new Function(`return (${componentSource})`)(), props = { record: { id: "item_2" }, locale: "fr-FR" };
+        const form = document.querySelector("form"), handler = component(props);
+        form.__reactProps$control = { onSubmit: handler };
+        form.__reactFiber$control = { type: component, memoizedProps: props };
+        form.addEventListener("submit", (event) => {
+          const pending = handler(event);
+          // Cancel HTML fallback after native invocation, including error cases.
+          event.preventDefault();
+          globalThis.controlOutcome = pending.then(() => "completed", (error) => error.name);
+        });
+      }, source(mode));
+      const candidates = await page.locator("form").evaluate(reactHandlerSources);
+      const discovered = discoverReactEndpoint(candidates);
+      const outcome = await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
+      const dispatched = ["native", "terminal-wrapper"].includes(mode);
+      assert.equal(outcome, dispatched ? "completed" : "TypeError");
+      assert.deepEqual(requests, dispatched ? [{ path: `/api/marketplace/${mode === "terminal-wrapper" ? "item_1" : "item_2"}?locale=fr-FR`, method: "POST" }] : []);
+      assert.equal(candidates[0].recordId, "item_2", "Capture precedes the native capture listener's mutation");
+      if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
+      else assert.equal(discovered, null, "Unsupported syntax must not invent a successful endpoint");
     });
   } finally { if (browser) await browser.close(); await close(server); }
 });

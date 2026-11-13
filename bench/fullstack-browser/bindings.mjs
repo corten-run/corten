@@ -52,6 +52,22 @@ function renderExpression(node) {
   return false;
 }
 
+function ordinaryDeclarations(list) {
+  const kind = list.flags & ts.NodeFlags.BlockScoped;
+  return kind === ts.NodeFlags.Let || kind === ts.NodeFlags.Const;
+}
+
+const renderConstructors = new Set(["_jsx", "_jsxs"]);
+function renderConstructor(node) {
+  if (!(ts.isCallExpression(node) && !(node.flags & ts.NodeFlags.OptionalChain)
+    && ts.isIdentifier(node.expression) && renderConstructors.has(node.expression.text)
+    && node.arguments.length === 2 && ts.isStringLiteral(node.arguments[0])
+    && ts.isObjectLiteralExpression(node.arguments[1]))) return false;
+  const props = node.arguments[1].properties;
+  return props.every((p) => ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)))
+    && new Set(props.map((p) => p.name.text)).size === props.length;
+}
+
 function supportedComponentBody(body) {
   if (!ts.isBlock(body)) return false;
   // This is a declaration-and-render reader, not a component interpreter.
@@ -59,7 +75,8 @@ function supportedComponentBody(body) {
   // leaving any reference in the declaration/handler trees we can resolve.
   const statements = body.statements.filter((node) => !ts.isEmptyStatement(node));
   return statements.length > 0 && ts.isReturnStatement(statements.at(-1))
-    && renderExpression(statements.at(-1).expression) && statements.slice(0, -1).every(ts.isVariableStatement);
+    && renderExpression(statements.at(-1).expression)
+    && statements.slice(0, -1).every((node) => ts.isVariableStatement(node) && ordinaryDeclarations(node.declarationList));
 }
 
 function directHandlerBinding(handler, component) {
@@ -69,8 +86,20 @@ function directHandlerBinding(handler, component) {
   if (ts.isReturnStatement(parent)) return parent.expression === value && parent.parent === component.body;
   if (ts.isVariableDeclaration(parent)) return ts.isIdentifier(parent.name) && parent.initializer === value && parent.parent.parent.parent === component.body;
   if (!ts.isPropertyAssignment(parent) || parent.initializer !== value || parent.name.text !== "onSubmit") return false;
-  for (let node = parent.parent; node && node !== component; node = node.parent)
-    if (ts.isReturnStatement(node)) return node.parent === component.body;
+  const props = parent.parent, form = props.parent;
+  if (!ts.isObjectLiteralExpression(props) || !renderConstructor(form)
+    || form.arguments[1] !== props || form.arguments[0].text !== "form") return false;
+  // Only the explicit JSX host-element constructor path installs this handler.
+  // A props-shaped object inside an arbitrary terminal factory is not a render.
+  for (let node = form; node && node !== component; node = node.parent) {
+    const owner = node.parent;
+    if (ts.isReturnStatement(owner)) return owner.expression === node && owner.parent === component.body;
+    if (ts.isParenthesizedExpression(owner) && owner.expression === node
+      || ts.isPropertyAssignment(owner) && owner.initializer === node
+      || ts.isObjectLiteralExpression(owner) || ts.isArrayLiteralExpression(owner)) continue;
+    if (renderConstructor(owner) && owner.arguments[1] === node) continue;
+    return false;
+  }
   return false;
 }
 
@@ -110,7 +139,7 @@ export function discoverReactEndpoint(candidates) {
     const bindsName = (name, text) => ts.isIdentifier(name) ? name.text === text
       : (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) && name.elements.some((e) => ts.isBindingElement(e) && bindsName(e.name, text));
     const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
-    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
+    const protectedName = (name) => variables.has(name) || renderConstructors.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
     const bindingScope = (node) => {
       if (ts.isFunctionExpression(node)) return node;
       if (ts.isCatchClause(node.parent)) return node.parent;
@@ -133,6 +162,10 @@ export function discoverReactEndpoint(candidates) {
       ts.forEachChild(node, inspectDeclarations);
     };
     inspectDeclarations(component);
+    // Constructor names denote the supported JSX runtime surface, not locals
+    // supplied by the component or a factory with a similar-looking call site.
+    if (declarations.some((d) => [...renderConstructors].some((name) => bindsName(d.name, name))
+      && within(handler, bindingScope(d)))) continue;
     let handlerValue = handler;
     while (ts.isParenthesizedExpression(handlerValue.parent)) handlerValue = handlerValue.parent;
     if (ts.isVariableDeclaration(handlerValue.parent)) {
@@ -213,11 +246,13 @@ export function discoverReactEndpoint(candidates) {
       ts.forEachChild(node, inspectBindings);
     };
     inspectBindings(component);
-    const eventName = handler.parameters[0]?.name.text;
+    const eventParameter = handler.parameters[0], eventName = eventParameter?.name.text;
     const eventField = (node, field) => ts.isPropertyAccessExpression(node) && !node.questionDotToken
-      && ts.isIdentifier(node.expression) && node.expression.text === eventName && node.name.text === field;
+      && ts.isIdentifier(node.expression) && node.expression.text === eventName && node.name.text === field
+      && !declarations.some((d) => d !== eventParameter && within(d, handler)
+        && bindsName(d.name, eventName) && within(node.expression, bindingScope(d)));
     const prefixDeclaration = (node) => {
-      if (!ts.isIdentifier(node.name) || !node.initializer) return false;
+      if (!ordinaryDeclarations(node.parent) || !ts.isIdentifier(node.name) || !node.initializer) return false;
       const value = node.initializer;
       return typeof evaluate(value) === "string" || ts.isNumericLiteral(value)
         || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)
@@ -236,7 +271,8 @@ export function discoverReactEndpoint(candidates) {
           || ts.isReturnStatement(parent) || ts.isVariableDeclaration(parent) || ts.isVariableDeclarationList(parent) || ts.isVariableStatement(parent)
           || ts.isTryStatement(parent) && node === parent.tryBlock);
         if (!supported) return false;
-        if (ts.isVariableDeclarationList(parent) && parent.declarations.slice(0, parent.declarations.indexOf(node)).some((d) => !prefixDeclaration(d))) return false;
+        if (ts.isVariableDeclarationList(parent) && (!ordinaryDeclarations(parent)
+          || parent.declarations.slice(0, parent.declarations.indexOf(node)).some((d) => !prefixDeclaration(d)))) return false;
         if (ts.isBlock(parent)) {
           // Only modeled pre-fetch effects are supported. In particular an
           // unknown alias write, getter read, helper call or await is not pure.
