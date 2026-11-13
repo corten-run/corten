@@ -463,7 +463,8 @@ for none. The workflow's step ended in failure 60 seconds in where the machine w
 in that run and lacked the name, and passed 61 seconds in where it was and `provision.sh` was
 started with the name 30 seconds in (it asks each 20 seconds); its twenty minutes were not
 waited out. By hand a name given twice is not refused: nginx warns and ignores the second
-(seen by a review), and the workflow's path refuses it. A renewal of a certificate that had replaced the
+(seen by a review), and the workflow's path refuses it. A renewal of a certificate that had
+replaced the
 site's (`certbot renew --dry-run`, against Pebble) passed for all three names.
 
 On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on
