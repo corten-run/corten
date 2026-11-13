@@ -124,7 +124,7 @@ async function portOf(name) {
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
-const nodeImage = "node:24-bookworm-slim";
+const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export const evidenceVersion = "marketplace-raw/v3";
 export const ownerLabel = "run.corten.marketplace";
-export const nodeImage = "node:24-bookworm-slim";
+export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 export { k6Image } from "../load-tool.mjs";
 export const upstreamInterpretation = "single-process upstream; a busy API may be the throughput limit, not the app";
 const environment = ["MARKETPLACE_SOURCE", "MARKETPLACE_FIXTURE_PATH", "API_BASE", "PORT", "HOSTS", "PROFILE", "MAX_CONNECTIONS", "LOCALE", "BASE", "TARGET", "DURATION", "MODE", "RATE", "VUS"];

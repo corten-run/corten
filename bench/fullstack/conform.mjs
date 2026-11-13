@@ -154,14 +154,14 @@ for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]
 docker("network", "create", network);
 docker("rm", "-f", "fsw-stall");
 // Accepts every connection and never writes a byte: an item API that hangs.
-const stall = docker("run", "-d", "--name", "fsw-stall", "--network", network, "node:24-alpine", "node", "-e", "require('net').createServer(() => {}).listen(8080)");
+const stall = docker("run", "-d", "--name", "fsw-stall", "--network", network, "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "node", "-e", "require('net').createServer(() => {}).listen(8080)");
 if (stall.status !== 0) throw new Error("fsw-stall: " + stall.stderr);
 docker("rm", "-f", "fsw-items");
 // The fixture's items, and `brokenItem` answered 500 (conform-items.mjs).
-const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
+const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
 if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
-const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, ...files, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
+const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, ...files, "-v", here + ":/b:ro", "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "sleep", "infinity");
 if (prober.status !== 0) throw new Error("fsw-probe: " + prober.stderr);
 // The item API answers before any app is probed: one that did not start would make every read fail.
 {

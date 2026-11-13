@@ -66,7 +66,7 @@ const stat = () => {
   return { minflt: Number(f[7]), ticks: Number(f[11]) + Number(f[12]) };
 };
 const load = (/** @type {string} */ encoding, /** @type {number} */ n) => {
-  const r = docker("run", "--rm", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "node", "/b/alloc-faults.mjs", "--load", `http://${app}:8080`, encoding, String(n));
+  const r = docker("run", "--rm", "--network", network, "-v", here + ":/b:ro", "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "node", "/b/alloc-faults.mjs", "--load", `http://${app}:8080`, encoding, String(n));
   if (r.status !== 0) throw new Error("load: " + r.stderr);
   const failed = Number(r.stdout);
   if (!Number.isInteger(failed)) throw new Error("load: " + r.stdout);
