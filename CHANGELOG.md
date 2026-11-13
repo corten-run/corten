@@ -23,6 +23,9 @@ Corten is pre-1.0, so any minor version may change the API.
   stable versions and immutable base images. Bind deployment runtime descriptions
   to those sources; changed inputs still require new qualification evidence.
 
+- Keep the native Razor and AOT benchmark CI test SDKs aligned with their production
+  Dockerfiles, so a runtime upgrade cannot leave the test jobs on an older SDK.
+
 - Register the native Rails, Phoenix and Laravel live ports without promoting
   historical captures. Retain Livewire/Reverb wire and DOM evidence, including
   negative HTTP controls and request timings on failed journeys; Laravel's

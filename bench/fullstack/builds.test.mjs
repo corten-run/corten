@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parse as parseYaml } from "yaml";
 import { allApps } from "./apps.mjs";
 import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
@@ -73,6 +74,22 @@ test("server recipes use the refreshed production toolchain", () => {
     const image = /^FROM (\S+)/m.exec(dockerfile)?.[1];
     assert.equal(recipes[name].tools, image, `${name}: recipe and production image differ`);
     assert.match(image, /@sha256:[a-f0-9]{64}$/, `${name}: immutable image required`);
+  }
+});
+
+test("native .NET CI tests use each production SDK", () => {
+  const workflow = parseYaml(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  for (const [app, job, name] of [
+    ["aspnet", "parity", "Test native Razor alert persistence and render failures"],
+    ["aspnet-aot", "json-aot", "Test reflection-disabled native record sources"],
+  ]) {
+    const dockerfile = readFileSync(join(repo, "bench/fullstack/apps", app, "Dockerfile"), "utf8");
+    const sdk = /^FROM (mcr\.microsoft\.com\/dotnet\/sdk:\S+) AS build$/m.exec(dockerfile)?.[1];
+    assert.ok(sdk, `${app}: production SDK required`);
+    const step = workflow.jobs[job].steps.find((step) => step.name === name);
+    assert.ok(step, `${app}: native CI test required`);
+    const images = step.run.match(/mcr\.microsoft\.com\/dotnet\/sdk:\S+/g);
+    assert.deepEqual(images, [sdk], `${app}: native CI and production SDK differ`);
   }
 });
 
