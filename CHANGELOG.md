@@ -375,6 +375,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
+  listings-feed README and its failover benchmark remove their Postgres containers with
+  `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
+  behind
+  ([#1233 The Postgres containers CONTRIBUTING and the listings-feed example start are removed with docker rm -f, which keeps each one's anonymous data volume](https://github.com/corten-run/corten/issues/1233)).
 - The app guide's table of defaults has rows for the handler deadline (30 seconds, then a 503, or
   the client's 408 while it waited for the body) and the request body limit (2 MiB for `Json`,
   `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so
