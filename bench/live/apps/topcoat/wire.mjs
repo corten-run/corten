@@ -3,8 +3,30 @@
 import assert from 'node:assert/strict';
 
 function messages(network) {
-  const regions = new Map();
-  return network.filter(r => r.kind === 'native-websocket-received').flatMap(record => {
+  if (!network.some(r => r.kind === 'native-websocket-received')) return [];
+  const documents = new Set(network.filter(r => r.kind === 'request' && r.method === 'GET').flatMap(r => {
+    const url = new URL(r.url);
+    return ['http:', 'https:'].includes(url.protocol) && url.pathname === '/' && !url.search && !url.hash
+      && !url.username && !url.password ? [url.href] : [];
+  }));
+  const origins = new Set(network.filter(r => r.kind === 'response' && r.status === 200 && documents.has(r.url))
+    .map(r => new URL(r.url).origin));
+  assert.equal(origins.size, 1, 'native application document origin required');
+  const origin = [...origins][0], regions = new Map(), sockets = new Set();
+  return network.flatMap(record => {
+    if (record.kind === 'native-websocket-created') {
+      assert.ok(typeof record.requestId === 'string' && record.requestId.length > 0, 'native socket identity required');
+      assert.ok(!sockets.has(record.requestId), 'native socket identity repeated');
+      const url = new URL(record.url);
+      assert.ok(['ws:', 'wss:'].includes(url.protocol), 'native socket protocol required');
+      const http = new URL(url.href); http.protocol = url.protocol === 'ws:' ? 'http:' : 'https:';
+      assert.ok(http.origin === origin && url.pathname === '/' && !url.search && !url.hash
+        && !url.username && !url.password, 'native socket must belong to the application origin and route');
+      sockets.add(record.requestId);
+      return [];
+    }
+    if (record.kind !== 'native-websocket-received') return [];
+    assert.ok(typeof record.requestId === 'string' && sockets.has(record.requestId), 'native socket creation must precede delivery');
     if (record.response?.opcode !== 1) return [];
     const envelope = JSON.parse(record.response.payloadData), frame = envelope.frame;
     assert.ok(frame && typeof frame.t === 'string', 'native Topcoat frame required');

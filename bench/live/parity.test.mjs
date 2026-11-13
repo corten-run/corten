@@ -98,16 +98,21 @@ test("Topcoat shared wire binding retains native resume and overflow resources",
   const ready = { kind: "ready", serial: 1, from: 0, status: "accepted", resources };
   const saturated = { ...resources, queueEvents: 2, queuePeak: 2 };
   const overflow = { kind: "overflow", serial: 2, outcome: "resnapshot", resources: saturated };
-  const network = [frame(ready, true), frame(overflow)];
+  const observed = frames => [
+    { kind: "request", method: "GET", url: "http://127.0.0.1:8080/" },
+    { kind: "response", status: 200, url: "http://127.0.0.1:8080/" },
+    { kind: "native-websocket-created", requestId: "socket-1", url: "ws://127.0.0.1:8080/" }, ...frames,
+  ];
+  const network = observed([frame(ready, true), frame(overflow)]);
   assert.deepEqual(wireResumes(network, "topcoat-live"), [{ from: 0, status: "accepted" }]);
   assert.deepEqual(wireResources(network, "topcoat-live"), [resources, saturated]);
   for (const invalid of [{ ...ready, from: -1 }, { ...ready, status: "invented" },
     { ...ready, resources: undefined }, { ...ready, resources: { ...resources, subscriptions: -1 } }]) {
-    assert.throws(() => wireResumes([frame(invalid, true)], "topcoat-live"));
+    assert.throws(() => wireResumes(observed([frame(invalid, true)]), "topcoat-live"));
   }
   for (const invalid of [{ ...overflow, outcome: "drop" }, { ...overflow, resources: undefined },
     { ...overflow, resources: { ...saturated, queueEvents: 0 } }]) {
-    assert.throws(() => wireResources([frame(ready, true), frame(invalid)], "topcoat-live"));
+    assert.throws(() => wireResources(observed([frame(ready, true), frame(invalid)]), "topcoat-live"));
   }
   assert.deepEqual(wireResumes([{ kind: "request", body: JSON.stringify(ready) }], "topcoat-live"), []);
   assert.deepEqual(wireResources([{ kind: "request", body: JSON.stringify(overflow) }], "topcoat-live"), []);
