@@ -164,11 +164,13 @@ Leptos SSR passes 10 unit tests, 1 native JSON integration test and 5 native POS
 security integration tests. These initially totaled 53 passing focused native
 tests; nodelay has no
 test cases. This is not a whole-repository check-suite or grouped-round receipt.
-The later live Corten Dockerfile-only extension also passes its unchanged 4
-native parity tests with the locked manifest. No live application source or lock
-was changed. The focused native total including that extension was 57 tests.
-The later cache-policy regression test brings the current total to 58, including
-all original 10 Topcoat tests plus the new test. Topcoat formatting also passes.
+The development context's live Corten port also passed four native parity tests
+with its locked manifest. That port's source and lock changes are not included
+in this scoped release; those four tests are historical development evidence,
+not verification of this release's live Corten app. This release changes only
+that app's Dockerfile bases. The focused total for the released applications is
+54 after the later Topcoat cache-policy regression, including all original ten
+Topcoat tests plus the new test. Topcoat formatting also passes.
 Topcoat's local `tests/check-native.mjs` exercises its actual CLI-built assets,
 catalog contract, typed links/404s/JSON, native SSE, sorting and offer shards,
 procedure confirmation and JS/no-JS fallback. The existing
@@ -200,9 +202,13 @@ The committed app Git-tree identities after the migration are:
 | `bench/catalog/corten` | `git-tree-sha1:6206a1c50467f09e6a5cb7a700a628a610c6278e` |
 | `bench/marketplace/corten` | `git-tree-sha1:d08bdaa998213e9b4ad89ae48a75a8c321c3e22b` |
 | `bench/nodelay/app` | `git-tree-sha1:43eb1091b9b500ba77d2aab6c0bc2fdb62e48764` |
-| `bench/live/apps/corten` (only Dockerfile changed here) | `git-tree-sha1:28cbd3e34189c5abe2f433d9ffa8a5ee4856dc22` |
+| `bench/live/apps/corten` (only Dockerfile changed here) | `git-tree-sha1:da13aa226ca20fc7d56c0edabfa135eeadf1ae21` |
 
 These are Git SHA-1 tree objects, not commits or application image identities.
+The earlier live-port development context instead had tree
+`git-tree-sha1:28cbd3e34189c5abe2f433d9ffa8a5ee4856dc22`. Its four parity tests
+do not qualify the different live Corten source shipped here. No new live Corten
+image/browser qualification is claimed by this Dockerfile-only refresh.
 The development context's existing marketplace `tests/image-source.mjs` helper
 recorded a clean relevant source set (661 files)
 and SHA-256 `b1c75c9094be1c41db8cdb99890303dc39f42855fc6f9be14baadff0a0ac44ec`.
