@@ -47,6 +47,8 @@ export function validateAttack(row, plan, budget) {
   assert.equal([row.targetClosedAtMs, row.releasedAtMs].filter((n) => n !== null).length, 1, "missing/contradictory attack terminal receipt");
   const terminal = row.targetClosedAtMs ?? row.releasedAtMs;
   assert.ok(finite(terminal) && terminal >= row.startedAtMs && terminal <= row.endedAtMs);
+  assert.ok(terminal <= budget.attack.releaseAtMs + budget.timing.maxWindowDriftMs,
+    "attack terminal receipt escaped reviewed release deadline");
   if (row.releasedAtMs !== null) {
     assert.ok(Math.abs(row.releasedAtMs - budget.attack.releaseAtMs) <= budget.timing.maxWindowDriftMs,
       "client release differs from reviewed release deadline");
@@ -57,6 +59,8 @@ export function validateAttack(row, plan, budget) {
     return;
   }
   assert.ok(finite(row.connectedAtMs) && row.connectedAtMs >= row.startedAtMs && row.connectedAtMs <= terminal);
+  assert.ok(row.connectedAtMs <= Math.min(row.startedAtMs + budget.attack.connectTimeoutMs, budget.attack.releaseAtMs) + budget.timing.maxStartLagMs,
+    "establishment escaped reviewed connect deadline");
   assert.equal(row.connectTimedOut, undefined, "established connection contradicts connect timeout");
   if (row.emission === "target-refused-before-write") {
     assert.equal(row.targetClosedAtMs, terminal); assert.equal(row.writes, 0); assert.equal(row.bytesQueued, 0); assert.equal(row.drips, 0);

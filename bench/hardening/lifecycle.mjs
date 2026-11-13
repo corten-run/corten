@@ -1,4 +1,28 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { observe } from "./native.mjs";
+
+export const terminalHealthPaths = (qualification, edgeQualification) => ({ application: qualification.probes.live?.path ?? null,
+  upstream: "/health", ...(edgeQualification ? { proxy: edgeQualification.probes.live?.path ?? null } : {}) });
+
+export async function observeTerminalHealth(base, path, timeoutMs, request = observe) {
+  return { path, response: path === null ? null : await request(base + path, { timeoutMs }) };
+}
+
+function liveness(health, path) {
+  if (!health) return "unavailable"; // Historical captures have no terminal HTTP observation.
+  assert.equal(health.path, path, "terminal health path differs from native qualification");
+  if (path === null) { assert.equal(health.response, null); return "missing"; }
+  assert.ok(typeof path === "string" && path.startsWith("/"));
+  if (health.response === null) { assert.equal(health.unavailable, "not-running"); return "unavailable"; }
+  const row = health.response;
+  assert.ok(typeof row.body === "string" && typeof row.complete === "boolean" && Number.isFinite(row.ms) && row.ms >= 0);
+  assert.equal(row.bytes, Buffer.byteLength(row.body));
+  assert.equal(row.sha256, createHash("sha256").update(row.body).digest("hex"), "terminal health bytes differ");
+  assert.ok(!["EMFILE", "ENFILE", "ENOBUFS", "ENOMEM", "EADDRNOTAVAIL", "EACCES", "EPERM", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"].includes(row.error), "local terminal health client failure");
+  return row.complete && !row.error && !row.timedOut && row.status === 200 && row.ms <= 600 ? "observed" : "failed";
+}
 
 export async function trackedImageBuild(summary, tag, save, build) {
   summary.ownedImages ??= [];
@@ -57,20 +81,33 @@ export function failureKind(stage, error) {
   return ["native-parity", "edge-parity", "native-form"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
 }
 
-export function terminalRecovery(recovered, processes, resources, lifecycle, source = "fixture") {
+export function terminalRecovery(recovered, processes, resources, lifecycle, source = "fixture", paths = {}) {
   const applications = processes.filter((p) => p.role === "application");
   const critical = processes.filter((p) => p.role === "application" || p.role === "proxy" || p.role === "upstream" && source === "api");
   const terminalServices = critical.map((p) => {
     const state = lifecycle[p.id].after.State;
     assert.equal(typeof state.Running, "boolean");
-    return { id: p.id, role: p.role, running: state.Running, finishedAt: state.FinishedAt, exitCode: state.ExitCode, oomKilled: state.OOMKilled, evidence: `${p.id}-lifecycle.json` };
+    const configured = lifecycle[p.id].after.Config?.Healthcheck?.Test;
+    const dockerHealth = state.Health?.Status ?? (configured?.length && configured[0] !== "NONE" ? "unavailable" : "not-configured");
+    assert.ok(["healthy", "unhealthy", "starting", "unavailable", "not-configured"].includes(dockerHealth));
+    return { id: p.id, role: p.role, running: state.Running, finishedAt: state.FinishedAt, exitCode: state.ExitCode, oomKilled: state.OOMKilled,
+      dockerHealth, liveness: liveness(lifecycle[p.id].health, paths[p.role]),
+      healthy: state.Running && !state.Paused && !state.Restarting && !state.Dead && !state.OOMKilled
+        && ["healthy", "not-configured"].includes(dockerHealth), evidence: `${p.id}-lifecycle.json` };
   });
-  for (const p of processes.filter((p) => p.role === "upstream" && source === "fixture")) assert.equal(lifecycle[p.id].after.State.Running, true, "fixture apparatus upstream exited");
+  for (const p of processes.filter((p) => p.role === "upstream" && source === "fixture")) {
+    assert.equal(lifecycle[p.id].after.State.Running, true, "fixture apparatus upstream exited");
+    if (paths.upstream) assert.equal(liveness(lifecycle[p.id].health, paths.upstream), "observed", "fixture apparatus upstream unhealthy");
+  }
   const terminalApplications = terminalServices.filter((p) => p.role === "application").map(({ role, ...p }) => p);
   const sampledRunning = resources.filter((r) => applications.some((p) => p.id === r.id)).every((r) => r.running);
-  const terminalRunning = terminalServices.every((r) => r.running)
+  const terminalRunning = terminalServices.every((r) => r.healthy && r.liveness === "observed")
     && resources.filter((r) => critical.some((p) => p.id === r.id)).every((r) => r.running);
   // A midpoint sample cannot override a later terminal exit. Preserve its real timestamp
   // instead of moving the Docker observation into an earlier oracle sample/window.
   return { disposition: !sampledRunning ? "stopped" : !terminalRunning ? "not-recovered" : recovered ? "recovered" : "not-recovered", terminalApplications, terminalServices };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  console.log(JSON.stringify(await observeTerminalHealth(process.argv[2], process.argv[3], Number(process.argv[4]))));
 }

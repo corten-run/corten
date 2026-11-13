@@ -171,3 +171,49 @@ qualification/edge checks passed 284/284 with file concurrency enabled. The two
 bounded real-daemon controls each removed their two labeled test networks while
 preserving the differently owned same-prefix network until its own cleanup.
 No native timing parameters or shared application files were changed.
+
+## Terminal health and pressure-bound repair
+
+At `d823a409cfbb52d9cf859de3267f8367fa56d0f3`, in-memory mutations of the
+retained `w11` API/edge slow-body capture reproduced three further gaps:
+running-but-unhealthy terminal services still recovered, target-close receipts
+at 9,500 ms escaped mandatory release at 8,500 ms, and establishment 10 ms before
+release erased all required trickles despite the 2,000 ms connection timeout.
+The initial reproduction passed the six existing checks and failed all five new
+checks (the two timing cases and each of the three service-critical roles).
+
+The repair bounds both terminal paths by release plus the unchanged 100 ms
+window drift and bounds establishment before cadence validation by connection
+timeout/release plus the unchanged 200 ms start-lag allowance. Early native
+refusals remain valid target outcomes. Receiving controls use their existing
+1,000 ms connection timeout; no attack profile or defense gate was enlarged.
+
+`lifecycleVersion: 3` adds actual terminal liveness observations, collected after
+the timed probe and receiving controls in each service's own network namespace,
+followed by Docker state inspection. Application and edge paths come from their
+respective production qualifications; the owned upstream uses `/health`.
+Completed, error-free HTTP 200 within 600 ms and healthy terminal Docker state
+are both required. No native healthcheck, middleware or endpoint is installed.
+Missing observations are unavailable, absent endpoints remain gaps, and running
+alone cannot establish recovery. API upstream HTTP 503 and Docker unhealthy
+states are target-capacity failures, not successful qualification or invalid
+injection; the unused fixture upstream remains apparatus.
+
+Retained `w10` and `w11` each pass 17/17 replay regressions. Terminal mutations
+use explicitly hypothetical in-memory health metadata to isolate each role's
+Docker failure, HTTP failure and combined failure; they are not new native
+observations. Neither capture, manifest, saved outcome nor summary was rewritten.
+Strict `verify.mjs` rejects `w10` at its old semantic-receipt version and `w11`
+at its old lifecycle version. Their old successful HTTP rows cannot supply
+missing terminal receipts or establish current numeric qualification.
+
+The focused suite passed 31/31, and the combined hardening/workloads/production-
+qualification/edge suite passed 285/285 with file concurrency enabled.
+`verify-health.mjs` separately observed a real
+labeled Docker service remain running with Docker `unhealthy` and a completed
+terminal HTTP 503. Each observation independently revoked recovery and numeric
+qualification for application, proxy and API-upstream role checks. Its exact
+owned container and volumes were removed, with zero remaining control resources.
+This control is not a fresh native framework run. No full matrix, framework
+change or performance/ranking measurement was performed. Fresh independent
+review and integrating repository-wide checks remain outstanding.

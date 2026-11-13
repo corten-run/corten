@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { qualification } from "../marketplace/feature-contract.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { nativeControls, assessNative } from "./native.mjs";
-import { trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalRecovery } from "./lifecycle.mjs";
+import { trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalRecovery, observeTerminalHealth } from "./lifecycle.mjs";
+import { targetOutcome } from "./evidence.mjs";
 import { budgets } from "./plan.mjs";
 import { validateAttack } from "./receipts.mjs";
 import { validateLegitimate } from "./receipts.mjs";
@@ -84,6 +85,45 @@ test("every service-critical terminal role is required; fixture upstream remains
   }
 });
 
+test("terminal native liveness and Docker health must both recover in every critical role", async () => {
+  let status = 200;
+  const app = createServer((req, res) => { res.writeHead(status); res.end("native health"); });
+  await new Promise((r) => app.listen(0, "127.0.0.1", r));
+  try {
+    const base = `http://127.0.0.1:${app.address().port}`, paths = { application: "/health/live", proxy: "/health/live", upstream: "/health" };
+    const processes = Object.keys(paths).map((role) => ({ id: role, role })), resources = processes.map(({ id }) => ({ id, running: true }));
+    const lifecycle = {};
+    for (const { id } of processes) lifecycle[id] = { after: { State: { Running: true, Health: { Status: "healthy" } } }, health: await observeTerminalHealth(base, paths[id], 600) };
+    const recovery = (value, source = "api") => terminalRecovery(true, processes, resources, value, source, paths);
+    assert.equal(recovery(lifecycle).disposition, "recovered");
+    status = 503;
+    const failed = await observeTerminalHealth(base, paths.application, 600);
+    assert.equal(failed.response.status, 503); assert.equal(failed.response.complete, true);
+    for (const { id } of processes) {
+      for (const corrupt of [(p) => p.after.State.Health.Status = "unhealthy", (p) => p.after.State.Health.Status = "starting",
+        (p) => { p.health = { ...failed, path: paths[id] }; }, (p) => { delete p.health; },
+        (p) => { p.health.response.timedOut = true; }, (p) => { p.health.response.complete = false; },
+        (p) => { p.health.response.error = "ECONNRESET"; }, (p) => { p.health.response.ms = 601; }, (p) => { p.after.State.Paused = true; },
+        (p) => { delete p.after.State.Health; p.after.Config = { Healthcheck: { Test: ["CMD", "health"] } }; }]) {
+        const changed = structuredClone(lifecycle); corrupt(changed[id]);
+        const terminal = recovery(changed);
+        assert.equal(terminal.disposition, "not-recovered", id);
+        const capture = { recovery: terminal, measurement: "complete", legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 1, ok: 1, errors: 0 } }])) };
+        const outcome = targetOutcome(capture, { productionQualified: true }, { state: "observed" });
+        assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
+      }
+    }
+    const wrong = structuredClone(lifecycle); wrong.application.health.path = "/invented";
+    assert.throws(() => recovery(wrong), /health path/);
+    const corrupt = structuredClone(lifecycle); corrupt.application.health.response.body = "different";
+    assert.throws(() => recovery(corrupt));
+    const fixture = structuredClone(lifecycle); fixture.upstream.health = { ...failed, path: paths.upstream };
+    assert.throws(() => recovery(fixture, "fixture"), /apparatus upstream unhealthy/);
+    const missing = structuredClone(lifecycle); missing.application.health = { path: null, response: null };
+    assert.equal(terminalRecovery(true, processes, resources, missing, "api", { ...paths, application: null }).disposition, "not-recovered");
+  } finally { app.closeAllConnections(); await new Promise((r) => app.close(r)); }
+});
+
 test("release and drip validation use the unchanged reviewed deadline and full cadence", () => {
   const b = budgets(), plan = { variant: "slow-headers", firstBytes: 1, firstSha256: "a".repeat(64), repeat: true, dripBytes: 1 };
   const row = { variant: plan.variant, firstBytes: 1, firstSha256: plan.firstSha256, startedAtMs: 2600, connectedAtMs: 2600,
@@ -100,6 +140,21 @@ test("release and drip validation use the unchanged reviewed deadline and full c
   }
   const refused = { ...row, endedAtMs: 2650, releasedAtMs: null, targetClosedAtMs: 2650, drips: 0, dripAtMs: [], writes: 1, bytesQueued: 1 };
   validateAttack(refused, plan, b); // Real early target closure is not an injection failure.
+  for (const established of [true, false]) {
+    const closed = { ...row, established, releasedAtMs: null, targetClosedAtMs: 9500, endedAtMs: 9501,
+      drips: 27, dripAtMs: Array.from({ length: 27 }, (_, i) => 2600 + (i + 1) * 250), writes: 28, bytesQueued: 28 };
+    if (!established) Object.assign(closed, { writes: 0, bytesQueued: 0, drips: 0, error: "ECONNREFUSED" });
+    assert.throws(() => validateAttack(closed, plan, b), /release deadline/);
+  }
+  const late = { ...row, connectedAtMs: 8490, drips: 0, dripAtMs: [], writes: 1, bytesQueued: 1 };
+  assert.throws(() => validateAttack(late, plan, b), /connect deadline/);
+  assert.throws(() => validateAttack({ ...late, emission: "target-refused-before-write", writes: 0, bytesQueued: 0,
+    targetClosedAtMs: 8500, releasedAtMs: null }, plan, b), /connect deadline/);
+  const deadline = row.startedAtMs + b.attack.connectTimeoutMs + b.timing.maxStartLagMs;
+  const atDeadline = { ...refused, connectedAtMs: deadline, endedAtMs: deadline + 1, targetClosedAtMs: deadline + 1,
+    emission: "target-refused-before-write", writes: 0, bytesQueued: 0, error: "ECONNRESET" };
+  validateAttack(atDeadline, plan, b);
+  assert.throws(() => validateAttack({ ...atDeadline, connectedAtMs: deadline + 0.5 }, plan, b), /connect deadline/);
 });
 
 test("completed legitimate HTTP responses cannot evade the 600 ms deadline with self-consistent timestamps", () => {

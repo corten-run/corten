@@ -264,7 +264,7 @@ export function validateControl(result) {
       const r = rows[i], receipt = observed.find((o) => o.sourcePort === r.localPort); assert.ok(receipt);
       // Receiving controls deliberately release on delivery, not the native window.
       // Their independent byte/backpressure receipts below prove that condition.
-      validateAttack(r, result.emissionPlan?.[i], { attack: { everyMs: 40, releaseAtMs: r.releasedAtMs }, timing: { maxStartLagMs: budgets().timing.maxStartLagMs, maxWindowDriftMs: 0 } });
+      validateAttack(r, result.emissionPlan?.[i], { attack: { everyMs: 40, connectTimeoutMs: 1000, releaseAtMs: r.releasedAtMs }, timing: { maxStartLagMs: budgets().timing.maxStartLagMs, maxWindowDriftMs: 0 } });
       assert.ok(r.endedAtMs <= 5000 + budgets().timing.maxStartLagMs, "receiving control exceeded its separate deadline");
       assert.equal(receipt.bytes, r.bytesQueued, "control receiver did not receive the emitted attack bytes");
       if (["slow-headers", "slow-bodies"].includes(phase)) {
