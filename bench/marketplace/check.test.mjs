@@ -139,13 +139,20 @@ test("LiveView long-poll saves require a unique native session, exact form and c
     assert.equal(liveViewPollReply(envelope, sent), false);
 });
 
-for (const wrongSession of [false, true]) test(`native LiveView long-poll ${wrongSession ? "rejects another session despite a POST acknowledgement and changed DOM" : "observes two saves after readiness without editing native transport"}`, { timeout: 45000 }, async () => {
+for (const { wrongSession, continuous } of [
+  { wrongSession: false, continuous: false }, { wrongSession: true, continuous: false },
+  { wrongSession: false, continuous: true },
+]) test(`native LiveView long-poll ${wrongSession ? "rejects another session despite a POST acknowledgement and changed DOM" : continuous ? "observes two saves while native polling continues" : "observes two saves after readiness without editing native transport"}`, { timeout: 45000 }, async () => {
   const fields = { email: "native@example.test", target_price: "1234,50" };
   const replies = new Map();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname === "/live/longpoll") {
       res.setHeader("content-type", "application/json");
+      if (url.searchParams.has("background")) {
+        setTimeout(() => res.end(JSON.stringify({ status: 204, messages: [] })), 100);
+        return;
+      }
       if (req.method === "POST") {
         const chunks = []; for await (const chunk of req) chunks.push(chunk);
         const [join, ref, topic] = JSON.parse(Buffer.concat(chunks).toString().trim());
@@ -159,6 +166,9 @@ for (const wrongSession of [false, true]) test(`native LiveView long-poll ${wron
       <form method="post" phx-submit="save"><input name="email"><input name="target_price"><button type="submit">Send</button></form>
       <p class="marketplace__message"></p></section></div><script>
       let ref = 0;
+      if (${continuous}) (async () => {
+        while (true) await fetch('/live/longpoll?vsn=2.0.0&token=native&background=1');
+      })();
       setTimeout(() => { document.querySelector('form').reset(); document.querySelector('#phx-alert').classList.add('phx-connected'); }, 50);
       document.querySelector('form').onsubmit = async event => {
         event.preventDefault(); const value = new URLSearchParams(new FormData(event.target)).toString();
@@ -173,6 +183,7 @@ for (const wrongSession of [false, true]) test(`native LiveView long-poll ${wron
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(); observeAlertTransport(page);
+    if (continuous) page.setDefaultTimeout(5000);
     await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/fr-FR/item_1`);
     const form = page.locator("form");
     await alertReady(page, form, true);

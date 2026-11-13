@@ -334,7 +334,8 @@ export async function submitAlert(page, form, javaScriptEnabled) {
       form.locator('[type="submit"]').click(),
     ]);
     await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
-    await page.waitForLoadState("networkidle");
+    // LiveView keeps polling after its correlated save reply; that is not pending navigation.
+    if (!liveView) await page.waitForLoadState("networkidle");
   } catch (error) {
     throw await alertFailure(page, { action, fields, javaScriptEnabled, response, liveViewAcknowledged }, error);
   }

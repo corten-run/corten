@@ -290,7 +290,9 @@ LiveView alert saves retain their native WebSocket or long-poll transport. The g
 waits for the connected render before filling, matches the exact form, root and
 reply references, and requires a successful POST acknowledgement and a reply from
 the same session when polling. A POST acknowledgement or changed message alone
-does not prove that save completed. Transport failures retain bounded diagnostics.
+does not prove that save completed. Its continuing polls are not navigation:
+the correlated save and rendered message precede the full-page assertions, without
+requiring global network idle. Transport failures retain bounded diagnostics.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the unchanged
 `marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
