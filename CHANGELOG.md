@@ -18,9 +18,18 @@ Corten is pre-1.0, so any minor version may change the API.
   These local apparatus integrations and read-only plans are not completed group baselines
   or automatic qualification of alternative runtimes.
 
-- Native marketplace alert stores in the other benchmark adapters expose independent,
-  session-isolated readback for accepted writes. Browser adapters retain their native form/router behavior, including
-  LiveView, Turbo and Livewire; invalid and failed submissions must not change stored state.
+- Native Rails, Laravel and Phoenix marketplace alert stores expose independent,
+  session-isolated readback for accepted writes. Their adapters retain native
+  LiveView, Turbo and Livewire behavior; group qualification remains separate.
+
+- Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
+  marketplace forms persist accepted alerts with session-isolated readback,
+  preserve their framework's enhanced and plain-form paths, and reject writes
+  whose source or rendering input failed. Next.js, Nuxt, SvelteKit and TanStack
+  Start guard pending same-form JS submissions to retain one session; these
+  correctness changes are not a completed group baseline. The shared correctness
+  checker recognizes TanStack's native generated server action only with matching
+  same-origin submitted fields, while retaining plain-form checks.
 
 - Native FastAPI, Django and Spring marketplace alerts persist accepted writes
   in isolated sessions with independent readback and no append after rejected,
