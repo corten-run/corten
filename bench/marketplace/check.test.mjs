@@ -59,16 +59,24 @@ for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? 
     <input name="email" value="native@example.test"><input name="target_price" value="1234,50"><button type="submit">Send</button></form>
     <p class="marketplace__message"></p></section></div><script>
     const socket = new WebSocket('ws://' + location.host + '/live/websocket?vsn=2.0.0');
-    socket.onopen = () => document.querySelector('[data-phx-session]').classList.add('phx-connected');
+    const other = new WebSocket('ws://' + location.host + '/live/websocket?vsn=2.0.0');
+    let opened = 0, ref = 1;
+    const connected = () => { if (++opened === 2) document.querySelector('[data-phx-session]').classList.add('phx-connected'); };
+    socket.onopen = connected; other.onopen = connected;
     socket.onmessage = () => document.querySelector('.marketplace__message').textContent = 'saved';
     document.querySelector('form').onsubmit = event => {
-      event.preventDefault(); socket.send(JSON.stringify(['1', '2', 'lv:phx-alert', 'event', {
+      event.preventDefault(); socket.send(JSON.stringify(['1', String(++ref), 'lv:phx-alert', 'event', {
         type: 'form', event: 'save', value: new URLSearchParams(new FormData(event.target)).toString()
       }]));
     };
     </script>`));
   const sockets = new wsServer({ server });
-  sockets.on("connection", (socket) => socket.on("message", () => socket.send(JSON.stringify(["1", unrelated ? "unrelated" : "2", "lv:phx-alert", "phx_reply", { status: "ok", response: {} }]))));
+  sockets.on("connection", (socket) => socket.on("message", (data) => {
+    const [joinRef, ref, topic] = JSON.parse(data.toString());
+    const reply = (ref) => JSON.stringify([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]);
+    if (unrelated) for (const other of sockets.clients) if (other !== socket) other.send(reply(ref));
+    socket.send(reply(unrelated ? "unrelated" : ref));
+  }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const browser = await chromium.launch({ headless: true });
   try {
@@ -81,7 +89,7 @@ for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? 
     await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/fr-FR/item_1`);
     await page.waitForFunction(() => document.querySelector('[data-phx-session]').classList.contains('phx-connected'));
     if (unrelated) await assert.rejects(submitAlert(page, page.locator("form"), true), /LiveView alert phx_reply: Timeout 15000ms exceeded/);
-    else await submitAlert(page, page.locator("form"), true);
+    else for (let i = 0; i < 2; i++) await submitAlert(page, page.locator("form"), true);
     assert.equal(await page.locator(".marketplace__message").textContent(), "saved");
     assert.equal(navigations, 1); assert.equal(posts, 0);
   } finally {
