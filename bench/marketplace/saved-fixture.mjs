@@ -91,6 +91,7 @@ export function writeSavedFixture(folder, commit, tree) {
   }
   const cpu = runtime("cpu", "load", 128 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], cmd: ["node", "-e", "setInterval(() => {}, 1000)"], quota: 1, network: "none", state: state(true, new Date(gateClock).toISOString()), mounts: [mount("/bench"), mount("/sys/fs/cgroup")] }); write("cpu-container.json", cpu);
   const cumulativeCpu = new Map();
+  let upstreamReads = 1;
   for (const { pass, profile, app } of passPlan(s.options.passes, s.options.apps, timedProfiles, () => [])) {
       const run = s.apps[app].runs[profile.key].find((r) => r.pass === pass);
       const base = `${profile.source}/${app}/p${run.pass}-${profile.locale ?? "neutral"}-${profile.target}`;
@@ -103,8 +104,11 @@ export function writeSavedFixture(folder, commit, tree) {
       let start = Date.parse(run.cold.first200At) + 1000;
       for (const phase of ["warmup", "fixed", "sat64", "sat256"]) {
         const seconds = phase === "warmup" ? s.options.warmup : s.options.duration, end = start + seconds * 1000 + 600;
-        const elapsed = seconds * 1000 + 137.123456, rate = seconds * 100 / (elapsed / 1000);
-        (phase === "warmup" ? run.warmup : run.phases[phase]).rps = rate;
+        const count = seconds * (phase === "fixed" ? s.options.rate : 100);
+        const elapsed = seconds * 1000 + 137.123456, rate = count / (elapsed / 1000);
+        const metrics = phase === "warmup" ? run.warmup : run.phases[phase];
+        metrics.requests = count; metrics.rps = rate;
+        if (phase !== "warmup") metrics.perCpuSecond = count;
         const load = runtime("k6", "load", 2 ** 30, { image: k6Image, entrypoint: ["k6"], mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
           cmd: ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], state: state(false, new Date(start + 100).toISOString(), new Date(end - 100).toISOString()) });
         const names = phase === "warmup" ? [] : [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
@@ -115,12 +119,19 @@ export function writeSavedFixture(folder, commit, tree) {
           cumulativeCpu.set(id, after[name]);
         }
         const raw = { evidenceVersion, identity: { app, source: profile.source, locale: profile.locale, target: profile.target, pass: run.pass, phase }, app: coldApp, load, cpu, upstream: profile.source === "api" ? upstream : null,
-          before, after, upstreamReads: profile.source === "api" ? { before: { answers: { 200: 1 } }, after: { answers: { 200: 1 + seconds * 100 } } } : null,
+          before, after, upstreamReads: profile.source === "api" ? {
+            before: { status: 200, requests: { item_1: upstreamReads }, answers: { 200: upstreamReads } },
+            after: { status: 200, requests: { item_1: upstreamReads + count }, answers: { 200: upstreamReads + count } },
+          } : null,
           finishedAt: new Date(end).toISOString(), seen: { pass: run.pass, phase, phaseStart: new Date(start).toISOString(), app: coldApp.state, errors: [] } };
         write(`${base}/${phase}-receipt.json`, raw);
         write(`${base}/${phase}-clock.json`, { testRunDurationMs: elapsed });
-        write(`${base}/${phase}.json`, { metrics: { http_reqs: { count: seconds * 100, rate }, http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 }, http_req_failed: { value: 0 }, checks: { passes: seconds * 200, fails: 0 } },
-          root_group: { checks: { "marketplace status 200": { passes: seconds * 100, fails: 0 }, "marketplace content type": { passes: seconds * 100, fails: 0 } } } });
+        if (profile.source === "api") upstreamReads += count;
+        const latency = { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 };
+        write(`${base}/${phase}.json`, { metrics: { http_reqs: { count, rate }, iterations: { count, rate },
+          vus_max: Object.fromEntries(["value", "min", "max"].map((key) => [key, phase === "fixed" ? 200 : Number(load.env.VUS)])), http_req_duration: latency, iteration_duration: latency,
+          http_req_failed: { passes: 0, fails: count, value: 0 }, checks: { passes: count * 2, fails: 0, value: 1 } },
+          root_group: { checks: { "marketplace status 200": { passes: count, fails: 0 }, "marketplace content type": { passes: count, fails: 0 } } } });
         write(`${base}/${phase}-cpu.json`, Object.fromEntries(names.map((n) => [n, { usec: 1000000 }])));
         if (phase !== "warmup") {
           const samples = Object.fromEntries(names.map((n) => [n, [0, 1, 2].map((i) => ({ t: start + (1 + i * 5) * 1000, cpu: 90 + i * 10, mem: 9 + i }))]));

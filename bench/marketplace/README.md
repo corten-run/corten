@@ -312,10 +312,33 @@ the shared upstream across apps/profiles/passes. A stopped phase's pre-load coun
 a lower bound when its post-load counter is unavailable. Gates cannot start before the
 specific checked app's retained start time.
 
+The native script makes one HTTP request and two ordered named checks per iteration.
+Replay requires `iterations`, `vus_max`, the HTTP failure rate's actual true/false sample
+counts, and the aggregate check rate/counts, not just their ratios. Each named check must
+cover every completed iteration and at most every request; the content check cannot
+outnumber the preceding status check. Their pass/fail sums must equal the aggregate checks.
+Status passes/failures cannot exceed the corresponding HTTP success/failure counts.
+Only observed unfinished iterations (`http_reqs.count - iterations.count`), bounded by
+the observed maximum VUs and the native scenario's VU limit, can lack checks. There is no
+percentage-of-traffic cutoff waiver. Rate ratios allow only `1e-12` float64/JSON rounding.
+Fixed-rate drops and failed requests remain app outcomes, not a new admission test.
+All exported HTTP and iteration latency trends require nonnegative finite values, ordered
+percentiles below the maximum, and a mean bounded by the maximum and its contribution
+over at most the request count. These checks also apply to stopped phases.
+
+Upstream control snapshots retain both per-record requests and status answers. The native
+upstream increments both synchronously before serving a control GET, so their totals must
+match. Both counter maps must be monotonic locally and across serial observations of the
+same upstream container, including gaps between apps/profiles/passes; load never resets them.
+Every container start must fall within the round and precede the observations it supports,
+including upstream-backed gates/cold starts and shared CPU reads. Repeated identities must
+keep the same start time. A healthy phase cannot carry sidecar/event observations that the
+producer only reads on the stopped-app path.
+
 Each phase also retains `<phase>-clock.json`, written by the real load script's
 `handleSummary` callback. Its `state.testRunDurationMs` is k6's counter-rate denominator,
 including graceful completion, not the configured duration or Docker lifetime. The legacy
-metric export remains unchanged. Replay checks count/rate against that clock with relative
+metric export remains unchanged. Replay checks every exported counter's count/rate against that clock with relative
 `1e-12` float64/JSON rounding tolerance. The configured-duration lower bound allows only
 1 ns of conversion rounding. The Docker/engine window comparison allows 2 ms for
 sub-millisecond Docker timestamps truncated by `Date.parse`; engine startup,
@@ -330,6 +353,8 @@ parser; the all-failed export still cannot qualify as a numeric measurement.
 It requires cached images, never pulls, publishes no ports, and has
 no external network. Saved replay itself never invokes this test or Docker.
 See [k6's summary clock and metric conversion](https://github.com/grafana/k6/blob/master/internal/js/summary.go).
+The check/iteration cutoff rules follow [k6's ordered check sample emission](https://github.com/grafana/k6/blob/master/internal/js/modules/k6/k6.go)
+and [completed iteration sample emission](https://github.com/grafana/k6/blob/master/internal/js/runner.go).
 Earlier raw versions without this independent clock remain historical and fail saved replay;
 do not synthesize clocks from their counts/rates.
 

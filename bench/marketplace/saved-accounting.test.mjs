@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSavedFixture } from "./saved-fixture.mjs";
@@ -45,7 +45,10 @@ function stoppedFixture(t) {
 
 test("API load must perform a record read for each successful request, not just one per phase", (t) => {
   const f = fixture(t);
-  invalidEdit(f, "api/corten/p1-neutral-json/fixed-receipt.json", (v) => { v.upstreamReads.after.answers[200] = v.upstreamReads.before.answers[200] + 1; });
+  invalidEdit(f, "api/corten/p1-neutral-json/fixed-receipt.json", (v) => {
+    v.upstreamReads.after.answers[200] = v.upstreamReads.before.answers[200] + 1;
+    v.upstreamReads.after.requests.item_1 = v.upstreamReads.after.answers[200];
+  });
 });
 
 test("a stopped app cannot hide an incomplete k6 summary", (t) => {
@@ -63,13 +66,14 @@ test("a stopped app cannot hide an incomplete k6 summary", (t) => {
   // required, but zero successful traffic is not a reason to discard that stop.
   const k6 = read(f.folder, `${f.base}/sat64.json`), raw = read(f.folder, f.path), requests = k6.metrics.http_reqs.count;
   for (const failed of [requests, requests - 150]) {
-    k6.metrics.http_req_failed.value = failed / requests;
-    k6.metrics.checks = { passes: requests * 2 - failed, fails: failed };
+    k6.metrics.http_req_failed = { passes: failed, fails: requests - failed, value: failed / requests };
+    k6.metrics.checks = { passes: requests * 2 - failed, fails: failed, value: (requests * 2 - failed) / (requests * 2) };
     k6.root_group.checks["marketplace status 200"] = { passes: requests - failed, fails: failed };
     raw.upstreamReads.after.answers[200] = raw.upstreamReads.before.answers[200] + requests - failed;
+    raw.upstreamReads.after.requests.item_1 = raw.upstreamReads.after.answers[200];
     write(f.folder, `${f.base}/sat64.json`, k6); write(f.folder, f.path, raw);
     assert.equal(validateSaved(f.args).complete, true);
-    if (requests > failed) invalidEdit(f, f.path, (v) => { v.upstreamReads.after.answers[200]--; });
+    if (requests > failed) invalidEdit(f, f.path, (v) => { v.upstreamReads.after.answers[200]--; v.upstreamReads.after.requests.item_1--; });
   }
 });
 
@@ -106,4 +110,64 @@ test("qualification and browser gates cannot precede their checked app's lifetim
   for (const name of ["check", "qualification"]) invalidEdit(f, `fixture/corten/${name}-container.json`, (v) => {
     v.state.StartedAt = "2026-01-01T00:00:00.100Z"; v.state.FinishedAt = "2026-01-01T00:00:00.200Z";
   });
+});
+
+test("review regressions: complete request/check coverage and all latency exports, including stopped apps", (t) => {
+  const f = stoppedFixture(t);
+  for (const path of ["fixture/corten/p1-en-US-page/fixed.json", `${f.base}/sat64.json`]) {
+    for (const edit of [
+      (v) => {
+        v.metrics.checks = { passes: 1, fails: 0, value: 1 };
+        v.root_group.checks["marketplace status 200"] = { passes: 1, fails: 0 };
+        v.root_group.checks["marketplace content type"] = { passes: 0, fails: 0 };
+      },
+      (v) => { v.metrics.checks = { passes: 0, fails: 3000, value: 0 }; },
+      (v) => { v.metrics.http_req_duration.avg = 10000; v.metrics.http_req_duration.max = 0; },
+      (v) => { v.metrics.iteration_duration["p(95)"] = 0; },
+      (v) => { v.metrics.http_req_waiting = { ...v.metrics.http_req_duration, avg: 10000 }; },
+      (v) => { v.metrics.iterations.count = v.metrics.http_reqs.count + 1; },
+      (v) => { v.metrics.http_req_failed.fails--; },
+    ]) invalidEdit(f, path, edit);
+  }
+});
+
+test("review regressions: shared upstream answer and request counters cannot rewind across phases", (t) => {
+  const f = fixture(t), path = "api/corten/p1-neutral-json/fixed-receipt.json";
+  for (const field of ["answers", "requests"]) invalidEdit(f, path, (v) => {
+    const key = Object.keys(v.upstreamReads.before[field])[0];
+    const delta = v.upstreamReads.after[field][key] - v.upstreamReads.before[field][key];
+    v.upstreamReads.before[field][key] += 10000000; v.upstreamReads.after[field][key] += 10000000;
+    assert.equal(v.upstreamReads.after[field][key] - v.upstreamReads.before[field][key], delta);
+  });
+  // Coherent local request/answer totals still cannot rewind together.
+  invalidEdit(f, path, (v) => {
+    for (const field of ["answers", "requests"]) for (const side of ["before", "after"]) {
+      for (const key of Object.keys(v.upstreamReads[side][field])) v.upstreamReads[side][field][key] += 10000000;
+    }
+  });
+});
+
+test("review regressions: shared dependencies must exist during their observations", (t) => {
+  const f = fixture(t);
+  const paths = readdirSync(f.folder, { recursive: true, withFileTypes: true }).filter((e) => e.isFile())
+    .map((e) => join(e.parentPath, e.name).slice(f.folder.length + 1).replaceAll("\\", "/"));
+  for (const role of ["cpu", "upstream"]) for (const startedAt of ["2027-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]) {
+    const originals = new Map();
+    try {
+      for (const path of paths.filter((p) => p === `${role}-container.json` || p.endsWith("-receipt.json") && (role === "cpu" || p.startsWith("api/")))) {
+        originals.set(path, readFileSync(join(f.folder, path)));
+        const v = read(f.folder, path); (v[role] ?? v).state.StartedAt = startedAt; write(f.folder, path, v);
+      }
+      assert.throws(() => validateSaved(f.args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID", role);
+    } finally { for (const [path, bytes] of originals) writeFileSync(join(f.folder, path), bytes); }
+  }
+});
+
+test("review regressions: healthy phases cannot contain stop-only sidecar or event observations", (t) => {
+  const f = fixture(t), path = "fixture/corten/p1-en-US-page/fixed-receipt.json";
+  for (const edit of [
+    (v) => { v.seen.sidecars = [{ name: v.cpu.name, startedAt: v.cpu.state.StartedAt, state: { ...v.cpu.state, Running: false, ExitCode: 137 } }]; v.seen.events = [{ action: "kill", ms: Date.parse(v.seen.phaseStart) + 1000 }]; },
+    (v) => { v.seen.sidecars = []; },
+    (v) => { v.seen.events = []; },
+  ]) invalidEdit(f, path, edit);
 });

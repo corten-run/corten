@@ -130,20 +130,44 @@ export function readLoadSummary(summary) {
   const failures = metric("http_req_failed");
   const checks = metric("checks");
   assert.ok(Number.isSafeInteger(requests?.count) && requests.count > 0 && requests.rate > 0 && Number.isFinite(requests.rate), "load sent no requests");
-  for (const k of ["avg", "p(50)", "p(95)", "p(99)", "max"]) assert.ok(Number.isFinite(duration?.[k]) && duration[k] >= 0, `load missing duration ${k}`);
+  const iterations = metric("iterations"), vus = metric("vus_max");
+  assert.ok(Number.isSafeInteger(iterations?.count) && iterations.count >= 0 && iterations.count <= requests.count, "load iteration/request counts disagree");
+  assert.ok(["value", "min", "max"].every((k) => Number.isSafeInteger(vus?.[k]) && vus[k] > 0) && vus.min <= vus.value && vus.value <= vus.max, "load VU bounds malformed");
+  assert.ok(requests.count - iterations.count <= vus.max, "load unfinished iterations exceed VUs");
+  assert.ok(duration && metric("iteration_duration"), "load missing duration exports");
+  for (const name of Object.keys(m).filter((n) => n === "iteration_duration" || n.startsWith("http_req_") && n !== "http_req_failed")) {
+    const trend = metric(name);
+    for (const k of ["avg", "p(50)", "p(95)", "p(99)", "max"]) assert.ok(Number.isFinite(trend?.[k]) && trend[k] >= 0, `load missing ${name} ${k}`);
+    assert.ok(trend["p(50)"] <= trend["p(95)"] && trend["p(95)"] <= trend["p(99)"] && trend["p(99)"] <= trend.max && trend.avg <= trend.max, `load ${name} statistical bounds disagree`);
+    // Every exported latency trend has at most one sample per HTTP request (or
+    // completed iteration). Even one maximum must contribute to its mean.
+    assert.ok(trend.avg * requests.count >= trend.max * (1 - 1e-12), `load ${name} mean cannot contain its maximum`);
+  }
   const failedRate = failures?.value ?? failures?.rate;
   assert.ok(Number.isFinite(failedRate) && failedRate >= 0 && failedRate <= 1, "load missing failure rate");
-  assert.ok(Number.isSafeInteger(checks?.passes) && Number.isSafeInteger(checks?.fails) && checks.passes >= 0 && checks.fails >= 0 && checks.passes + checks.fails > 0, "load checks missing");
   const named = summary.root_group?.checks ?? {};
   const status = named["marketplace status 200"], kind = named["marketplace content type"];
-  assert.ok([status, kind].every((c) => Number.isSafeInteger(c?.passes) && c.passes >= 0 && Number.isSafeInteger(c?.fails) && c.fails >= 0), "load checks missing by name");
+  assert.deepEqual(Object.keys(named).sort(), ["marketplace content type", "marketplace status 200"], "load checks missing/extra by name");
+  assert.ok(!summary.root_group.groups?.length, "unexpected nested load checks");
+  assert.ok([status, kind, checks, failures].every((c) => Number.isSafeInteger(c?.passes) && c.passes >= 0 && Number.isSafeInteger(c?.fails) && c.fails >= 0 && Number.isSafeInteger(c.passes + c.fails)), "load rate/check sample counts missing");
+  const statusCount = status.passes + status.fails, kindCount = kind.passes + kind.fails;
+  // The native script does one HTTP request, then these two checks in order,
+  // then completes its iteration. Only unfinished iterations can lack checks.
+  assert.ok(iterations.count <= kindCount && kindCount <= statusCount && statusCount <= requests.count, "load per-request check coverage disagrees with iterations");
+  assert.equal(checks.passes, status.passes + kind.passes, "aggregate check passes disagree with named checks");
+  assert.equal(checks.fails, status.fails + kind.fails, "aggregate check failures disagree with named checks");
+  assert.ok(checks.passes + checks.fails > 0, "load checks missing");
+  const ratio = (actual, expected) => Number.isFinite(actual) && Math.abs(actual - expected) <= 1e-12;
+  assert.ok(ratio(checks.value ?? checks.rate, checks.passes / (checks.passes + checks.fails)), "aggregate check rate disagrees with samples");
+  // RateSink 'passes' counts true samples: for http_req_failed that means failures.
+  assert.equal(failures.passes + failures.fails, requests.count, "HTTP failure sample coverage disagrees with requests");
+  assert.ok(ratio(failedRate, failures.passes / requests.count), "HTTP failure rate disagrees with samples");
   assert.equal(kind.fails, 0, "a 200 had the wrong content type under load: a parity failure, not an outcome");
-  const dropped = metric("dropped_iterations")?.count ?? 0;
+  const droppedMetric = metric("dropped_iterations");
+  const dropped = droppedMetric === undefined ? 0 : droppedMetric?.count;
   assert.ok(Number.isSafeInteger(dropped) && dropped >= 0, "load dropped iterations malformed");
-  const failed = Math.round(failedRate * requests.count);
-  // A request's metrics are recorded before its check, so one cut off at the phase's end can
-  // have its failure and not its check; nothing else makes the two differ.
-  assert.ok(status.fails <= failed && failed - status.fails <= Math.max(1, requests.count / 100), "status check and failed requests disagree");
+  const failed = failures.passes;
+  assert.ok(status.fails <= failed && status.passes <= requests.count - failed, "status check and failed requests disagree");
   return { requests: requests.count, rps: requests.rate, p50: duration["p(50)"], p95: duration["p(95)"], p99: duration["p(99)"],
     failed, failedRate, dropped, checksFailed: status.fails, appOutcome: failed > 0 || dropped > 0 || status.fails > 0 };
 }
@@ -216,13 +240,15 @@ const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "un
  * @param {{action: string}[]} [seen.events] Docker events for the app container since phaseStart
  * @param {object|null} [seen.summary] the phase's k6 summary, when it was saved
  */
-export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars = [], events = [], summary = null }) {
+export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars, events, summary = null }) {
   const stop = app ? appStop(app, pass, phase) : null;
   if (!stop) {
     if (errors.length) throw errors[0].error;
     assert.ok(app, "app container state unavailable");
+    assert.ok(sidecars === undefined && events === undefined, "healthy phase contains stop-only observations");
     return null;
   }
+  sidecars ??= []; events ??= [];
   const harness = `during ${phase}, and the app container stopped: a harness failure, not the app's outcome`;
   const start = Date.parse(phaseStart);
   assert.ok(!Number.isNaN(start), "a stopped app needs its phase's start");
@@ -293,8 +319,25 @@ export function stageAggregate(runs, phase, asked) {
 // A slow upstream answers 200s late; the report names it beside an outcome (busy upstream).
 export function upstreamErrors(before, after) {
   for (const c of [before, after]) {
-    assert.ok(c && c.answers && typeof c.answers === "object", "upstream counters missing");
-    for (const n of Object.values(c.answers)) assert.ok(Number.isSafeInteger(n) && n >= 0, "bad upstream counter");
+    assert.ok([200, 302, 503].includes(c?.status), "upstream control status missing");
+    const totals = [];
+    for (const field of ["answers", "requests"]) {
+      const counters = c[field];
+      assert.ok(counters && typeof counters === "object" && !Array.isArray(counters), "upstream counters missing");
+      for (const [key, n] of Object.entries(counters)) {
+        assert.ok(field === "answers" ? /^[1-5][0-9]{2}$/.test(key) : /^item_[1-9][0-9]*$/.test(key) && Number(key.slice(5)) <= 500, "bad upstream counter key");
+        assert.ok(Number.isSafeInteger(n) && n >= 0, "bad upstream counter");
+      }
+      const total = Object.values(counters).reduce((sum, n) => sum + n, 0);
+      assert.ok(Number.isSafeInteger(total), "bad upstream counter total"); totals.push(total);
+    }
+    // The upstream increments the record request and its answer synchronously,
+    // before serving the next control GET. A held/unanswered read is not healthy.
+    assert.equal(totals[0], totals[1], "upstream request/answer coverage disagrees");
+  }
+  assert.equal(before.status, after.status, "upstream control status changed during observations");
+  for (const field of ["answers", "requests"]) for (const key of new Set([...Object.keys(before[field]), ...Object.keys(after[field])])) {
+    assert.ok((after[field][key] ?? 0) >= (before[field][key] ?? 0), "upstream counters moved backwards");
   }
   const statuses = new Set([...Object.keys(before.answers), ...Object.keys(after.answers)]);
   const moved = Object.fromEntries([...statuses].map((s) => [s, (after.answers[s] ?? 0) - (before.answers[s] ?? 0)]));

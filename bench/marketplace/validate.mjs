@@ -61,7 +61,10 @@ function replay({ folder, round, commit }) {
   assert.equal(host.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim(), s.host.cpu, "host CPU differs from raw probe");
   assert.equal(host.at(-1).trim(), s.host.onlineCpus, "host CPU inventory differs from raw probe");
   const used = new Map(), configurations = new Map(), probeIds = new Set(), loadIds = new Set();
-  const cpuObservations = [];
+  const cpuObservations = [], upstreamObservations = [], containerStarts = new Map();
+  function covers(c, observation) {
+    assert.ok(time(c.state.StartedAt) <= observation, "container lifetime starts after its observation");
+  }
   function runtime(c, expectedImage, role, memory, { running = false, quota = s.measurement.cpus[role].quota } = {}) {
     id(c.id); imageId(c.imageId); assert.equal(c.imageId, expectedImage, "raw runtime image differs");
     assert.match(c.name, new RegExp(`^${s.runId}-[a-z0-9-]+$`));
@@ -71,6 +74,13 @@ function replay({ folder, round, commit }) {
     assert.ok(c.nanoCpus === quota * 1e9 && c.cpuQuota === 0 || c.nanoCpus === 0 && Number.isSafeInteger(c.cpuPeriod) && c.cpuPeriod > 0 && Number.isSafeInteger(c.cpuQuota) && c.cpuQuota / c.cpuPeriod === quota, "raw runtime CPU quota differs");
     assert.equal(typeof c.state?.Running, "boolean"); assert.equal(typeof c.state.OOMKilled, "boolean");
     assert.ok(!c.state.Error, "Docker runtime error");
+    assert.notEqual(c.state.Restarting, true, "container is restarting");
+    const began = time(c.state.StartedAt);
+    assert.ok(began >= time(s.startedAt) && began <= time(s.finishedAt), "container lifetime outside round");
+    if (containerStarts.has(c.id)) assert.equal(began, containerStarts.get(c.id), "container restarted between observations");
+    containerStarts.set(c.id, began);
+    if (!c.state.Running) assert.ok(time(c.state.FinishedAt) >= began && time(c.state.FinishedAt) <= time(s.finishedAt), "container finish outside lifetime/round");
+    else assert.ok(time(c.state.FinishedAt) <= began, "running container finish contradicts current lifetime");
     if (running) {
       assert.equal(c.state.Running, true); assert.equal(c.state.OOMKilled, false); assert.equal(c.state.ExitCode, 0);
       assert.ok(c.state.Restarting === undefined || c.state.Restarting === false, "running container is restarting"); time(c.state.StartedAt);
@@ -116,6 +126,7 @@ function replay({ folder, round, commit }) {
   assert.equal(fixtureMount, posix.join(benchMount, "marketplace/fixtures"), "fixture is not from the source checkout");
   mounts(upstream, [["/fixtures", fixtureMount], ["/bench", benchMount]]);
   const cpu = runtime(files.json("cpu-container.json"), s.tools.upstream.imageId, "load", 128 * 2 ** 20, { quota: 1, running: true });
+  covers(cpu, firstLoad);
   assert.equal(cpu.name, `${s.runId}-cpu`); assert.equal(cpu.network, "none");
   assert.equal(cpu.image, nodeImage);
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
@@ -151,6 +162,7 @@ function replay({ folder, round, commit }) {
     assert.equal(c.state.Running, false); assert.equal(c.state.OOMKilled, false); assert.equal(c.state.ExitCode, 0);
     assert.ok(time(c.state.StartedAt) >= time(s.startedAt) && time(c.state.FinishedAt) >= time(c.state.StartedAt) && time(c.state.FinishedAt) <= firstLoad, "gate did not finish before load");
     assert.ok(time(appContainer.state.StartedAt) >= time(s.startedAt) && time(c.state.StartedAt) >= time(appContainer.state.StartedAt), "gate precedes the checked app's lifetime");
+    covers(upstream, time(appContainer.state.StartedAt));
     const outputRoot = posix.join(benchMount, "marketplace/results", round, ...(s.options.part ? [`d${s.options.part.index}`] : []), source, appContainer.name.slice(s.runId.length + 1));
     mounts(c, [["/repo", repoMount], ["/results", outputRoot, false]]);
   }
@@ -205,11 +217,14 @@ function replay({ folder, round, commit }) {
         appRuntime(raw.app, app, profile.source, { running: !run.stopped || run.stopped.phase !== phase });
         assert.equal(raw.app.id, coldApp.id, "app restarted between cold and load");
         assert.equal(raw.app.state.StartedAt, coldApp.state.StartedAt); assert.deepEqual(raw.seen.app, raw.app.state);
+        covers(raw.app, start);
         runtime(raw.cpu, cpu.imageId, "load", 128 * 2 ** 20, { quota: 1, running: true });
         assert.equal(raw.cpu.id, cpu.id); assert.equal(raw.cpu.state.StartedAt, cpu.state.StartedAt);
+        covers(raw.cpu, start);
         if (profile.source === "api") {
           runtime(raw.upstream, upstream.imageId, "api", 512 * 2 ** 20, { running: true });
           assert.equal(raw.upstream.id, upstream.id); assert.equal(raw.upstream.state.StartedAt, upstream.state.StartedAt);
+          covers(raw.upstream, time(run.startedAt));
         } else assert.equal(raw.upstream, null);
         const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 ** 30);
         assert.equal(k6.image, k6Image);
@@ -225,7 +240,9 @@ function replay({ folder, round, commit }) {
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
         assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
         if (profile.source === "api") {
+          assert.equal(raw.upstreamReads.before.status, 200); assert.equal(raw.upstreamReads.after.status, 200);
           assert.equal(upstreamErrors(raw.upstreamReads.before, raw.upstreamReads.after), 0);
+          upstreamObservations.push({ id: upstream.id, start, end, ...raw.upstreamReads });
           const reads = (raw.upstreamReads.after.answers[200] ?? 0) - (raw.upstreamReads.before.answers[200] ?? 0);
           // A completed 200 requires its own record read. Failed/time-out requests
           // may also have read upstream, so do not equate reads to successful traffic.
@@ -282,6 +299,15 @@ function replay({ folder, round, commit }) {
         assert.deepEqual(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
       }
     }
+  }
+  const lastUpstream = new Map();
+  for (const observation of upstreamObservations.sort((a, b) => a.start - b.start)) {
+    const prior = lastUpstream.get(observation.id);
+    if (prior) {
+      assert.ok(observation.start >= prior.end, "overlapping shared upstream observations");
+      assert.equal(upstreamErrors(prior.after, observation.before), 0, "upstream failed between serial observations");
+    }
+    lastUpstream.set(observation.id, observation);
   }
   const lastCpu = new Map();
   for (const observation of cpuObservations.sort((a, b) => a.start - b.start)) {

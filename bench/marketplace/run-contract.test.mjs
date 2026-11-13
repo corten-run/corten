@@ -49,7 +49,15 @@ test("legacy selection cannot silently reduce the twenty-app default", () => {
 
 function k6(metrics = {}, { status = [100, 0], kind = [100, 0] } = {}) {
   const check = ([passes, fails]) => ({ passes, fails });
-  return { metrics: { http_reqs: { count: 100, rate: 10 }, http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 }, http_req_failed: { value: 0 }, checks: { passes: 200, fails: 0 }, ...metrics },
+  const latency = { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 };
+  const native = { http_reqs: { count: 100, rate: 10 }, iterations: { count: 100, rate: 10 }, vus_max: { value: 10, min: 10, max: 10 },
+    http_req_duration: latency, iteration_duration: latency, http_req_failed: { passes: 0, fails: 100, value: 0 }, checks: { passes: 200, fails: 0, value: 1 }, ...metrics };
+  if (metrics.http_req_failed) {
+    const failed = Math.round(metrics.http_req_failed.value * 100);
+    native.http_req_failed = { passes: failed, fails: 100 - failed, ...metrics.http_req_failed };
+  }
+  if (metrics.checks) native.checks = { value: metrics.checks.passes / (metrics.checks.passes + metrics.checks.fails), ...metrics.checks };
+  return { metrics: native,
     root_group: { checks: { "marketplace status 200": check(status), "marketplace content type": check(kind) } } };
 }
 test("what an app fails to serve is its outcome; a summary that is not a measurement still fails (#1128)", () => {
@@ -59,7 +67,7 @@ test("what an app fails to serve is its outcome; a summary that is not a measure
   const timedOut = readOutcome(k6({ http_req_failed: { value: 0.25 }, checks: { passes: 175, fails: 25 } }, { status: [75, 25] }));
   assert.equal(timedOut.failed, 25); assert.equal(timedOut.checksFailed, 25); assert.equal(timedOut.appOutcome, true);
   // a request cut off at the phase's end may have its failure and not its check
-  assert.equal(readOutcome(k6({ http_req_failed: { value: 0.25 } }, { status: [76, 24] })).checksFailed, 24);
+  assert.equal(readOutcome(k6({ http_req_failed: { value: 0.25 }, iterations: { count: 99, rate: 9.9 }, checks: { passes: 174, fails: 24 } }, { status: [75, 24], kind: [99, 0] })).checksFailed, 24);
   const behind = readOutcome(k6({ dropped_iterations: { count: 40 } }));
   assert.equal(behind.dropped, 40); assert.equal(behind.appOutcome, true);
   for (const s of [null, {}, k6({ http_reqs: { count: 0, rate: 0 } }), k6({ http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": null, max: 4 } }),
@@ -86,10 +94,52 @@ test("complete stopped traffic parses without successful requests, but never wit
     (v) => { v.root_group.checks["marketplace content type"].fails = 1; },
   ]) { const v = structuredClone(raw); edit(v); assert.throws(() => readLoadSummary(v)); }
 });
+
+test("native k6 accounting reconciles every named check, aggregate, rate sample and unfinished iteration", () => {
+  for (const [label, edit] of [
+    ["sparse checks", (v) => { v.metrics.checks = { passes: 1, fails: 0, value: 1 }; for (const c of Object.values(v.root_group.checks)) c.passes = 0; v.root_group.checks["marketplace status 200"].passes = 1; }],
+    ["aggregate failures", (v) => { v.metrics.checks = { passes: 0, fails: 200, value: 0 }; }],
+    ["aggregate passes", (v) => { v.metrics.checks.passes--; }],
+    ["aggregate rate", (v) => { v.metrics.checks.value = 0.5; }],
+    ["failure sample count", (v) => { v.metrics.http_req_failed.fails--; }],
+    ["failure sample rate", (v) => { v.metrics.http_req_failed.value = 0.5; }],
+    ["extra iterations", (v) => { v.metrics.iterations.count++; }],
+    ["unchecked completed iteration", (v) => { v.root_group.checks["marketplace content type"].passes--; v.metrics.checks.passes--; }],
+    ["cutoff exceeds VUs", (v) => { v.metrics.iterations.count = 1; }],
+    ["missing iterations", (v) => { delete v.metrics.iterations; }],
+    ["missing VU bound", (v) => { delete v.metrics.vus_max; }],
+    ["extra check", (v) => { v.root_group.checks.other = { passes: 1, fails: 0 }; }],
+  ]) { const v = k6(); edit(v); assert.throws(() => readLoadSummary(v), undefined, label); }
+  // One interrupted failed request lacks both checks; another can be cut off
+  // between the status and content checks. No percentage-of-traffic allowance.
+  const cutoff = k6({ iterations: { count: 99, rate: 9.9 }, checks: { passes: 199, fails: 0 } }, { kind: [99, 0] });
+  assert.equal(readLoadSummary(cutoff).requests, 100);
+  cutoff.metrics.http_req_failed = { passes: 1, fails: 99, value: 0.01 };
+  assert.throws(() => readLoadSummary(cutoff), /status check/);
+});
+
+test("all native latency exports obey ordering and statistical bounds, not just reported percentiles", () => {
+  for (const name of ["http_req_duration", "iteration_duration", "http_req_waiting", "http_req_duration{expected_response:true}"]) {
+    for (const edit of [
+      (v) => { v.max = 0; v.avg = 10000; },
+      (v) => { v["p(50)"] = 3; v["p(95)"] = 2; },
+      (v) => { v["p(95)"] = 4; v["p(99)"] = 3; },
+      (v) => { v["p(99)"] = 5; },
+      (v) => { v.avg = 5; },
+      (v) => { v.avg = 0; },
+    ]) {
+      const v = k6(); v.metrics[name] = { ...v.metrics.http_req_duration }; edit(v.metrics[name]);
+      assert.throws(() => readLoadSummary(v), /statistical bounds|mean cannot contain/, name);
+    }
+  }
+  const zero = k6(); for (const name of ["http_req_duration", "iteration_duration"]) for (const key of Object.keys(zero.metrics[name])) zero.metrics[name][key] = 0;
+  assert.equal(readLoadSummary(zero).p99, 0);
+});
 test("an upstream error answer during a phase is counted, so the run fails on it", () => {
-  assert.equal(upstreamErrors({ answers: { 200: 10 } }, { answers: { 200: 50 } }), 0);
-  assert.equal(upstreamErrors({ answers: { 200: 10, 503: 1 } }, { answers: { 200: 50, 503: 3, 404: 1 } }), 3);
-  for (const [a, b] of [[{ answers: { 200: 10 } }, { answers: { 200: 9 } }], [{}, { answers: {} }], [{ answers: { 200: -1 } }, { answers: { 200: 1 } }]]) assert.throws(() => upstreamErrors(a, b));
+  const counts = (answers) => ({ status: 200, answers, requests: { item_1: Object.values(answers).reduce((sum, n) => sum + n, 0) } });
+  assert.equal(upstreamErrors(counts({ 200: 10 }), counts({ 200: 50 })), 0);
+  assert.equal(upstreamErrors(counts({ 200: 10, 503: 1 }), counts({ 200: 50, 503: 3, 404: 1 })), 3);
+  for (const [a, b] of [[counts({ 200: 10 }), counts({ 200: 9 })], [{}, counts({})], [counts({ 200: -1 }), counts({ 200: 1 })]]) assert.throws(() => upstreamErrors(a, b));
 });
 test("an app container that exits or is OOM-killed during a load phase is a recorded stop, with why (#1128)", () => {
   assert.equal(appStop({ Running: true, OOMKilled: false, ExitCode: 0 }, 1, "sat64"), null);

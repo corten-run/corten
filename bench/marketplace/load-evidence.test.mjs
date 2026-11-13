@@ -31,7 +31,8 @@ test("real producer callback and copy path retain k6 engine elapsed, including g
     // k6's CounterSink.Format uses duration.Seconds(); handleSummary exports
     // float64(duration)/float64(time.Millisecond). Keep their independent math.
     const elapsed = nanoseconds / 1e6;
-    const legacy = { metrics: { http_reqs: { count, rate: count / (nanoseconds / 1e9) } } };
+    const counter = (count) => ({ count, rate: count / (nanoseconds / 1e9) });
+    const legacy = { metrics: { http_reqs: counter(count), iterations: counter(count - 1), dropped_iterations: counter(0), data_received: counter(12345), data_sent: counter(6789) } };
     const outputs = { "/tmp/marketplace-summary.json": JSON.stringify(legacy), ...handleSummary({ state: { testRunDurationMs: elapsed } }) };
     const calls = [];
     const docker = async (args) => {
@@ -53,6 +54,13 @@ test("real producer callback and copy path retain k6 engine elapsed, including g
     validateLoadExecution(evidence);
     const rate = summary.metrics.http_reqs.rate;
     summary.metrics.http_reqs.rate = 1e9; assert.throws(() => validateLoadExecution(evidence), /count\/rate/); summary.metrics.http_reqs.rate = rate;
+    for (const name of ["iterations", "dropped_iterations", "data_received", "data_sent"]) {
+      const original = summary.metrics[name];
+      for (const bad of [{ ...original, rate: 1e9 }, { ...original, count: -1 }, { rate: original.rate }]) {
+        summary.metrics[name] = bad; assert.throws(() => validateLoadExecution(evidence), /counter|count\/rate/, name);
+      }
+      summary.metrics[name] = original;
+    }
     for (const bad of [14997, elapsed + 2000, "15000", null, Infinity]) assert.throws(() => validateLoadExecution({ ...evidence, clock: { testRunDurationMs: bad } }));
     assert.throws(() => validateLoadExecution({ ...evidence, clock: {} }));
   }
@@ -96,6 +104,6 @@ test("pinned real k6 producer exports replayable elapsed against an isolated HTT
     if (phase === "failed") assert.throws(() => readOutcome(summary), /no request succeeded/);
     else assert.equal(readOutcome(summary).failed, 0);
     assert.ok(clock.testRunDurationMs > 15000, "mock's in-flight requests should require real graceful completion");
-    t.diagnostic(`measured ${phase} mock only: count=${summary.metrics.http_reqs.count}, rate=${summary.metrics.http_reqs.rate}, engineMs=${clock.testRunDurationMs}, dockerMs=${Date.parse(receipt.state.FinishedAt) - Date.parse(receipt.state.StartedAt)}`);
+    t.diagnostic(`measured ${phase} mock only: count=${summary.metrics.http_reqs.count}, iterations=${summary.metrics.iterations.count}, VUsMax=${summary.metrics.vus_max.max}, failureSamples=${JSON.stringify(summary.metrics.http_req_failed)}, checkSamples=${JSON.stringify(summary.metrics.checks)}, rate=${summary.metrics.http_reqs.rate}, engineMs=${clock.testRunDurationMs}, dockerMs=${Date.parse(receipt.state.FinishedAt) - Date.parse(receipt.state.StartedAt)}`);
   }
 });

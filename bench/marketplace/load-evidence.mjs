@@ -21,10 +21,25 @@ export function validateLoadExecution({ load, summary, clock, start, end, second
   // graceful completion, but excludes Docker startup/teardown. Never use the
   // configured duration as the counter rate's denominator.
   assert.ok(Number.isFinite(elapsed) && elapsed >= seconds * 1000 - 1e-6 && elapsed <= finished - began + 2, "k6 engine duration truncated/outside container window");
-  const counter = summary.metrics?.http_reqs?.values ?? summary.metrics?.http_reqs;
-  assert.ok(Number.isSafeInteger(counter?.count) && counter.count > 0 && Number.isFinite(counter.rate) && counter.rate > 0, "invalid k6 request counter/rate");
-  const expected = counter.count / (elapsed / 1000);
+  const metrics = summary.metrics;
+  const requests = metrics?.http_reqs?.values ?? metrics?.http_reqs;
+  assert.ok(requests?.count > 0, "invalid k6 request counter/rate");
   // Both exports use k6 TestRunDuration. Only float64 division/JSON rounding
   // differs, not scheduling jitter (which is already in the engine clock).
-  assert.ok(Math.abs(counter.rate - expected) <= Math.max(expected, counter.rate) * 1e-12, "k6 count/rate differs from engine elapsed clock");
+  for (const [name, raw] of Object.entries(metrics)) {
+    const counter = raw?.values ?? raw;
+    if (counter?.count === undefined) {
+      assert.ok(raw?.type !== "counter" && !["http_reqs", "iterations", "dropped_iterations", "data_sent", "data_received"].includes(name), `missing k6 ${name} counter`);
+      continue;
+    }
+    assert.ok(Number.isSafeInteger(counter.count) && counter.count >= 0 && Number.isFinite(counter.rate) && counter.rate >= 0, `invalid k6 ${name} counter/rate`);
+    const expected = counter.count / (elapsed / 1000);
+    assert.ok(Math.abs(counter.rate - expected) <= Math.max(expected, counter.rate) * 1e-12, `k6 ${name} count/rate differs from engine elapsed clock`);
+  }
+  if (load.env) {
+    const maximum = metrics.vus_max?.values ?? metrics.vus_max;
+    assert.ok(maximum?.max <= (load.env.MODE === "fixed" ? 1000 : Number(load.env.VUS)), "k6 VUs exceed native scenario limit");
+    const dropped = (metrics.dropped_iterations?.values ?? metrics.dropped_iterations)?.count ?? 0;
+    if (load.env.MODE !== "fixed") assert.equal(dropped, 0, "closed VU scenario cannot drop scheduled iterations");
+  }
 }
