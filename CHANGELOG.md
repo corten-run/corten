@@ -21,6 +21,13 @@ Corten is pre-1.0, so any minor version may change the API.
 - Native marketplace alert stores in the other benchmark adapters expose independent,
   session-isolated readback for accepted writes. Browser adapters retain their native form/router behavior, including
   LiveView, Turbo and Livewire; invalid and failed submissions must not change stored state.
+
+- Native FastAPI, Django and Spring marketplace alerts persist accepted writes
+  in isolated sessions with independent readback and no append after rejected,
+  incomplete-source or render-failed submissions. FastAPI owns its page-source
+  cancellation and deadline; Django WSGI and Spring MVC lifetime limitations
+  remain explicitly failed capabilities, not completed group qualification.
+
 - A native client-heavy runner exercises Corten, React, Vue, Solid, Svelte and
   Remix against the same keyed data and dashboard input. Independent visible-DOM,
   network and lifecycle gates precede a separate measured journey. Builds are
