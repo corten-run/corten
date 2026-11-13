@@ -54,6 +54,10 @@ func TestNativePageDeadlineAndAlertAbort(t *testing.T) {
 				defer upstream.Close()
 				router, source := nativeSourceRouter(t, "marketplace", "api", upstream.URL, nil)
 				source.Timeout = 500 * time.Millisecond
+				if mode == "abort-POST" {
+					// Cancellation must beat the source deadline, not be caused by it.
+					source.Timeout = 5 * time.Second
+				}
 				app := httptest.NewServer(router)
 				defer app.Close()
 				client := &http.Client{Timeout: 3 * time.Second}
