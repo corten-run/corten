@@ -34,6 +34,10 @@ The module has no subprocess, network or write API. Read-only source-path checks
 become `source-present`. A missing native port has `implementation:"pending-implementation"`,
 `configuration:null` and an `expectedSourceRoot`, not a fullstack fallback. Such entries cannot
 bind deployment descriptors, even if a caller supplies an unrelated configuration.
+`pending-integration` representatives and candidates also remain unbound. Binding requires
+`implementation:"source-present"` and rechecks the catalog's native source references and
+the supplied configuration's references. Receipt names or supplied manifests cannot promote
+an implementation. Saved descriptors are rechecked by the same gate.
 All entries initially report pending
 qualification with no evidence; `source-present` means only that the native configuration
 is checked in, not that it implements the entire group's required behavior.
@@ -110,7 +114,7 @@ both `bindingSha256` and `descriptorSha256`. `binding` has exactly these fields:
 | `commit` | Full exact source commit, not a branch or short name. |
 | `images` | Immutable `sha256:` image ID for every build key, including both JSON payloads. |
 | `configuration` | Complete native configuration; `null` uses a catalog configuration when one exists. A representative cannot be silently retuned; a candidate cannot replace its framework. |
-| `budget` | Exact existing runner/reservation work, placement, duration, passes, rates, total CPU/memory and process/edge accounting. No defaults are supplied by this layer. |
+| `budget` | A validated `benchmark-native-reservation/v1` record for the applicable native runner, described below. Truthy objects, equality alone and another group's reservation are insufficient. No defaults are supplied by this layer. |
 | `evidence` | Exactly `implementation`, `native-parity`, `performance`, `independent-review`, each `null` or `{path, sha256}`. |
 
 The binding hash covers the current registry contract, entire case objects, app/configuration,
@@ -118,6 +122,47 @@ commit, image IDs and budget. The descriptor hash also covers the evidence refer
 receipts can refer to the non-circular binding hash. JSON object keys are sorted for the hash;
 array order remains meaningful. These are internal benchmark descriptors, not a new Corten
 network/file protocol. They do not replace native runner provenance or artifact formats.
+
+### Native reservations
+
+`validateDeploymentBudget(group, budget)` accepts exactly `schema`, `group`, `runner`,
+`options`, `cpus`, `resources`, `host`, and `edge`. It validates before a descriptor is
+hashed or reservations are compared. This internal adapter record explicitly binds fields
+from the existing native contracts; it is not a new universal budget or a replacement for
+a durable host reservation, native runtime receipt or measured result.
+
+Adapters currently exist only for `catalog-page` (`bench/catalog/run.mjs`), `json-api`
+(`bench/json-api/run.mjs`) and `localized-marketplace` (`bench/marketplace/run.mjs`).
+`options` must equal that runner's native `parseArgs` result, with explicit complete app/group
+selection, round, boolean build/check-only fields and numeric passes, duration, warmup, rate
+and startup timeout (plus the native JSON receipts field). Native parsers enforce their
+actual bounds and round semantics; check-only is not a timed reservation. `cpus` must equal
+the native CPU parser's complete `app`/`api`/`load` output, including quota, placement and
+Docker arguments. Invalid or overlapping CPU sets, wrong quotas and omissions fail closed.
+
+`resources` records every applicable native container role, each with `cpu` (its native CPU
+record), `memoryBytes`, `sharedMemoryBytes`, and `processes:"all-container-descendants"`.
+The existing runner arguments require app 1 GiB, upstream 512 MiB, load 2 GiB, cold probe
+256 MiB and sampler 128 MiB; the sampler uses one CPU with the load role's placement.
+Catalog/marketplace browser checkers have 2 GiB memory and 1 GiB shared memory; marketplace
+also has a 512 MiB transport checker. Other roles record `sharedMemoryBytes:null` because
+the runner supplies no explicit shared-memory limit; null is not a claim of zero usage.
+These are checked-in native limits, not tuning recommendations or
+values callers may enlarge. Their CPU roles follow the corresponding native launch args.
+
+`host` explicitly records `isolation:"none"`, `cpu:null`, `memoryBytes:null`, and process
+roles `["driver"]` (catalog/marketplace) or `["driver","functional-checker"]` (JSON).
+Null means no host isolation asserted, not zero resource use. Runtime evidence must still
+attribute the actual processes and validate the host conditions. `edge` must be `null` for
+these direct runners; unbudgeted edge configurations and extra resource roles are rejected.
+Changing a native launch budget/topology requires reviewing its adapter, not relabeling it.
+
+The other six groups remain visible in read-only plans but have **no integrated reservation
+adapter here and cannot bind descriptors/selections**. Their capture/journey apparatus is
+not promoted to a complete measured runner by borrowing catalog limits. Future adapters must
+validate their own actual work, resource, process and edge contracts before binding is added.
+Even a structurally valid reservation is not evidence that its limits were enforced; native
+raw runtime replay and independent review remain mandatory.
 
 `screenDeployment(descriptor, {readArtifact, verifyNative, verifyPerformance})` checks identities
 and content hashes. `readArtifact(path)` supplies local bytes through a contained, read-only
@@ -158,8 +203,9 @@ deployment adapter must bind those native results to this descriptor, not just c
 
 `fixedSelection(group, descriptors, validators)` requires every registry app once, in order,
 one round commit and identical total budget objects. Each app has one deployment for the
-**entire group**. A candidate requires `reviewed-for-selection`; pending representatives can
-be recorded as intent but cannot be mistaken for qualification. Selection output retains the
+**entire group**. Source-present candidates require `reviewed-for-selection`; representatives
+with pending qualification can be recorded as intent only when implementation and reservation
+gates pass. Pending implementation/integration entries remain inventory-only. Selection output retains the
 full deployment inventory and auxiliary families, plus a new `selectionSha256`.
 
 Save that hash before starting a round. `verifyPhaseSelection(selection, reservedSha256,

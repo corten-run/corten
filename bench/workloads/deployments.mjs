@@ -4,10 +4,14 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
+import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
+import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
 import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
 
 export const deploymentSchema = "benchmark-deployments/v1";
 export const receiptSchema = "benchmark-deployment-review/v1";
+export const reservationSchema = "benchmark-native-reservation/v1";
 const freeze = (value) => {
   if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
@@ -219,11 +223,58 @@ function reference(ref) {
   assert.ok(!/[\\:\x00-\x1f]/.test(ref.path) && ref.path.split("/").every((part) => part && part !== "." && part !== ".."), "artifact must be a relative local path without traversal");
 }
 const receiptKinds = ["implementation", "native-parity", "performance", "independent-review"];
+function requireImplementation(entry) {
+  assert.equal(entry.implementation, "source-present", "deployment implementation must be source-present before binding; pending integration/implementation stays unbound");
+  assert.ok(entry.configuration && sourceState(entry.configuration.sourceRefs) === "source-present", "deployment implementation sources must be source-present before binding");
+}
+
+// Adapters for existing timed native runners only. Capture-only apparatus must not
+// borrow these limits. Options/CPU validation stays with the native contract parsers.
+const reservations = {
+  "catalog-page": { runner: "bench/catalog/run.mjs", parse: catalogOptions, cpus: catalogCpus, prefix: "CATALOG" },
+  "json-api": { runner: "bench/json-api/run.mjs", parse: jsonOptions, cpus: jsonCpus, prefix: "JSON_API" },
+  "localized-marketplace": { runner: "bench/marketplace/run.mjs", parse: marketplaceOptions, cpus: marketplaceCpus, prefix: "MARKETPLACE" },
+};
+export function validateDeploymentBudget(group, budget) {
+  const native = reservations[group];
+  assert.ok(native, `${group}: native reservation adapter not integrated; deployment stays unbound`);
+  assert.ok(budget && Object.getPrototypeOf(budget) === Object.prototype, "native reservation must be a plain structured object");
+  keys(budget, ["schema", "group", "runner", "options", "cpus", "resources", "host", "edge"], "native reservation");
+  assert.equal(budget.schema, reservationSchema, "native reservation schema required");
+  assert.equal(budget.group, group, "reservation belongs to another group");
+  assert.equal(budget.runner, native.runner, "reservation belongs to another native runner");
+  const options = budget.options;
+  assert.ok(options && Object.getPrototypeOf(options) === Object.prototype, "reservation native options required");
+  for (const key of ["passes", "duration", "warmup", "rate", "startupTimeout"]) assert.ok(Number.isSafeInteger(options[key]) && options[key] > 0, `reservation ${key}: positive integer required`);
+  assert.equal(typeof options.build, "boolean", "reservation build option must be explicit");
+  assert.equal(options.checkOnly, false, "check-only apparatus is not a timed reservation");
+  const argv = [options.round, "--group", group, ...["passes", "duration", "warmup", "rate", "startupTimeout"].flatMap((key) => [key === "startupTimeout" ? "--startup-timeout" : `--${key}`, String(options[key])]), ...(options.build ? ["--build"] : [])];
+  if (group === "json-api" && options.receipts !== null) { string(options.receipts, "reservation receipts"); argv.push("--receipts", options.receipts); }
+  assert.deepEqual(options, native.parse(argv, Object.fromEntries(selectedApps(group).map((app) => [app, {}]))), "reservation must preserve exact native options and full selection");
+  keys(budget.cpus, ["app", "api", "load"], "reservation CPU roles");
+  const env = Object.fromEntries(Object.entries(budget.cpus).map(([role, value]) => {
+    assert.ok(value && (value.cpuset === null || typeof value.cpuset === "string"), "reservation CPU placement must be explicit");
+    return [`${native.prefix}_${role.toUpperCase()}_CPUS`, value.cpuset];
+  }));
+  assert.deepEqual(budget.cpus, native.cpus(env), "reservation CPU quota/placement/arguments differ from native contract");
+  const container = (cpu, memoryBytes, sharedMemoryBytes = null) => ({ cpu, memoryBytes, sharedMemoryBytes, processes: "all-container-descendants" });
+  const samplerCpu = { ...budget.cpus.load, quota: 1, args: ["--cpus", "1", ...(budget.cpus.load.cpuset ? ["--cpuset-cpus", budget.cpus.load.cpuset] : [])] };
+  // These are the existing run.mjs Docker arguments, not new tuning defaults.
+  const resources = { app: container(budget.cpus.app, 2 ** 30), upstream: container(budget.cpus.api, 512 * 2 ** 20),
+    load: container(budget.cpus.load, 2 ** 31), cold: container(budget.cpus.load, 256 * 2 ** 20), sampler: container(samplerCpu, 128 * 2 ** 20),
+    ...(group === "json-api" ? {} : { checker: container(budget.cpus.load, 2 ** 31, 2 ** 30) }),
+    ...(group === "localized-marketplace" ? { transportChecker: container(budget.cpus.load, 512 * 2 ** 20) } : {}) };
+  assert.deepEqual(budget.resources, resources, "reservation memory/shared-memory/process accounting differs from native runner");
+  assert.deepEqual(budget.host, { isolation: "none", cpu: null, memoryBytes: null, processes: group === "json-api" ? ["driver", "functional-checker"] : ["driver"] }, "reservation must disclose unisolated host processes, not invent CPU/memory limits");
+  assert.equal(budget.edge, null, "these native reservations have no edge; a new topology needs its own reviewed adapter");
+  return budget;
+}
 
 // The caller supplies the actual frozen reservation, not a locally guessed/default budget.
 // An alternative needs a concrete configuration, never a candidate name standing in for one.
 export function deploymentDescriptor(group, app, id, binding) {
   const entry = entryFor(group, app, id);
+  requireImplementation(entry);
   keys(binding, ["commit", "images", "configuration", "budget", "evidence"], "deployment binding");
   assert.match(binding.commit ?? "", /^[a-f0-9]{40}$/, "exact commit required");
   const configuration = binding.configuration ?? entry.configuration;
@@ -240,10 +291,12 @@ export function deploymentDescriptor(group, app, id, binding) {
   configuration.command.forEach((part) => string(part, "command argument"));
   assert.ok(configuration.environment && typeof configuration.environment === "object" && !Array.isArray(configuration.environment), "runtime environment manifest required");
   assert.ok(Array.isArray(configuration.sourceRefs) && configuration.sourceRefs.length > 0, "native source configuration references required");
+  assert.ok(configuration.sourceRefs.every((ref) => typeof ref === "string") && sourceState(configuration.sourceRefs) === "source-present", "deployment implementation sources must be source-present before binding");
   assert.ok(configuration.builds && Object.keys(configuration.builds).length > 0, "build manifests required");
   keys(binding.images, Object.keys(configuration.builds), "immutable images for every build");
   for (const image of Object.values(binding.images)) assert.match(image, /^sha256:[a-f0-9]{64}$/, "immutable image digest required, not tag");
-  assert.ok(binding.budget && Object.keys(binding.budget).length > 0, "exact reservation budget required");
+  validateDeploymentBudget(group, binding.budget);
+  assert.equal(configuration.edge, representative(group, app).configuration.edge, "native reservation is direct only; changing edge topology needs a reviewed reservation adapter");
   keys(binding.evidence, receiptKinds, "evidence references");
   for (const ref of Object.values(binding.evidence)) if (ref !== null) reference(ref);
   const subject = { schema: deploymentSchema, registry: registrySchema, group, app, deployment: id, contractSha256: contractSha256(group),
@@ -331,6 +384,8 @@ export function fixedSelection(group, descriptors, validators = {}) {
   const first = descriptors[0];
   for (const descriptor of descriptors) {
     assert.equal(descriptor.group, group); assert.equal(descriptor.commit, first.commit, "one fixed round commit required");
+    requireImplementation(entryFor(group, descriptor.app, descriptor.deployment));
+    validateDeploymentBudget(group, descriptor.budget);
     assert.deepEqual(descriptor.budget, first.budget, "equal total deployment budgets required; no enlargement for a failing app");
   }
   const screens = descriptors.map((descriptor) => screenDeployment(descriptor, validators));
@@ -348,6 +403,7 @@ export function fixedSelection(group, descriptors, validators = {}) {
 // A runner must compare every phase with the hash saved before the round, not a newly
 // computed selection after an app fails. This check performs no execution or fallback.
 export function verifyPhaseSelection(selection, reservedSha256, observed) {
+  validateDeploymentBudget(selection.group, selection.budget);
   digest(reservedSha256, "reserved selection");
   const { selectionSha256, ...body } = selection;
   assert.equal(selectionSha256, reservedSha256, "selection changed after reservation");

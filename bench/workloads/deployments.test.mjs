@@ -4,19 +4,43 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { contractSha256, definition, groupNames, retainedFamilies, selectedApps } from "./registry.mjs";
 import { groupApps, scheduledGroup } from "../marketplace/groups.mjs";
-import { deploymentCli, deploymentDescriptor, deploymentPlan, deploymentSha256, fixedSelection, outcomeKinds, receiptSchema, screenDeployment, verifyPhaseSelection } from "./deployments.mjs";
+import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
+import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
+import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
+import { deploymentCli, deploymentDescriptor, deploymentPlan, deploymentSha256, fixedSelection, outcomeKinds, receiptSchema, reservationSchema, screenDeployment, validateDeploymentBudget, verifyPhaseSelection } from "./deployments.mjs";
 
 const commit = "38301e17051b1b43901b63f66b150886d2097c29";
 // Synthetic fixtures test validation, not a qualification receipt or measured result.
-const budget = { app: { cpus: 1, memoryBytes: 2 ** 30 }, upstream: { cpus: 2, memoryBytes: 512 * 2 ** 20 }, load: { cpus: 4, memoryBytes: 2 ** 31 }, edge: null, work: { passes: 3, duration: 60, warmup: 30, rate: 150 }, processes: "all processes inside their role's aggregate cgroup budget" };
+function nativeBudget(group = "catalog-page", env = {}) {
+  const native = { "catalog-page": [catalogOptions, catalogCpus, "c3", "catalog"], "json-api": [jsonOptions, jsonCpus, "j3", "json-api"],
+    "localized-marketplace": [marketplaceOptions, marketplaceCpus, "w3", "marketplace"] }[group];
+  assert.ok(native, "test needs an integrated native reservation");
+  const [parse, cpuSettings, round, area] = native;
+  const options = parse([round, "--group", group, "--passes", "3", "--duration", "60", "--warmup", "30", "--rate", "150", "--startup-timeout", "120"], Object.fromEntries(selectedApps(group).map((app) => [app, {}])));
+  const cpus = cpuSettings(env), container = (cpu, memoryBytes, sharedMemoryBytes = null) => ({ cpu, memoryBytes, sharedMemoryBytes, processes: "all-container-descendants" });
+  return { schema: reservationSchema, group, runner: `bench/${area}/run.mjs`, options, cpus,
+    resources: { app: container(cpus.app, 2 ** 30), upstream: container(cpus.api, 512 * 2 ** 20), load: container(cpus.load, 2 ** 31),
+      cold: container(cpus.load, 256 * 2 ** 20), sampler: container({ ...cpus.load, quota: 1, args: ["--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : [])] }, 128 * 2 ** 20),
+      ...(group === "json-api" ? {} : { checker: container(cpus.load, 2 ** 31, 2 ** 30) }),
+      ...(group === "localized-marketplace" ? { transportChecker: container(cpus.load, 512 * 2 ** 20) } : {}) },
+    host: { isolation: "none", cpu: null, memoryBytes: null, processes: group === "json-api" ? ["driver", "functional-checker"] : ["driver"] }, edge: null };
+}
+const budget = nativeBudget();
+// Rehashed saved input deliberately bypasses the constructor, like an untrusted file.
+function uncheckedBinding(original, fields) {
+  const { descriptorSha256, bindingSha256, evidence, ...subject } = original;
+  const next = { ...subject, ...fields };
+  const body = { ...next, bindingSha256: deploymentSha256(next), evidence };
+  return { ...body, descriptorSha256: deploymentSha256(body) };
+}
 const emptyEvidence = () => Object.fromEntries(["implementation", "native-parity", "performance", "independent-review"].map((kind) => [kind, null]));
-function binding(configuration, evidence = emptyEvidence()) {
-  return { commit, images: Object.fromEntries(Object.keys(configuration.builds).map((key) => [key, `sha256:${"a".repeat(64)}`])), configuration, budget, evidence };
+function binding(configuration, evidence = emptyEvidence(), group = "catalog-page") {
+  return { commit, images: Object.fromEntries(Object.keys(configuration.builds).map((key) => [key, `sha256:${"a".repeat(64)}`])), configuration, budget: nativeBudget(group), evidence };
 }
 const manifest = (group, app) => deploymentPlan(group).apps.find((row) => row.app === app).deployments[0];
 function descriptor(group = "catalog-page", app = "express") {
   const entry = manifest(group, app);
-  return deploymentDescriptor(group, app, entry.id, binding(entry.configuration));
+  return deploymentDescriptor(group, app, entry.id, binding(entry.configuration, emptyEvidence(), group));
 }
 function fixture(original = descriptor(), { status = "complete", mutate = () => {}, baseline } = {}) {
   const files = new Map();
@@ -116,7 +140,7 @@ test("live representatives use dispatched native ports and missing recovery port
     assert.equal(aspnet.configuration.builds.app.dockerfile, "bench/live/apps/aspnet/Dockerfile");
     assert.ok(aspnet.configuration.sourceRefs.includes("bench/live/apps/aspnet/LiveParity.csproj"));
     assert.match(aspnet.configuration.middleware, /ServerSentEvents/);
-    assert.deepEqual(deploymentDescriptor(group, "aspnet", aspnet.id, binding(aspnet.configuration)).configuration.command, ["dotnet", "LiveParity.dll"]);
+    assert.throws(() => deploymentDescriptor(group, "aspnet", aspnet.id, binding(aspnet.configuration)), /implementation.*source-present|reservation adapter not integrated/);
     for (const row of deploymentPlan(group).apps) {
       const entry = row.deployments[0];
       assert.ok(!JSON.stringify(entry).includes("bench/fullstack/apps/"), `${group}/${row.app} borrows an unrelated app`);
@@ -124,7 +148,7 @@ test("live representatives use dispatched native ports and missing recovery port
       else {
         assert.equal(entry.implementation, "pending-implementation");
         assert.equal(entry.expectedSourceRoot, `bench/live/apps/${row.app}`);
-        assert.throws(() => deploymentDescriptor(group, row.app, entry.id, binding(manifest("catalog-page", "express").configuration)), /pending native implementation/);
+        assert.throws(() => deploymentDescriptor(group, row.app, entry.id, binding(manifest("catalog-page", "express").configuration)), /implementation.*source-present/);
       }
     }
   }
@@ -138,7 +162,7 @@ test("live representatives use dispatched native ports and missing recovery port
   assert.equal(gin.builds.app.context, "bench/live/apps/gin");
   assert.match(gin.runtime, /Go 1\.27\.3/);
   assert.equal(manifest("recoverable-live", "laravel").implementation, "pending-implementation");
-  assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /pending native implementation/);
+  assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /implementation.*source-present/);
   assert.equal(manifest("recoverable-live", "topcoat").configuration, null);
   const corten = manifest("recoverable-live", "corten");
   assert.equal(corten.configuration, null); assert.equal(corten.implementation, "pending-implementation");
@@ -159,7 +183,7 @@ test("client-heavy manifests describe the current native builder, driver and gen
     assert.ok(c.sourceRefs.includes("bench/client-heavy/observer.mjs"));
     assert.match(c.server, /run\.mjs.*static/);
     assert.doesNotMatch(JSON.stringify(c), /bench\/browser\/(?:build\.mjs|serve\.mjs|apps\/state)/);
-    assert.deepEqual(deploymentDescriptor("client-heavy", entry.app, entry.id, binding(c)).configuration.command, c.command);
+    assert.throws(() => deploymentDescriptor("client-heavy", entry.app, entry.id, binding(c)), /implementation.*source-present|reservation adapter not integrated/);
   }
   const corten = entries.find((e) => e.app === "corten").configuration;
   assert.ok(corten.sourceRefs.includes("bench/browser/gen/src/bin/client.rs"));
@@ -174,7 +198,7 @@ test("new descriptor binds exact commit/images/config/work/budgets and evidence 
   assert.match(d.descriptorSha256, /^[a-f0-9]{64}$/); assert.equal(screenDeployment(d).status, "pending");
   const b = binding(d.configuration);
   for (const modified of [{ ...b, commit: "b".repeat(40) }, { ...b, images: { app: `sha256:${"b".repeat(64)}` } },
-    { ...b, budget: { ...budget, work: { ...budget.work, rate: 151 } } }, { ...b, evidence: { ...b.evidence, implementation: { path: "receipt.json", sha256: "b".repeat(64) } } }]) {
+    { ...b, budget: { ...budget, options: { ...budget.options, rate: 151 } } }, { ...b, evidence: { ...b.evidence, implementation: { path: "receipt.json", sha256: "b".repeat(64) } } }]) {
     const next = deploymentDescriptor(d.group, d.app, d.deployment, modified);
     assert.notEqual(next.descriptorSha256, d.descriptorSha256); assert.equal(next.contractSha256, d.contractSha256);
   }
@@ -184,8 +208,9 @@ test("new descriptor binds exact commit/images/config/work/budgets and evidence 
   assert.throws(() => deploymentDescriptor(d.group, d.app, d.deployment, { ...b, images: { app: "image:tag" } }), /immutable image/);
   assert.throws(() => deploymentDescriptor(d.group, d.app, d.deployment, { ...b, commit: "38301e1" }), /exact commit/);
   assert.throws(() => deploymentDescriptor(d.group, d.app, d.deployment, { ...b, configuration: { ...d.configuration, workers: "two" } }), /silently changed/);
-  assert.throws(() => deploymentDescriptor(d.group, d.app, "express-bun", { ...b, configuration: null }), /implemented configuration/);
-  assert.throws(() => deploymentDescriptor(d.group, d.app, "express-bun", { ...b, configuration: { ...d.configuration, framework: "Bun.serve" } }), /retain the native framework/);
+  assert.throws(() => deploymentDescriptor(d.group, d.app, "express-bun", { ...b, configuration: null }), /implementation.*source-present/);
+  const alternative = deploymentPlan("localized-marketplace").apps.find((row) => row.app === "django").deployments.find((d) => d.id === "django-gunicorn-sync");
+  assert.throws(() => deploymentDescriptor("localized-marketplace", "django", alternative.id, binding({ ...alternative.configuration, framework: "Bun.serve" }, emptyEvidence(), "localized-marketplace")), /retain the native framework/);
   for (const path of ["../escape.json", "C:/escape.json", "/absolute.json", "https://example.com/receipt.json", "folder\\receipt.json", "receipt.json:stream", "folder/./receipt.json", "folder//receipt.json"]) {
     assert.throws(() => deploymentDescriptor(d.group, d.app, d.deployment, { ...b, evidence: { ...b.evidence, implementation: { path, sha256: "a".repeat(64) } } }), /relative local/);
   }
@@ -241,30 +266,33 @@ test("fixed selection preserves all apps and phases, equal budgets and complete 
   assert.equal(verifyPhaseSelection(selection, selection.selectionSha256, observed), true);
   assert.throws(() => verifyPhaseSelection(selection, selection.selectionSha256, { ...observed, descriptorSha256: "b".repeat(64) }), /switched mid-round/);
   assert.throws(() => verifyPhaseSelection(selection, "b".repeat(64), observed), /changed after reservation/);
-  assert.throws(() => verifyPhaseSelection({ ...selection, budget: { enlarged: true } }, selection.selectionSha256, observed), /content changed/);
+  assert.throws(() => verifyPhaseSelection({ ...selection, budget: { ...budget, options: { ...budget.options, rate: 151 } } }, selection.selectionSha256, observed), /content changed/);
+  assert.throws(() => verifyPhaseSelection({ ...selection, budget: { unrelated: true } }, selection.selectionSha256, observed), /reservation/);
   assert.throws(() => fixedSelection(group, descriptors.slice(1)), /all registry apps/);
   assert.throws(() => fixedSelection(group, [descriptors[0], descriptors[0], ...descriptors.slice(2)]), /all registry apps/);
   const changed = [...descriptors];
   const d = descriptors[1];
-  changed[1] = deploymentDescriptor(group, d.app, d.deployment, { ...binding(d.configuration), budget: { ...budget, larger: true } });
+  changed[1] = deploymentDescriptor(group, d.app, d.deployment, { ...binding(d.configuration), budget: { ...budget, options: { ...budget.options, rate: 151 } } });
   assert.throws(() => fixedSelection(group, changed), /equal total deployment budgets/);
   changed[1] = deploymentDescriptor(group, d.app, d.deployment, { ...binding(d.configuration), commit: "b".repeat(40) });
   assert.throws(() => fixedSelection(group, changed), /fixed round commit/);
   const i = descriptors.findIndex((d) => d.app === "express"), current = descriptors[i];
   changed.splice(0, changed.length, ...descriptors);
-  changed[i] = deploymentDescriptor(group, "express", "express-bun", { ...binding({ ...current.configuration, runtime: "Bun", command: ["bun", "server.mjs"] }) });
-  assert.throws(() => fixedSelection(group, changed), /complete independent group qualification/);
+  assert.throws(() => deploymentDescriptor(group, "express", "express-bun", binding({ ...current.configuration, runtime: "Bun", command: ["bun", "server.mjs"] })), /implementation.*source-present/);
 });
 
 test("an alternative needs a replayed representative comparison and independently reviewed whole-group tradeoff", () => {
-  const base = fixture(), current = base.descriptor;
-  const candidate = deploymentDescriptor(current.group, current.app, "express-bun", binding({ ...current.configuration, runtime: "Bun", command: ["bun", "server.mjs"] }));
+  const base = fixture(descriptor("localized-marketplace", "django")), current = base.descriptor;
+  const alternative = deploymentPlan(current.group).apps.find((row) => row.app === current.app).deployments.find((d) => d.id === "django-gunicorn-sync");
+  const candidate = deploymentDescriptor(current.group, current.app, alternative.id, binding(alternative.configuration, emptyEvidence(), current.group));
   const alt = fixture(candidate, { baseline: current });
   const files = new Map([...base.files, ...alt.files]);
   const validators = { ...alt.validators, readArtifact: (path) => { assert.ok(files.has(path), `missing ${path}`); return files.get(path); } };
   assert.equal(screenDeployment(alt.descriptor, validators).status, "reviewed-for-selection");
   const descriptors = selectedApps(current.group).map((app) => app === current.app ? alt.descriptor : descriptor(current.group, app));
-  assert.equal(fixedSelection(current.group, descriptors, validators).selected.find((row) => row.app === current.app).deployment, "express-bun");
+  assert.equal(fixedSelection(current.group, descriptors, validators).selected.find((row) => row.app === current.app).deployment, alternative.id);
+  const pending = [...descriptors]; pending[pending.findIndex((d) => d.app === current.app)] = candidate;
+  assert.throws(() => fixedSelection(current.group, pending), /complete independent group qualification/);
   assert.equal(screenDeployment(alt.descriptor, { readArtifact: validators.readArtifact }).status, "pending");
   for (const mutate of [
     (r) => { delete r.performance.baseline; },
@@ -276,7 +304,7 @@ test("an alternative needs a replayed representative comparison and independentl
     const brokenFiles = new Map([...base.files, ...broken.files]);
     assert.throws(() => screenDeployment(broken.descriptor, { ...validators, readArtifact: (path) => brokenFiles.get(path) }));
   }
-  assert.throws(() => screenDeployment(alt.descriptor, { ...validators, verifyNative: ({ descriptor }) => descriptor.deployment === "express-bun" }), /native implementation\/parity validation did not pass/);
+  assert.throws(() => screenDeployment(alt.descriptor, { ...validators, verifyNative: ({ descriptor }) => descriptor.deployment === alternative.id }), /native implementation\/parity validation did not pass/);
 });
 
 test("CLI has only read-only inventory, no execution, tuning, receipt-promotion or app-subset flags", () => {
@@ -285,4 +313,79 @@ test("CLI has only read-only inventory, no execution, tuning, receipt-promotion 
   assert.deepEqual(Object.keys(outcomeKinds), ["app-capacity", "harness-failure", "functional-failure"]);
   const source = readFileSync(new URL("deployments.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bfetch\(|\bwriteFileSync\(|\bspawn\(/);
+});
+
+test("pending source integration and implementation cannot bind representatives, candidates or fixed selections", () => {
+  const base = descriptor(); let pending = 0;
+  for (const group of groupNames) for (const row of deploymentPlan(group).apps) for (const entry of row.deployments) {
+    if (entry.implementation === "source-present") continue;
+    const configuration = entry.configuration ?? row.deployments[0].configuration ?? manifest("catalog-page", "express").configuration;
+    assert.throws(() => deploymentDescriptor(group, row.app, entry.id, binding(configuration)), /implementation.*source-present/);
+    const forged = uncheckedBinding(base, { group, app: row.app, deployment: entry.id, contractSha256: contractSha256(group), cases: definition(group).cases, configuration });
+    assert.throws(() => screenDeployment(forged), /implementation.*source-present/);
+    pending++;
+  }
+  assert.ok(pending > 0, "pending candidates must remain in the catalog");
+  const catalog = selectedApps("catalog-page").map((app) => descriptor("catalog-page", app));
+  catalog[catalog.findIndex((d) => d.app === "express")] = uncheckedBinding(base, { deployment: "express-bun" });
+  assert.throws(() => fixedSelection("catalog-page", catalog), /implementation.*source-present/);
+  assert.throws(() => fixedSelection("client-heavy", selectedApps("client-heavy").map((app) => {
+    const entry = manifest("client-heavy", app);
+    return deploymentDescriptor("client-heavy", app, entry.id, binding(entry.configuration));
+  })), /implementation.*source-present|reservation adapter not integrated/);
+  const savedClient = selectedApps("client-heavy").map((app) => {
+    const entry = manifest("client-heavy", app);
+    return uncheckedBinding(base, { group: "client-heavy", app, deployment: entry.id, configuration: entry.configuration,
+      images: { screen: `sha256:${"a".repeat(64)}` }, cases: definition("client-heavy").cases, contractSha256: contractSha256("client-heavy") });
+  });
+  assert.throws(() => fixedSelection("client-heavy", savedClient), /implementation.*source-present|reservation adapter not integrated/, "six rehashed saved descriptors cannot bypass the implementation/reservation gates");
+});
+
+test("truthy or incomplete budgets cannot bind even a complete equal catalog selection", () => {
+  const entry = manifest("catalog-page", "express");
+  for (const bad of ["x", ["x"], { cpus: -1 }, { unrelated: true }]) {
+    assert.throws(() => deploymentDescriptor("catalog-page", "express", entry.id, { ...binding(entry.configuration), budget: bad }), /reservation/);
+    assert.throws(() => fixedSelection("catalog-page", selectedApps("catalog-page").map((app) => {
+      const current = manifest("catalog-page", app);
+      return deploymentDescriptor("catalog-page", app, current.id, { ...binding(current.configuration), budget: bad });
+    })), /reservation/);
+    const forged = selectedApps("catalog-page").map((app) => uncheckedBinding(descriptor("catalog-page", app), { budget: bad }));
+    assert.throws(() => fixedSelection("catalog-page", forged), /reservation/);
+    assert.throws(() => screenDeployment(forged[0]), /reservation/);
+  }
+});
+
+test("native reservations validate actual work, all container resources, process scope, placement and edge before comparison", () => {
+  for (const group of ["catalog-page", "json-api", "localized-marketplace"]) {
+    const valid = nativeBudget(group);
+    assert.equal(validateDeploymentBudget(group, valid), valid);
+    const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE" }[group];
+    const pinned = nativeBudget(group, { [`${prefix}_APP_CPUS`]: "1", [`${prefix}_API_CPUS`]: "2-3", [`${prefix}_LOAD_CPUS`]: "4-7" });
+    assert.equal(validateDeploymentBudget(group, pinned), pinned);
+    const invalid = [
+      (b) => { b.schema = "unknown"; }, (b) => { b.group = "hardening"; }, (b) => { b.runner = "bench/live/run.mjs"; },
+      (b) => { delete b.options.duration; }, (b) => { b.options.rate = "150"; }, (b) => { b.options.passes = 2; },
+      (b) => { b.options.duration = 301; }, (b) => { b.options.startupTimeout = -1; }, (b) => { b.options.checkOnly = true; },
+      (b) => { b.options.apps.pop(); }, (b) => { b.options.unrelated = true; },
+      (b) => { b.cpus.app.quota = -1; }, (b) => { b.cpus.app.quota = 2; }, (b) => { b.cpus.app.cpuset = "0"; b.cpus.api.cpuset = "0"; },
+      (b) => { delete b.resources.upstream; }, (b) => { b.resources.app.memoryBytes = -1; }, (b) => { b.resources.app.memoryBytes *= 2; },
+      (b) => { b.resources.app.processes = "main-process-only"; }, (b) => { b.resources.load.sharedMemoryBytes = 123; },
+      (b) => { delete b.resources.sampler; }, (b) => { b.host.cpu = 1; }, (b) => { b.host.processes = []; },
+      (b) => { b.edge = { cpu: 1, memoryBytes: 100 }; }, (b) => { b.unrelated = true; },
+    ];
+    for (const mutate of invalid) {
+      const bad = structuredClone(valid); mutate(bad);
+      assert.throws(() => validateDeploymentBudget(group, bad));
+    }
+    const i = manifest(group, "aspnet"), d = deploymentDescriptor(group, i.app, i.id, binding(i.configuration, emptyEvidence(), group));
+    for (const mutate of invalid) {
+      const bad = structuredClone(valid); mutate(bad);
+      assert.throws(() => deploymentDescriptor(group, i.app, i.id, { ...binding(i.configuration, emptyEvidence(), group), budget: bad }));
+      assert.throws(() => fixedSelection(group, selectedApps(group).map((app) => uncheckedBinding(descriptor(group, app), { budget: bad }))));
+    }
+    assert.equal(screenDeployment(d).status, "pending", "valid reservation is not qualification");
+  }
+  for (const group of groupNames.filter((group) => !["catalog-page", "json-api", "localized-marketplace"].includes(group))) assert.throws(() => validateDeploymentBudget(group, budget), /reservation adapter not integrated/);
+  const alternative = deploymentPlan("localized-marketplace").apps.find((row) => row.app === "django").deployments.find((d) => d.id === "django-gunicorn-sync");
+  assert.throws(() => deploymentDescriptor("localized-marketplace", "django", alternative.id, binding({ ...alternative.configuration, edge: "unbudgeted reverse proxy" }, emptyEvidence(), "localized-marketplace")), /edge topology/);
 });
