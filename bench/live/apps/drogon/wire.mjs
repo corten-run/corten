@@ -40,6 +40,10 @@ function messages(network) {
   return messages;
 }
 export const wireEvents = network => messages(network).filter(message => message.kind === 'event').map(message => message.event);
+export const wireResumes = network => messages(network).filter(message => message.kind === 'ready')
+  .map(({ from, status }) => ({ from, status }));
+export const wireResources = network => messages(network).filter(message => ['ready', 'overflow'].includes(message.kind))
+  .map(message => message.resources);
 export function wireSnapshots(network) {
   return network.filter(record => record.kind === 'response' && new URL(record.url).pathname === '/parity/snapshot').map(record => {
     assert.equal(record.status, 200); const value = JSON.parse(record.body);

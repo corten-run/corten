@@ -8,6 +8,12 @@ benchmark oracle. The first HTTP page renders the authoritative rows on the
 server, including safe HTML attribute/text escaping. Ordinary upserts preserve
 the keyed DOM node; removes delete it and reinserts create a new node.
 
+The shared native runner registers this port for both bounded and native-feed
+profiles. Its wire binding extracts original ready/overflow resource receipts
+and resume metadata as well as events and snapshots. Registration is not group
+qualification: the runner still requires the complete native evidence gates.
+Older captures keep their recorded missing-port outcome after registration.
+
 ## Protocol
 
 The HTTP controls are `/parity/configure`, `/parity/publish`, `/parity/control`,

@@ -38,6 +38,11 @@ const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${p
 
 // These are the dispatched keyed live applications, not historical price transports.
 const liveNative = freeze({
+  drogon: { framework: "Drogon native keyed WebSocket application", runtime: "Drogon 1.9.14 / C++17 native release",
+    build: "CMake Release; pinned Drogon SDK; native CTest before runtime image", server: "Drogon WebSocketController / browser WebSocket",
+    workers: "one native process; one Drogon event-loop thread; acknowledged bounded per-reader queues", command: ["/app/server"],
+    environment: { PORT: "8080" }, refs: ["CMakeLists.txt", "src/feed.cc", "src/feed.h", "src/main.cc", "static/client.js", "static/index.html", "wire.mjs"],
+    middleware: "native /parity controls, SSR keyed table, WebSocket transport, one in-flight application message per reader; unknown native/kernel buffers remain unknown" },
   express: { framework: "Express native SSE application", runtime: "Node 24", build: "npm ci --omit=dev --ignore-scripts",
     server: "Express response SSE / browser EventSource", workers: "one Node application process; bounded per-reader queues",
     command: ["node", "server.mjs"], environment: { PORT: "8080" }, refs: ["package.json", "package-lock.json", "server.mjs", "client.js"],

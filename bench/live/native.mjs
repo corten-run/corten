@@ -14,6 +14,8 @@ const legacyPorts = Object.freeze({
 
 // These are separate application ports, not historical price-forwarding endpoints.
 export const nativePorts = Object.freeze({ ...legacyPorts,
+  drogon: { directory: "drogon", transport: "Drogon WebSocketController / bounded acknowledged reader queues / browser WebSocket",
+    image: "cb-parity-live-drogon", wire: "drogon-live", wireModule: "./apps/drogon/wire.mjs" },
   corten: { directory: "corten", transport: "corten_feed::Feed / native subscribe() and keyed views / browser EventSource", image: "cb-parity-live-corten",
     profiles: ["native-feed"], wire: "corten-feed", rootContext: true, dockerfile: "Dockerfile.parity", buildTimeoutMs: 1200000 },
 });

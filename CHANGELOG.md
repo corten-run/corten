@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A native Drogon keyed live application uses its own acknowledged WebSocket
+  delivery, bounded reader queues, snapshot recovery and reader-scoped cleanup.
+  Group registration preserves original wire observations and historical missing
+  outcomes; bounded correctness diagnostics are not a completed timing baseline.
+
 - Native workload-group driver entry points retain all selected contenders and explicit
   failure/unsupported coverage. Deployment manifests separate representative production
   choices from performance candidates and bind qualification to exact native evidence.
