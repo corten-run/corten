@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.AspNetCore.Http.Timeouts;
 
 namespace ItemPage.Pages;
 
+[RequestTimeout("Marketplace")]
 public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
 {
     public MarketplaceRecord Record { get; private set; } = null!;
@@ -21,7 +23,8 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
         if (alerts is not null && (Request.Headers["Sec-Fetch-Site"] == "cross-site"
             || (Request.Headers.ContainsKey("Origin") && Request.Headers.Origin != $"{Request.Scheme}://{Request.Host}")))
             return StatusCode(StatusCodes.Status403Forbidden);
-        var record = await source.Get(id);
+        var traceParent = Request.Headers["traceparent"].ToString();
+        var record = await source.Get(id, HttpContext.RequestAborted, traceParent);
         if (record is null) return NotFound();
         Record = record;
         Locale = locale;
@@ -31,7 +34,8 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
         AllOffers = Request.Query["offers"] == "all";
         if (alerts is not null)
         {
-            var form = await Request.ReadFormAsync();
+            // The first, cancellation-aware read precedes MVC antiforgery validation.
+            var form = Request.Form;
             var email = form["email"].FirstOrDefault() ?? "";
             Message = Format.Alert(email, form["target_price"].FirstOrDefault() ?? "", record.Title, out var targetMinor);
             Response.Headers.CacheControl = "no-store";
