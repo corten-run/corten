@@ -214,6 +214,30 @@ export function liveViewAlertReply(payload, sent) {
     && typeof frame[4].response === "object" && !Array.isArray(frame[4].response));
 }
 
+export function liveViewPollSession(pollUrl, action) {
+  try {
+    const url = new URL(pollUrl), target = new URL(action);
+    if (url.origin !== target.origin || url.username || url.password || url.pathname !== "/live/longpoll"
+      || url.searchParams.getAll("vsn").length !== 1 || url.searchParams.get("vsn") !== "2.0.0"
+      || url.searchParams.getAll("token").length !== 1 || !url.searchParams.get("token")) return null;
+    return url.searchParams.get("token");
+  } catch { return null; }
+}
+
+export function liveViewPollEvent(body, pollUrl, action, fields, rootId) {
+  const session = liveViewPollSession(pollUrl, action);
+  if (!session || typeof body !== "string") return null;
+  const target = new URL(action);
+  const socketUrl = `${target.protocol === "https:" ? "wss:" : "ws:"}//${target.host}/live/websocket?vsn=2.0.0`;
+  const matches = body.split("\n").map((payload) => liveViewAlertEvent(payload, socketUrl, action, fields, rootId)).filter(Boolean);
+  return matches.length === 1 ? { ...matches[0], session } : null;
+}
+
+export function liveViewPollReply(envelope, sent) {
+  return !!(envelope && envelope.status === 200 && Array.isArray(envelope.messages)
+    && envelope.messages.some((value) => liveViewAlertReply(typeof value === "string" ? value : JSON.stringify(value), sent)));
+}
+
 const liveViewObservers = new WeakMap();
 export function observeAlertTransport(page) {
   if (liveViewObservers.has(page)) return;
@@ -230,6 +254,25 @@ export function observeAlertTransport(page) {
       if (pending?.socket === socket && liveViewAlertReply(payload, pending.sent)) pending.resolve();
     });
   });
+  page.on("request", (request) => {
+    if (!pending || pending.sent || request.method() !== "POST"
+      || request.headers()["content-type"]?.split(";", 1)[0] !== "application/x-ndjson") return;
+    const sent = liveViewPollEvent(request.postData(), request.url(), pending.action, pending.fields, pending.rootId);
+    if (sent) Object.assign(pending, { sent, request, acknowledged: false, replied: false });
+  });
+  page.on("response", async (response) => {
+    const expected = pending;
+    if (!expected?.request || response.status() !== 200
+      || liveViewPollSession(response.url(), expected.action) !== expected.sent.session
+      || response.headers()["content-type"]?.split(";", 1)[0] !== "application/json") return;
+    try {
+      const envelope = await response.json();
+      if (pending !== expected) return;
+      if (response.request() === expected.request && envelope?.status === 200) expected.acknowledged = true;
+      else if (response.request().method() === "GET" && liveViewPollReply(envelope, expected.sent)) expected.replied = true;
+      if (expected.acknowledged && expected.replied) expected.resolve();
+    } catch { /* Failed transport bodies cannot acknowledge a save. */ }
+  });
   page.once("close", () => pending?.reject(new Error("Page closed waiting for LiveView alert reply")));
   liveViewObservers.set(page, (expected) => {
     assert.ok(!pending, "one alert submission at a time");
@@ -240,6 +283,12 @@ export function observeAlertTransport(page) {
     });
     return { promise, dispose: () => { clearTimeout(timer); pending = null; } };
   });
+}
+
+export async function alertReady(page, form, javaScriptEnabled) {
+  if (!javaScriptEnabled) return;
+  const rootId = await form.evaluate((f) => f.matches('[phx-submit="save"]') ? f.closest("[data-phx-session]")?.id : null);
+  if (rootId) await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), rootId);
 }
 
 export async function submitAlert(page, form, javaScriptEnabled) {
@@ -253,25 +302,25 @@ export async function submitAlert(page, form, javaScriptEnabled) {
     return f.matches('.marketplace__alert form[phx-submit="save"]') && root?.id
       ? { rootId: root.id, fields: [...new FormData(f)] } : null;
   });
-  let response;
-  if (liveView) {
-    const observe = liveViewObservers.get(page);
-    assert.ok(observe, "observeAlertTransport must run before goto for LiveView");
-    await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), liveView.rootId);
-    const wait = observe({ action, ...liveView });
-    try { await Promise.all([wait.promise, form.locator('[type="submit"]').click()]); }
-    finally { wait.dispose(); }
-  } else [response] = await Promise.all([
-    page.waitForResponse((r) => alertResponse(r, action, fields)),
-    form.locator('[type="submit"]').click(),
-  ]);
+  let response, liveViewAcknowledged = false;
   try {
+    if (liveView) {
+      const observe = liveViewObservers.get(page);
+      assert.ok(observe, "observeAlertTransport must run before goto for LiveView");
+      await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), liveView.rootId);
+      const wait = observe({ action, ...liveView });
+      try { await Promise.all([wait.promise, form.locator('[type="submit"]').click()]); liveViewAcknowledged = true; }
+      finally { wait.dispose(); }
+    } else [response] = await Promise.all([
+      page.waitForResponse((r) => alertResponse(r, action, fields)),
+      form.locator('[type="submit"]').click(),
+    ]);
     await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
     await page.waitForLoadState("networkidle");
   } catch (error) {
     let timer;
     const diagnostic = await Promise.race([
-      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response ? response.text().catch(() => "unavailable") : "matching phx_reply received"]),
+      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response ? response.text().catch(() => "unavailable") : liveViewAcknowledged ? "matching phx_reply received" : "matching phx_reply not received"]),
       new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
     ]).finally(() => clearTimeout(timer));
     const transport = response ? `POST ${response.status()} ${response.url()}` : `LiveView ${action}`;
@@ -351,6 +400,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         ["todd@example.test", locale === "en-US" ? "1234.50" : "1234,50", labels[locale].alert_set.replace("{email}", "todd@example.test").replace("{title}", catalog.item_1.title).replace("{price}", new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1234.5))]]) {
         await visit("item_1");
         const form = page.locator(".marketplace__alert form");
+        await alertReady(page, form, javaScriptEnabled);
         await form.locator('[name="email"]').fill(email); await form.locator('[name="target_price"]').fill(price);
         // HTML email validation would otherwise prevent the invalid-email server case.
         await form.evaluate((f) => { f.noValidate = true; });

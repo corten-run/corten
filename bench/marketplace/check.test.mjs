@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { chromium } from "@playwright/test";
 import { records } from "./fixtures.mjs";
 import { expectedPage, labels } from "./records.mjs";
-import { alertResponse, alignNumberSpaces, comparePage, compareStyles, liveViewAlertEvent, liveViewAlertReply, navigationFinished, numericFields, numericText, observeAlertTransport, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
+import { alertReady, alertResponse, alignNumberSpaces, comparePage, compareStyles, liveViewAlertEvent, liveViewAlertReply, liveViewPollEvent, liveViewPollReply, liveViewPollSession, navigationFinished, numericFields, numericText, observeAlertTransport, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
 import { referenceHtml } from "./reference.mjs";
 
 test("LiveView form frames require the native root, origin, V2 types and exact unique fields", () => {
@@ -51,7 +51,7 @@ test("LiveView success replies require the saved frame's join ref, ref and topic
   assert.equal(liveViewAlertReply(JSON.stringify(reply), null), false);
 });
 
-for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? "rejects an unrelated reply despite a changed message" : "uses the existing socket without a POST or document reload"}`, { timeout: 25000 }, async () => {
+for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? "rejects an unrelated reply despite a changed message" : "uses the existing socket without a POST or document reload"}`, { timeout: 45000 }, async () => {
   // Use Playwright's existing ws server, not a mocked browser WebSocket.
   const { wsServer } = createRequire(import.meta.url)("playwright-core/lib/utilsBundle");
   const server = createServer((req, res) => res.end(`<div id="phx-alert" data-phx-session="fixture"><section class="marketplace__alert">
@@ -88,7 +88,11 @@ for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? 
     page.on("request", (req) => { if (req.method() === "POST") posts++; });
     await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/fr-FR/item_1`);
     await page.waitForFunction(() => document.querySelector('[data-phx-session]').classList.contains('phx-connected'));
-    if (unrelated) await assert.rejects(submitAlert(page, page.locator("form"), true), /LiveView alert phx_reply: Timeout 15000ms exceeded/);
+    if (unrelated) await assert.rejects(submitAlert(page, page.locator("form"), true), (error) => {
+      assert.match(error.cause.message, /LiveView alert phx_reply: Timeout 15000ms exceeded/);
+      assert.match(error.message, /Alert LiveView .*fields=.*native@example.test.*matching phx_reply not received/);
+      return true;
+    });
     else for (let i = 0; i < 2; i++) await submitAlert(page, page.locator("form"), true);
     assert.equal(await page.locator(".marketplace__message").textContent(), "saved");
     assert.equal(navigations, 1); assert.equal(posts, 0);
@@ -97,6 +101,77 @@ for (const unrelated of [false, true]) test(`native LiveView save ${unrelated ? 
     for (const socket of sockets.clients) socket.terminate();
     await new Promise((resolve) => sockets.close(resolve));
     server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("LiveView long-poll saves require a unique native session, exact form and correlated reply", () => {
+  const action = "https://localhost/marketplace/fr-FR/item_1", poll = "https://localhost/live/longpoll?vsn=2.0.0&token=native";
+  const fields = [["email", "native@example.test"], ["target_price", "1234,50"], ["_csrf_token", "fixture"]];
+  const frame = JSON.stringify(["1", "2", "lv:phx-alert", "event", { type: "form", event: "save", value: new URLSearchParams(fields).toString() }]);
+  const sent = liveViewPollEvent(frame + "\n", poll, action, fields, "phx-alert");
+  assert.deepEqual(sent, { joinRef: "1", ref: "2", topic: "lv:phx-alert", session: "native" });
+  for (const url of [poll.replace("https:", "http:"), poll.replace("localhost", "foreign.test"),
+    poll.replace("localhost", "user:password@localhost"), poll.replace("longpoll", "other"),
+    poll + "&token=other", poll.replace("token=native", "token="), poll.replace("2.0.0", "1.0.0"), poll + "&vsn=2.0.0"])
+    assert.equal(liveViewPollSession(url, action), null);
+  for (const body of [frame + "\n" + frame, "{}", frame.replace("native%40example.test", "other%40example.test")])
+    assert.equal(liveViewPollEvent(body, poll, action, fields, "phx-alert"), null);
+  const reply = ["1", "2", "lv:phx-alert", "phx_reply", { status: "ok", response: {} }];
+  assert.equal(liveViewPollReply({ status: 200, messages: [JSON.stringify(reply)] }, sent), true);
+  assert.equal(liveViewPollReply({ status: 200, messages: [reply] }, sent), true);
+  for (const envelope of [{ status: 200 }, { status: 500, messages: [reply] }, { status: 200, messages: [] },
+    { status: 200, messages: [["1", "other", ...reply.slice(2)]] }, { status: 200, messages: ["{"] }])
+    assert.equal(liveViewPollReply(envelope, sent), false);
+});
+
+for (const wrongSession of [false, true]) test(`native LiveView long-poll ${wrongSession ? "rejects another session despite a POST acknowledgement and changed DOM" : "observes two saves after readiness without editing native transport"}`, { timeout: 45000 }, async () => {
+  const fields = { email: "native@example.test", target_price: "1234,50" };
+  const replies = new Map();
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/live/longpoll") {
+      res.setHeader("content-type", "application/json");
+      if (req.method === "POST") {
+        const chunks = []; for await (const chunk of req) chunks.push(chunk);
+        const [join, ref, topic] = JSON.parse(Buffer.concat(chunks).toString().trim());
+        replies.set(ref, [join, ref, topic, "phx_reply", { status: "ok", response: {} }]);
+        res.end(JSON.stringify({ status: 200 }));
+      } else res.end(JSON.stringify({ status: 200, messages: [replies.get(url.searchParams.get("ref"))] }));
+      return;
+    }
+    res.setHeader("content-type", "text/html");
+    res.end(`<div id="phx-alert" data-phx-session="fixture"><section class="marketplace__alert">
+      <form method="post" phx-submit="save"><input name="email"><input name="target_price"><button type="submit">Send</button></form>
+      <p class="marketplace__message"></p></section></div><script>
+      let ref = 0;
+      setTimeout(() => { document.querySelector('form').reset(); document.querySelector('#phx-alert').classList.add('phx-connected'); }, 50);
+      document.querySelector('form').onsubmit = async event => {
+        event.preventDefault(); const value = new URLSearchParams(new FormData(event.target)).toString();
+        const frame = ['1', String(++ref), 'lv:phx-alert', 'event', {type:'form', event:'save', value}];
+        const url = '/live/longpoll?vsn=2.0.0&token=native';
+        await fetch(url, {method:'POST', headers:{'content-type':'application/x-ndjson'}, body:JSON.stringify(frame)+'\\n'});
+        await fetch('/live/longpoll?vsn=2.0.0&token=${wrongSession ? "other" : "native"}&ref='+ref);
+        document.querySelector('.marketplace__message').textContent = 'saved';
+      };</script>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage(); observeAlertTransport(page);
+    await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/fr-FR/item_1`);
+    const form = page.locator("form");
+    await alertReady(page, form, true);
+    await form.locator('[name="email"]').fill(fields.email); await form.locator('[name="target_price"]').fill(fields.target_price);
+    if (wrongSession) await assert.rejects(submitAlert(page, form, true), (error) => {
+      assert.match(error.cause.message, /LiveView alert phx_reply: Timeout 15000ms exceeded/);
+      assert.match(error.message, /Alert LiveView .*fields=.*native@example.test.*message="saved".*matching phx_reply not received/);
+      return true;
+    });
+    else for (let i = 0; i < 2; i++) await submitAlert(page, form, true);
+    assert.equal(await page.locator('.marketplace__message').textContent(), "saved");
+    assert.equal(await form.locator('[name="email"]').inputValue(), fields.email);
+  } finally {
+    await browser.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
   }
 });
 

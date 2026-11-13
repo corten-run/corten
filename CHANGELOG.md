@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure.
+
 - Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
   lifecycle, gate and cleanup observations. A read-only validator replays their
   complete matrix and exact aggregates; older results remain historical when

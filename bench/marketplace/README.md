@@ -286,6 +286,11 @@ The browser gate observes native enhanced form transports without replacing them
 Livewire alert updates must identify the same-origin marketplace alert component,
 item, locale, save call and submitted values. The complete rendered-page and
 valid/invalid alert assertions still run, as do JavaScript-disabled plain forms.
+LiveView alert saves retain their native WebSocket or long-poll transport. The gate
+waits for the connected render before filling, matches the exact form, root and
+reply references, and requires a successful POST acknowledgement and a reply from
+the same session when polling. A POST acknowledgement or changed message alone
+does not prove that save completed. Transport failures retain bounded diagnostics.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the unchanged
 `marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
