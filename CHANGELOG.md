@@ -12,6 +12,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Release archives carry GitHub build provenance and a `SHA256SUMS` file, checked before the
+  GitHub release is created; the install guide documents verification on Unix and PowerShell.
+
 - A read-only saved client-heavy evidence validator checks source identities,
   native bundles, observations, outcomes and resource/timing consistency without
   executing archived code or contacting a network. Historical v1 captures remain

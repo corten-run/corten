@@ -2545,10 +2545,13 @@ rules something out.
     exists, so its first version is published by hand; and a test of each of those on every
     platform. Such a launcher would also have to check the binary before running it. Its publish
     step could write each archive's sha256 into the package from the same run's builds, so that
-    is a constraint on its design, not a reason against it. That the release's own archives carry
-    no checksum, signature or attestation is a gap of its own, which `cargo binstall` and a manual
-    download already have
+    is a constraint on its design, not a reason against it. The release workflow now gives its
+    archives GitHub build provenance and a plain `SHA256SUMS` file, verified before the GitHub
+    release is created, closing the separate manual-download verification gap
     ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
+    `cargo binstall` does not consume that file or GitHub attestations, so verification before
+    installation uses the [manual download](guide/getting-started.md#verify-a-prebuilt-binary).
+    That evidence does not make an npm initializer's extra channel or lifecycle any smaller.
 
     The name is held all the same, as [Releasing](../CONTRIBUTING.md#releasing) holds `corten` on
     crates.io should it come free ("take it only so no one else can"): `npm create corten` runs
@@ -2607,7 +2610,8 @@ rules something out.
 
     Last checked: 2026-11-12, the npm registry (`npm view` of the four names, the `corten` and
     `corten-run` scopes' package lists) and npm's trusted-publishing, `npm trust` (npm 11.21.2) and
-    name-squatting documentation, read at `684a5395f`.
+    name-squatting documentation, read at `684a5395f`; 2026-11-13, release verification against
+    actions/attest-build-provenance 4.2.2 and cargo-binstall 1.27.0's metadata and signing docs.
 
 44. <a id="choice-slow-part-link"></a>**A slow part no stream will bring is a link the app writes to
     its own page with a query field that reads the part in, not a marker Corten reads.** A

@@ -58,6 +58,10 @@ jobs:
           - { target: aarch64-apple-darwin, os: macos-15 }
           - { target: x86_64-pc-windows-msvc, os: windows-2025 }
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
@@ -68,10 +72,14 @@ jobs:
       - if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path target/${{ matrix.target }}/release/corten.exe -DestinationPath corten-${{ matrix.target }}.zip
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: corten-${{ matrix.target }}.*
       - uses: actions/upload-artifact@v7
         with:
           name: corten-${{ matrix.target }}
           path: corten-${{ matrix.target }}.*
+          if-no-files-found: error
 
   publish:
     needs: [checks, version, binaries]
@@ -104,15 +112,29 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      attestations: read
     steps:
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
+      - name: Write SHA256SUMS
+        run: sha256sum corten-*.tgz corten-*.zip > SHA256SUMS
+      - name: Verify every release archive
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          for archive in corten-*.tgz corten-*.zip; do
+            grep -Fx -- "$(sha256sum "$archive")" SHA256SUMS
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF"
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
       # CHANGELOG-<version>.md is there only when the notes were too long for the release itself.
       - run: |
           shopt -s nullglob
           extra=(CHANGELOG-*.md)
           shopt -u nullglob
-          gh release create "$GITHUB_REF_NAME" corten-* "${extra[@]}" --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" corten-* SHA256SUMS "${extra[@]}" --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}

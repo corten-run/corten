@@ -294,9 +294,15 @@ Every published crate (all of `crates/`) shares the version in `[workspace.packa
 released together; the examples have `publish = false`. Pushing a tag `vX.Y.Z` runs the
 `Release` workflow (`.github/workflows/release.yml`): the checks, a `corten` binary for each
 platform, `cargo publish --workspace` (each crate after the ones it depends on), then a GitHub
-release with the binaries and the version's `CHANGELOG.md` section as its notes (attached as
-`CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub release allows).
+release with the binaries, `SHA256SUMS` and the version's `CHANGELOG.md` section as its notes
+(attached as `CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub
+release allows).
 It stops before publishing when the tag, the workspace version and the changelog disagree.
+Each archive is attested in its build job with GitHub artifact attestations. Before creating
+the GitHub release, the workflow checks every archive's checksum and verifies its provenance
+against this release workflow, source commit and tag; missing or invalid evidence fails the
+job. This gate runs after crates.io publishing, not before it. Users verify downloaded archives
+as in [Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary).
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.

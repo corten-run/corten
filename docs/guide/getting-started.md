@@ -43,6 +43,48 @@ a pin is being bumped (`Cargo.toml` asks for another revision than the lock was 
 cargo resolves it), the note compares the command with the revision `Cargo.toml` asks for, and
 says nothing for a new tag or branch. A path dependency (a checkout of corten) is not compared.
 
+## Verify a prebuilt binary
+
+The [GitHub releases](https://github.com/corten-run/corten/releases) have `corten-<target>.tgz`
+archives (Linux and macOS) and `corten-x86_64-pc-windows-msvc.zip` (Windows). Releases built by
+the current workflow include `SHA256SUMS` and GitHub build provenance for every archive; older
+releases may have neither. Download your archive and `SHA256SUMS` from the same release into
+one directory. Before extracting or running the binary, use the
+[GitHub CLI](https://cli.github.com/manual/gh_attestation_verify) to verify the archive against
+its build, and GNU coreutils to check its checksum (substitute your archive's name):
+
+```sh
+gh attestation verify corten-x86_64-unknown-linux-musl.tgz -R corten-run/corten
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Both commands must succeed. `--ignore-missing` skips the other platforms' archives, not a bad
+checksum. Provenance establishes which repository, workflow and source commit produced the
+archive; check the reported source against the release tag. A checksum alone detects damaged
+downloads but does not establish who built them if both archive and checksum file are replaced.
+
+In PowerShell, verify provenance the same way and compare the selected archive's checksum:
+
+```powershell
+$archive = 'corten-x86_64-pc-windows-msvc.zip'
+gh attestation verify $archive -R corten-run/corten
+if ($LASTEXITCODE -ne 0) { throw 'Build provenance verification failed' }
+$entry = @(Get-Content SHA256SUMS | Where-Object { ($_ -split '  ', 2)[1] -eq $archive })
+if ($entry.Count -ne 1) { throw "Expected one checksum for $archive" }
+$expected = ($entry[0] -split '  ', 2)[0]
+if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
+    throw "Checksum verification failed for $archive"
+}
+```
+
+`cargo binstall` does not consume `SHA256SUMS` or GitHub attestations automatically: its
+[supported metadata](https://github.com/cargo-bins/cargo-binstall/blob/main/SUPPORT.md) has no
+checksum-file setting, and its [signature support](https://github.com/cargo-bins/cargo-binstall/blob/main/SIGNING.md)
+uses minisign, not GitHub attestations. To verify a prebuilt binary before installing it,
+download and verify it as above, then extract it and put `corten` (`corten.exe` on Windows) in
+a directory on your `PATH`. Alternatively, `cargo install corten-cli` builds from the source
+crate whose checksum crates.io stores.
+
 ## What `corten new` writes
 
 | Path | What |
