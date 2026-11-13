@@ -7,6 +7,8 @@ export const resourceCoveragePolicy = Object.freeze({ targetIntervalMs: 500, max
 export function mergeResourceSamples(before, stream, after) {
   for (const samples of [before, stream, after]) assert.ok(Array.isArray(samples) && samples.every((s, i) =>
     Number.isFinite(s.t) && (!i || s.t >= samples[i - 1].t)), "resource stream clock moved backwards before merge");
+  assert.ok(before.length && after.length && after[0].t >= before.at(-1).t,
+    "resource boundary clock moved backwards before merge");
   return [...before, ...stream, ...after].toSorted((a, b) => a.t - b.t);
 }
 

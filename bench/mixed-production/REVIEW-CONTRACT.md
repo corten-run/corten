@@ -37,13 +37,21 @@ byte-forwarding endpoint followed by the runner's own JSON parser. Timing theref
 also requires an independent source audit, using `verifyNativeReceipt` from the
 existing JSON group. The runner never generates a positive audit.
 
+Every automatic build uses a retained Git archive of its resolved commit, not the
+working directory. Docker receives that exact archive buffer on stdin with its native
+Dockerfile. Ignored or untracked files cannot enter `COPY . .`. Each context archive is
+hashed, compared with the source snapshot and bound in image labels and audit identity;
+the archive and extracted source remain evidence. `--build` resolves HEAD unless an
+explicit `--build-ref` is given. Dirty harness diagnostics do not build uncommitted app
+changes and cannot qualify measurements.
+
 Fresh automatic builds save `<app>-source-audit-request.json` with an `identity` and
 `sourceFiles` containing exact hashes of all tracked native build-context inputs.
 Corten's Dockerfile copies the root context, so its audit binds the entire tracked
 checkout, including workspace Cargo manifests, crates and build configuration. Inputs are
 compared before/after building and again at measurement admission. The source audit
 identity includes app, marketplace payload, mixed contract hash, native source commit,
-configuration profile and the input-set hash. The measured immutable image must have
+configuration profile, context-archive hash and the input-set hash. The measured immutable image must have
 the matching clean build labels. An audit remains source-specific across fresh builds;
 it is not an arbitrary positive declaration about an image tag.
 

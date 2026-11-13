@@ -18,16 +18,22 @@ export function commands(cwd) {
   return {
     get interrupted() { return interrupted; },
     dispose() { for (const signal of ["SIGINT", "SIGTERM"]) process.off(signal, interrupt); },
-    async command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
+    async command(binary, args, { timeout = 30000, file, cleanup = false, input } = {}) {
       if (interrupted && !cleanup) throw new Error("JSON run interrupted");
-      const child = spawn(binary, args, { cwd, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+      if (input !== undefined && !Buffer.isBuffer(input)) throw new TypeError("command input must be a Buffer");
+      const child = spawn(binary, args, { cwd, windowsHide: true, detached: process.platform !== "win32", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
       children.add(child); let output = "", error = "", expired = false;
+      let inputError;
+      if (input !== undefined) {
+        child.stdin.on("error", (failure) => { inputError = failure; });
+        child.stdin.end(input);
+      }
       child.stdout.on("data", (c) => { output = (output + c).slice(-8 * 1024 * 1024); if (file) appendFileSync(file, c); });
       child.stderr.on("data", (c) => { error = (error + c).slice(-65536); if (file) appendFileSync(file, c); });
       const timer = setTimeout(() => { expired = true; kill(child); }, timeout);
       try {
         const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
-        if (code !== 0 || expired || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? "timeout" : `exit ${code}`}\n${error || output}`);
+        if (code !== 0 || expired || inputError || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? "timeout" : `exit ${code}`}\n${inputError?.message || error || output}`);
         return output.trim();
       } finally { clearTimeout(timer); children.delete(child); }
     },

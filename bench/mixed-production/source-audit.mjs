@@ -24,6 +24,7 @@ export function sourceSnapshot(root, paths) {
 export function sourceAuditIdentity(summary, app) {
   return { app, payload: "marketplace-v2", key: "mixed-native-source", commit: summary.provenance.nativeSource.commit,
     contractSha256: summary.contractSha256, nativeProfile: summary.options.profile,
+    contextArchiveSha256: summary.apps[app].contextArchiveSha256,
     buildInputsSha256: sha256(JSON.stringify(summary.apps[app].buildInputs)) };
 }
 
@@ -33,6 +34,8 @@ export function verifySourceAudit(receipt, expected, snapshot, image) {
   assert.equal(image?.buildCommit, expected.commit, "native audit/image source commit differs");
   assert.equal(image.buildDirty, "false", "native audit needs a clean fresh image");
   assert.equal(image.profile, expected.nativeProfile, "native audit/image configuration differs");
+  assert.match(expected.contextArchiveSha256 ?? "", /^[a-f0-9]{64}$/, "immutable Docker build context required");
+  assert.equal(image.contextArchiveSha256, expected.contextArchiveSha256, "native image/audited Docker archive differs");
   assert.match(image.id ?? "", /^sha256:[0-9a-f]{64}$/, "immutable native image required");
   assert.deepEqual(receipt?.sourceFiles, snapshot.sourceFiles, "independent source audit must cover every exact native build input");
   assert.deepEqual(receipt.traceContext, { requestScoped: true, delayedWorkRetainsTrace: true, noAmbientCurrentOperation: true },

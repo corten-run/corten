@@ -47,6 +47,11 @@ saved. Build failures do not drop candidates. The runner removes its built image
 capture and never replaces the shared marketplace tags. Default/reused images may be stale:
 their labels and IDs are evidence of what actually ran, not proof they match the checkout.
 
+Automatic builds archive the resolved commit and send the retained, hashed context bytes
+to Docker on stdin. Ignored/untracked files and uncommitted app changes are never build
+inputs. Without `--build-ref`, this commit is HEAD; commit native app changes before a
+fresh diagnostic build. The harness's own dirty status is still recorded separately.
+
 `--build-ref <7-to-40-digit-local-commit-hash>` requires `--build`. It archives that exact local
 commit into the round's `build-source/`, builds its unchanged native Dockerfiles and records
 the resolved commit, tree and archive hash separately from harness provenance. It never

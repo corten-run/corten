@@ -86,13 +86,13 @@ function auditVector() {
     "bench/fullstack/apps/express/lib/source.mjs": Buffer.from("export const get = async id => (await fetch(base + id)).json();") };
   const sourceFiles = Object.entries(files).map(([path, body]) => ({ path, sha256: sha256(body) }));
   const expected = { app: "express", payload: "marketplace-v2", key: "mixed-native-source", commit: "a".repeat(40),
-    contractSha256: "b".repeat(64), nativeProfile: "defaults", buildInputsSha256: sha256(JSON.stringify(sourceFiles)) };
+    contractSha256: "b".repeat(64), nativeProfile: "defaults", contextArchiveSha256: "f".repeat(64), buildInputsSha256: sha256(JSON.stringify(sourceFiles)) };
   const receipt = { schema: "json-api-native-audit/v1", identity: expected, auditor: "independent-unit-vector", auditedAt: "2026-11-12T00:00:00Z",
     traceContext: { requestScoped: true, delayedWorkRetainsTrace: true, noAmbientCurrentOperation: true },
     findings: [], verified: { typedCompleteRecord: true, nativeSerialization: true, noOutputCache: true, noJsonPassthrough: true,
       fixtureParsedAtStartup: true, requestTimeFetchParse: true, upstreamErrors: true }, sourceFiles };
   return { expected, snapshot: { files, sourceFiles }, receipt, image: { id: `sha256:${"c".repeat(64)}`,
-    buildCommit: expected.commit, buildDirty: "false", profile: "defaults" } };
+    buildCommit: expected.commit, buildDirty: "false", profile: "defaults", contextArchiveSha256: expected.contextArchiveSha256 } };
 }
 
 test("source audits bind the independent review to exact complete inputs, source commit, native configuration and built image", () => {
@@ -110,6 +110,8 @@ test("source audits bind the independent review to exact complete inputs, source
     (x) => { x.image.buildCommit = "d".repeat(40); },
     (x) => { x.image.buildDirty = "true"; },
     (x) => { x.image.profile = "matched"; },
+    (x) => { x.image.contextArchiveSha256 = "0".repeat(64); },
+    (x) => { delete x.expected.contextArchiveSha256; },
     (x) => { x.receipt.identity = { ...x.expected, contractSha256: "e".repeat(64) }; },
     (x) => { x.snapshot.files["bench/fullstack/apps/express/server.mjs"] = Buffer.from("res.end(await upstream.arrayBuffer());"); },
   ]) { const bad = auditVector(); mutate(bad); assert.throws(() => verifySourceAudit(bad.receipt, bad.expected, bad.snapshot, bad.image)); }
@@ -117,7 +119,7 @@ test("source audits bind the independent review to exact complete inputs, source
 
 test("source requests are derived from native build inputs, not positive qualification declarations", () => {
   const x = auditVector(), summary = { provenance: { nativeSource: { commit: x.expected.commit } }, contractSha256: x.expected.contractSha256,
-    options: { profile: "defaults" }, apps: { express: { buildInputs: x.snapshot.sourceFiles } } };
+    options: { profile: "defaults" }, apps: { express: { buildInputs: x.snapshot.sourceFiles, contextArchiveSha256: x.expected.contextArchiveSha256 } } };
   assert.deepEqual(sourceAuditIdentity(summary, "express"), x.expected);
   assert.deepEqual(buildInputPaths("express"), ["bench/fullstack/apps/express"]);
   assert.deepEqual(buildInputPaths("corten"), ["."]);
@@ -128,6 +130,10 @@ test("source requests are derived from native build inputs, not positive qualifi
 test("resource merge refuses an originally backwards stream rather than sorting away the evidence", () => {
   const sample = (t) => ({ t, cpu: 1, mem: 64 });
   assert.throws(() => mergeResourceSamples([sample(0)], [sample(500), sample(1000), sample(900), sample(1500)], [sample(2000)]));
+  assert.throws(() => mergeResourceSamples([sample(1000)], [sample(1500), sample(2000), sample(2500), sample(3000)], [sample(500)]));
+  assert.throws(() => mergeResourceSamples([], [sample(500)], [sample(1000)]));
+  assert.deepEqual(mergeResourceSamples([sample(1000)], [sample(500), sample(1500), sample(2000)], [sample(2000)]),
+    [sample(500), sample(1000), sample(1500), sample(2000), sample(2000)]);
 });
 
 test("mixed extraction accepts a separate local native POST action without changing the captured DOM", { skip: !process.env.MIXED_BROWSER_TESTS }, async () => {

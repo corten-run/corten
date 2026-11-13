@@ -10,6 +10,7 @@ import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { buildInputPaths, sourceSnapshot, sourceAuditIdentity } from "./source-audit.mjs";
+import { nativeBuildContext } from "./build-context.mjs";
 
 export function parseArgs(args) {
   const options = { round: args[0], apps: null, images: null, readbacks: null, nativeAudits: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
@@ -81,7 +82,7 @@ export async function run(args) {
   writeFileSync(join(folder, "plan.json"), JSON.stringify(plan, null, 2));
   writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
-  summary.provenance.harnessFiles = Object.fromEntries(["capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
+  summary.provenance.harnessFiles = Object.fromEntries(["build-context.mjs", "capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const own = async (args, name) => {
     active.add(name);
@@ -127,14 +128,14 @@ export async function run(args) {
     let buildRoot = repo;
     const nativeSource = summary.provenance.nativeSource = { kind: "checkout", commit: summary.provenance.commit,
       dirty: summary.provenance.dirty.length > 0 };
-    if (options.buildRef) {
+    if (options.build) {
       nativeSource.kind = "git-archive";
-      nativeSource.commit = await io.command("git", ["rev-parse", "--verify", `${options.buildRef}^{commit}`]);
+      nativeSource.commit = await io.command("git", ["rev-parse", "--verify", `${options.buildRef ?? summary.provenance.commit}^{commit}`]);
       nativeSource.tree = await io.command("git", ["rev-parse", `${nativeSource.commit}^{tree}`]);
       nativeSource.dirty = false;
       buildRoot = join(folder, "build-source"); mkdirSync(buildRoot);
       const archive = join(folder, "build-source.tar");
-      await io.command("git", ["archive", "--format=tar", "--output", archive, nativeSource.commit], { timeout: 60000 });
+      await io.command("git", ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", "--output", archive, nativeSource.commit], { timeout: 60000 });
       nativeSource.archiveSha256 = sha256(readFileSync(archive));
       await io.command("tar", ["-xf", archive, "-C", buildRoot], { timeout: 60000 });
     }
@@ -154,15 +155,16 @@ export async function run(args) {
         entry.buildInputs = sourceSnapshot(buildRoot, paths).sourceFiles;
         const tag = options.build ? `${runId}-${app}` : images[app] ?? `cb-marketplace-${app}`;
         if (options.build) {
-          const context = app === "corten" ? buildRoot : join(buildRoot, "bench/fullstack/apps", app);
-          const dockerfile = app === "corten" ? join(buildRoot, "bench/marketplace/corten/Dockerfile") : join(context, "Dockerfile");
+          const context = await nativeBuildContext(io, folder, nativeSource.commit, app, entry.buildInputs);
+          entry.contextArchiveSha256 = context.sha256;
           builtImages.add(tag);
           // Benchmark apps are excluded from the Rust workspace and require their existing
           // ecosystem Dockerfiles, not a replacement Cargo build or ad hoc target volume.
           await docker(["build", "--label", "agent.owner=codex", "--label", `agent.task=${runId}`,
             "--label", `run.corten.marketplace.commit=${nativeSource.commit}`, "--label", `run.corten.marketplace.dirty=${nativeSource.dirty}`,
+            "--label", `run.corten.mixed-production.context=${context.sha256}`,
             "--label", `run.corten.marketplace.profile=${options.profile}`, "--build-arg", `PROFILE=${options.profile}`,
-            "-t", tag, "-f", dockerfile, context], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`) });
+            "-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });
           if (!options.buildRef) {
             assert.equal(await io.command("git", ["rev-parse", "HEAD"]), summary.provenance.commit, "checkout changed during build");
             assert.equal(await io.command("git", ["status", "--porcelain"]), summary.provenance.dirty, "working tree changed during build");
@@ -173,6 +175,7 @@ export async function run(args) {
         entry.image = { tag, id: image.Id, repoDigests: image.RepoDigests, bytes: image.Size,
           buildCommit: image.Config.Labels?.["run.corten.marketplace.commit"] ?? null,
           buildDirty: image.Config.Labels?.["run.corten.marketplace.dirty"] ?? null,
+          contextArchiveSha256: image.Config.Labels?.["run.corten.mixed-production.context"] ?? null,
           profile: image.Config.Labels?.["run.corten.marketplace.profile"] ?? null };
         writeFileSync(join(folder, `${app}-source-audit-request.json`), JSON.stringify({ schema: "mixed-native-source-audit-request/v1",
           identity: sourceAuditIdentity(summary, app), sourceFiles: entry.buildInputs }, null, 2));
