@@ -67,3 +67,8 @@ a later socket/write failure does not roll back an already committed alert. No n
 upstream cancellation or disconnect guarantee is claimed. Read-only handlers are
 unchanged. Minor-unit tests cover exact integers above 2^53, signed-64-bit maximum,
 and rejection beyond that bound.
+
+For API-sourced alert writes, required/non-nullable fields are checked recursively
+against the existing native Go record declarations, including nested rows, before
+native decoding. Optional pointer fields retain their native null/missing behavior.
+No separate schema or record types, dependencies, or GET-path rules are introduced.

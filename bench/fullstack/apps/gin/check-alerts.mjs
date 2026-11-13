@@ -31,9 +31,13 @@ const upstream = createServer((req, res) => {
   if (id === 'bad-json') { res.end('{'); return; }
   if (id === 'trailing-json') { res.end(JSON.stringify(records.item_1) + 'garbage'); return; }
   if (id === 'incomplete') { res.end('{}'); return; }
-  if (id === 'bad-rating' || id === 'mismatched') {
+  if (['bad-rating', 'mismatched', 'missing-title', 'null-title', 'missing-quantity'].includes(id)) {
     const record = structuredClone(records.item_1);
+    if (id !== 'mismatched') record.id = id;
     if (id === 'bad-rating') { record.id = id; record.listings[0].rating_hundredths = 65535; }
+    if (id === 'missing-title') delete record.title;
+    if (id === 'null-title') record.title = null;
+    if (id === 'missing-quantity') delete record.listings[0].quantity;
     res.end(JSON.stringify(record)); return;
   }
   if (!records[id]) { res.writeHead(404); res.end('{}'); return; }
@@ -134,7 +138,7 @@ try {
           const response = await context.request.post(`${base}/marketplace/en-US/failed`, { form: { email, target_price: '1' } });
           assert.equal(response.status(), app === 'topcoat' ? 500 : 502, 'preserve each native source-error status');
           assert.deepEqual(await read(), expected, 'source failure mutated storage');
-          for (const id of ['bad-json', 'trailing-json', 'incomplete', 'bad-rating', 'mismatched']) {
+          for (const id of ['bad-json', 'trailing-json', 'incomplete', 'bad-rating', 'mismatched', 'missing-title', 'null-title', 'missing-quantity']) {
             let response;
             try { response = await context.request.post(`${base}/marketplace/en-US/${id}`, { form: { email, target_price: '1' } }); } catch {}
             assert.deepEqual(await read(), expected, `malformed upstream ${id} mutated storage`);

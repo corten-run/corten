@@ -193,6 +193,38 @@ func TestAcceptedNativeAlertMinorBounds(t *testing.T) {
 	}
 }
 
+func TestAlertRejectsMissingAndNullNativeRecordFields(t *testing.T) {
+	data, _ := json.Marshal(sampleMarketplace())
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(data, &fields)
+	if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"title", "description", "images", "id", "listings"} {
+		original := fields[key]
+		for _, value := range []json.RawMessage{nil, json.RawMessage("null")} {
+			if value == nil {
+				delete(fields, key)
+			} else {
+				fields[key] = value
+			}
+			data, _ := json.Marshal(fields)
+			if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err == nil {
+				t.Fatal(key, "accepted missing/null field")
+			}
+		}
+		fields[key] = original
+	}
+	var rows []map[string]json.RawMessage
+	_ = json.Unmarshal(fields["listings"], &rows)
+	delete(rows[0], "quantity")
+	fields["listings"], _ = json.Marshal(rows)
+	data, _ = json.Marshal(fields)
+	if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err == nil {
+		t.Fatal("accepted missing nested field")
+	}
+}
+
 func TestAlertSessionExpiryCapacityAndTLS(t *testing.T) {
 	store := &alertStore{}
 	request := httptest.NewRequest("POST", "https://market.test/marketplace/en-US/item_1", nil)
