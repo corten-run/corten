@@ -476,13 +476,14 @@ pub(crate) fn reaches(route: &str, prefix: &str) -> bool {
 /// under it, segment by segment as matchit 0.8.4 matches: a parameter matches the text before it
 /// in its segment and then the rest of that segment, which may be empty where the route goes on
 /// after it but not where it ends the route (`/shop{x}/desk` matches `/shop/desk`, `/cor{x}`
-/// never `/cor`); a catch-all, the text before it and at least one more byte of the path. A
-/// `prefix` that ends in `/` (Corten's own, `/corten/`) holds only the paths with a segment after
-/// it. Narrower than [`reaches`], which counts only the text before the first parameter:
+/// never `/cor`); a catch-all, the text before it and at least one more byte of the path.
+/// matchit 0.8.5 and 0.8.6 refuse an empty value before a `/`, which only narrows what matches.
+/// A `prefix` that ends in `/` (Corten's own, `/corten/`) holds only the paths with a segment
+/// after it. Narrower than [`reaches`], which counts only the text before the first parameter:
 /// `/{slug}` reaches `/shop/desk` but cannot match under it. The router holds no text after a
-/// parameter (Corten strips it, and matchit refuses it); were there some, the parameter would
-/// match one byte or more before it, as Corten checks it. It reads the route alone: a static
-/// route beside it may answer such a path first.
+/// parameter (Corten strips it, and matchit 0.8.4 refuses it); were there some, the parameter
+/// would match one byte or more before it, as matchit 0.8.6 matches it. It reads the route alone:
+/// a static route beside it may answer such a path first.
 pub(crate) fn can_match_under(route: &str, prefix: &str) -> bool {
     if !route.contains('{') || under(prefix.strip_suffix('/').filter(|p| !p.is_empty()).unwrap_or(prefix), route) {
         return false;

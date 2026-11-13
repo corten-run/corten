@@ -4084,31 +4084,89 @@ fn a_route_reaches_an_api_through_a_parameter_before_it() {
     assert!(!reaches("/{*rest}", "/"), "nothing is outside the root");
 }
 
+/// `/api/items`'s routes that can match under it with no empty value, so in every matchit 0.8.
+const CAN_UNDER_API_ITEMS: [&str; 7] =
+    ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/ap{*rest}"];
+
+/// Each prefix, a route written outside it, and whether the route can match a path at or under
+/// the prefix, as matchit 0.8.4 matches (#1213).
+fn can_match_under_cases() -> Vec<(&'static str, &'static str, bool)> {
+    let mut cases = Vec::new();
+    let mut add = |prefix: &'static str, can: bool, routes: &[&'static str]| {
+        cases.extend(routes.iter().map(|&route| (prefix, route, can)));
+    };
+    add("/api/items", true, &CAN_UNDER_API_ITEMS);
+    // An empty value before a `/` (`/api{x}/items` matches `/api/items`), and one byte at the end.
+    add("/api/items", true, &["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}", "/api/item{x}"]);
+    add("/api/items", false, &["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/api/items/{id}"]);
+    // A value that ends the route is never empty: `/api{x}` is never `/api`.
+    add("/api/items", false, &["/b{*rest}", "/api{x}", "/api/items{x}"]);
+    // Corten's own `/corten/` holds only paths with a segment after it.
+    add("/corten/", true, &["/{a}/{b}", "/{*rest}", "/{a}/", "/corten{x}/{b}", "/cor{x}/{b}"]);
+    add("/corten/", false, &["/{slug}", "/cor{x}", "/corten{x}", "/x/{a}", "/corten/{file}"]);
+    // Beside an inner area at `/shop/desk`, and beside one at `/shop`.
+    add("/shop/desk", true, &["/shop/{id}", "/shop{x}/desk", "/{a}/{b}", "/shop/{id}/more"]);
+    add("/shop/desk", false, &["/{slug}", "/shop/x{id}", "/{a}/x/{b}", "/shops/{id}"]);
+    add("/shop", true, &["/{slug}"]);
+    // Text after a parameter, which the router does not hold: one byte or more before it.
+    add("/api/a.json", true, &["/api/{x}.json"]);
+    add("/api/.json", false, &["/api/{x}.json"]);
+    // The root holds every route, so none is outside it.
+    add("/", false, &["/{*rest}"]);
+    cases
+}
+
 /// Counted by segment, a route can match under a prefix only where each of its segments can
 /// match the prefix's, as matchit 0.8.4 matches: a parameter the rest of one segment after the
 /// text before it, empty only before a `/` the route goes on with, a catch-all the rest (#1213).
 #[test]
 fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
-    use crate::api::can_match_under;
-    let can = ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/ap{*rest}"];
-    // An empty value before a `/` (`/api{x}/items` matches `/api/items`), and one byte at the end.
-    let empty = ["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}", "/api/item{x}"];
-    for route in can.into_iter().chain(empty) {
-        assert!(can_match_under(route, "/api/items"), "{route}");
+    for (prefix, route, can) in can_match_under_cases() {
+        assert_eq!(crate::api::can_match_under(route, prefix), can, "{route} under {prefix}");
     }
-    let cannot = ["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/api/items/{id}"];
-    // A value that ends the route is never empty: `/api{x}` is never `/api`.
-    for route in cannot.into_iter().chain(["/b{*rest}", "/api{x}", "/api/items{x}"]) {
-        assert!(!can_match_under(route, "/api/items"), "{route}");
+}
+
+/// Never a false no: with each route alone in a router of the matchit this build resolves, every
+/// path at or under a prefix that it matches is one `can_match_under` says it can reach. A route
+/// that matchit refuses (text after a parameter, before 0.8.6) is left out (#1213).
+#[test]
+fn can_match_under_never_says_no_where_matchit_matches() {
+    use crate::api::{can_match_under, under};
+    let cases = can_match_under_cases();
+    let mut prefixes: Vec<&str> = cases.iter().map(|&(prefix, _, _)| prefix).collect();
+    let mut routes: Vec<&str> = cases.iter().map(|&(_, route, _)| route).collect();
+    for list in [&mut prefixes, &mut routes] {
+        list.sort_unstable();
+        list.dedup();
     }
-    // Corten's own `/corten/` holds only paths with a segment after it.
-    for route in ["/{a}/{b}", "/{*rest}", "/{a}/", "/corten{x}/{b}", "/cor{x}/{b}"] {
-        assert!(can_match_under(route, "/corten/"), "{route}");
+    let (mut held, mut matched) = (Vec::new(), std::collections::BTreeSet::new());
+    for route in routes {
+        let mut router = matchit::Router::new();
+        if router.insert(route, ()).is_err() {
+            continue;
+        }
+        held.push(route);
+        for &prefix in &prefixes {
+            // A route written inside the prefix is the prefix's own, never asked about.
+            if under(prefix.strip_suffix('/').filter(|inner| !inner.is_empty()).unwrap_or(prefix), route) {
+                continue;
+            }
+            let base = prefix.trim_end_matches('/');
+            for tail in ["", "/", "//", "/a", "/a/", "/a//", "/a/b", "//b", "/a.json", "/.json"] {
+                let path = format!("{base}{tail}");
+                // As the router's scopes hold them: Corten's own prefixes by their start.
+                let at = if prefix.ends_with('/') { path.starts_with(prefix) } else { under(prefix, &path) };
+                if at && router.at(&path).is_ok() {
+                    assert!(can_match_under(route, prefix), "{route} matches {path}, under {prefix}");
+                    matched.insert((route, prefix));
+                }
+            }
+        }
     }
-    for route in ["/{slug}", "/cor{x}", "/corten{x}", "/x/{a}", "/corten/{file}"] {
-        assert!(!can_match_under(route, "/corten/"), "{route}");
+    // The paths tried reach every route that can match with no empty value, so the check is not empty.
+    for route in CAN_UNDER_API_ITEMS.into_iter().filter(|route| held.contains(route)) {
+        assert!(matched.contains(&(route, "/api/items")), "no path tried under /api/items matches {route}");
     }
-    assert!(can_match_under("/{slug}", "/shop") && !can_match_under("/{*rest}", "/"), "the root holds every route");
 }
 
 /// A top-level API owns its prefix too: a page's catch-all does not answer a path under it (#539).
