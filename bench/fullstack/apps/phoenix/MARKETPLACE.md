@@ -17,6 +17,10 @@ then synchronizes those edits through the same non-writing `change` event.
 After mount, the callback no longer preserves values against server patches;
 rejoins use LiveView's ordinary form recovery. No subtree ignores, replacement
 form transport or changes to the normal 2,500 ms long-poll fallback are involved.
+Both LiveView transports use Phoenix's `check_origin: :conn`: the browser origin
+must match the request connection's scheme, host and port, rather than the
+endpoint URL's default `localhost` host. This permits same-origin loopback runs
+without allowing foreign origins or disabling native session/CSRF checks.
 
 `MARKETPLACE_SOURCE=fixture` loads `MARKETPLACE_FIXTURE_PATH` once at startup
 (default `/fixtures/marketplace.json`). Otherwise each request reads one record
@@ -64,6 +68,7 @@ From the repository root, with Playwright installed and the native image running
 ```sh
 node bench/fullstack/apps/rails/test/native-alerts.mjs phoenix http://localhost:8080
 node bench/fullstack/apps/phoenix/test/native-preconnect.mjs http://localhost:8080
+node bench/fullstack/apps/phoenix/test/native-origins.mjs http://localhost:8080
 ```
 
 This checks actual native LiveView events, independent HTTP readbacks with the
@@ -81,3 +86,9 @@ It checks retained values, no pre-submit mutation, real native save and independ
 readback. Delayed cases also disconnect/reconnect the native socket with blurred
 edits, reject an invalid recovered target, and accept a later valid edit without
 reloading or hiding subsequent server updates.
+
+The origin regression uses the canonical marketplace fixture. It checks real
+WebSocket and long-poll joins and correlated saves on both loopback hostnames,
+then rejects a different host, scheme or port on both transports with the
+browser's valid session and CSRF token. Long-poll is exercised by closing only
+the browser's WebSocket, leaving LiveView's normal fallback timing unchanged.

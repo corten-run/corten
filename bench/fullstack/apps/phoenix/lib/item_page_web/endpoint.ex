@@ -15,8 +15,8 @@ defmodule ItemPageWeb.Endpoint do
   socket "/socket", ItemPageWeb.UserSocket, websocket: true, longpoll: false
 
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [check_origin: :conn, connect_info: [session: @session_options]],
+    longpoll: [check_origin: :conn, connect_info: [session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
   #
