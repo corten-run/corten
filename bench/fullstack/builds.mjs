@@ -150,7 +150,7 @@ export const recipes = {
     ra: { at: 'name="title" value=(&item.|title)>', expect: "title" },
   },
   "axum-maud": {
-    tools: "rust:1-bookworm",
+    tools: "rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31",
     context: "",
     workdir: "/src",
     deps: `cargo fetch --locked ${hostTarget}`,
