@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { schema, registryDigest, groupReady, nativeGroup } from "./plan.mjs";
-import { assemble, verifyArtifacts, digest, targetOutcome } from "./evidence.mjs";
+import { assemble, verifyArtifacts, verifyParity, digest, targetOutcome } from "./evidence.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { validateQualification, qualificationSettings } from "../marketplace/feature-contract.mjs";
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
@@ -20,11 +20,14 @@ export function verify(folder) {
     const out = join(folder, cell.key), manifest = read(join(out, "manifest.json")); verifyArtifacts(out, manifest);
     const settings = read(join(out, "settings.json")), deployment = read(join(out, "deployment.json"));
     const qualification = validateQualification(read(join(out, "qualification.json"))); assert.deepEqual(qualification.missing, cell.nativeMissingFeatures);
+    if (summary.deploymentQualificationVersion === 1) verifyParity(read(join(out, "native-parity.json")), cell.source);
     if (summary.nativeControlsVersion === 1) {
       assert.deepEqual(cell.nativeAssessment, assessNative(read(join(out, "native-controls.json")), qualification));
       assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure");
       if (cell.mode === "deployed-edge") {
-        assert.deepEqual(cell.edgeAssessment, assessNative(read(join(out, "edge-native-controls.json")), qualification));
+        const effective = summary.deploymentQualificationVersion === 1 ? validateQualification(read(join(out, "edge-qualification.json"))) : qualification;
+        if (summary.deploymentQualificationVersion === 1) assert.deepEqual(effective.missing, cell.edgeMissingFeatures);
+        assert.deepEqual(cell.edgeAssessment, assessNative(read(join(out, "edge-native-controls.json")), effective, summary.deploymentQualificationVersion === 1 ? "deployed-edge" : "direct"));
         assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure");
       }
     }

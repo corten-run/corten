@@ -52,10 +52,21 @@ with the existing pinned edge image and generated `nginxConf`, without substitut
 a common renderer or application transport. Node trusts only the generated CA;
 Chromium pins its generated public key. Native form action, encoding, CSRF fields
 and cookies are discovered and submitted successfully before body attacks.
+`deploymentQualificationVersion: 1` additionally runs the unchanged production
+`qualify()` predicate suite through real TLS clients at the edge, including the
+unfinished-header and 950/1,050 connection probes. It stores separate
+`edge-qualification.json` and `native-parity.json`; direct qualification is never
+substituted for effective edge qualification. The TLS adapter changes client
+transport only, not the proxy profile, target, budgets, thresholds or predicates.
+TLS handshakes must complete and validate the generated CA before requests or
+idle connections count. See [native app-owner requirements](NATIVE-GAPS.md) for
+the observed Express/Gin feature gaps and full-matrix acceptance command.
 
 `native-controls.json` separately records allowed/unknown Host responses, the
 actual liveness path found by production qualification, and a negative health
 path. No endpoint means `missing`; a catch-all 200 is `inconclusive`, not live.
+A failed, partial or timed-out negative health request is also inconclusive;
+only a completed negative 4xx distinguishes the endpoint from a catch-all.
 API-source controls retain nonce-mutated page/full JSON responses, exact one-read
 upstream counters, 503/302 refusal, independent liveness under upstream failure,
 and reset/readback receipts. Controls run in the direct and deployed-edge namespace
