@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { host, ownedDroplet, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { host, ownedDroplet, portableEvidenceSegment, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
 const state = () => reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }, "2026-11-13T00:00:00.000Z");
@@ -72,6 +72,27 @@ test("archive keeps raw campaign and required host metadata but rejects hostile 
     assert.throws(() => check([...metadata, ...additions]));
   for (const type of ["l", "h", "b", "c", "p", "s"]) assert.throws(() => check(names, names.map((p, i) => `${i === 4 ? type : p.endsWith("/") ? "d" : "-"}rwx entry`)));
   assert.throws(() => check(names.slice(1))); assert.throws(() => safeArchive(names.join("\n"), "-one"));
+});
+
+test("archive permits exact portable native source and dependency names", () => {
+  const names = ["run.log", "host.txt", "exit-code",
+    "campaign/mixed/build-source/crates/corten/src/assets/unsafe/50%.css",
+    "campaign/mixed/build-source/bench/fullstack/apps/nextjs/pages/[locale]/[id].tsx",
+    "campaign/mixed/build-source/bench/fullstack/apps/tanstack-start/api.marketplace.$id.ts",
+    "campaign/client/vendor/wasi-0.11.1+wasi-snapshot-preview1/Cargo.toml",
+    "campaign/hardening/node_modules/@scope/package/package.json"];
+  safeArchive(names.join("\n") + "\n", names.map(() => "-rwxr-xr-x entry").join("\n") + "\n");
+  for (const name of ["50%.css", "[id].tsx", "api.$id.ts", "+page.svelte", "@scope", "wasi-0.11.1+snapshot", "%2e%2e", "%2F"]) {
+    assert.equal(portableEvidenceSegment(name), true, name);
+  }
+  for (const name of ["", ".", "..", "x.", "space name", "x ", "x\t", "x\n", "x\0", "/x", "x/y", "x\\y", "x:stream",
+    "CON", "nul.json", "COM1.log", "LPT9", "x?", "x*", 'x"', "x<", "x>", "x|", "caf\u00e9", null, ["x"]]) {
+    assert.equal(portableEvidenceSegment(name), false, String(name));
+  }
+  for (const paths of [["campaign/@Scope/x", "campaign/@scope/y"], ["campaign/[Id].tsx", "campaign/[id].tsx"]]) {
+    const entries = ["run.log", "host.txt", "exit-code", ...paths];
+    assert.throws(() => safeArchive(entries.join("\n") + "\n", entries.map(() => "-rwx entry").join("\n") + "\n"), /casing|duplicate/);
+  }
 });
 test("listing terminators cannot erase hostile member bytes and implicit parents retain casing", () => {
   const check = (names) => safeArchive(names.join("\n") + "\n", names.map(() => "-rwxr-xr-x entry").join("\n") + "\n");

@@ -11,6 +11,7 @@ import { inspectJson } from "../../json-api/report.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
 import { admitted } from "../../marketplace/feature-contract.mjs";
 import { inspectRawSupport } from "./raw-support.mjs";
+import { portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const supportedGroups = Object.freeze(["catalog-page", "json-api", "localized-marketplace"]);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -56,8 +57,7 @@ export function syncDirectory(path) {
   const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 function safeName(name) {
-  assert.ok(/^[A-Za-z0-9_.-]+$/.test(name) && name !== "." && name !== ".." && !name.endsWith(".")
-    && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name), "unsafe evidence path segment");
+  assert.ok(portableEvidenceSegment(name), "unsafe evidence path segment");
 }
 export function tree(root) {
   physical(root);

@@ -105,11 +105,9 @@ export function safeArchive(entries, verbose) {
   assert.equal(names.length, types.length, "archive listings differ");
   for (let i = 0; i < names.length; i++) {
     const name = names[i], path = name.endsWith("/") ? name.slice(0, -1) : name;
-    full(name, /[A-Za-z0-9_./-]+/, "archive member");
     assert.ok(name.length <= 4096, "archive member size limit");
     const parts = path.split("/");
-    assert.ok(parts.length <= 64 && parts.every((p) => p && p !== "." && p !== ".." && !p.endsWith(".")
-      && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p)), "unsafe archive path");
+    assert.ok(parts.length <= 64 && parts.every(portableEvidenceSegment), "unsafe archive path");
     // Tar may omit directory entries: every implicit parent has the same casing rule.
     for (let j = 1; j <= parts.length; j++) {
       const prefix = parts.slice(0, j).join("/"), key = prefix.toLowerCase();
@@ -133,6 +131,14 @@ export function safeArchive(entries, verbose) {
     }
   }
   for (const name of ["run.log", "host.txt", "exit-code"]) assert.ok(seen.has(name), `missing ${name}`);
+}
+
+// Native source snapshots include route brackets, npm scopes, Cargo versions
+// and the literal-percent asset fixture. Never decode or normalize these names.
+export function portableEvidenceSegment(name) {
+  return typeof name === "string" && /^[A-Za-z0-9_.@$%+\[\]-]+$/.test(name)
+    && name !== "." && name !== ".." && !name.endsWith(".")
+    && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name);
 }
 
 // Shared with the local kernel fixture. Older systemd ignores DelegateSubgroup;

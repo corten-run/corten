@@ -26,6 +26,10 @@ Corten is pre-1.0, so any minor version may change the API.
 - Keep the native Razor and AOT benchmark CI test SDKs aligned with their production
   Dockerfiles, so a runtime upgrade cannot leave the test jobs on an older SDK.
 
+- Preserve literal route, scoped-package and vendor-version filenames when collecting
+  native benchmark evidence. Collection, archive and artifact namespaces share the
+  portable-name check without decoding names or relaxing traversal, link or collision checks.
+
 - Register the native Rails, Phoenix and Laravel live ports without promoting
   historical captures. Retain Livewire/Reverb wire and DOM evidence, including
   negative HTTP controls and request timings on failed journeys; Laravel's

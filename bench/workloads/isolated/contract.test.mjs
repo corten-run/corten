@@ -301,6 +301,11 @@ test("artifact namespace is exact, required, case-safe and never a positive nati
     assert.throws(() => validateArtifactPaths(b, []), /required/);
   }
   const b = bind("catalog-page"), prefix = `${b.validation.artifactRoot}/`, required = prefix + "summary.json";
+  assert.deepEqual(validateArtifactPaths(b, [required,
+    `${prefix}build-source/pages/[locale]/[id].tsx`, `${prefix}build-source/api.$id.ts`,
+    `${prefix}build-source/50%.css`, `${prefix}vendor/wasi-0.11.1+snapshot/Cargo.toml`,
+    `${prefix}node_modules/@scope/package/package.json`]),
+  { namespace: "verified", nativeEvidence: "unknown", ready: false });
   for (const bad of ["/etc/passwd", "D:/other/summary.json", "bench/catalog/results/c20/summary.json", `${prefix}../summary.json`,
     `${prefix}a//b`, `${prefix}a\\b`, `${prefix}a/./b`, `${prefix}CON.txt`, `${prefix}a.`, `${prefix}a\nb`, `${prefix}a:stream`]) {
     assert.throws(() => validateArtifactPaths(b, [required, bad]), /artifact/);

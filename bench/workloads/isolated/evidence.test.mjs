@@ -40,6 +40,28 @@ test("collection retains the entire tree, empty directories and raw failure byte
   assert.throws(() => durable(join(target, "summary.json"), "success"), /EEXIST/);
   assert.equal(readRegular(join(source, "summary.json")).toString(), '{"complete":false}');
 });
+
+test("collection preserves native repository, vendor and scoped package names exactly", (t) => {
+  const root = temporary(t), source = join(root, "source"), target = join(root, "copy");
+  const paths = [
+    "build-source/crates/corten/src/assets/unsafe/50%.css",
+    "build-source/bench/fullstack/apps/nextjs/pages/marketplace/[locale]/[id].tsx",
+    "build-source/bench/fullstack/apps/tanstack-start/src/routes/api.marketplace.$id.ts",
+    "vendor/wasi-0.11.1+wasi-snapshot-preview1/Cargo.toml",
+    "node_modules/@scope/package/package.json",
+    "src/routes/+page.svelte",
+  ];
+  for (const [index, path] of paths.entries()) {
+    fs.mkdirSync(dirname(join(source, path)), { recursive: true });
+    fs.writeFileSync(join(source, path), Buffer.from([index, 0, 255]));
+  }
+  const manifest = copyEvidence(source, target);
+  assert.deepEqual(tree(source), manifest); assert.deepEqual(tree(target), manifest);
+  for (const [index, path] of paths.entries()) {
+    assert.ok(manifest.entries.some((entry) => entry.path === path && entry.type === "file"));
+    assert.deepEqual(readRegular(join(target, path)), Buffer.from([index, 0, 255]));
+  }
+});
 test("links, junctions, hardlinks, case collisions and unsafe names fail closed", (t) => {
   const root = temporary(t), outside = join(root, "outside"); fs.mkdirSync(outside);
   fs.writeFileSync(join(outside, "secret"), "do not copy");

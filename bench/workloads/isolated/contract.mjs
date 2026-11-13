@@ -20,6 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -320,9 +321,7 @@ export function validateArtifactPaths(binding, paths) {
   for (const path of paths) {
     assert.equal(typeof path, "string", "artifact path must be text");
     assert.ok(path.startsWith(prefix), "artifact outside exact native round root");
-    assert.ok(/^[A-Za-z0-9_./-]+$/.test(path), "unsafe artifact path");
-    for (const part of path.split("/")) assert.ok(part && part !== "." && part !== ".." && !part.endsWith(".")
-      && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part), "unsafe artifact segment");
+    for (const part of path.split("/")) assert.ok(portableEvidenceSegment(part), "unsafe artifact segment");
     const key = path.toLowerCase(); assert.ok(!seen.has(key), "duplicate/case-colliding artifact"); seen.add(key);
   }
   for (const file of binding.validation.required) assert.ok(paths.includes(prefix + file), `missing required native artifact ${file}`);
