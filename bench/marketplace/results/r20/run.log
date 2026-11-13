@@ -1,0 +1,272 @@
+2026-11-12T15:39:53.112Z building corten
+2026-11-12T15:41:12.287Z building nextjs
+2026-11-12T15:41:35.006Z building aspnet
+2026-11-12T15:41:59.390Z building fastapi
+2026-11-12T15:42:22.471Z building express
+2026-11-12T15:42:26.018Z building topcoat
+2026-11-12T15:45:21.579Z building leptos
+2026-11-12T15:50:38.860Z checking corten fixture
+2026-11-12T15:51:56.596Z checking nextjs fixture
+2026-11-12T15:52:45.225Z excluding nextjs fixture: missing pageHeaders, pageScripts, host, live, unfinishedHead, connectionCap
+2026-11-12T15:52:45.605Z checking aspnet fixture
+2026-11-12T15:54:07.151Z checking fastapi fixture
+2026-11-12T15:54:55.501Z excluding fastapi fixture: missing bigHead, live, unfinishedHead, connectionCap
+2026-11-12T15:54:55.869Z checking express fixture
+2026-11-12T15:55:34.414Z excluding express fixture: missing json404, json405, host, live
+2026-11-12T15:55:34.759Z checking topcoat fixture
+2026-11-12T15:56:12.560Z excluding topcoat fixture: missing pageScripts, json404, json405, host, bigHead, live, connectionCap
+2026-11-12T15:56:12.906Z checking leptos fixture
+2026-11-12T15:57:00.749Z excluding leptos fixture: missing crossSite, json404, json405, host, bigHead, live, unfinishedHead, connectionCap
+2026-11-12T15:57:01.089Z checking corten api
+2026-11-12T15:58:30.323Z checking nextjs api
+2026-11-12T15:59:59.683Z excluding nextjs api: missing pageHeaders, pageScripts, host, live, deadline, unfinishedHead, connectionCap
+2026-11-12T16:00:00.049Z checking aspnet api
+2026-11-12T16:01:31.475Z checking fastapi api
+2026-11-12T16:02:30.178Z excluding fastapi api: missing page500, json500, bigHead, live, unfinishedHead, connectionCap
+2026-11-12T16:02:30.570Z checking express api
+2026-11-12T16:03:21.036Z excluding express api: missing json404, json405, json500, host, live
+2026-11-12T16:03:21.405Z checking topcoat api
+2026-11-12T16:04:09.617Z excluding topcoat api: missing pageScripts, page500, json404, json405, json500, host, bigHead, live, connectionCap
+2026-11-12T16:04:09.990Z checking leptos api
+2026-11-12T16:05:08.348Z excluding leptos api: missing crossSite, json404, json405, json500, host, bigHead, live, unfinishedHead, connectionCap
+2026-11-12T16:05:10.774Z cold corten fixture page pass 1
+2026-11-12T16:05:11.626Z warmup corten fixture page pass 1
+2026-11-12T16:05:22.240Z corten fixture page fixed pass 1
+2026-11-12T16:05:38.156Z corten fixture page sat64 pass 1
+2026-11-12T16:05:54.142Z corten fixture page sat256 pass 1
+2026-11-12T16:06:10.494Z cold aspnet fixture page pass 1
+2026-11-12T16:06:12.216Z warmup aspnet fixture page pass 1
+2026-11-12T16:06:22.816Z aspnet fixture page fixed pass 1
+2026-11-12T16:06:38.693Z aspnet fixture page sat64 pass 1
+2026-11-12T16:06:54.586Z aspnet fixture page sat256 pass 1
+2026-11-12T16:07:10.917Z cold corten fixture page pass 1
+2026-11-12T16:07:11.755Z warmup corten fixture page pass 1
+2026-11-12T16:07:22.373Z corten fixture page fixed pass 1
+2026-11-12T16:07:38.252Z corten fixture page sat64 pass 1
+2026-11-12T16:07:54.205Z corten fixture page sat256 pass 1
+2026-11-12T16:08:10.465Z cold aspnet fixture page pass 1
+2026-11-12T16:08:12.095Z warmup aspnet fixture page pass 1
+2026-11-12T16:08:22.719Z aspnet fixture page fixed pass 1
+2026-11-12T16:08:38.585Z aspnet fixture page sat64 pass 1
+2026-11-12T16:08:54.510Z aspnet fixture page sat256 pass 1
+2026-11-12T16:09:10.747Z cold corten fixture page pass 1
+2026-11-12T16:09:11.594Z warmup corten fixture page pass 1
+2026-11-12T16:09:22.197Z corten fixture page fixed pass 1
+2026-11-12T16:09:38.081Z corten fixture page sat64 pass 1
+2026-11-12T16:09:54.078Z corten fixture page sat256 pass 1
+2026-11-12T16:10:10.365Z cold aspnet fixture page pass 1
+2026-11-12T16:10:11.995Z warmup aspnet fixture page pass 1
+2026-11-12T16:10:22.567Z aspnet fixture page fixed pass 1
+2026-11-12T16:10:38.445Z aspnet fixture page sat64 pass 1
+2026-11-12T16:10:54.309Z aspnet fixture page sat256 pass 1
+2026-11-12T16:11:10.556Z cold corten fixture json pass 1
+2026-11-12T16:11:11.362Z warmup corten fixture json pass 1
+2026-11-12T16:11:21.979Z corten fixture json fixed pass 1
+2026-11-12T16:11:37.868Z corten fixture json sat64 pass 1
+2026-11-12T16:11:53.833Z corten fixture json sat256 pass 1
+2026-11-12T16:12:10.091Z cold aspnet fixture json pass 1
+2026-11-12T16:12:11.561Z warmup aspnet fixture json pass 1
+2026-11-12T16:12:22.115Z aspnet fixture json fixed pass 1
+2026-11-12T16:12:37.975Z aspnet fixture json sat64 pass 1
+2026-11-12T16:12:53.864Z aspnet fixture json sat256 pass 1
+2026-11-12T16:13:10.104Z cold corten api page pass 1
+2026-11-12T16:13:10.924Z warmup corten api page pass 1
+2026-11-12T16:13:21.493Z corten api page fixed pass 1
+2026-11-12T16:13:37.389Z corten api page sat64 pass 1
+2026-11-12T16:13:53.390Z corten api page sat256 pass 1
+2026-11-12T16:14:09.670Z cold aspnet api page pass 1
+2026-11-12T16:14:11.286Z warmup aspnet api page pass 1
+2026-11-12T16:14:21.888Z aspnet api page fixed pass 1
+2026-11-12T16:14:37.765Z aspnet api page sat64 pass 1
+2026-11-12T16:14:53.690Z aspnet api page sat256 pass 1
+2026-11-12T16:15:10.107Z cold corten api page pass 1
+2026-11-12T16:15:10.912Z warmup corten api page pass 1
+2026-11-12T16:15:21.482Z corten api page fixed pass 1
+2026-11-12T16:15:37.374Z corten api page sat64 pass 1
+2026-11-12T16:15:53.249Z corten api page sat256 pass 1
+2026-11-12T16:16:09.465Z cold aspnet api page pass 1
+2026-11-12T16:16:11.086Z warmup aspnet api page pass 1
+2026-11-12T16:16:21.725Z aspnet api page fixed pass 1
+2026-11-12T16:16:37.657Z aspnet api page sat64 pass 1
+2026-11-12T16:16:53.704Z aspnet api page sat256 pass 1
+2026-11-12T16:17:10.185Z cold corten api page pass 1
+2026-11-12T16:17:11.043Z warmup corten api page pass 1
+2026-11-12T16:17:21.643Z corten api page fixed pass 1
+2026-11-12T16:17:37.586Z corten api page sat64 pass 1
+2026-11-12T16:17:53.501Z corten api page sat256 pass 1
+2026-11-12T16:18:09.757Z cold aspnet api page pass 1
+2026-11-12T16:18:11.485Z warmup aspnet api page pass 1
+2026-11-12T16:18:22.116Z aspnet api page fixed pass 1
+2026-11-12T16:18:38.056Z aspnet api page sat64 pass 1
+2026-11-12T16:18:54.020Z aspnet api page sat256 pass 1
+2026-11-12T16:19:10.400Z cold corten api json pass 1
+2026-11-12T16:19:11.197Z warmup corten api json pass 1
+2026-11-12T16:19:21.809Z corten api json fixed pass 1
+2026-11-12T16:19:37.762Z corten api json sat64 pass 1
+2026-11-12T16:19:53.694Z corten api json sat256 pass 1
+2026-11-12T16:20:10.012Z cold aspnet api json pass 1
+2026-11-12T16:20:11.532Z warmup aspnet api json pass 1
+2026-11-12T16:20:22.133Z aspnet api json fixed pass 1
+2026-11-12T16:20:38.113Z aspnet api json sat64 pass 1
+2026-11-12T16:20:54.108Z aspnet api json sat256 pass 1
+2026-11-12T16:21:10.406Z cold corten fixture page pass 2
+2026-11-12T16:21:11.280Z warmup corten fixture page pass 2
+2026-11-12T16:21:21.925Z corten fixture page fixed pass 2
+2026-11-12T16:21:37.842Z corten fixture page sat64 pass 2
+2026-11-12T16:21:53.851Z corten fixture page sat256 pass 2
+2026-11-12T16:22:10.193Z cold aspnet fixture page pass 2
+2026-11-12T16:22:11.908Z warmup aspnet fixture page pass 2
+2026-11-12T16:22:22.515Z aspnet fixture page fixed pass 2
+2026-11-12T16:22:38.415Z aspnet fixture page sat64 pass 2
+2026-11-12T16:22:54.344Z aspnet fixture page sat256 pass 2
+2026-11-12T16:23:10.647Z cold corten fixture page pass 2
+2026-11-12T16:23:11.510Z warmup corten fixture page pass 2
+2026-11-12T16:23:22.097Z corten fixture page fixed pass 2
+2026-11-12T16:23:37.977Z corten fixture page sat64 pass 2
+2026-11-12T16:23:53.920Z corten fixture page sat256 pass 2
+2026-11-12T16:24:10.206Z cold aspnet fixture page pass 2
+2026-11-12T16:24:11.820Z warmup aspnet fixture page pass 2
+2026-11-12T16:24:22.401Z aspnet fixture page fixed pass 2
+2026-11-12T16:24:38.285Z aspnet fixture page sat64 pass 2
+2026-11-12T16:24:54.152Z aspnet fixture page sat256 pass 2
+2026-11-12T16:25:10.369Z cold corten fixture page pass 2
+2026-11-12T16:25:11.204Z warmup corten fixture page pass 2
+2026-11-12T16:25:21.840Z corten fixture page fixed pass 2
+2026-11-12T16:25:37.760Z corten fixture page sat64 pass 2
+2026-11-12T16:25:53.773Z corten fixture page sat256 pass 2
+2026-11-12T16:26:10.058Z cold aspnet fixture page pass 2
+2026-11-12T16:26:11.760Z warmup aspnet fixture page pass 2
+2026-11-12T16:26:22.344Z aspnet fixture page fixed pass 2
+2026-11-12T16:26:38.251Z aspnet fixture page sat64 pass 2
+2026-11-12T16:26:54.184Z aspnet fixture page sat256 pass 2
+2026-11-12T16:27:10.453Z cold corten fixture json pass 2
+2026-11-12T16:27:11.245Z warmup corten fixture json pass 2
+2026-11-12T16:27:21.890Z corten fixture json fixed pass 2
+2026-11-12T16:27:37.784Z corten fixture json sat64 pass 2
+2026-11-12T16:27:53.786Z corten fixture json sat256 pass 2
+2026-11-12T16:28:10.110Z cold aspnet fixture json pass 2
+2026-11-12T16:28:11.667Z warmup aspnet fixture json pass 2
+2026-11-12T16:28:22.263Z aspnet fixture json fixed pass 2
+2026-11-12T16:28:38.156Z aspnet fixture json sat64 pass 2
+2026-11-12T16:28:54.078Z aspnet fixture json sat256 pass 2
+2026-11-12T16:29:10.332Z cold corten api page pass 2
+2026-11-12T16:29:11.144Z warmup corten api page pass 2
+2026-11-12T16:29:21.738Z corten api page fixed pass 2
+2026-11-12T16:29:37.622Z corten api page sat64 pass 2
+2026-11-12T16:29:53.495Z corten api page sat256 pass 2
+2026-11-12T16:30:09.725Z cold aspnet api page pass 2
+2026-11-12T16:30:11.330Z warmup aspnet api page pass 2
+2026-11-12T16:30:21.989Z aspnet api page fixed pass 2
+2026-11-12T16:30:37.865Z aspnet api page sat64 pass 2
+2026-11-12T16:30:53.813Z aspnet api page sat256 pass 2
+2026-11-12T16:31:10.225Z cold corten api page pass 2
+2026-11-12T16:31:11.059Z warmup corten api page pass 2
+2026-11-12T16:31:21.630Z corten api page fixed pass 2
+2026-11-12T16:31:37.498Z corten api page sat64 pass 2
+2026-11-12T16:31:53.362Z corten api page sat256 pass 2
+2026-11-12T16:32:09.568Z cold aspnet api page pass 2
+2026-11-12T16:32:11.139Z warmup aspnet api page pass 2
+2026-11-12T16:32:21.750Z aspnet api page fixed pass 2
+2026-11-12T16:32:37.638Z aspnet api page sat64 pass 2
+2026-11-12T16:32:53.543Z aspnet api page sat256 pass 2
+2026-11-12T16:33:09.899Z cold corten api page pass 2
+2026-11-12T16:33:10.725Z warmup corten api page pass 2
+2026-11-12T16:33:21.299Z corten api page fixed pass 2
+2026-11-12T16:33:37.185Z corten api page sat64 pass 2
+2026-11-12T16:33:53.054Z corten api page sat256 pass 2
+2026-11-12T16:34:09.258Z cold aspnet api page pass 2
+2026-11-12T16:34:10.875Z warmup aspnet api page pass 2
+2026-11-12T16:34:21.478Z aspnet api page fixed pass 2
+2026-11-12T16:34:37.382Z aspnet api page sat64 pass 2
+2026-11-12T16:34:53.351Z aspnet api page sat256 pass 2
+2026-11-12T16:35:09.775Z cold corten api json pass 2
+2026-11-12T16:35:10.575Z warmup corten api json pass 2
+2026-11-12T16:35:21.149Z corten api json fixed pass 2
+2026-11-12T16:35:37.060Z corten api json sat64 pass 2
+2026-11-12T16:35:52.931Z corten api json sat256 pass 2
+2026-11-12T16:36:09.190Z cold aspnet api json pass 2
+2026-11-12T16:36:10.642Z warmup aspnet api json pass 2
+2026-11-12T16:36:21.231Z aspnet api json fixed pass 2
+2026-11-12T16:36:37.145Z aspnet api json sat64 pass 2
+2026-11-12T16:36:53.043Z aspnet api json sat256 pass 2
+2026-11-12T16:37:09.275Z cold aspnet fixture page pass 3
+2026-11-12T16:37:10.926Z warmup aspnet fixture page pass 3
+2026-11-12T16:37:21.508Z aspnet fixture page fixed pass 3
+2026-11-12T16:37:37.434Z aspnet fixture page sat64 pass 3
+2026-11-12T16:37:53.309Z aspnet fixture page sat256 pass 3
+2026-11-12T16:38:09.560Z cold corten fixture page pass 3
+2026-11-12T16:38:10.411Z warmup corten fixture page pass 3
+2026-11-12T16:38:21.031Z corten fixture page fixed pass 3
+2026-11-12T16:38:36.902Z corten fixture page sat64 pass 3
+2026-11-12T16:38:52.905Z corten fixture page sat256 pass 3
+2026-11-12T16:39:09.181Z cold aspnet fixture page pass 3
+2026-11-12T16:39:10.825Z warmup aspnet fixture page pass 3
+2026-11-12T16:39:21.408Z aspnet fixture page fixed pass 3
+2026-11-12T16:39:37.297Z aspnet fixture page sat64 pass 3
+2026-11-12T16:39:53.176Z aspnet fixture page sat256 pass 3
+2026-11-12T16:40:09.439Z cold corten fixture page pass 3
+2026-11-12T16:40:10.281Z warmup corten fixture page pass 3
+2026-11-12T16:40:20.916Z corten fixture page fixed pass 3
+2026-11-12T16:40:36.818Z corten fixture page sat64 pass 3
+2026-11-12T16:40:52.799Z corten fixture page sat256 pass 3
+2026-11-12T16:41:09.074Z cold aspnet fixture page pass 3
+2026-11-12T16:41:10.733Z warmup aspnet fixture page pass 3
+2026-11-12T16:41:21.335Z aspnet fixture page fixed pass 3
+2026-11-12T16:41:37.202Z aspnet fixture page sat64 pass 3
+2026-11-12T16:41:53.080Z aspnet fixture page sat256 pass 3
+2026-11-12T16:42:09.343Z cold corten fixture page pass 3
+2026-11-12T16:42:10.176Z warmup corten fixture page pass 3
+2026-11-12T16:42:20.772Z corten fixture page fixed pass 3
+2026-11-12T16:42:36.640Z corten fixture page sat64 pass 3
+2026-11-12T16:42:52.625Z corten fixture page sat256 pass 3
+2026-11-12T16:43:08.955Z cold aspnet fixture json pass 3
+2026-11-12T16:43:10.510Z warmup aspnet fixture json pass 3
+2026-11-12T16:43:21.092Z aspnet fixture json fixed pass 3
+2026-11-12T16:43:36.986Z aspnet fixture json sat64 pass 3
+2026-11-12T16:43:52.891Z aspnet fixture json sat256 pass 3
+2026-11-12T16:44:09.139Z cold corten fixture json pass 3
+2026-11-12T16:44:09.938Z warmup corten fixture json pass 3
+2026-11-12T16:44:20.559Z corten fixture json fixed pass 3
+2026-11-12T16:44:36.440Z corten fixture json sat64 pass 3
+2026-11-12T16:44:52.476Z corten fixture json sat256 pass 3
+2026-11-12T16:45:08.802Z cold aspnet api page pass 3
+2026-11-12T16:45:10.382Z warmup aspnet api page pass 3
+2026-11-12T16:45:20.996Z aspnet api page fixed pass 3
+2026-11-12T16:45:36.901Z aspnet api page sat64 pass 3
+2026-11-12T16:45:52.858Z aspnet api page sat256 pass 3
+2026-11-12T16:46:09.334Z cold corten api page pass 3
+2026-11-12T16:46:10.169Z warmup corten api page pass 3
+2026-11-12T16:46:20.732Z corten api page fixed pass 3
+2026-11-12T16:46:36.658Z corten api page sat64 pass 3
+2026-11-12T16:46:52.625Z corten api page sat256 pass 3
+2026-11-12T16:47:08.827Z cold aspnet api page pass 3
+2026-11-12T16:47:10.426Z warmup aspnet api page pass 3
+2026-11-12T16:47:21.053Z aspnet api page fixed pass 3
+2026-11-12T16:47:36.946Z aspnet api page sat64 pass 3
+2026-11-12T16:47:52.872Z aspnet api page sat256 pass 3
+2026-11-12T16:48:09.327Z cold corten api page pass 3
+2026-11-12T16:48:10.156Z warmup corten api page pass 3
+2026-11-12T16:48:20.736Z corten api page fixed pass 3
+2026-11-12T16:48:36.634Z corten api page sat64 pass 3
+2026-11-12T16:48:52.519Z corten api page sat256 pass 3
+2026-11-12T16:49:08.749Z cold aspnet api page pass 3
+2026-11-12T16:49:10.346Z warmup aspnet api page pass 3
+2026-11-12T16:49:20.948Z aspnet api page fixed pass 3
+2026-11-12T16:49:36.831Z aspnet api page sat64 pass 3
+2026-11-12T16:49:52.789Z aspnet api page sat256 pass 3
+2026-11-12T16:50:09.328Z cold corten api page pass 3
+2026-11-12T16:50:10.166Z warmup corten api page pass 3
+2026-11-12T16:50:20.754Z corten api page fixed pass 3
+2026-11-12T16:50:36.655Z corten api page sat64 pass 3
+2026-11-12T16:50:52.540Z corten api page sat256 pass 3
+2026-11-12T16:51:08.799Z cold aspnet api json pass 3
+2026-11-12T16:51:10.261Z warmup aspnet api json pass 3
+2026-11-12T16:51:20.836Z aspnet api json fixed pass 3
+2026-11-12T16:51:36.725Z aspnet api json sat64 pass 3
+2026-11-12T16:51:52.625Z aspnet api json sat256 pass 3
+2026-11-12T16:52:08.853Z cold corten api json pass 3
+2026-11-12T16:52:09.639Z warmup corten api json pass 3
+2026-11-12T16:52:20.215Z corten api json fixed pass 3
+2026-11-12T16:52:36.143Z corten api json sat64 pass 3
+2026-11-12T16:52:52.088Z corten api json sat256 pass 3
+2026-11-12T16:53:08.932Z marketplace-v2 r20: PASS; /bench/repo/bench/marketplace/results/r20/summary.json

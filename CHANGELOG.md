@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A read-only saved client-heavy evidence validator checks source identities,
+  native bundles, observations, outcomes and resource/timing consistency without
+  executing archived code or contacting a network. Historical v1 captures remain
+  blocked from qualification and verified timings when required proof is absent.
+
 - Grouped catalog runs preserve versioned raw load, counted CPU, memory samples,
   cold-start, image/check and cleanup observations. An offline validator replays
   the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
@@ -7145,16 +7150,21 @@ their names, and has no tag or release.
 4. New `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
-6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
-   from round r16 (2026-11-06 to 2026-11-07 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `eea6adb`),
-   with all eighteen page apps and JSON-only aspnet-aot; load rows are medians of three passes.
-   Corten serves 20,705 item pages and 26,385 JSON responses a second from memory at 64
-   users, and 3,669 item-API pages. A page from memory costs 47 µs of CPU
-   (21,195 per CPU-second), serves 1,234 pages a second per MiB, and the item page loads 14.1 KB
-   of JavaScript (gzip), up 9.1% from r15. It is the first round with five offers in Corten's initial HTML,
-   not all offers in hidden templates, so its page gain is not a like-for-like speedup.
-   The Build table is r16's: Corten's clean production build took 77.3 s and its rebuild 34.7 s; axum + Maud took 31.7 s and 11.3 s,
-   the apps not written in Rust or C++ took 6.6-45.4 s clean and 0.9-6.3 s after the edit, and Corten's development rebuild took 2.6 s.
+6. The README and [Performance](docs/performance.md#on-the-server) server tables now use
+   [historical marketplace v2 r20](bench/marketplace/results/r20/report.md), 2026-11-12 UTC,
+   `43550265076e378d2159a9ebc254cf9412a2355a`, one c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz).
+   This is the first validated `production` baseline under `marketplace-production/v1`,
+   not a speed delta from r16, catalog c1/c2 or the newer workload-group campaign. Corten and
+   ASP.NET Core qualified; Next.js, FastAPI, Express, Topcoat, Leptos were excluded
+   with raw reasons, and omitted adapters were not tested. Each admitted app completed
+   8 profiles and 3 passes, with 10s warmup, 15s phases and 150 req/s fixed load.
+   Tables retain all page locales, JSON once per source, medians/ranges, latency, fixed CPU
+   and memory, counted efficiency, cold starts and pass-specific app/upstream limits. No
+   request failures, drops or app stops were recorded; below-95% app CPU prevents
+   maximum-capacity claims for those stages. No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core.
+   Historical r16 server, build, browser, byte and
+   instruction measurements keep their workload labels; no new measurements of those
+   latter four are claimed, nor readiness for newer group contracts.
 
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a

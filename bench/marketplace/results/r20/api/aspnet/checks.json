@@ -1,0 +1,87 @@
+{
+  "workload": "marketplace-v2",
+  "source": "api",
+  "jsonRecords": 500,
+  "pages": 264,
+  "profiles": [
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    }
+  ],
+  "upstream": {
+    "readsPerRequest": 1,
+    "uncachedPage": true,
+    "uncachedJson": true,
+    "jsonReserialized": true,
+    "errors": true
+  }
+}
