@@ -21,6 +21,12 @@ or remove Corten's features to manufacture parity.
 
 ## Implementation status
 
+The [client-heavy runner](../client-heavy/README.md) builds all selected native
+applications, observes their actual DOM and resources, and gates a separate
+measured journey on correctness. Its defaults are bounded local verification,
+not an isolated ranking or a cloud/nightly integration. Other native groups
+retain their independently reported implementation and qualification states.
+
 `registry.mjs` is the versioned selection and functional-work matrix. `evidence.mjs` keeps
 every selected app/case visible as unknown, implemented or not implemented, with separate
 parity and measurement states. Missing, unsupported and failed evidence is not zero throughput.
