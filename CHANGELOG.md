@@ -5,6 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
+  is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
+  Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left
+  its idle watch permanently busy. Its partial-header probe with an open stream did not show
+  a regression from HTTP/1.1. Publish the partial evidence and follow-up criteria, and put
+  the proxy caveat beside the README's production-defaults claim.
+
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
@@ -17,6 +24,11 @@ Corten is pre-1.0, so any minor version may change the API.
   complete matrix and exact aggregates; older results remain historical when
   required proof is absent. Replay does not establish independent source approval
   or host ownership, and does not change the recorded capacity outcomes.
+
+- Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
+  every archive's provenance before publishing to crates.io or creating the GitHub release, and
+  the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`
+  still checks its download only by HTTPS.
 
 - A read-only saved client-heavy evidence validator checks source identities,
   native bundles, observations, outcomes and resource/timing consistency without
@@ -289,6 +301,18 @@ Corten is pre-1.0, so any minor version may change the API.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+- A request reads what its area or API sets (deadline, body limit, CSP and shell key,
+  middleware, its API) from the route it matched: `App::router` resolves each area's and API's
+  once, with those of the areas and APIs around it, and gives it to each of their routes, where
+  each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
+  is its prefix's, and a route that can match a path under another prefix, counted segment by
+  segment (a page's `/{*rest}`, or `/{slug}` beside an area at `/shop`), look it up by path, so
+  what a request meets is unchanged. Measured at `f7d33ce2` against main `31de4268` (callgrind,
+  release, jemalloc, five runs each), a page in an inner area costs 328 instructions fewer and an
+  API's JSON 223 fewer, and in an app with no areas or APIs each costs 138 fewer; and later,
+  counting segments, a page at `/{slug}` in an app with no areas costs 114 fewer than
+  when it was looked up by path (at `084db982` against `416882fa`, three runs each)
+  ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 - `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
   only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
@@ -313,6 +337,21 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A WebSocket handshake of a version other than 13, or of none, is answered 426 with
+  `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
+  RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,
+  where it was a 400 that named no version; a handler that gives it a 400 keeps
+  `Sec-WebSocket-Version: 13`, and any other status (a 404 that hides the socket) none of them.
+  An HTTP/1.0 request's `Upgrade` is ignored (RFC 9110, 7.8), so an `Option<Upgrade>` route gives
+  its other answer, and a proxy that passes `Upgrade` on over HTTP/1.0 gets that answer too.
+  Corten needs hyper 1.12, the first that keeps a 426's `Connection: upgrade` when it adds
+  `close`. **Breaking:** a handshake of a wrong or missing version gets a 426 where it got a 400,
+  a request to an `Upgrade` route that does not ask to switch, and a handshake on a
+  connection that cannot switch (HTTP/2, `app.test()`), get a 400 where they got a 426 without
+  the `Upgrade` header a 426 must have, and an HTTP/1.0 request with `Upgrade` to an
+  `Option<Upgrade>` route gets that route's page where it got a 426 (RFC 9110, 7.8), so a client,
+  health check or app test that expects the old status sees the new one
+  ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
 - A typed link no longer writes a path value that would open another page: `.` or `..`, which a
   browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
   `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
@@ -334,6 +373,23 @@ Corten is pre-1.0, so any minor version may change the API.
   length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
   dot a second read (docs/design.md#limit-path-values)
   ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
+
+- `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
+  `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
+  is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
+  reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
+  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
+  field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
+  `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
+  as serde refuses it. A transparent struct whose one read field is a path ending in
+  `PhantomData` (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde
+  refuses it. Each other attribute it refused is still a compile error, some with reworded
+  messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
+  for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
+  than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
+  count)
+  ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
+
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
   with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`

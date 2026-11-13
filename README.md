@@ -43,6 +43,8 @@ AI agents.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
+  Apps with live streams also need an HTTP/2 proxy or CDN in front
+  ([Deploying](docs/guide/deploy.md)), even when the app ends TLS itself.
 - **One binary.** No JavaScript build step or bundler in the app; `static/` is compiled into the
   program.
 
@@ -55,6 +57,10 @@ corten new my-app
 cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save
 ```
+
+`cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
+build first, download it as in
+[Verify a prebuilt binary](docs/guide/getting-started.md#verify-a-prebuilt-binary).
 
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a test and a Dockerfile. [Getting started](docs/guide/getting-started.md) walks

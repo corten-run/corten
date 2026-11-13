@@ -838,9 +838,10 @@ rules something out.
     would be a second place a route's settings live beside its area or API; and a type parameter
     on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
     The request's `Signal`, which every staged request already allocates, carries the limit,
-    so setting one adds no allocation: each request pays the limit's selection (a comparison, or a
-    prefix lookup in an area) and an XOR as its signal is made, and a reader the lookup of the
-    signal and another XOR.
+    so setting one adds no allocation: each request reads the limit from the scope of its area or
+    API, given to its route when the router is built, or for an unknown URL and a route that can
+    match under another prefix found by the request's path ([Choice 28](#choice-fixed-stages)),
+    and pays an XOR as its signal is made, and a reader the lookup of the signal and another XOR.
     The readers wait for a slow client until the deadline, not an idle time as an `Upload` does,
     so a raised limit is held that long: a prefix that raises one keeps a deadline. A route that
     says `unstaged` reads no body; one that takes more than its prefix allows takes the whole
@@ -872,9 +873,12 @@ rules something out.
     measured (callgrind, release, jemalloc, 1,200 against 200 requests in process through the
     stages, one run each, the settable limit against `9653c20c`: a plain answer 13,234
     instructions a request before and 13,261 after, and a 1 KiB body `Bytes` reads 17,291 before
-    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit adds a
-    prefix lookup like the deadline's, not measured); a limit put on the request as an extension
-    of its own instead cost 17,969 with one set);
+    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit then added a
+    prefix lookup like the deadline's, not measured; since
+    [#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)
+    it is read from the route's scope with the area's deadline and middleware, which
+    [Choice 28](#choice-fixed-stages) measures together, Stands on); a limit put on the request as
+    an extension of its own instead cost 17,969 with one set);
     measured (axum 0.8.9's `Json` answers to twelve bodies under eight content types, recorded
     before it left and held by `json.rs`'s `AXUM_0_8_9` table);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
@@ -894,7 +898,10 @@ rules something out.
     traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked);
     2026-11-10, `IntoResponse`, `FromRef` and the body readers Corten's, axum gone
     ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first;
-    2026-11-10, the limit set per app, area and API and its cost, measured against `9653c20c`.
+    2026-11-10, the limit set per app, area and API and its cost, measured against `9653c20c`;
+    2026-11-12, an area's limit read from its route's scope, not by a prefix lookup, measured
+    with the area's other settings at `f7d33ce2` against main `31de4268`
+    ([Choice 28](#choice-fixed-stages), Stands on).
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -1036,6 +1043,89 @@ rules something out.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
        for them as Corten could not be, and nothing measured here points at it.
+
+       While a connection is idle, a request's head must arrive within `App::header_timeout` (30
+       seconds), which also closes an idle keep-alive connection, and be at most
+       `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
+       progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
+       seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
+       bytes a second, which would need a count of bytes and a window in the connection's writer, for
+       every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
+       client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+       waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
+       minimum body rate, the idle time being how far behind it a client may fall), counting only the
+       time spent waiting for the client, since one byte resets an idle time alone and a long upload's
+       route has a long deadline or none. That reader is Corten's own and already notes when a wait
+       begins, so the rate costs it a count and clearing when the client went quiet for each piece,
+       and for each piece it waited for a second clock read, a sum and the earlier of two due times; a
+       request that reads no body makes no reader, so it pays nothing. Counted with callgrind against
+       `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats to within 0.1%): a
+       piece `Pieces` waited for, one byte each, went from 2,038 to 2,256 instructions (+218, 10.7%);
+       an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%) when they came at once and
+       from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a body read whole was unchanged.
+       A one-byte piece is the worst case: a piece of a few KiB, as clients send, pays the same
+       instructions over far more bytes. It assumes the handler asks for the next piece promptly, as
+       a handler that spends a fixed time on each piece lets a client that sends one in that time go
+       on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
+       by the route's deadline alone, which a route that removes it keeps for those; how many may be
+       open is `App::max_connections`, unbounded unless set.
+
+       Live streams still require a proxy or CDN speaking HTTP/2 to browsers, even when
+       `serve_wrapped` ends TLS itself. The earlier watchlist check (two streams per page)
+       saw the fourth HTTP/1.1 tab get no answer in 15 seconds, against eight loaded over h2
+       through nginx; the browser cap is about six connections per host, not eight tabs.
+       The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
+       and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
+       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
+       The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
+       failure. Operator time, money and memory have not been measured, not counted as zero.
+
+       The opt-in `http2` prototype at `1a8adcb5f`, retained under
+       [evidence/http2-prototype](https://github.com/corten-run/corten/tree/evidence/http2-prototype),
+       was weighed against `ecbef5eb`. Off, the template still has 59 dependency crates with
+       the same tree and the item test's identical executable code section (not identical
+       whole binaries). Three alternating callgrind pairs give 74,531 instructions per item
+       request against 74,751, with overlapping ranges, so no speed difference is shown.
+       On, it adds eight crates (67 total), with TLS still the app's choice. Eight direct-TLS
+       watchlist tabs loaded and received live events over h2 in Chromium and Firefox.
+       WebKit's SSL connect error was not investigated; environment versus protocol is unknown.
+       A small TLS page counted 58,724 instructions/request over h2 against 40,519 over HTTP/1.1
+       through the feature-on hyper-util auto builder, not the shipping `http1::Builder` path.
+       Events counted 5,174 against 2,806 through that same builder. These medians do not
+       include the missing security-bound implementation. Workloads, ranges, client scripts
+       and the partial coverage are in [HTTP/2 evidence](../bench/http2/README.md).
+
+       The prototype does not ship. With a 100 ms send timeout, a zero-window response
+       resumed after 500 ms once the client granted credit: the socket watch misses that wait.
+       The partial-head probe, however, kept stream 1 open at `/quiet` while stream 3 waited
+       for CONTINUATION. HTTP/1.1's header watch is BUSY while an answer is open too, so this
+       is not evidence of a weakened header guarantee. An idle h2 connection with no open
+       streams was not probed. Inspection finds a prototype bug there: on the first h2 request
+       `watch.take()` then `busy()` removes the response's path back to idle forever.
+       A stream-counting idle watch could preserve the connection-level contract; a header-block
+       timeout with an open sibling would be a stronger, separately chosen guarantee.
+
+       Hyper 1.12.0 has no per-stream send-wait hook. Its `PipeToSendStream` polls a body,
+       holds the returned chunk and waits in `poll_capacity` without polling the body again.
+       Corten's `Answered` wrapper can observe that handoff and lack of further polls; a
+       connection-level stall detector using it is untried, not ruled out. Closing the whole
+       connection is the same granularity as HTTP/1.1's timeout. False positives for quiet
+       producers, completed bodies and progressing sibling streams still need tests.
+       The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
+       limitation, not a reason HTTP/2 cannot ship: Corten could detect the preface itself
+       and retain its HTTP/1 builder. Decoded h2 head limits, concurrent-stream/reset bounds,
+       GOAWAY with open streams and HTTP/1 WebSocket fallback still need verification.
+       Do not advertise RFC 8441 unless implemented; explicit h2 refusal is an alternative.
+
+       This weighs two reliability failures, not reliability against convenience alone:
+       the no-proxy live app already fails at the fourth tab, and an opt-in feature would
+       leave the default unchanged. The reason to defer is that a feature must not silently
+       weaken a security bound. Keep the proxy requirement (option 2) while testing the
+       connection-level design (option 1). One stream per page (option 3) still exhausts the
+       cross-tab cap and adds a custom format where HTTP/2 is standard, against
+       [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
+       TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
        builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
@@ -1294,14 +1384,30 @@ rules something out.
     HTTP/1.1, matchit 0.8 matches paths, and `http` 1 is the type hyper and its clients share);
     platform (rustc names the argument no request can fill for one impl per arity, where one impl
     over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
-    holds a router of Corten's to what axum does without naming either); value (fast and proven
-    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed, the
-    order the Values give, which is why the suite comes first).
+    holds a router of Corten's to what axum does without naming either); measured (the partial
+    HTTP/2 weighing at `1a8adcb5f`, driver correction `70e523f3b`, against `ecbef5eb`:
+    three alternating differential callgrind runs per variant, 59 dependencies off and 67 on,
+    eight direct-TLS tabs live in Chromium and Firefox, and a zero-window send resumed after
+    500 ms with 100 ms configured, as [HTTP/2 evidence](../bench/http2/README.md) records);
+    reasoned (the open-sibling header probe matches HTTP/1.1's busy-watch contract, while
+    `watch.take()` in the prototype loses the return to idle; an `Answered` body-stall
+    detector could close the whole connection but has not been tried); value (fast and proven
+    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
+    which is why the dispatch suite comes first and an opt-in protocol must not silently
+    weaken a security bound even though the no-proxy live app already fails).
 
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
-    ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
+    hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
+    [hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928)),
+    or a stream-counting idle watch plus a body-stall detector passes the two connection-bound
+    cases specified for [limits.mjs](../bench/http2/README.md#follow-up-acceptance): an idle h2
+    connection with no open streams and a zero-window send. The historical open-sibling case
+    is a control, not a demand for a stronger header guarantee. Shipping still needs the
+    shutdown, reset-flood and full three-engine TLS checks omitted from the partial weighing.
+    HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
+    the vocabulary in 3 and leaves 4 to 7 as they are.
 
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
@@ -1317,7 +1423,10 @@ rules something out.
     2026-11-10, axum gone (step 4) at `5548c97a` against step 3 at `67e7f5f5`, with the suite
     unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
-    the `laned` variant of `fa0b1525`.
+    the `laned` variant of `fa0b1525`; 2026-11-13, hyper 1.12.0, hyper-util 0.1.21 and h2
+    0.4.20, prototype `1a8adcb5f` and driver `70e523f3b` against `ecbef5eb`, with the
+    corrected watch semantics read in `watch.rs` and `app.rs`, and the untried connection-level
+    alternative distinguished from the measured send stall.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -1372,7 +1481,12 @@ rules something out.
 
     Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
     at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
-    the branch merged onto the integration tip).
+    the branch merged onto the integration tip); 2026-11-12, one reading for `FromJson`'s reader and
+    `Deserialize`, with the `transparent` twins `Phantom` (beside a `PhantomData`) and `Named`
+    (beside a defaulted field), on the branch from `24062789`; 2026-11-13, serde_derive 1.0.229's
+    `allow_transparent` (a path type whose last segment is `PhantomData`), with the twins `Count`
+    (a tuple), `Scored` (a `default = "path"` field), `Wrapped<T>` and `Qualified`
+    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
@@ -1515,8 +1629,24 @@ rules something out.
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
     `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
     own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
-    at its prefix; they are boxed, since which run depends on the path, and an app with none pays
-    nothing for them. A route that says `unstaged` where it is declared, in the app's routes
+    at its prefix; they are boxed, since which run depends on the route, and an app with none pays
+    nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
+    with those of the areas and APIs around it) is resolved once for each when the router is
+    built and given to each of its routes, so a request reads it from the route it matched; only
+    an unknown URL, whose `404` belongs to the prefix it is under, and a route that can match a
+    path under another prefix, an area's, an API's or one of Corten's own (`/corten/`, the
+    assets'), look it up by the request's path, a scan of those prefixes. Which routes can is
+    counted segment by segment when the router is built (`api::can_match_under`), as matchit
+    0.8.4 matches: a parameter takes the rest of its segment after any text before it, empty only
+    where the route goes on with a `/` (0.8.5 and 0.8.6 refuse even that, which only narrows what
+    matches), a catch-all the rest of the path, and a prefix of Corten's own holds only paths with
+    a segment after it. So a page's `/{*rest}` looks up by path, as does `/{slug}` beside an area
+    at `/shop` (it matches `/shop`) and `/shop/{id}` beside one at `/shop/desk`, while `/{slug}`
+    in an app with no areas, or beside `/shop/desk` alone, has its scope. The count reads each
+    route alone, so it may send by path one whose paths under another prefix a static route beside
+    it always answers first (`/{slug}` beside an area's route at `/shop`); it never gives a route
+    a scope when one of its paths is under another prefix. A route that says `unstaged` where it
+    is declared, in the app's routes
     module, an area's or an API's, goes through none of the stages, the app's, area's and API's
     middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
     order a reader checks is still one, and a flag, as `no_store` is, that names what the route
@@ -1628,8 +1758,12 @@ rules something out.
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
     one boxed future, 21,374 to 21,511 instructions against 20,497 to 20,646 with none; a request
-    outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
-    Corten's own code within 18 instructions of before, while its whole request rose from 19,696
+    outside that area 19,909 to 19,913 against 19,706, which was then a scan of the areas'
+    prefixes on every request and since
+    [#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)
+    is paid only where the route can match under one (measured below); an app whose areas and
+    APIs have none runs Corten's own code within 18 instructions of before, while its whole
+    request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
@@ -1646,12 +1780,53 @@ rules something out.
     match against the app's names (`security::named`, about 400 in the profile)); measured
     (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
     unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
-    plain axum router in the same build); measured (callgrind, release, five runs each, the same
+    plain axum router in the same build); measured (callgrind, release, jemalloc, five runs each
+    alternating with main `31de4268`, a request counted as the run of 1,200 less the run of 200
+    over 1,000 by `tests::what_a_request_in_an_area_costs`, median and range: each route given
+    its scope at `f7d33ce2` against six prefix lookups a request, in an app with two areas (one
+    inside the other) and an API that each set a deadline, a body limit and a middleware, a page
+    in the inner area 23,733 (23,733 to 23,733) against 24,061 (24,061 to 24,061) and the API's
+    JSON 13,647 (13,647 to 13,648) against 13,870 (13,870 to 13,870), and in an app with none,
+    where both are the app's own routes, the same page 18,261 (18,261 to 18,261) against 18,399
+    (18,397 to 18,399) and the same JSON handler 12,957 (12,957 to 12,957) against 13,095 (13,095
+    to 13,095)); measured (callgrind, release, jemalloc, three runs each, both apps in one build at
+    `6ffc316f`, which shares one set of stages among each scope's routes, the same harness: the
+    page in the inner area 23,732.9 (23,731.5 to 23,732.9) against 18,261.3 (18,259.9 to
+    18,261.3) as an app route, 5,471.6 more (5,470.2 to 5,473.0), and the API's JSON 13,647.3
+    (13,647.1 to 13,647.4) against 12,956.9 (12,956.9 to 12,957.0) for the same handler as an app
+    route, 690.3 more (690.2 to 690.5)); measured (callgrind, release, jemalloc, three runs each,
+    the routes counted by segment at `084db982` against `416882fa`, the same harness with its
+    `slug`, `routed` and `rest` targets: a page at `/{slug}` in the app with no areas 18,406.4
+    (18,406.4 to 18,407.8) against 18,520.7 (18,520.7 to 18,520.8), 114.4 fewer, now 145.4 over
+    the same page at a fixed route, 18,261.0; in the app with areas, where `/{slug}` can match
+    `/shop` and still looks its scope up by path, 18,740.7 against 18,740.8; and there a page an
+    app `/{*rest}` answers outside every area 19,236.7 (19,236.6 to 19,238.3) against 18,569.8
+    (18,569.7 to 18,569.8) at `/elsewhere/item`, 667.0 more in both builds; every other target
+    within 0.1 of before); measured (callgrind, release, five runs each, the same
     handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
-    and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
-    variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
+    and 7,797, and 8,099 for a plain axum router in both); reasoned (every route the router holds
+    has whole-segment parameters, which is what keeps the segment count independent of matchit's
+    version: `#[derive(Route)]`'s `parse_path` refuses text before a parameter, an area's and an
+    API's routes are held to `route::route_shaped` when the app compiles, and text after a
+    parameter is stripped before the router holds the path (`suffixed`); a `Route` written by hand
+    and given to the hidden `Routes::__route` can put text before one, and the count follows
+    matchit 0.8.4 for that too); platform (matchit, read in its source: an app's `Cargo.lock` names
+    the version it holds, which `crates/corten/Cargo.toml`'s caret `0.8.4` lets be any of 0.8.4 to
+    0.8.6, the newest published; this workspace holds 0.8.4, which axum 0.8.9 pins for
+    `examples/card-market`, and a new app, whose `corten new` template asks for no axum, resolves
+    the newest, 0.8.6, when cargo first writes its lock. In all three a parameter takes the rest of
+    its segment after any text before it, a segment holds one parameter, and a catch-all takes the
+    rest of the path; 0.8.4 lets a value before a `/` be empty and 0.8.5 and 0.8.6 do not, and
+    0.8.6 adds text after a parameter, which Corten never holds, so for Corten's routes the later
+    two match no path 0.8.4 does not, and the count, which allows the empty value, is never short
+    for any of them. It is not exact: a static route beside a route may answer first the paths it
+    counts, and under 0.8.5 or 0.8.6 a hand-written `/corten{x}/{b}` is counted for `/corten/b`,
+    which it no longer matches. `tests::can_match_under_never_says_no_where_matchit_matches` checks
+    the count against the matchit a build resolves, so CI runs it on 0.8.4); measured (callgrind,
+    release, three runs each, every run the same, an uncommitted variant of `fa0b1525` whose
+    `laned` adds the headers as it takes the handler's answer: 7,022
     and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each with
     jemalloc and with glibc, every run the same, step 4 at `5548c97a` against step 3 at
     `67e7f5f5`, in the harness with the control (the same numbers on the uncommitted tree before
@@ -1693,11 +1868,26 @@ rules something out.
     through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
-    builds by more than the route does, which says the harness no longer separates them; or a request outside every area costs more than twice
-    the about 200 instructions measured here over the build before area middleware (the lookup
-    and any layout effect together; layout alone moved a whole request by about 280). Area
-    middleware has no switch, so the next check builds current main with the prefix lookup taken
-    out by hand rather than going back to `9200aae4`.
+    builds by more than the route does, which says the harness no longer separates them; or, in
+    one build of `tests::what_a_request_in_an_area_costs` with jemalloc, a request in its app
+    with two areas and an API costs more than about 100 instructions over the same request in its
+    app with none, beyond the difference measured once each route was given its scope (at
+    `6ffc316f`: 5,472 for the page in the inner area against the same page as an app route, and
+    690 for the API's JSON route against the same handler as an app route); or, in one build of
+    the same harness in its app with areas, a page an app catch-all answers outside every area,
+    which looks its scope up by path, costs more than about 100 instructions over the same page at
+    an app route there, beyond the 667 measured at `084db982` (19,236.7 through the catch-all
+    against 18,569.8 at the route, a catch-all's match counted in it); or a route whose every
+    path is outside the other prefixes is sent by path for a reason other than a static route
+    beside it answering those paths first or, for a hand-written route, an empty value before a
+    `/` that the matchit it is held in refuses, which says the segment count has grown looser
+    than it reads; or one is given a scope while one of its paths is under another prefix, which a
+    request would then answer with the wrong area's settings; or
+    `tests::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
+    build resolves matches a path the count says a route cannot reach; or a matchit 0.8 release
+    after 0.8.6 is published, whose rules were not read, or Corten's requirement moves past 0.8;
+    or a derived route, or an area's or API's, may put text before a parameter, which
+    `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1720,7 +1910,17 @@ rules something out.
     variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`; 2026-11-10, the
     unstaged route and the plain axum router with axum gone (step 4) at `5548c97a` against step 3
     at `67e7f5f5`, with the profile of each, and the `service_fn` control with no framework in both
-    builds (three runs each with jemalloc and with glibc, every run the same).
+    builds (three runs each with jemalloc and with glibc, every run the same); 2026-11-12, each
+    route given its area's or API's scope at `f7d33ce2` against main `31de4268`
+    ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)),
+    and the app with areas against the one with none in one build at `6ffc316f`; 2026-11-13,
+    routes counted by segment at `084db982` against `416882fa`, with a catch-all's request;
+    2026-11-13, matchit 0.8.4's parameter matching and route insertion read in its source
+    (`tree.rs`), with 0.8.6's for the Revisit-when; 2026-11-13, matchit 0.8.5's `tree.rs` read
+    against 0.8.4's and 0.8.6's, the versions crates.io lists for 0.8 (0.8.6 the newest), and the
+    workspace's `Cargo.lock` (matchit 0.8.4, axum 0.8.9 requiring `=0.8.4`), with the
+    differential test in the commit that adds it, which fails when the count is made to refuse an
+    empty value before a `/`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -2540,10 +2740,17 @@ rules something out.
     exists, so its first version is published by hand; and a test of each of those on every
     platform. Such a launcher would also have to check the binary before running it. Its publish
     step could write each archive's sha256 into the package from the same run's builds, so that
-    is a constraint on its design, not a reason against it. That the release's own archives carry
-    no checksum, signature or attestation is a gap of its own, which `cargo binstall` and a manual
-    download already have
+    is a constraint on its design, not a reason against it. The release workflow now gives its
+    archives GitHub build provenance, verified before any crate is published or the GitHub
+    release is created, and a plain `SHA256SUMS` file (which detects a changed or damaged
+    download, not who built it), which closes the manual-download half of a gap of its own
     ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
+    `cargo binstall` does not consume that file or GitHub attestations; it verifies only a
+    minisign signature, which needs a signing key the release holds, so it still has only HTTPS
+    until that is decided, and verification before installation uses the
+    [manual download](guide/getting-started.md#verify-a-prebuilt-binary) (cargo-binstall
+    1.27.0's `SUPPORT.md` and `SIGNING.md`, read 2026-11-13).
+    That evidence does not make an npm initializer's extra channel or lifecycle any smaller.
 
     The name is held all the same, as [Releasing](../CONTRIBUTING.md#releasing) holds `corten` on
     crates.io should it come free ("take it only so no one else can"): `npm create corten` runs
@@ -2947,56 +3154,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     frame the client sent, with pings so one that only listens answers) and should bound how
     many it keeps: otherwise sockets no one uses take the cap from every other request. The work
     on a switched connection is told when shutdown begins and is not waited for.
-14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
-    seconds), which also closes an idle keep-alive connection, and be at most
-    `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
-    progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
-    seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
-    bytes a second, which would need a count of bytes and a window in the connection's writer, for
-    every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
-    client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
-    waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
-    minimum body rate, the idle time being how far behind it a client may fall), counting only the
-    time spent waiting for the client, since one byte resets an idle time alone and a long upload's
-    route has a long deadline or none. That reader is Corten's own and already notes when a wait
-    begins, so the rate costs it a count and clearing when the client went quiet for each piece,
-    and for each piece it waited for a second clock read, a sum and the earlier of two due times; a
-    request that reads no body makes no reader, so it pays nothing. Counted with callgrind against
-    `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats to within 0.1%): a
-    piece `Pieces` waited for, one byte each, went from 2,038 to 2,256 instructions (+218, 10.7%);
-    an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%) when they came at once and
-    from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a body read whole was unchanged.
-    A one-byte piece is the worst case: a piece of a few KiB, as clients send, pays the same
-    instructions over far more bytes. It assumes the handler asks for the next piece promptly, as
-    a handler that spends a fixed time on each piece lets a client that sends one in that time go
-    on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
-    by the route's deadline alone, which a route that removes it keeps for those; how many may be
-    open is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from
-    a proxy or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
-    browser opens about six connections to a host, each open stream holds one, and requests queue
-    behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.
-    That holds for `serve_wrapped` too, which ends TLS but still speaks HTTP/1.1, so an app with
-    live streams has a proxy or CDN in front whatever ends its TLS. Measured with
-    `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth
-    tab got no answer in 15 seconds and nginx logged three documents; through the configuration
-    in [Deploying](guide/deploy.md#nginx) with `http2 on`, all eight tabs loaded over `h2`, the
-    first in 1.0 s and the other seven in 212 to 471 ms. Corten cannot check this at startup: a
-    stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
-    does not say whether a route streams, since its snapshot route has them too; and
-    `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
-    guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
-    connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
-    the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
-    `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
-    answer to each per-connection rule (a concurrent-streams limit beside
-    `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
-    WebSockets over extended `CONNECT`, [Limit 13](#limit-protocol-switch)), which the proxy handles or makes unnecessary,
-    and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
-    HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
-    fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
-    the user gives better than an origin. Either reopens for an app that must serve browsers or
-    native apps' platform clients with no proxy at all and has live streams; HTTP/3 also waits
-    for a stable `h3`.
+14. <a id="limit-http1"></a>Connections are HTTP/1.1. An app with live streams needs an HTTP/2
+    proxy or CDN even when it ends TLS itself. The connection bounds, measured tradeoff and
+    reopening criteria are in [Choice 25](#choice-axum-router), protocol step 2; configuration
+    is in [Deploying](guide/deploy.md).
 15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or

@@ -404,8 +404,8 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
 }
 
 /// What goes around a request's route: the app's stages ([`crate::middleware`]'s order), made
-/// once by [`crate::App::router`], or an unstaged route's lane ([`crate::route::Lane`]) in
-/// their place.
+/// by [`crate::App::router`] with what the area or API each route is in sets, or an unstaged
+/// route's lane ([`crate::route::Lane`]) in their place.
 pub(crate) trait Stages: Send + Sync + 'static {
     /// The request through the stages, `route` last.
     fn run(self: Arc<Self>, req: Request, route: &Route) -> Answering;
@@ -439,8 +439,7 @@ impl std::fmt::Debug for Router {
 struct Dispatch {
     paths: matchit::Router<usize>,
     routes: Vec<Entry>,
-    /// The app's stages, which every route but an unstaged one goes through, and an unknown
-    /// URL's `404`.
+    /// The app's stages for an unknown URL's `404`, and for a route given none of its own.
     stages: Option<Arc<dyn Stages>>,
     not_found: Route,
     not_allowed: Route,
@@ -454,7 +453,8 @@ struct Entry {
     /// What its `405` (or its `fallback`'s answer) says it allows; nothing for `any`.
     allow: Option<HeaderValue>,
     written: Option<&'static str>,
-    /// The stages its requests go through: the app's, or its lane in their place.
+    /// The stages its requests go through: the app's, with what the area or API it is in sets,
+    /// or its lane in their place.
     stages: Option<Arc<dyn Stages>>,
 }
 
@@ -475,10 +475,10 @@ impl Entry {
 }
 
 impl Router {
-    /// `table`'s routes, each through `stages` unless it has its own (and an unknown URL too, a
-    /// `404`). A path the router cannot hold beside another (`/a/{x}` beside `/a/{y}`) stops
-    /// the app, naming it.
-    pub(crate) fn new(table: Table, stages: Option<Arc<dyn Stages>>) -> Self {
+    /// `table`'s routes, each through the stages `at` gives for its path, or `stages` where it
+    /// gives none (and an unknown URL too, a `404`), unless it has a lane of its own. A path the
+    /// router cannot hold beside another (`/a/{x}` beside `/a/{y}`) stops the app, naming it.
+    pub(crate) fn new(table: Table, stages: Option<Arc<dyn Stages>>, at: impl Fn(&str) -> Option<Arc<dyn Stages>>) -> Self {
         let mut paths = matchit::Router::new();
         let mut routes = Vec::with_capacity(table.routes.len());
         for Placed { path, methods, written, through } in table.routes {
@@ -489,16 +489,17 @@ impl Router {
                 Allow::Any => None,
                 Allow::Methods(names) => Some(HeaderValue::from_str(&names.join(",")).expect("method names are header text")),
             };
+            let around = match through {
+                Through::App => at(&path).or_else(|| stages.clone()),
+                Through::Lane(lane) => Some(lane as Arc<dyn Stages>),
+            };
             routes.push(Entry {
                 path,
                 slots: methods.slots.map(|slot| slot.map(Slot::route)),
                 fallback: methods.fallback.map(Slot::route),
                 allow,
                 written,
-                stages: match through {
-                    Through::App => stages.clone(),
-                    Through::Lane(lane) => Some(lane),
-                },
+                stages: around,
             });
         }
         let not_found: Route = Arc::new(Status(StatusCode::NOT_FOUND));
@@ -535,7 +536,7 @@ impl Router {
 #[cfg(test)]
 impl From<Table> for Router {
     fn from(table: Table) -> Router {
-        Router::new(table, None)
+        Router::new(table, None, |_| None)
     }
 }
 

@@ -3,7 +3,9 @@
 [Back to the guides](../../README.md#documentation)
 
 `corten::serve(App::new(url::router())).await` puts everything a production app needs around
-your routes. Each default can be replaced in one line.
+your routes. Each default can be replaced in one line. An app with live streams also needs
+an HTTP/2 proxy or CDN in front ([Deploying](deploy.md)); ending TLS in `serve_wrapped` does
+not remove that requirement.
 
 | Concern | Default | Override |
 |---|---|---|
@@ -754,6 +756,13 @@ open stream holds one, and a page with a few live elements open in a few tabs us
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
 puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
 HTTP/2 itself: [design Limit 14](../design.md#limit-http1)).
+This requirement has an operational cost: a second server and nine proxy-specific concerns
+in the deployment guide (the other three rows concern optional caching, health and HTTPS).
+The [HTTP/2 prototype](../../bench/http2/README.md) allowed eight live tabs but missed a send
+timeout and, by inspection, never returned its h2 watch to idle. Its partial-header probe kept
+a response open, when HTTP/1.1's watch is busy too; an idle h2 connection was not tested.
+A stream-counting idle watch and a body-stall detector that closes the connection remain
+untried. There is no supported `http2` feature yet.
 An app whose own default port is not 3000 (another service has it on that machine) passes its
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.
@@ -967,9 +976,14 @@ Like an area's deadline and policy, its middleware covers every request at its p
 it: its routes, its nested areas' and APIs' (the outer area's middleware runs first), an app
 route declared at a path under it, and an unknown URL there. Given again, a middleware runs after what was given before. Each one a request meets costs
 one boxed future on top of what it does (about 900 instructions for one that only passes the
-request on). In an app where no area or API has any, the request runs the same code as before;
-where some do, a request outside them pays a scan of their prefixes. card-market limits writes
-this way.
+request on). In an app where no area or API has any, a request goes through the app's middleware
+alone, with no boxed step. card-market limits writes this way. A request finds its area's or API's
+middleware, with its deadline, body limit and policy, on the route it matched, resolved once when
+the app starts. Only an unknown URL and a route that can match a path under another prefix (an
+area's, an API's, or one of Corten's own: `/corten/`, the assets') look them up by the request's
+path, a scan of the prefixes. Which routes can is counted segment by segment, a parameter
+matching one segment and a catch-all the rest: an app's `/{*rest}` can, and so can `/{slug}`
+beside an area at `/shop`, but not beside `/shop/desk` or in an app with no areas.
 
 A tower layer still goes around the whole app (`.layer(l)`), outside the router and every stage, for
 what must see the raw request first: a cap on body size. It sees the request before its route is
@@ -1879,12 +1893,20 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    [design Limit 26](../design.md#limit-origin-scheme)), so an app served only over HTTPS says
    so with `hsts`. A route whose callers must not be browsers at all refuses them in its
    `Identify` (a request with `Origin` or `Sec-Fetch-Site`).
-2. A request that does not ask to switch gets a 426, and a route that does not take `Upgrade`
-   never switches: only an `Upgrade` makes the 101, so a socket opens only where a route
-   declared one. A URL that is a socket and also something else (a page, or a gateway's relayed
-   answer) takes `Option<Upgrade>`, `None` when the request does not ask, and returns
-   `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or `SwitchOr::Answer(page)`. Its failures
-   are answered as `A`'s are, and a switch it asks for is checked as above.
+2. A request that does not ask to switch gets a 400: the extractor serves tunnels too, so it
+   cannot name a required protocol in the `Upgrade` header a 426 must carry. An HTTP/1.0
+   request does not ask, whatever its headers say, since HTTP/1.0 cannot switch (RFC 9110,
+   7.8). A WebSocket handshake with a version other than 13 gets a 426 with
+   `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade`, kept on the
+   error page and JSON failures; one with no version is taken as one of another version, which
+   tells the client which to send. A handler that gives that error a 400 (`with_status`) keeps
+   only `Sec-WebSocket-Version: 13`; any other status (a 404 that hides the socket) carries none
+   of the three. A route that does not take `Upgrade` never switches: only an `Upgrade` makes
+   the 101, so a socket opens only where a route declared one. A URL that is a socket and also
+   something else (a page, or a gateway's relayed answer) takes `Option<Upgrade>`, `None` when
+   the request does not ask, and returns `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or
+   `SwitchOr::Answer(page)`. Its failures are answered as `A`'s are, and a switch it asks for is
+   checked as above.
 3. The request's own `Signal` ends with the 101, so the work gets its own, which aborts with
    `Abort::Shutdown` when the app begins to shut down; the work is not waited for.
    `App::send_timeout` still holds on the switched connection: a write the client has made no
@@ -1900,7 +1922,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    tunnel that relays another server's switch and then passes bytes both ways
    (`tokio::io::copy_bidirectional`).
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
-   `CONNECT`) and a test's `app().test()` get a 426.
+   `CONNECT`) and a test's `app().test()` get a 400. A 400 needs no `Upgrade`, so it has none
+   (nor `Connection`), and HTTP/2 forbids both headers anyway.
 
 `corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
 gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body
