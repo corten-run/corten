@@ -257,6 +257,101 @@ test("coherently reprojected SSR/timing contradictions are invalid, absent recei
   });
 });
 
+test("partial failed receipt chronology and readbacks remain diagnostic, not fabricated qualification", async (t) => {
+  const summary = unavailable(), { cell, e, profile } = failedRaw(summary), zero = Object.fromEntries(["subscriptions", "connections", "listeners", "timers", "pendingTasks"].map((k) => [k, 0]));
+  const resource = (at, realm = "synthetic-live") => ({ observer: `synthetic-resource-${at}`, at, realm, scope: realm, scriptExecutionEnabled: profile.js, scopes: [], unsupported: [], unattributed: { ...zero } });
+  const read = (id) => ({ observer: `synthetic-read-${id}`, outcome: "read", via: "independent-read", status: 200, path: "/api/alerts", alerts: [] });
+  // Explicitly synthetic FAILED metadata, never a native run or positive qualification fixture.
+  e.resourceBaseline = resource(2, "synthetic-blank"); e.storeBefore = read("initial");
+  e.steps = [{ action: structuredClone(profile.steps[0]), at: 10, timing: { dispatchMs: 2, visibleChangeObservedMs: 3, settledObservedMs: 4 },
+    requests: [], document: null, dom: { observer: "synthetic-dom", scope: "synthetic-live", url: { path: profile.steps[0].path }, page: null, native: {} },
+    domPassed: false, resourcesAtDOM: resource(15), resources: resource(20), retired: null, failures: ["No native page executed"], lifecycleFailures: [], errors: [] }];
+  e.readiness = { definition: "Synthetic failed-only metadata", actionableObservedMs: 5 };
+  e.mutationProbes = { before: read("mutation"), otherContext: { before: read("other-before"), after: read("other-after") }, attempts: [{ readback: read("rejection") }], failures: ["No native mutation execution"] };
+  e.nativeCleanup = { outcome: "failed", before: resource(50), navigation: { at: 55 }, after: resource(60), detachedAt: 61, released: resource(62),
+    probe: { at: 65, afterAt: 70 }, platformProbe: { receivedAt: 71, finishedAt: 72 }, retired: null, failures: ["No native cleanup executed"] };
+  e.cleanup = { contextClosed: false, error: "No browser executed", nativePageScope: structuredClone(e.nativeCleanup) };
+  e.platformLifecycle = { schema: "native-browser-platform-lifetimes/v2", contextConfiguration: { javaScriptEnabled: profile.js }, coverage: {},
+    target: { target: "synthetic-target", context: "synthetic-context", type: "page" }, boundaries: { startedAt: 1, applicationStartedAt: 3, terminalStartedAt: 80, endedAt: 100 },
+    events: [{ event: "native-clock-sample", phase: "initial-native-clock", startedAt: 0.1, receivedAt: 0.2, at: 99999 },
+      { event: "Runtime.executionContextCreated", uniqueId: "blank", receivedAt: 0.3 }, { event: "domain-enabled", receivedAt: 0.4 },
+      { event: "Target.getTargets", phase: "initial", startedAt: 0.5, receivedAt: 0.6 },
+      { event: "Runtime.executionContextCreated", uniqueId: "live", receivedAt: 12 },
+      { event: "unique-context-read-probe", receivedAt: 90, finishedAt: 91 },
+      { event: "Target.getTargets", phase: "terminal", startedAt: 95, receivedAt: 96 }],
+    realms: [{ realm: "synthetic-blank", uniqueId: "blank", observedAt: 1.8 }, { realm: "synthetic-live", uniqueId: "live", observedAt: 14 }],
+    documents: [{ observer: "synthetic-dom", realm: "synthetic-live", observedAt: 21, identityObservation: { startedAt: 22, finishedAt: 23 } },
+      { observer: "synthetic-terminal", realm: "synthetic-live", observedAt: 75, identityObservation: { startedAt: 76, finishedAt: 77 } }], observationFailures: [] };
+  e.harnessClosedLifecycle = structuredClone(e.platformLifecycle);
+  e.harnessClosedLifecycle.events.push({ event: "Target.targetDestroyed", receivedAt: 105 });
+  e.harnessClosedLifecycle.observationFailures.push({ phase: "page-session-closed", at: 106 });
+  e.requestLedgerEndedAt = 102; // Post-harness receipts must NOT be charged to this native boundary.
+  const f = fixture(t, summary), original = structuredClone(e), baseline = f.check();
+  assert.equal(baseline.outcome, "blocked", baseline.invalid.join("; "));
+  const invalid = [
+    ["initial read HTTP failure labeled read", (e) => { e.storeBefore.status = 500; }, /HTTP status/],
+    ["mutation read HTTP failure labeled read", (e) => { e.mutationProbes.before.status = 500; }, /HTTP status/],
+    ["other session read HTTP failure labeled read", (e) => { e.mutationProbes.otherContext.after.status = 500; }, /HTTP status/],
+    ["rejection read HTTP failure labeled read", (e) => { e.mutationProbes.attempts[0].readback.status = 500; }, /HTTP status/],
+    ["read endpoint changed", (e) => { e.mutationProbes.before.path = "/other-store"; }, /endpoint changed/],
+    ["read reused native form response", (e) => { e.storeBefore.path = e.steps[0].action.path; }, /separate native store/],
+    ["read source conflicts", (e) => { e.storeBefore.source = profile.source === "api" ? "fixture" : "api"; }, /identity contradicts/],
+    ["read round conflicts", (e) => { e.storeBefore.round = "w999"; }, /identity contradicts/],
+    ["read case conflicts", (e) => { e.storeBefore.case = "unrelated-case"; }, /identity contradicts/],
+    ["read observer reused", (e) => { e.storeBefore.observer = e.steps[0].dom.observer; }, /observer missing\/reused/],
+    ["read malformed HTTP status", (e) => { e.storeBefore.status = true; }, /Malformed.*status/],
+    ["read malformed contents", (e) => { e.storeBefore.alerts = { alerts: [] }; }, /Malformed.*contents/],
+    ["resource baseline overlaps journey", (e) => { e.resourceBaseline.at = 11; }, /baseline\/action/],
+    ["cleanup overlaps journey", (e) => { e.nativeCleanup.before.at = 19; }, /Journey\/cleanup/],
+    ["pre-baseline receipt before case", (e) => { e.platformLifecycle.events[0].receivedAt = -1; }, /pre-case/],
+    ["target request has backwards start", (e) => { e.platformLifecycle.events[3].startedAt = 0.7; }, /receipt.*order/],
+    ["realm precedes its native context", (e) => { e.platformLifecycle.realms[1].observedAt = 11; }, /Context\/realm/],
+    ["parser precedes dependent resource", (e) => { e.platformLifecycle.documents[0].observedAt = 19; }, /Action\/parser/],
+    ["parser identity precedes parser", (e) => { e.platformLifecycle.documents[0].identityObservation.startedAt = 20; }, /Dependent parser/],
+    ["parser identity outlives terminal", (e) => { e.platformLifecycle.documents[0].identityObservation.finishedAt = 101; }, /Dependent parser/],
+    ["actual receipt outlives declared terminal", (e) => { e.platformLifecycle.events.at(-1).receivedAt = 103; }, /receipt\/terminal/],
+    ["probe finish outlives terminal", (e) => { e.platformLifecycle.events[5].finishedAt = 103; }, /completion\/terminal/],
+    ["post-cleanup parser precedes cleanup", (e) => { e.platformLifecycle.documents[1].observedAt = 59; }, /Post-cleanup parser/],
+    ["post-cleanup parser precedes dependent probe", (e) => { e.platformLifecycle.documents[1].observedAt = 71; }, /Post-cleanup parser/],
+    ["malformed harness close duration", (e) => { e.cleanup.closeMs = -1; }, /context-close duration/],
+    ["native observer failure outlives boundary", (e) => { e.platformLifecycle.observationFailures.push({ at: 103 }); }, /failure\/terminal/],
+    ["post-harness rewrites native prefix", (e) => { e.harnessClosedLifecycle.events[1].receivedAt = 0.31; }, /prefix/],
+    ["upstream sample outlives browser boundary", (e) => { e.upstreamLedger = { phases: [], terminal: { startedAt: 104, finishedAt: 105 } }; }, /boundary predates/],
+  ];
+  const blocked = [
+    ["genuine failed read HTTP 500", (e) => { Object.assign(e.storeBefore, { outcome: "failed", status: 500, alerts: null, reason: "Actual HTTP failure retained" }); }],
+    ["missing read status", (e) => { delete e.storeBefore.status; }],
+    ["missing read endpoint", (e) => { delete e.storeBefore.path; }],
+    ["missing read observer", (e) => { delete e.storeBefore.observer; }],
+    ["missing read contents", (e) => { delete e.storeBefore.alerts; }],
+    ["missing read method", (e) => { delete e.storeBefore.via; }],
+    ["missing parser identity", (e) => { delete e.platformLifecycle.documents[0].identityObservation; delete e.harnessClosedLifecycle.documents[0].identityObservation; }],
+    ["missing target request start", (e) => { delete e.platformLifecycle.events[3].startedAt; delete e.harnessClosedLifecycle.events[3].startedAt; }],
+  ];
+  for (const [name, mutate, message] of [...invalid, ...blocked]) await t.test(name, () => {
+    cell.evidence = structuredClone(original); mutate(cell.evidence); cell.evidence.cleanup.nativePageScope = structuredClone(cell.evidence.nativeCleanup); f.save();
+    const result = f.check(); assert.equal(result.outcome, message ? "invalid" : "blocked", result.invalid.join("; "));
+    if (message) assert.match(result.invalid.join("; "), message); else assert.deepEqual(result.invalid, []);
+    assert.equal(result.qualificationPassed, false); assert.equal(result.readyForLoad, false);
+  });
+});
+
+test("readback endpoint is fixed across profiles and honors the default target contract", (t) => {
+  const summary = unavailable(), { e, profile } = failedRaw(summary);
+  const read = (observer, path) => ({ observer, path, status: 200, outcome: "read", via: "independent-read", alerts: [] });
+  e.storeBefore = read("synthetic-first-case", "/api/alerts");
+  const second = failedRaw(summary, plan.cases.find((p) => p.source === profile.source && p.key !== profile.key));
+  second.e.storeBefore = read("synthetic-second-case", "/other-native-store");
+  const f = fixture(t, summary);
+  assert.match(f.check().invalid.join("; "), /endpoint changed/);
+  second.e.storeBefore = read("synthetic-second-case", "/api/alerts");
+  summary.options.targets = null;
+  summary.options.build = true;
+  summary.targetsSha256 = sha256(JSON.stringify(Object.fromEntries(candidates.map((a) => [a, { image: `cb-marketplace-${a}`, readback: { path: "/api/alerts" } }]))));
+  e.storeBefore.path = "/different-default-store"; f.save();
+  assert.match(f.check().invalid.join("; "), /endpoint changed/);
+});
+
 test("actual HTTP upstream receipts are conserved through probes/cleanup/final, with hostile terminal mutations rejected", async (t) => {
   const summary = unavailable(), { e, profile } = failedRaw(summary), source = createUpstream({ item_1: { value: 1 } });
   source.listen(0, "127.0.0.1"); await once(source, "listening"); const base = `http://127.0.0.1:${source.address().port}`;
@@ -307,6 +402,12 @@ test("late failed POST and body capture errors survive full final-request rederi
 const retainedFolder = join(repo, "bench/fullstack-browser/work/lifecycle/w28");
 test("retained real w28 stays blocked and raw lifecycle/DOM/asset tampering cannot hide behind rehashed projections", { skip: !existsSync(join(retainedFolder, "summary.json")) }, async (t) => {
   const summary = JSON.parse(readFileSync(join(retainedFolder, "summary.json"))), cell = Object.values(summary.cells).flat().find((c) => c.evidence), original = structuredClone(cell.evidence);
+  const derive = (e) => {
+    e.platformRetirementProofs = e.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id,
+      proof: validatePlatformRetirement(e.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));
+    e.platformCleanupProof = validatePlatformRetirement(e.platformLifecycle, { realm: e.nativeCleanup.before.realm, retiredAt: e.nativeCleanup.navigation.at, observationMs: settings.observationMs });
+    e.noJSRequestProof = classifyNoJSRequests(e.platformLifecycle);
+  };
   const f = fixture(t, summary);
   for (const app of Object.keys(summary.builds)) writeFileSync(join(f.folder, `build-${app}.log`), readFileSync(join(retainedFolder, `build-${app}.log`)));
   // The historical journal lacks newer identity/clock receipts. Its old positive
@@ -321,7 +422,7 @@ test("retained real w28 stays blocked and raw lifecycle/DOM/asset tampering cann
   cell.evidence = structuredClone(original); f.save();
   const r = f.check(); assert.equal(r.outcome, "blocked", r.invalid.join("; ")); assert.equal(r.qualificationPassed, false);
   assert.equal(r.cells.find((c) => c.derived).derived.noJS, "unknown");
-  for (const [name, mutate] of [
+  for (const [name, mutate, rederive] of [
     ["all native commits deleted", (e) => { e.platformLifecycle.events = e.platformLifecycle.events.filter((r) => r.event !== "Page.frameNavigated"); }],
     ["all network receipts deleted", (e) => { e.platformLifecycle.events = e.platformLifecycle.events.filter((r) => !r.event.startsWith("Network.")); }],
     ["asset response deleted", (e) => { e.platformLifecycle.events = e.platformLifecycle.events.filter((r) => !(r.event === "Network.responseReceived" && r.type === "Stylesheet")); }],
@@ -335,12 +436,34 @@ test("retained real w28 stays blocked and raw lifecycle/DOM/asset tampering cann
     ["backwards action durations", (e) => { e.steps[0].timing.visibleChangeObservedMs = e.steps[0].timing.settledObservedMs + 1; }],
     ["boolean readiness time", (e) => { e.readiness.actionableObservedMs = true; }],
     ["final boundary before all actions", (e) => { e.requestLedgerEndedAt = e.clock.startedAt; }],
+    ["initial independent read HTTP 500", (e) => { e.storeBefore.status = 500; }],
+    ["write independent read HTTP 500", (e) => { e.steps.find((r) => r.readback?.outcome === "read").readback.status = 500; }],
+    ["independent read from form response", (e) => { const r = e.steps.find((r) => r.readback?.outcome === "read"); r.readback.path = r.action.path; }],
+    ["mutation baseline read HTTP 500", (e) => { e.mutationProbes.before.status = 500; }],
+    ["other session read HTTP 500", (e) => { e.mutationProbes.otherContext.after.status = 500; }],
+    ["rejection read HTTP 500", (e) => { e.mutationProbes.attempts[0].readback.status = 500; }],
+    ["baseline after first action", (e) => { e.resourceBaseline.at = e.clock.startedAt + e.steps[1].at; }],
+    ["actual lifecycle receipt after final ledger", (e) => { e.requestLedgerEndedAt = e.platformLifecycle.boundaries.endedAt + 1; e.platformLifecycle.events.at(-1).receivedAt = e.requestLedgerEndedAt + 100; }, true],
+    ["cleanup before journey", (e) => { const c = e.nativeCleanup, shift = c.before.at - e.clock.startedAt; for (const key of ["before", "navigation", "after"]) c[key].at -= shift; e.cleanup.nativePageScope = structuredClone(c); }, true],
+    ["DOM resource JS profile contradiction", (e) => { e.steps[0].resourcesAtDOM.scriptExecutionEnabled = !e.environment.js; }],
+    ["pre-baseline target receipt before case", (e) => { e.platformLifecycle.events[0].receivedAt = e.clock.startedAt - 1; }, true],
+    ["target request starts after its receipt", (e) => { const r = e.platformLifecycle.events.find((r) => r.event === "Target.getTargets"); r.startedAt = r.receivedAt + 1; }, true],
+    ["target inventory after startup boundary", (e) => { e.platformLifecycle.events.find((r) => r.event === "Target.getTargets").receivedAt = e.resourceBaseline.at; }, true],
+    ["realm association before native context", (e) => { e.platformLifecycle.realms[0].observedAt = e.clock.startedAt; }, true],
+    ["dependent parser before resource capture", (e) => { e.platformLifecycle.documents[0].observedAt = e.resourceBaseline.at; }, true],
+    ["parser identity finishes after terminal", (e) => { const d = e.platformLifecycle.documents[0]; d.identityObservation = { startedAt: d.observedAt + 1, finishedAt: e.platformLifecycle.boundaries.endedAt + 1 }; }, true],
+    ["lifecycle completion after terminal", (e) => { e.platformLifecycle.events.find((r) => r.event === "unique-context-read-probe").finishedAt = e.platformLifecycle.boundaries.endedAt + 1; }, true],
+    ["observer failure after terminal", (e) => { e.platformLifecycle.observationFailures.push({ phase: "observer-failed", at: e.platformLifecycle.boundaries.endedAt + 1 }); }, true],
+    ["post-cleanup parser before cleanup", (e) => { e.platformLifecycle.documents.at(-1).observedAt = e.nativeCleanup.before.at - 1; }, true],
+    ["retirement probe before action capture", (e) => { const r = e.steps.find((r) => r.platformRetirementProbe); r.platformRetirementProbe.receivedAt = r.resources.at - 1; }, true],
+    ["post-harness prefix changed", (e) => { e.harnessClosedLifecycle.events[0].receivedAt += 1; }, true],
     ["DOM resource scope changed", (e) => { e.steps[0].resourcesAtDOM.scope = "unobserved-scope"; }],
     ["initial store changed", (e) => { e.storeBefore.alerts.push({ item_id: "item_2", email: "unexpected@example.test", target_minor: 125 }); }],
     ["mutation store emptied", (e) => { e.mutationProbes.before.alerts = []; }],
     ["fresh worker zeros invented", (e) => { e.nativeCleanup.retired.owned = Object.fromEntries(["subscriptions", "connections", "listeners", "timers", "pendingTasks"].map((k) => [k, 0])); }],
   ]) await t.test(name, () => {
-    cell.evidence = structuredClone(original); mutate(cell.evidence); f.save(); assert.equal(f.check().outcome, "invalid", name);
+    cell.evidence = structuredClone(original); mutate(cell.evidence); if (rederive) derive(cell.evidence);
+    f.save(); assert.equal(f.check().outcome, "invalid", name);
   });
   for (const [name, mutate] of [
     ["absent SSR observation", (e) => { delete e.steps[0].document; }],
@@ -356,6 +479,7 @@ test("retained real w28 stays blocked and raw lifecycle/DOM/asset tampering cann
   });
   cell.evidence = structuredClone(original);
   cell.evidence.platformLifecycle.events = cell.evidence.platformLifecycle.events.filter((r) => r.event !== "Page.frameNavigated");
+  cell.evidence.harnessClosedLifecycle.events = cell.evidence.harnessClosedLifecycle.events.filter((r) => r.event !== "Page.frameNavigated");
   const e = cell.evidence;
   e.platformRetirementProofs = e.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id, proof: validatePlatformRetirement(e.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));
   e.platformCleanupProof = validatePlatformRetirement(e.platformLifecycle, { realm: e.nativeCleanup.before.realm, retiredAt: e.nativeCleanup.navigation.at, observationMs: settings.observationMs });

@@ -167,6 +167,17 @@ consistent. The final browser ledger boundary must follow the retained action, r
 readiness, lifecycle, cleanup and upstream terminal observations. Action durations use the
 producer's later dispatch clock, so action-start plus duration is a lower bound, not an
 invented exact dispatch timestamp. Missing timings do not become zero observations.
+Every initial, write, rejection and other-session readback is checked for successful HTTP
+status, a separate native store endpoint fixed per target/round, unique observer identity
+and canonical store fields. Provided case/round/source identities must agree. A retained
+failed HTTP read remains failed diagnostics, not a malformed success or an empty store.
+Missing read receipts and unauthenticated endpoint/context/source bindings stay blocked.
+Host-clock checks cover actual pre-baseline, target inventory, context/realm, parser and URL
+identity, retirement probe, cleanup, observer-failure and upstream sample receipts, not only
+declared boundaries. Dependencies and journey/cleanup/terminal phases must be ordered.
+CDP timestamps and upstream server clocks are never compared with the host clock.
+Post-harness journals must preserve the native prefix; their later close receipts are not
+charged to the pre-harness final browser boundary and cannot supply native cleanup proof.
 Links (including junctions, ancestors and hard links), network/device/ADS or
 traversal paths, non-regular files, extra/missing files and changing evidence are refused.
 

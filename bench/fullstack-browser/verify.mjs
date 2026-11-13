@@ -5,7 +5,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, rea
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256 } from "./contract.mjs";
+import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256 } from "./contract.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
@@ -170,8 +170,48 @@ function ssrResponse(row, block) {
   if (!native.completed || native.failure || native.captureError || !present(native.bodySha256)) block("SSR native browser response body/completion proof unavailable");
 }
 
+function storeReads(e, profile, summary, app, endpoints, block) {
+  const m = e.mutationProbes, entries = [[e.storeBefore, e.failures, "initial"]];
+  for (const row of e.steps.filter((r) => r.action?.input)) entries.push([row.readback, row.failures, "write"]);
+  if (m) entries.push([m.before, m.failures, "mutation baseline"], [m.otherContext?.before, m.failures, "other session initial"],
+    [m.otherContext?.after, m.failures, "other session final"], ...(m.attempts ?? []).map((r) => [r.readback, m.failures, "rejection"]));
+  const writes = new Set([...e.steps.flatMap((r) => [r.action?.path, r.formBefore?.action, r.formBefore?.updatePath,
+    r.formBefore?.enhancement?.path, ...(r.requests ?? []).filter((q) => q.method === "POST").map((q) => q.path)]),
+    ...(m?.attempts ?? []).map((r) => r.path)].filter(Boolean));
+  let endpoint = endpoints.get(app) ?? (summary.options.targets === null ? "/api/alerts" : null);
+  const observers = new Set(e.steps.flatMap((r) => [r.dom?.observer, r.document?.observer]).filter(Boolean));
+  for (const [r, failures, phase] of entries) {
+    if (r === null || r === undefined) { block(`Independent ${phase} readback unavailable`); continue; }
+    need(object(r) && ["read", "failed", "unsupported"].includes(r.outcome), "Malformed independent readback outcome");
+    for (const [key, expected] of [["source", profile.source], ["round", summary.options.round], ["case", profile.key]])
+      if (r[key] !== undefined && r[key] !== null) same(r[key], expected, "Independent readback case/round/source identity contradicts run");
+    if (r.path === null || r.path === undefined) block("Independent readback endpoint unavailable");
+    else {
+      need(typeof r.path === "string" && /^\/(?!\/)[^?#\\\s\x00-\x1f\x7f]+$/.test(r.path)
+        && !r.path.startsWith("/marketplace/") && !writes.has(r.path), "Independent readback is not a separate native store endpoint");
+      endpoint ??= r.path; same(r.path, endpoint, "Independent readback endpoint changed within native target/round"); endpoints.set(app, endpoint);
+    }
+    if (r.status !== null && r.status !== undefined) need(Number.isInteger(r.status) && r.status >= 100 && r.status <= 599, "Malformed independent readback HTTP status");
+    if (r.outcome !== "read") {
+      need(text(r.reason), "Failed/unsupported independent readback lacks a reason");
+      if (r.outcome === "failed") need(e.functionalChecksPassed !== true && failures?.length > 0, "Failed independent readback hidden by functional outcome");
+      block("Independent native store read failed or unsupported"); continue;
+    }
+    if (r.status === null || r.status === undefined) block("Independent readback HTTP status unavailable");
+    else same(r.status, 200, "Successful independent readback contradicts native HTTP status");
+    if (r.via === null || r.via === undefined) block("Independent readback method unavailable");
+    else same(r.via, "independent-read", "Readback reused a non-independent response");
+    if (r.observer === null || r.observer === undefined) block("Independent readback observer unavailable");
+    else { need(text(r.observer) && !observers.has(r.observer), "Independent readback observer missing/reused"); observers.add(r.observer); }
+    if (r.alerts === null || r.alerts === undefined) block("Independent readback store contents unavailable");
+    else { need(Array.isArray(r.alerts), "Malformed independent readback contents"); alertsFromReadback(r.alerts); }
+  }
+  block("Independent readback endpoint/context/source binding is not independently bundled; custom target paths are never opened");
+}
+
 function observationTiming(e, block) {
   let latest = e.clock.startedAt, previous = e.clock.startedAt;
+  const windows = [];
   const durationKeys = ["dispatchMs", "visibleChangeObservedMs", "settledObservedMs"];
   for (const row of e.steps) {
     need(finite(row.at), "Malformed native action start");
@@ -195,7 +235,14 @@ function observationTiming(e, block) {
       need(finite(sample.at) && sample.at >= end, "Resource observation predates action timing evidence");
       end = sample.at;
     }
-    latest = Math.max(latest, end); previous = end;
+    const probe = row.platformRetirementProbe;
+    if (probe) {
+      need(finite(probe.receivedAt) && finite(probe.finishedAt) && probe.receivedAt >= end && probe.finishedAt >= probe.receivedAt, "Retirement probe predates dependent action observations");
+      end = probe.finishedAt;
+    }
+    if (row.platformRetirement) need(finite(row.platformRetirement.retiredAt) && row.platformRetirement.retiredAt >= start
+      && row.platformRetirement.retiredAt <= end, "Retirement predates its action or follows its observations");
+    windows.push({ start, end }); latest = Math.max(latest, end); previous = end;
   }
   const ready = e.readiness;
   if (ready === null || ready === undefined) block("Native readiness observation unavailable");
@@ -216,17 +263,137 @@ function observationTiming(e, block) {
       latest = Math.max(latest, at);
     }
   }
-  // Only supplied host-clock observations contribute bounds, never inferred times.
-  const cleanup = e.nativeCleanup;
-  for (const at of [e.resourceBaseline?.at, cleanup?.before?.at, cleanup?.navigation?.at, cleanup?.after?.at,
-    cleanup?.released?.at, cleanup?.detachedAt, cleanup?.probe?.at, cleanup?.probe?.afterAt,
-    e.platformLifecycle?.boundaries?.endedAt, e.upstreamLedger?.terminal?.finishedAt]) {
-    if (at !== null && at !== undefined) { need(finite(at), "Malformed terminal observation timestamp"); latest = Math.max(latest, at); }
+  return Math.max(latest, receiptChronology(e, windows, block));
+}
+
+function receiptChronology(e, windows, block) {
+  const origin = e.clock.startedAt, missing = (v) => v === null || v === undefined;
+  let latest = origin;
+  const time = (v, label, required = true, application = true) => {
+    if (missing(v)) { if (required) block(`Missing ${label} timestamp`); return null; }
+    need(finite(v) && v >= origin, `Malformed/pre-case ${label} timestamp`);
+    if (application) latest = Math.max(latest, v); return v;
+  };
+  const order = (a, b, label) => { if (!missing(a) && !missing(b)) need(a <= b, `${label} observations out of order`); };
+  const sequence = (values, label) => { let prior = null; for (const value of values) { order(prior, value, label); if (!missing(value)) prior = value; } };
+  const interval = (r, label, start = "startedAt", end = "finishedAt", application = true) => {
+    if (!r) { block(`Missing ${label} receipt`); return [null, null]; }
+    need(object(r), `Malformed ${label} receipt`);
+    const bounds = [time(r[start], label, true, application), time(r[end], label, true, application)];
+    sequence(bounds, label); return bounds;
+  };
+  const resources = [e.resourceBaseline, ...e.steps.flatMap((r) => [r.resourcesAtDOM, r.resources]),
+    e.nativeCleanup?.before, e.nativeCleanup?.after, e.nativeCleanup?.released].filter(Boolean);
+  for (const r of resources) {
+    time(r.at, "resource");
+    if (missing(r.scriptExecutionEnabled)) block("Resource JS configuration unavailable");
+    else same(r.scriptExecutionEnabled, e.environment.js, "Resource JS configuration contradicts native profile");
+  }
+  const baseline = time(e.resourceBaseline?.at, "resource baseline");
+  order(baseline, windows[0]?.start, "Resource baseline/action");
+  if (!missing(e.cleanup?.closeMs)) need(finite(e.cleanup.closeMs), "Malformed harness context-close duration");
+  const c = e.nativeCleanup;
+  let cleanupEnd = windows.at(-1)?.end ?? baseline ?? origin;
+  if (c) {
+    const points = [c.before?.at, c.navigation?.at, c.after?.at, c.detachedAt, c.released?.at, c.probe?.at, c.probe?.afterAt];
+    points.forEach((v) => time(v, "cleanup", false)); sequence([cleanupEnd, ...points], "Journey/cleanup");
+    if (!c.before) block("Cleanup start receipt unavailable");
+    if (c.probe) interval(c.probe, "retired DOM probe", "at", "afterAt");
+    if (c.platformProbe) {
+      const [start, end] = interval(c.platformProbe, "cleanup platform probe", "receivedAt");
+      order(c.after?.at, start, "Cleanup/platform probe"); points.push(end);
+    }
+    cleanupEnd = Math.max(cleanupEnd, ...points.filter((v) => !missing(v)));
+  }
+  const j = e.platformLifecycle, b = j?.boundaries ?? {};
+  if (j) {
+    for (const key of ["startedAt", "applicationStartedAt", "terminalStartedAt", "endedAt"]) time(b[key], "lifecycle boundary");
+    sequence([b.startedAt, baseline, b.applicationStartedAt, windows[0]?.start], "Pre-baseline/application lifecycle");
+    sequence([b.applicationStartedAt, windows.at(-1)?.end, c?.before?.at, c?.after?.at, c?.probe?.afterAt, c?.platformProbe?.finishedAt,
+      b.terminalStartedAt, b.endedAt], "Journey/terminal lifecycle");
+    const journal = (saved, application) => {
+      need(Array.isArray(saved.events), "Malformed lifecycle receipt array"); let prior = origin;
+      for (const r of saved.events) {
+        need(object(r), "Malformed lifecycle receipt");
+        const received = time(r.receivedAt, "lifecycle receipt", true, application);
+        order(prior, received, "Lifecycle receipt stream"); if (!missing(received)) prior = received;
+        const started = time(r.startedAt, "lifecycle receipt start", false, application), finished = time(r.finishedAt, "lifecycle receipt finish", false, application);
+        sequence([started, received, finished], "Lifecycle receipt");
+        if (r.event === "Target.getTargets" || r.event === "native-clock-sample") {
+          if (missing(started)) block("Lifecycle request start receipt unavailable");
+          if (r.phase?.startsWith("initial")) order(received, b.startedAt, "Initial lifecycle inventory/clock");
+          else if (r.phase?.startsWith("terminal")) order(b.terminalStartedAt, started, "Terminal lifecycle inventory/clock");
+          else need(false, "Unknown lifecycle inventory/clock phase");
+        }
+        if (r.event === "unique-context-read-probe" && missing(finished)) block("Lifecycle probe completion unavailable");
+        if (r.event === "domain-enabled") order(received, b.startedAt, "Pre-baseline lifecycle domain");
+        if (application) { order(received, b.endedAt, "Lifecycle receipt/terminal boundary"); order(finished, b.endedAt, "Lifecycle completion/terminal boundary"); }
+      }
+      for (const r of saved.observationFailures ?? []) {
+        const at = time(r.at, "lifecycle observer failure", true, application);
+        if (application) order(at, b.endedAt, "Observer failure/terminal boundary");
+      }
+    };
+    journal(j, true);
+    for (const phase of ["initial", "terminal"]) if (!j.events.some((r) => r.event === "Target.getTargets" && r.phase === phase)) block("Lifecycle target inventory incomplete");
+    for (const r of j.realms ?? []) {
+      const at = time(r.observedAt, "realm association"); order(at, b.endedAt, "Realm/terminal boundary");
+      const created = j.events.find((v) => v.event === "Runtime.executionContextCreated" && v.uniqueId === r.uniqueId);
+      if (created) order(created.receivedAt, at, "Context/realm dependency"); else block("Realm lacks native creation receipt");
+      for (const sample of resources.filter((v) => v.realm === r.realm)) order(at, sample.at, "Realm/resource dependency");
+    }
+    for (const doc of j.documents ?? []) {
+      const at = time(doc.observedAt, "parser document");
+      sequence([b.applicationStartedAt, at, b.terminalStartedAt], "Application/parser/terminal lifecycle");
+      const realm = j.realms?.find((r) => r.realm === doc.realm);
+      if (realm) order(realm.observedAt, at, "Realm/parser dependency"); else block("Parser realm association unavailable");
+      const index = e.steps.findIndex((r) => r.dom?.observer === doc.observer);
+      if (index >= 0) sequence([e.steps[index].resources?.at, at, windows[index + 1]?.start ?? c?.before?.at ?? b.terminalStartedAt], "Action/parser dependency");
+      else sequence([cleanupEnd, at, b.terminalStartedAt], "Post-cleanup parser dependency");
+      const [start, end] = interval(doc.identityObservation, "parser URL identity");
+      sequence([at, start, end, b.terminalStartedAt], "Dependent parser URL observation");
+      if (doc.identityObservation?.uniqueId !== undefined && realm) same(doc.identityObservation.uniqueId, realm.uniqueId, "Parser identity contradicts native realm");
+    }
+    const h = e.harnessClosedLifecycle;
+    if (h) {
+      journal(h, false);
+      same(h.events.slice(0, j.events.length), j.events, "Post-harness lifecycle changed the native receipt prefix");
+      same(h.documents, j.documents, "Post-harness parser observations changed"); same(h.realms, j.realms, "Post-harness realm associations changed");
+      same(h.boundaries, j.boundaries, "Post-harness lifecycle boundaries changed");
+      same(h.target, j.target, "Post-harness native target identity changed");
+      same(h.observationFailures?.slice(0, j.observationFailures?.length ?? 0), j.observationFailures, "Post-harness lifecycle failure prefix changed");
+      for (const r of h.events.slice(j.events.length)) order(b.endedAt, r.receivedAt, "Post-native lifecycle receipt");
+      for (const r of (h.observationFailures ?? []).slice(j.observationFailures?.length ?? 0)) order(b.endedAt, r.at, "Post-native observer failure");
+    } else block("Post-harness lifecycle receipt journal unavailable");
+  }
+  const ledger = e.upstreamLedger;
+  if (ledger) {
+    const [start, end] = interval(ledger.baseline, "upstream baseline");
+    order(end, baseline, "Upstream/resource baseline");
+    order(end, j?.events?.[0]?.receivedAt, "Upstream/native observer initialization");
+    let prior = end;
+    for (const p of ledger.phases ?? []) {
+      const [before, ready] = interval(p.before, "upstream phase before"), [after, done] = interval(p.after, "upstream phase after");
+      sequence([prior, before, ready, after, done], "Upstream phases"); prior = done ?? ready ?? prior;
+      const index = e.steps.findIndex((r) => r.action.id === p.phase);
+      if (index >= 0) {
+        sequence([windows[index].start, before, ready, e.steps[index].resourcesAtDOM?.at ?? e.steps[index].resources?.at], "Action/upstream begin");
+        order(windows[index].end, after, "Action/upstream end"); order(done, windows[index + 1]?.start ?? c?.before?.at, "Upstream/next action or cleanup");
+      }
+      if (p.phase === "initial-store") sequence([b.applicationStartedAt, before, ready, after, done, windows[0]?.start], "Initial store phase");
+      if (p.phase === "mutation-probes") { order(windows.at(-1)?.end, before, "Journey/mutation phase"); order(done, c?.before?.at, "Mutation/cleanup phase"); }
+      if (p.phase === "cleanup") {
+        order(ready, c?.before?.at, "Upstream/cleanup begin"); order(cleanupEnd, after, "Cleanup/upstream end"); order(done, b.terminalStartedAt, "Cleanup/terminal phase");
+        for (const doc of j?.documents ?? []) if (!e.steps.some((r) => r.dom?.observer === doc.observer)) order(done, doc.observedAt, "Cleanup upstream/terminal parser");
+      }
+    }
+    const [terminal, done] = interval(ledger.terminal, "upstream terminal");
+    sequence([prior, b.endedAt, terminal, done], "Lifecycle/upstream terminal phase");
   }
   return latest;
 }
 
-function replayCell(cell, profile, app, summary, records, block) {
+function replayCell(cell, profile, app, summary, records, block, endpoints) {
   need(object(cell) && ["not-run", "failed", "unsupported", "captured"].includes(cell.outcome) && typeof cell.qualificationPassed === "boolean", "Malformed native cell outcome");
   if (cell.evidence === null) {
     need(cell.outcome === "not-run" || cell.outcome === "failed", "Missing native evidence cannot support a positive/unsupported cell");
@@ -241,11 +408,11 @@ function replayCell(cell, profile, app, summary, records, block) {
   same(e.environment, { ...settings.profiles[profile.device], js: profile.js }, "Native environment differs from profile");
   need(e.clock?.origin === "node.performance.now" && finite(e.clock.startedAt), "Native observation clock missing/malformed");
   const latestObservation = observationTiming(e, block);
+  storeReads(e, profile, summary, app, endpoints, block);
   if (e.resourceBaseline) { resource(e.resourceBaseline); same(e.resourceBaseline.scriptExecutionEnabled, profile.js, "Baseline JS configuration differs from profile"); }
   else block("Native resource baseline missing");
   if (e.storeBefore?.outcome === "read") {
-    need(text(e.storeBefore.observer) && e.storeBefore.via === "independent-read" && Array.isArray(e.storeBefore.alerts), "Malformed independent initial store observation");
-    if (e.storeBefore.alerts.length) need(!e.functionalChecksPassed && e.failures.length > 0, "Initial nonempty store hidden by functional summary");
+    if (e.storeBefore.alerts?.length) need(!e.functionalChecksPassed && e.failures.length > 0, "Initial nonempty store hidden by functional summary");
   } else block("Initial empty independent store proof unavailable");
   let previous = null, domPass = true, allFunctional = e.steps.length === profile.steps.length;
   const semanticFailures = [];
@@ -293,8 +460,8 @@ function replayCell(cell, profile, app, summary, records, block) {
         if (enhancement) same(posts[0].transport, enhancement.transport, "Native enhancement transport mismatch");
         need((step.kind === "accepted-write" ? [200, 201, 202, 204, 302, 303] : [200, 302, 303, 400, 422]).includes(posts[0].status), "Unexpected native POST status");
         const accepted = profile.steps.find((s) => s.kind === "accepted-write");
-        need(row.readback?.outcome === "read" && row.readback.via === "independent-read" && row.readback.observer !== row.dom?.observer, "Independent store readback missing");
-        same(row.readback.alerts, [{ item_id: step.itemId, email: accepted.input.email, target_minor: 125 }], "Native write/rejection store mismatch");
+        if (row.readback?.outcome === "read" && Array.isArray(row.readback.alerts)) same(row.readback.alerts, [{ item_id: step.itemId, email: accepted.input.email, target_minor: 125 }], "Native write/rejection store mismatch");
+        else block("Independent store readback contents unavailable");
       } else need(!posts.length, "Unexpected native write");
       if (!step.input && (["initial", "missing", "reset", "return"].includes(step.kind) || step.kind === "navigate" || !profile.js)) need(row.requests.some((r) => r.method === "GET"
         && r.status === (step.kind === "missing" ? 404 : 200) && navigationDestination(r, { app, architecture: e.architecture, js: profile.js, form: row.formBefore }) === step.path), "Native navigation receipt missing");
@@ -315,13 +482,12 @@ function replayCell(cell, profile, app, summary, records, block) {
     need(list(m.failures) && Array.isArray(m.attempts), "Malformed mutation probe ledger");
     if (!m.failures.length) {
       same(m.attempts.map((a) => a.kind), ["cross-site-origin", "cross-site-fetch-metadata", "no-record"], "Missing/duplicate mutation rejection probes");
-      need(m.before?.outcome === "read" && m.otherContext?.before?.outcome === "read" && m.otherContext?.after?.outcome === "read", "Mutation probes lack independent stores");
-      same(m.otherContext.before.alerts, [], "Other context starts nonempty"); same(m.otherContext.after.alerts, [], "Mutation state crossed contexts");
+      for (const read of [m.otherContext?.before, m.otherContext?.after]) if (read?.outcome === "read" && Array.isArray(read.alerts)) same(read.alerts, [], "Other context starts nonempty or mutation state crossed contexts");
       const accepted = profile.steps.find((s) => s.kind === "accepted-write");
-      same(m.before.alerts, [{ item_id: accepted.itemId, email: accepted.input.email, target_minor: 125 }], "Mutation baseline differs from independently observed accepted store");
+      if (m.before?.outcome === "read" && Array.isArray(m.before.alerts)) same(m.before.alerts, [{ item_id: accepted.itemId, email: accepted.input.email, target_minor: 125 }], "Mutation baseline differs from independently observed accepted store");
       for (const row of m.attempts) {
         need(!row.failure && row.method === "POST" && (row.kind === "no-record" ? [404] : [400, 403, 419, 422]).includes(row.status), "Mutation probe did not reject");
-        need(row.readback?.outcome === "read", "Mutation readback missing"); same(row.readback.alerts, m.before.alerts, "Rejected mutation changed store");
+        if (row.readback?.outcome === "read" && Array.isArray(row.readback.alerts) && Array.isArray(m.before?.alerts)) same(row.readback.alerts, m.before.alerts, "Rejected mutation changed store");
       }
     }
     allFunctional &&= !m.failures.length;
@@ -478,12 +644,13 @@ export function validateSaved(input = {}) {
     const browser = summary.browser;
     if (browser === null) block("Native browser provenance unavailable");
     else { need(browser?.engine === "chromium" && text(browser.version) && text(browser.playwright) && hash.test(browser.executableSha256), "Malformed browser provenance/hash"); localPath(browser.executable); same(browser.launch, { headless: true }, "Native browser launch options mismatch"); }
+    const endpoints = new Map();
     for (const app of candidates) {
       const cells = summary.cells[app]; need(Array.isArray(cells), "Missing raw native profiles"); same(cells.map((c) => c?.case), plan.cases.map((p) => p.key), "Missing/extra/duplicate/out-of-order native profiles");
       for (const profile of plan.cases) {
         const cell = cells.find((c) => c.case === profile.key);
         if (cell.outcome !== "not-run") need(options.apps.includes(app) && (!options.cases || options.cases.includes(profile.key)), "Native evidence outside selected run options");
-        const reasons = [], derived = replayCell(cell, profile, app, summary, records, (r) => { if (!reasons.includes(r)) reasons.push(r); });
+        const reasons = [], derived = replayCell(cell, profile, app, summary, records, (r) => { if (!reasons.includes(r)) reasons.push(r); }, endpoints);
         if (reasons.length) block("Native matrix contains unqualified or missing proof");
         result.cells.push({ app, case: profile.key, outcome: cell.outcome, derived, blocked: reasons });
       }
