@@ -1,0 +1,33 @@
+{
+  "app": "aspnet",
+  "group": "recoverable-live",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "aspnet-fanout-1.json.gz",
+      "sha256": "7284ff7250ecad810a1e0c7918f56544d431077f6a6510d188130c5b681631b1"
+    },
+    {
+      "file": "aspnet-fanout-2.json.gz",
+      "sha256": "4d03e4f307e841398d366d3b87540b4a469212109d172fef6cb027f3eab0f413"
+    },
+    {
+      "file": "aspnet-fanout-4.json.gz",
+      "sha256": "6be2b22b06722966486c5bbd0857789b2fb7920dba9438149fac0191414da4f6"
+    }
+  ]
+}

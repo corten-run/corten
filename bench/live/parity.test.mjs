@@ -128,6 +128,37 @@ test("real Express and ASP.NET native-feed profiles independently qualify before
   for (const app of ["aspnet", "express"]) assert.equal(ledger.cells.find((r) => r.app === app).measurement, "complete");
 });
 
+test("new Gin native-feed source independently qualifies and measures after its source build timeout", async () => {
+  const directory = new URL("./evidence/native-feed-gin/", import.meta.url);
+  assert.deepEqual((await verifyRound(directory)).passed, ["gin"]);
+  const ledger = JSON.parse(await readFile(new URL("coverage.json", directory), "utf8"));
+  assert.equal(ledger.cells.find((r) => r.app === "gin").measurement, "complete");
+});
+
+test("actual Corten Feed/subscribe/keyed-view delivery and recovery qualify before every measured level", async () => {
+  for (const base of [new URL("./evidence/native-feed-corten/", import.meta.url),
+    new URL("../recoverable-live/evidence/native-feed-corten/", import.meta.url)]) {
+    const round = await verifyRound(base);
+    assert.deepEqual(round.passed, ["corten"]); assert.equal(round.readyForLoad, false);
+    const ledger = JSON.parse(await readFile(new URL("coverage.json", base), "utf8"));
+    assert.equal(ledger.cells.find((r) => r.app === "corten").measurement, "complete");
+  }
+});
+
+test("actual Corten metadata cannot conceal a different native keyed patch", async () => {
+  const a = await artifact("corten-normal", new URL("./evidence/native-feed-corten/", import.meta.url));
+  const frame = a.network.find((r) => r.kind === "native-sse" && r.eventName === "patch");
+  const patch = JSON.parse(frame.data); patch.changes = [{ op: "remove", id: "different-native-key" }]; frame.data = JSON.stringify(patch);
+  assert.throws(() => verify(a), /native keyed patch/);
+});
+
+test("current ASP.NET native-feed recovery source independently qualifies all faults and measured levels", async () => {
+  const directory = new URL("../recoverable-live/evidence/native-feed-aspnet/", import.meta.url);
+  assert.deepEqual((await verifyRound(directory)).passed, ["aspnet"]);
+  const ledger = JSON.parse(await readFile(new URL("coverage.json", directory), "utf8"));
+  assert.equal(ledger.cells.find((r) => r.app === "aspnet").measurement, "complete");
+});
+
 for (const [name, mutate] of [
   ["missing native batch write", (a) => { const r = a.network.find((r) => r.kind === "request" && r.body?.includes('"events":')); const body = JSON.parse(r.body); body.events.pop(); r.body = JSON.stringify(body); }],
   ["missing native batch acknowledgement", (a) => { const r = a.network.find((r) => r.kind === "response" && r.body?.includes('"acks":')); const body = JSON.parse(r.body); body.acks.pop(); r.body = JSON.stringify(body); }],

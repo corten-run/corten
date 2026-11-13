@@ -19,6 +19,12 @@ Every implemented app must pass normal, disconnect, missed-updates, expired-curs
 slow-reader browser journeys. The saved `evidence/native-recovery/` captures preserve the
 actual bounded ASP.NET journeys, not group completion or load readiness.
 
+Current explicit-profile captures in `evidence/native-feed-corten/` and
+`evidence/native-feed-aspnet/` each pass all six native fault scenarios and the independently
+admitted 1/2/4-browser measurement levels. They remain partial rounds, never full-group
+readiness. `evidence/native-recovery-timing-limit/` preserves the earlier failed Corten
+round without rewriting its identity or relaxing the 10-second gates.
+
 Explicit `--measure` revalidates all six successful saved native recovery journeys before
 measuring that app's actual 1/2/4-browser fan-out, visible frame latency and kernel CPU/memory.
 Measurements reference their native qualification artifacts; failed or absent ports are not
