@@ -7,11 +7,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, k6Image, nodeImage, sourceTree } from "./raw-contract.mjs";
+import { retainLoadEvidence } from "./load-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -26,7 +28,7 @@ const folder = options.part ? join(here, "results", options.round, `d${options.p
 mkdirSync(dirname(folder), { recursive: true });
 // Atomic reservation: another invocation or an old failed run cannot be overwritten.
 mkdirSync(folder);
-const summary = { schema: resultSchema, workload, round: options.round, runId, options, startedAt: new Date().toISOString(), complete: false, checksPassed: false, failures: [], cleanupFailures: [], apps: {}, host: { hostname: hostname(), platform: platform(), release: release() },
+const summary = { schema: resultSchema, evidenceVersion, workload, round: options.round, runId, options, startedAt: new Date().toISOString(), complete: false, checksPassed: false, failures: [], cleanupFailures: [], apps: {}, host: { hostname: hostname(), platform: platform(), release: release() },
   scope: "marketplace-v2 rich localized rendering/JSON load only; fullstack bytes, build-cost, instructions and browser-timing measurements are not ported",
   measurement: { profiles: timedProfiles, cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
@@ -35,6 +37,10 @@ const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.string
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
 if (options.group) Object.assign(summary.measurement, { featureProfile, qualificationSettings });
 const active = new Set();
+const created = [], removed = [], images = {}, toolImages = {};
+const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
+const receipt = async (name) => containerReceipt(await inspect(name));
+let tree;
 let interrupted = false;
 const children = new Set();
 // This stops command clients, not browser descendants. Browsers run ONLY in
@@ -95,6 +101,13 @@ const fail = (app, source, stage, error) => {
 const owned = async (args, name) => {
   active.add(name);
   await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)]);
+  const info = await inspect(name);
+  created.push({ kind: "container", id: info.Id, name });
+  // All runner-supplied mounts are binds; image-declared volumes are anonymous.
+  for (const m of info.Mounts.filter((m) => m.Type === "volume")) {
+    assert.match(m.Name, /^[a-f0-9]{64}$/);
+    created.push({ kind: "volume", id: m.Name, name: m.Name });
+  }
   return name;
 };
 async function remove(name) {
@@ -103,7 +116,12 @@ async function remove(name) {
   if (list) {
     const info = await inspect(name, true);
     assert.equal(info.Config.Labels?.[label], runId, `refusing cleanup of unowned ${name}`);
-    await docker(["rm", "-f", info.Id], { cleanup: true });
+    assert.equal(await docker(["rm", "-f", "-v", info.Id], { cleanup: true }), info.Id);
+    removed.push({ kind: "container", id: info.Id, name });
+    for (const m of info.Mounts.filter((m) => m.Type === "volume")) {
+      assert.equal(await docker(["volume", "ls", "--filter", `name=^${m.Name}$`, "--format", "{{.Name}}"], { cleanup: true }), "", "anonymous volume survived container cleanup");
+      removed.push({ kind: "volume", id: m.Name, name: m.Name });
+    }
   }
   active.delete(name);
 }
@@ -114,8 +132,6 @@ async function portOf(name) {
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
-const nodeImage = "node:24-bookworm-slim";
-const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
 const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
@@ -156,6 +172,7 @@ async function coldStart(name, source, target, image, raw) {
   const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${summary.currentLocale}/item_1`;
   try {
     await owned(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
+    retain(join(raw, "probe-container.json"), await receipt(probe));
     const deadline = Date.now() + 10000;
     while (!(await docker(["logs", probe])).includes("catalog-probe-ready")) {
       if (Date.now() > deadline) throw new Error("cold sidecar did not become ready");
@@ -168,6 +185,7 @@ async function coldStart(name, source, target, image, raw) {
     assert.equal(exit, "0", `cold probe: ${output}`);
     const result = JSON.parse(output.split("\n").findLast((line) => line.startsWith("{")));
     const info = await inspect(name);
+    retain(join(raw, "cold-container.json"), containerReceipt(info));
     const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
     assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
     const cold = { ...result, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt, clock: "Docker host wall clock; container start, not process exec; polling interval 10ms", measuredBeforeReadinessOrWarmup: true };
@@ -182,7 +200,6 @@ async function cpu(containers) {
 }
 async function load(name, target, phase, seconds, raw, pass) {
   const container = `${runId}-k6`;
-  const output = join(raw, `${phase}.json`);
   const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
     "-e", `RATE=${options.rate}`, "-e", `VUS=${phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64}`];
   const samples = phase === "warmup" ? [] : [name, ...(summary.currentSource === "api" ? [upstreamName] : [])];
@@ -216,11 +233,12 @@ async function load(name, target, phase, seconds, raw, pass) {
     }
   }
   try {
+    let appReceipt;
     const { after, seen } = await afterPhase({ pass, phase, phaseStart: new Date(phaseStartMs).toISOString() }, errors, {
-      app: async () => (await inspect(name)).State,
+      app: async () => { appReceipt = await receipt(name); return appReceipt.state; },
       counters: async () => (samples.length && Object.keys(before).length ? cpu(samples) : {}),
       // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
-      summary: async () => { await docker(["cp", `${container}:/tmp/marketplace-summary.json`, output]); return JSON.parse(readFileSync(output, "utf8")); },
+      summary: () => retainLoadEvidence(docker, container, raw, phase),
       sidecars: () => Promise.all([cpuName, ...(reads ? [upstreamName] : [])].map(async (n) => ({ name: n, startedAt: startedAt[n], state: await inspect(n).then((i) => i.State, () => null) }))),
       events: async () => {
         const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
@@ -229,19 +247,26 @@ async function load(name, target, phase, seconds, raw, pass) {
     }, (e) => log(`${name} ${phase}: ${e.step} failed as the app stopped: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
+    const upstreamReads = reads ? { before: reads, after: await upstreamCounters() } : null;
+    retain(join(raw, `${phase}-receipt.json`), { evidenceVersion,
+      identity: { app: name.slice(runId.length + 1), source: summary.currentSource, locale: summary.currentLocale, target, pass, phase },
+      app: appReceipt, load: await receipt(container), cpu: await receipt(cpuName), upstream: reads ? await receipt(upstreamName) : null,
+      before, after, upstreamReads, finishedAt: new Date().toISOString(),
+      seen: { ...seen, summary: undefined, errors: seen.errors.map((e) => ({ ...e, error: String(e.error?.message ?? e.error) })) } });
     // Throws for a harness or parity failure, including one the app's stop does not explain (#1128).
     const stop = phaseEnd(seen);
+    readLoadSummary(seen.summary);
     if (stop) {
       // An upstream error answer may be what stopped the app: that stays the harness's failure.
       if (reads) {
-        const upstream = upstreamErrors(reads, await upstreamCounters());
+        const upstream = upstreamErrors(upstreamReads.before, upstreamReads.after);
         assert.equal(upstream, 0, `the upstream answered ${upstream} record reads with an error during ${phase}, and the app stopped: a harness failure, not the app's outcome`);
       }
       throw new AppStopped(stop);
     }
     const metrics = readOutcome(seen.summary);
     if (reads) {
-      const errors = upstreamErrors(reads, await upstreamCounters());
+      const errors = upstreamErrors(upstreamReads.before, upstreamReads.after);
       assert.equal(errors, 0, `the upstream answered ${errors} record reads with an error during ${phase}: a harness failure, not the app's outcome`);
     }
     if (metrics.appOutcome) log(`${name} ${phase}: app outcome, ${metrics.failed} of ${metrics.requests} requests failed, ${metrics.dropped} iterations dropped, ${metrics.checksFailed} checks failed`);
@@ -257,6 +282,7 @@ async function load(name, target, phase, seconds, raw, pass) {
 try {
   save();
   summary.commit = await command("git", ["rev-parse", "HEAD"]);
+  tree = sourceTree(summary.commit);
   summary.dirty = (await command("git", ["status", "--porcelain", "--untracked-files=normal"])).length > 0;
   assert.ok(options.checkOnly || !summary.dirty, "load runs require a clean committed checkout");
   summary.host.docker = await docker(["version", "--format", "{{.Server.Version}}"]);
@@ -271,6 +297,7 @@ try {
   summary.host.cpu = hostText.split("\n").find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim() ?? null;
   summary.host.onlineCpus = hostText.trim().split("\n").at(-1).trim();
   const fixture = readFileSync(join(fixtureDir, "marketplace.json"));
+  writeFileSync(join(folder, "fixture.json"), fixture);
   const marketplace = validateMarketplace(JSON.parse(fixture));
   const generated = (await import("./fixtures.mjs")).records();
   assert.deepEqual(marketplace, generated, "generated fixture is stale: run node bench/marketplace/fixtures.mjs");
@@ -291,6 +318,8 @@ try {
         assert.ok(buildDirty || !(await command("git", ["status", "--porcelain"])).length, "checkout became dirty during image build");
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
+      images[app] = imageReceipt(image);
+      retain(join(folder, "images.json"), images);
       Object.assign(entry, imageProvenance(image.Config.Labels, summary.commit, options.checkOnly));
       entry.imageId = image.Id;
       if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], featureProfile, "image lacks the required feature profile");
@@ -299,10 +328,15 @@ try {
     save();
   }
   await docker(["network", "create", "--label", `${label}=${runId}`, network]);
+  const networkInfo = JSON.parse(await docker(["network", "inspect", network]))[0];
+  created.push({ kind: "network", id: networkInfo.Id, name: network });
+  retain(join(folder, "network.json"), { id: networkInfo.Id, name: network, owner: networkInfo.Labels?.[label] });
   summary.networkCreated = true;
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
   const upstreamInfo = await inspect(upstreamName);
+  retain(join(folder, "upstream-container.json"), containerReceipt(upstreamInfo));
+  toolImages.upstream = imageReceipt(JSON.parse(await docker(["image", "inspect", upstreamInfo.Image]))[0]);
   startedAt[upstreamName] = upstreamInfo.State.StartedAt;
   summary.tools = { upstream: { image: nodeImage, imageId: upstreamInfo.Image } };
   const upstream = upstreamUrl = await portOf(upstreamName);
@@ -322,6 +356,7 @@ try {
     checker = JSON.parse(await docker(["image", "inspect", checkerImage]))[0];
   }
   summary.tools.checker = { image: checkerImage, imageId: checker.Id, isolation: "owned PID namespace/cgroup; force-removed in finally, independent of Node/browser process groups" };
+  toolImages.checker = imageReceipt(checker);
     for (const source of sources) for (const app of options.apps) {
       const entry = summary.apps[app];
       if (!entry.imageId) continue;
@@ -340,12 +375,14 @@ try {
         await owned(["run", "-d", ...appArgs(name, source, entry.imageId)], name);
         const base = await portOf(name);
         await ready(base);
+        retain(join(out, "app-container.json"), await receipt(name));
         if (options.group) {
           const qualificationContainer = `${name}-qualification`;
           try {
             await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "--ulimit", "nofile=65536:65536", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
               checker.Id, "node", "/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/qualification.json"], qualificationContainer);
             await docker(["start", "-a", qualificationContainer], { timeout: 8 * 60000, file: join(out, "qualification.log") });
+            retain(join(out, "qualification-container.json"), await receipt(qualificationContainer));
             const q = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
             (entry.qualification ??= {})[source] = q;
             if (!q.eligible) { log(`excluding ${app} ${source}: missing ${q.missing.join(", ")}`); save(); continue; }
@@ -357,7 +394,10 @@ try {
         // stays a trustworthy browser origin without disabling security features.
         await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
           "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/marketplace/check.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/checks.json"], checkContainer);
-        try { await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") }); }
+        try {
+          await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") });
+          retain(join(out, "check-container.json"), await receipt(checkContainer));
+        }
         finally { await remove(checkContainer); }
         const checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
         entry.checks[source] = checked;
@@ -386,9 +426,12 @@ try {
     assert.equal(await command("git", ["status", "--porcelain"]), "", "checkout changed during builds/checks");
     const k6 = JSON.parse(await docker(["image", "inspect", k6Image]).catch(async () => { await docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") }); return docker(["image", "inspect", k6Image]); }))[0];
     summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
+    toolImages.k6 = imageReceipt(k6);
+    retain(join(folder, "tools.json"), toolImages);
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     startedAt[cpuName] = (await inspect(cpuName)).State.StartedAt;
+    retain(join(folder, "cpu-container.json"), await receipt(cpuName));
     // A profile in which the app's container stopped runs no later pass (#1128).
     for (const { pass, profile: { key, source, locale, target }, app, skip } of passPlan(options.passes, measuredApps, timedProfiles, (a, k) => summary.apps[a].runs[k] ?? [])) {
       const entry = summary.apps[app];
@@ -427,6 +470,7 @@ try {
   }
   summary.finishedCommit = await command("git", ["rev-parse", "HEAD"]);
   summary.finishedDirty = (await command("git", ["status", "--porcelain"])).length > 0;
+  retain(join(folder, "source.json"), { evidenceVersion, commit: summary.commit, tree, dirty: summary.dirty, finishedCommit: summary.finishedCommit, finishedDirty: summary.finishedDirty });
   if (!options.checkOnly) {
     assert.equal(summary.finishedCommit, summary.commit, "checkout moved during measurement");
     assert.equal(summary.finishedDirty, false, "checkout changed during measurement");
@@ -434,6 +478,7 @@ try {
   summary.complete = summary.failures.length === 0;
 } catch (e) { fail(null, null, "suite", e); }
 finally {
+  const cleanupStartedAt = new Date().toISOString();
   for (const name of [...active].reverse()) {
     try { await remove(name); } catch (e) { summary.cleanupFailures.push({ resource: name, error: e.message }); }
   }
@@ -442,9 +487,16 @@ finally {
     if (found) {
       const info = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0];
       assert.equal(info.Labels?.[label], runId, "refusing unowned network cleanup");
-      await docker(["network", "rm", info.Id], { cleanup: true });
+      assert.equal(await docker(["network", "rm", info.Id], { cleanup: true }), info.Id);
+      removed.push({ kind: "network", id: info.Id, name: network });
     }
   } catch (e) { summary.cleanupFailures.push({ resource: network, error: e.message }); }
+  try {
+    const remaining = { containers: await docker(["ps", "-a", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true }),
+      networks: await docker(["network", "ls", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true }) };
+    retain(join(folder, "cleanup.json"), { evidenceVersion, runId, startedAt: cleanupStartedAt, finishedAt: new Date().toISOString(), created, removed, remaining });
+    assert.deepEqual(remaining, { containers: "", networks: "" }, "owned resources survived cleanup");
+  } catch (e) { summary.cleanupFailures.push({ resource: runId, error: e.message }); }
   delete summary.currentSource;
   delete summary.currentLocale;
   summary.finishedAt = new Date().toISOString();
