@@ -524,6 +524,10 @@ async function run(browser) {
   {
     const styled = await browser.newPage();
     styled.on("pageerror", (e) => errors.push(`styled patch: ${e.message}`));
+    // What the runtime says of the patch (a runtime that does not take the link out of the patch
+    // says it has no id); the failed load is the browser's, not the runtime's.
+    const said = /** @type {string[]} */ ([]);
+    styled.on("console", (m) => m.type() === "error" && m.text().startsWith("corten:") && said.push(m.text()));
     await styled.goto(base);
     await styled.evaluate(() =>
       document
@@ -554,13 +558,46 @@ async function run(browser) {
     check("a page outside an area links none of its stylesheets", (await styled.$$eval("link[data-corten-style]", (all) => all.length)) === 0);
     await styled.route("**/sections/**", (route) => route.abort("internetdisconnected"));
     const failed = await save();
-    check("a patch whose area stylesheet fails to load is put in place unstyled, the link taken out", failed === "Saved 0px, 0 link", failed);
+    check(
+      "a patch whose area stylesheet fails to load is put in place unstyled, the link taken out",
+      failed === "Saved 0px, 0 link" && said.length === 0,
+      [failed, ...said].join("; "),
+    );
     await styled.unroute("**/sections/**");
     const first = await save();
     check("a patch from another area's handler loads that area's stylesheet before it is put in place", first === "Saved 5px, 1 link", first);
     const second = await save();
-    check("the next patch from that area does not link its stylesheet again", second === "Saved 5px, 1 link", second);
+    check("the next patch from that area does not link its stylesheet again", second === "Saved 5px, 1 link" && said.length === 0, [second, ...said].join("; "));
     await styled.close();
+  }
+  // Two patches that link a stylesheet still loading: the second waits for the same load rather
+  // than take the link the first put in the head for a loaded stylesheet.
+  {
+    const raced = await browser.newPage();
+    raced.on("pageerror", (e) => errors.push(`raced patches: ${e.message}`));
+    await raced.goto(base);
+    await raced.route("**/sections/**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.continue();
+    });
+    const drawn = await raced.evaluate(async () => {
+      const { patch } = await import("corten");
+      const answer = await fetch("/smoke/styled", { method: "POST", headers: { corten: "action" } }).then((r) => r.text());
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p id="styled-note"></p>'));
+      // The note's border each time a patch puts it in the page.
+      const seen = /** @type {string[]} */ ([]);
+      const observer = new MutationObserver(() => {
+        const note = document.querySelector(".styled-note__note");
+        if (note) seen.push(getComputedStyle(note).borderInlineStartWidth);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      await Promise.all([patch(__html(answer)), patch(__html(answer))]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      observer.disconnect();
+      return `${seen.join(" ")}, ${document.head.querySelectorAll('link[data-corten-style][href*="/sections/smoke"]').length} link`;
+    });
+    check("a patch sent while another's area stylesheet is loading waits for that load", /^5px( 5px)*, 1 link$/.test(drawn), drawn);
+    await raced.close();
   }
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.

@@ -1443,6 +1443,14 @@ mod tests {
                 "{body}"
             );
         }
+        // A component no list names is the patch's in its message, not the page's.
+        #[cfg(debug_assertions)]
+        {
+            let unlisted =
+                App::new(Routes::from(Table::new().route("/stray", get(badge)))).dev(true).components(&[theme::TOKENS]);
+            let (status, body) = action(unlisted.router(), "/stray").await;
+            assert!(status == 500 && body.contains("the patch renders BadgeList, which the app does not list"), "{body}");
+        }
     }
 
     #[derive(crate::Route)]

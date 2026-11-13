@@ -1938,10 +1938,19 @@ function viewOf(root, fresh) {
 }
 
 /**
+ * The section stylesheets {@link stylesOf} added to <head> that have not loaded yet, by URL, so a
+ * second answer that links one (a patch while another is in flight, a navigation) waits for the
+ * same load rather than take a link in the head for a loaded stylesheet.
+ * @type {Map<string, Promise<boolean>>}
+ */
+const loadingStyles = new Map();
+
+/**
  * Moves the section stylesheets a page or a patch links (`Area::components`) out of it, adds those
  * this document lacks to <head> and resolves when they have loaded: true, or false when one
  * failed, which is taken out again so a later answer that links it tries again. Those that load
- * are never removed: their rules only match their own components' classes.
+ * are never removed: their rules only match their own components' classes. One that neither
+ * loads nor fails holds the answer, as the browser holds a page on a stylesheet.
  * @param {DocumentFragment} content
  * @returns {Promise<boolean>}
  */
@@ -1951,15 +1960,25 @@ async function stylesOf(content) {
   const have = Array.from(document.head.querySelectorAll("link[data-corten-style]"), (link) => link.getAttribute("href"));
   const loads = Array.from(links, (link) => {
     link.remove();
-    if (have.includes(link.getAttribute("href"))) return true;
+    const href = link.getAttribute("href") ?? "";
+    const loading = loadingStyles.get(href);
+    if (loading) return loading;
+    if (have.includes(href)) return true;
     document.head.append(link);
-    return new Promise((resolve) => {
-      link.onload = () => resolve(true);
+    /** @type {Promise<boolean>} */
+    const load = new Promise((resolve) => {
+      link.onload = () => {
+        loadingStyles.delete(href);
+        resolve(true);
+      };
       link.onerror = () => {
+        loadingStyles.delete(href);
         link.remove();
         resolve(false);
       };
     });
+    loadingStyles.set(href, load);
+    return load;
   });
   return (await Promise.all(loads)).every(Boolean);
 }
