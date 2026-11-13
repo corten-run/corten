@@ -68,22 +68,32 @@ export function parseArgs(args) {
 export const selected = (cell, o) => Object.entries(o.verify).every(([key, value]) => cell[key === "case" ? "mode" : key] === value);
 export const registryDigest = contractSha256("hardening");
 
+const nativeEvidence = (cell, assessment) => assessment?.schema === "native-hardening-assessment/v1"
+  && typeof assessment.productionQualified === "boolean"
+  && ["observed", "missing", "inconclusive"].includes(assessment.hostValidation)
+  && ["observed", "missing", "inconclusive"].includes(assessment.liveness)
+  && assessment.sourceControl === (cell.source === "api" ? "passed" : "not-applicable");
+
 export function groupReady(cells) {
   const expected = matrix();
   assert.deepEqual(cells.map((c) => c.key), expected.map((c) => c.key), "selected group matrix was dropped or reordered");
   return cells.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true
-    && c.nativeAssessment?.sourceControl !== "target-functional-failure" && c.nativeAssessment !== undefined);
+    && nativeEvidence(c, c.nativeAssessment) && (c.mode === "direct" || nativeEvidence(c, c.edgeAssessment)));
 }
 
 export function nativeGroup(cells) {
   assert.deepEqual(cells.map((c) => c.key), matrix().map((c) => c.key));
   return apps.map((app) => {
     const selected = cells.filter((c) => c.app === app), assessed = selected.filter((c) => c.nativeAssessment);
+    const assessments = selected.flatMap((c) => [c.nativeAssessment, ...(c.mode === "deployed-edge" ? [c.edgeAssessment] : [])]).filter(Boolean);
+    const qualified = selected.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true
+      && nativeEvidence(c, c.nativeAssessment) && c.nativeAssessment.productionQualified === true
+      && (c.mode === "direct" || nativeEvidence(c, c.edgeAssessment) && c.edgeAssessment.productionQualified === true));
     return { app, representative: "existing-native-marketplace-production-matched", alternatives: [],
       cells: selected.length, assessed: assessed.length, observed: selected.filter((c) => c.status === "observed").length,
-      productionQualification: !assessed.length ? "not-established" : assessed.some((c) => !c.nativeAssessment.productionQualified)
-        ? "gaps-observed" : assessed.length === selected.length ? "qualified" : "partial",
-      missingProductionFeatures: [...new Set(assessed.flatMap((c) => c.nativeAssessment.missingProductionFeatures))].sort(),
+      productionQualification: !assessed.length ? "not-established" : assessments.some((a) => a.productionQualified === false)
+        ? "gaps-observed" : qualified ? "qualified" : "partial",
+      missingProductionFeatures: [...new Set(assessments.flatMap((a) => a.missingProductionFeatures))].sort(),
       numericComparisonQualified: selected.every((c) => c.targetOutcome?.numericComparisonQualified === true) };
   });
 }
