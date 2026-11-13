@@ -139,16 +139,26 @@ func newMarketplaceSource() (*marketplaceSource, error) {
 			return nil, err
 		}
 		defer file.Close()
-		if err := json.NewDecoder(file).Decode(&s.fixture); err != nil {
+		var records map[string]json.RawMessage
+		if err := json.NewDecoder(file).Decode(&records); err != nil {
 			return nil, err
 		}
-		if s.fixture == nil {
+		if records == nil {
 			return nil, fmt.Errorf("missing marketplace fixture")
 		}
-		for _, record := range s.fixture {
+		s.fixture = make(map[string]*marketplaceRecord, len(records))
+		for id, data := range records {
+			if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err != nil {
+				return nil, err
+			}
+			var record marketplaceRecord
+			if err := json.Unmarshal(data, &record); err != nil {
+				return nil, err
+			}
 			if err := record.validate(); err != nil {
 				return nil, err
 			}
+			s.fixture[id] = &record
 		}
 	} else {
 		s.client = newRecordHTTPClient()

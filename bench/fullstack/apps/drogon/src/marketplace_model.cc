@@ -148,8 +148,10 @@ std::string Format::alert(const std::string &title, const std::string &email, co
    ++cents;
   }
  } catch (const std::exception &) { return words["invalid_price"].asString(); }
+ auto price = money_.formatDecimal(std::to_string(cents) + "e-2", status);
+ auto confirmation = interpolate(words["alert_set"].asString(), email, title, formatted(price, status));
  if (minor) *minor = cents;
- return interpolate(words["alert_set"].asString(), email, title, amount(number));
+ return confirmation;
 }
 View::View(RecordPtr r, const std::string &l, const Json::Value &w, const std::string &s, const std::string &order, bool allOffers)
  : record(std::move(r)), locale(l), seller(s), sort(order == "desc" ? "desc" : "asc"), words(w), format(l) {

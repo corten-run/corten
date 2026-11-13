@@ -9,6 +9,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -222,6 +224,60 @@ func TestAlertRejectsMissingAndNullNativeRecordFields(t *testing.T) {
 	data, _ = json.Marshal(fields)
 	if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err == nil {
 		t.Fatal("accepted missing nested field")
+	}
+}
+
+func TestAlertFixtureRejectsIncompleteRecordsWithoutAppend(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, field := range []string{"title", "description", "listing quantity", "listing seller", "offer quantity", "content title"} {
+		for _, null := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/null=%t", field, null), func(t *testing.T) {
+				data, _ := json.Marshal(sampleMarketplace())
+				var record map[string]any
+				if err := json.Unmarshal(data, &record); err != nil {
+					t.Fatal(err)
+				}
+				fields, key := record, field
+				if parts := strings.Split(field, " "); len(parts) == 2 {
+					array := map[string]string{"listing": "listings", "offer": "offers", "content": "contents"}[parts[0]]
+					fields, key = record[array].([]any)[0].(map[string]any), parts[1]
+				}
+				if null {
+					fields[key] = nil
+				} else {
+					delete(fields, key)
+				}
+				data, _ = json.Marshal(map[string]any{"item_1": record})
+				path := filepath.Join(t.TempDir(), "marketplace.json")
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("MARKETPLACE_SOURCE", "fixture")
+				t.Setenv("MARKETPLACE_FIXTURE_PATH", path)
+				source, err := newMarketplaceSource()
+				if err != nil {
+					if !strings.Contains(err.Error(), "missing required marketplace field") {
+						t.Fatal(err)
+					}
+					return // Startup rejection cannot create a session or append.
+				}
+				router := gin.New()
+				source.routes(router)
+				request := httptest.NewRequest("POST", "/marketplace/en-US/item_1", strings.NewReader("email=fixture%40example.test&target_price=1"))
+				request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				read := httptest.NewRecorder()
+				request = httptest.NewRequest("GET", "/api/alerts", nil)
+				for _, cookie := range response.Result().Cookies() {
+					request.AddCookie(cookie)
+				}
+				router.ServeHTTP(read, request)
+				if response.Code != http.StatusBadGateway || len(response.Result().Cookies()) != 0 || read.Body.String() != "[]" {
+					t.Fatalf("incomplete fixture accepted: POST=%d cookies=%v readback=%s", response.Code, response.Result().Cookies(), read.Body.String())
+				}
+			})
+		}
 	}
 }
 

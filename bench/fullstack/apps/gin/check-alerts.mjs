@@ -12,8 +12,9 @@ import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
 
-const [app, image, profile = 'defaults'] = process.argv.slice(2);
-assert.ok(['gin', 'drogon', 'topcoat', 'leptos'].includes(app) && image && ['defaults', 'matched'].includes(profile), 'usage: node check-alerts.mjs APP IMAGE [defaults|matched]');
+const [app, image, profile = 'defaults', focus = 'all'] = process.argv.slice(2);
+assert.ok(['gin', 'drogon', 'topcoat', 'leptos'].includes(app) && image && ['defaults', 'matched'].includes(profile), 'usage: node check-alerts.mjs APP IMAGE [defaults|matched] [all|money]');
+assert.ok(['all', 'money'].includes(focus), 'focus must be all or money');
 const docker = (...args) => {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
   assert.ifError(result.error);
@@ -46,6 +47,7 @@ const upstream = createServer((req, res) => {
 await new Promise(resolve => upstream.listen(0, '0.0.0.0', resolve));
 let browser;
 let active;
+const moneyFailures = [];
 try {
   await writeFile(join(folder, 'items.json'), '{}');
   await writeFile(join(folder, 'catalog.json'), JSON.stringify(catalogRecords()));
@@ -70,7 +72,47 @@ try {
       }
       throw new Error(docker('logs', active));
     });
-    for (const javaScriptEnabled of [false, true]) {
+    // Pair the native confirmation with independent, exact JSON readback. JSON
+    // numbers above 2^53 must not be rounded by the test client either.
+    const moneyContext = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const page = await moneyContext.newPage();
+      const expected = [];
+      const spaces = text => text.replace(/[\u00a0\u202f]/g, ' ');
+      for (const tag of ['en-US', 'fr-FR', 'de-DE']) {
+        for (const [input, minor, amounts] of [
+          ['1.005', 101n, ['$1.01', '1,01 $US', '1,01 $']],
+          ['1.015', 102n, ['$1.02', '1,02 $US', '1,02 $']],
+          ['1.0049', 100n, ['$1.00', '1,00 $US', '1,00 $']],
+          ['0.005', 1n, ['$0.01', '0,01 $US', '0,01 $']],
+          ['90071992547409.93', 9007199254740993n, ['$90,071,992,547,409.93', '90 071 992 547 409,93 $US', '90.071.992.547.409,93 $']],
+          ['92233720368547758.07', 9223372036854775807n, ['$92,233,720,368,547,758.07', '92 233 720 368 547 758,07 $US', '92.233.720.368.547.758,07 $']],
+          ['92233720368547758.08', null, []],
+        ]) {
+          const email = `money-${tag}-${input}@example.test`;
+          const target_price = tag === 'en-US' ? input : input.replace('.', ',');
+          const response = await moneyContext.request.post(`${base}/marketplace/${tag}/item_1`, { form: { email, target_price } });
+          assert.equal(response.status(), 200);
+          await page.setContent(await response.text());
+          const message = spaces(await page.locator('.marketplace__message').innerText());
+          if (minor !== null) expected.push({ item_id: 'item_1', email, target_minor: minor });
+          const readback = await moneyContext.request.get(`${base}/api/alerts`);
+          assert.equal(readback.status(), 200);
+          const rows = JSON.parse(await readback.text(), (key, value, context) => key === 'target_minor' ? BigInt(context.source) : value);
+          try {
+            if (minor === null) assert.ok(!message.includes(email), 'overflow must not confirm acceptance');
+            else {
+              assert.ok(message.includes(email), 'accepted price must confirm its email');
+              const amount = amounts[['en-US', 'fr-FR', 'de-DE'].indexOf(tag)];
+              assert.ok(message.includes(amount), `confirmation ${JSON.stringify(message)} must contain ${JSON.stringify(amount)}`);
+            }
+            assert.deepEqual(rows, expected, 'confirmation and stored minor units must agree exactly');
+          } catch (error) { moneyFailures.push(`${app} ${source} ${tag} ${input}: ${error.message.split('\n')[0]}; confirmation=${JSON.stringify(message)}; last stored=${rows.at(-1)?.target_minor}`); }
+        }
+      }
+      console.log(`CHECKED ${app} ${source}: paired money confirmation/readback in all locales`);
+    } finally { await moneyContext.close(); }
+    for (const javaScriptEnabled of focus === 'money' ? [] : [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled });
       const other = await browser.newContext({ javaScriptEnabled: false });
       try {
@@ -97,13 +139,14 @@ try {
         const form = page.locator('.marketplace__alert form');
         const email = `native-${javaScriptEnabled}@example.test`;
         await form.locator('[name=email]').fill(email);
-        await form.locator('[name=target_price]').fill('12.34');
+        await form.locator('[name=target_price]').fill('1.005');
         const posted = page.waitForRequest(req => req.method() === 'POST');
         await form.locator('button').click();
         const sent = await posted;
         assert.equal(new URL(sent.url()).pathname, app === 'leptos' && javaScriptEnabled ? '/api/marketplace-alert' : '/marketplace/en-US/item_1');
         await page.locator('.marketplace__message').filter({ hasText: email }).waitFor();
-        const expected = [{ item_id: 'item_1', email, target_minor: 1234 }];
+        assert.ok((await page.locator('.marketplace__message').innerText()).includes('$1.01'));
+        const expected = [{ item_id: 'item_1', email, target_minor: 101 }];
         assert.deepEqual(await read(), expected, 'accepted native form commits exactly once');
         assert.deepEqual(await read(), expected, 'GET does not clear storage');
         const cookies = await context.cookies(base);
@@ -175,6 +218,8 @@ try {
     }
     docker('rm', '-f', '-v', active); active = undefined;
   }
+  assert.deepEqual(moneyFailures, [], 'native money confirmation/readback regressions');
+  console.log(`PASS ${app}: exact money confirmation and storage`);
 } finally {
   if (browser) await browser.close();
   if (active) docker('rm', '-f', '-v', active);
