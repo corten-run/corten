@@ -5,13 +5,13 @@ use topcoat::{
     router::{
         content::{Form, Json},
         error::not_found,
-        href, page, path_param, route,
+        href, page, route,
     },
     runtime::link,
     view::{View, ViewExt, view},
 };
 
-use crate::{Id, catalog, document, missing};
+use crate::{catalog, document, id, missing};
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CatalogQuery {
@@ -21,7 +21,7 @@ pub(crate) struct CatalogQuery {
 
 #[page("/catalog/{id}")]
 pub async fn catalog_page(cx: &Cx, Form(query): Form<CatalogQuery>) -> Result<impl View> {
-    let Some(record) = catalog::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)? else {
+    let Some(record) = catalog::source::get(id(cx)).await.map_err(topcoat::Error::msg)? else {
         return Ok(view! { missing() }.boxed());
     };
     Ok(view! {
@@ -35,7 +35,7 @@ pub async fn catalog_page(cx: &Cx, Form(query): Form<CatalogQuery>) -> Result<im
                 <ul aria-label="Tags">
                     for tag in &record.tags { <li>(tag)</li> }
                 </ul>
-                <form method="get" action=(href!(catalog_page, Id(record.id.as_str())))>
+                <form method="get" action=(href!(catalog_page, id: record.id.as_str()))>
                     <label>"Field name " <input name="field" value=(&query.field)></label>
                     <button type="submit">"Filter"</button>
                 </form>
@@ -51,7 +51,7 @@ pub async fn catalog_page(cx: &Cx, Form(query): Form<CatalogQuery>) -> Result<im
                 <nav aria-label="Related records">
                     <ul>
                         for related in &record.related {
-                            <li>link(href: href!(catalog_page, Id(related.id.as_str())), (&related.title))</li>
+                            <li>link(href: href!(catalog_page, id: related.id.as_str()), (&related.title))</li>
                         }
                     </ul>
                 </nav>
@@ -63,6 +63,6 @@ pub async fn catalog_page(cx: &Cx, Form(query): Form<CatalogQuery>) -> Result<im
 
 #[route(GET "/api/catalog/{id}")]
 pub async fn catalog_json(cx: &Cx) -> Result<Json<Arc<catalog::Record>>> {
-    let record = catalog::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let record = catalog::source::get(id(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
     Ok(Json(record))
 }
