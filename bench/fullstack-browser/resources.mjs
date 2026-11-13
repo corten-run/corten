@@ -41,20 +41,28 @@ export function installResourceObserver() {
     const key = JSON.stringify([String(type), capture(options)]);
     if (bindings.has(key)) return Reflect.apply(add, this, [type, bindings.get(key).wrapped, options]);
     const owned = entry("listeners", this); owned.type = String(type);
+    const signal = options?.signal, once = Boolean(options?.once);
+    const binding = { owned, wrapped: null, release: null };
+    const release = () => {
+      owned.active = false;
+      if (bindings.get(key) === binding) bindings.delete(key);
+      if (signal) Reflect.apply(remove, signal, ["abort", release]);
+    };
+    binding.release = release;
     const wrapped = function(...args) {
-      if (options?.once) { owned.active = false; bindings.delete(key); }
+      if (once) release();
       return typeof callback === "function" ? invoke(owned, callback, this, args) : invoke(owned, callback.handleEvent, callback, args);
     };
-    bindings.set(key, { owned, wrapped });
-    if (options?.signal) Reflect.apply(add, options.signal, ["abort", () => { owned.active = false; bindings.delete(key); }, { once: true }]);
+    binding.wrapped = wrapped; bindings.set(key, binding);
+    if (signal) Reflect.apply(add, signal, ["abort", release, { once: true }]);
     try { return Reflect.apply(add, this, [type, wrapped, options]); }
-    catch (e) { owned.active = false; bindings.delete(key); throw e; }
+    catch (e) { release(); throw e; }
   };
   EventTarget.prototype.removeEventListener = function(type, callback, options) {
     const bindings = callback && callbacks.get(callback)?.get(this), key = JSON.stringify([String(type), capture(options)]);
     const binding = bindings?.get(key);
-    if (binding) { binding.owned.active = false; bindings.delete(key); }
-    return Reflect.apply(remove, this, [type, binding?.wrapped ?? callback, options]);
+    const value = Reflect.apply(remove, this, [type, binding?.wrapped ?? callback, options]);
+    binding?.release(); return value;
   };
   const timerFamilies = { clock: new Map(), animation: new Map(), idle: new Map() };
   for (const [start, stop, repeat] of [["setTimeout", "clearTimeout", false], ["setInterval", "clearInterval", true],
