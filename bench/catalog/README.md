@@ -82,6 +82,11 @@ memory and latency, and flag underutilized app CPUs or busy single-process
 upstreams. A successful correctness baseline is not proof the app saturated its CPU. Inspect
 the raw artifacts and `host.txt` as well; the report does not collect results or delete a host.
 
+Application logs preserve both stdout and stderr directly in each raw `app.log`, including
+output larger than the command's bounded in-memory diagnostic tail. Command deadlines and
+log-collection failures remain explicit failures; incomplete logs are not silently accepted.
+This does not disable native access logging or change measured application settings.
+
 The proposed [marketplace v2 contract](../marketplace/README.md) retains a richer app workload
 while requiring equivalent request-time localization. It is groundwork, not a measured or
 ready-to-run replacement for catalog or the historical marketplace suite.

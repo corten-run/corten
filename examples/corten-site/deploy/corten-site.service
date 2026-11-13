@@ -1,0 +1,48 @@
+# The site as a service: one binary, run as a user of its own that owns nothing, restarted
+# whenever it stops. provision.sh installs this as /etc/systemd/system/corten-site.service.
+[Unit]
+Description=Corten's site
+After=network-online.target
+Wants=network-online.target
+# Keep restarting: by default systemd gives up after five failed starts in ten seconds.
+StartLimitIntervalSec=0
+
+[Service]
+# The release the deploy last pointed `current` at (.github/workflows/site.yml).
+ExecStart=/opt/corten-site/current/corten-site
+# HOST, PORT, HOSTS, PROXIES, PUBLIC_ORIGIN, HTTPS and CORTEN_SITE_MACHINE (the README's table).
+EnvironmentFile=/etc/corten-site.env
+Restart=always
+RestartSec=1
+# A stop is SIGTERM: the app ends its streams and lets open requests finish.
+TimeoutStopSec=20
+# Every open page holds a connection for its live stream, and nginx holds one more for each.
+LimitNOFILE=16384
+
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+# nginx reaches the site over loopback, and the site reaches nothing. On a cloud machine that
+# keeps it from the metadata address, where anything on the machine can read what the machine
+# was handed as it started (infra/main.tf hands it its SSH host key).
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

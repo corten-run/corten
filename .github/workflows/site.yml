@@ -1,0 +1,146 @@
+# Ships examples/corten-site to the machine that serves it (examples/corten-site/deploy/README.md):
+# tests the site, builds the release binary, copies it over SSH, points `current` at it and
+# restarts the service, then asks the site for its page, its commit and its live stream. A site
+# that does not answer as this commit is put back on the release before. Does nothing until the
+# repository variable SITE_HOST names a machine.
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - examples/corten-site/**
+      # A change to what a machine is made from is the Site machine workflow's: it makes the new
+      # machine and runs this one when that machine answers. Shipped from here as well, a release
+      # would go to a machine about to be removed, or to one still setting itself up. The guide
+      # changes with those files and is not part of the site. A push that also changes something
+      # else here still runs this workflow, and that run may fail against a machine being
+      # replaced: the run the Site machine workflow starts afterwards is the one that ships.
+      - "!examples/corten-site/deploy/infra/**"
+      - "!examples/corten-site/deploy/provision.sh"
+      - "!examples/corten-site/deploy/nginx.conf"
+      - "!examples/corten-site/deploy/corten-site.service"
+      - "!examples/corten-site/deploy/README.md"
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a running one is never cancelled for the next: a cancelled deploy
+# could leave an unchecked release served.
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only main is shipped, whatever ref the workflow is run from by hand.
+    if: vars.SITE_HOST != '' && github.ref == 'refs/heads/main'
+    # The machine runs Ubuntu 24.04 too, so the binary finds the C library it was linked against.
+    runs-on: ubuntu-24.04
+    # The deploy key is this environment's secret. Give the environment a deployment branch rule
+    # for main (deploy/README.md), so no other branch's workflow can read it.
+    environment: site
+    # A run that hangs holds the one place in the queue: it is ended, and the next one ships.
+    timeout-minutes: 45
+    env:
+      SITE_HOST: ${{ vars.SITE_HOST }}
+      SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+    steps:
+      - name: The repository names the site as well as the machine
+        run: |
+          [ -n "$SITE_DOMAIN" ] || { echo "set the repository variable SITE_DOMAIN beside SITE_HOST"; exit 1; }
+      # The job that holds the deploy key runs its actions at the commits read, not at tags that
+      # can move.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # CI tests a pull request before it merges; this tests the commit that is about to be served.
+      - name: The site's tests
+        run: cargo test --locked -p corten-site
+      - name: Build the release the site will say it is
+        run: CORTEN_SITE_HEAT="${GITHUB_SHA::7}" cargo build --release --locked -p corten-site
+      - name: The deploy key, and the machine's own host key
+        env:
+          SITE_SSH_KEY: ${{ secrets.SITE_SSH_KEY }}
+          SITE_KNOWN_HOSTS: ${{ secrets.SITE_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SITE_SSH_KEY" > ~/.ssh/site && chmod 600 ~/.ssh/site
+          printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Ship it, and put the release before back if the site does not come up as this commit
+        run: |
+          set -eu
+          commit="${GITHUB_SHA::7}"
+          # Each run has a directory of its own, so running a commit again never writes over the
+          # release being served, and there is always the one before to go back to.
+          release="/opt/corten-site/releases/${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          site="https://$SITE_DOMAIN"
+          # A machine that stops answering is given up on within 20 seconds, so the step goes on
+          # to put the release before back over a new connection.
+          options="-i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+          ssh="ssh $options deploy@$SITE_HOST"
+          # deploy/release.sh runs on the machine, sent with each deploy.
+          machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
+          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
+          # Nothing on the machine has changed until `serve`: a failure up to there leaves the
+          # site as it was.
+          $ssh "mkdir -p $release"
+          scp $options target/release/corten-site "deploy@$SITE_HOST:$release/corten-site.new"
+          machine install "$release" "$(sha256sum target/release/corten-site | cut -d' ' -f1)"
+          # The page as HTML names the commit it was built from, its JSON does too, and its live
+          # stream sends a reading every second. Each answer is read whole before it is searched.
+          page() { got=$(curl -fsS --max-time 5 "$site/") && printf '%s' "$got" | grep -q "built from $1"; }
+          json() { got=$(curl -fsS --max-time 5 -H 'accept: application/json' "$site/") && printf '%s' "$got" | grep -q "\"heat\":\"$1\""; }
+          stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
+          if machine serve "$release"; then
+            for try in $(seq 1 20); do
+              if page "$commit" && json "$commit" && stream; then
+                echo "$site/ is serving $commit"
+                machine prune || echo "the older releases were not removed; the next deploy tries again"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "the site did not come up as $commit"
+          else
+            echo "the machine did not take $release"
+          fi
+          if [ -z "$before" ]; then
+            echo "there is no release before this one to put back"
+            exit 1
+          fi
+          # The machine may be out of reach for a moment, which is what failed the deploy: the
+          # put-back is tried three times.
+          put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          # A release's directory starts with its commit, which its page names: the put-back is
+          # checked as that release, not as any answer. It is read with this commit's words for
+          # it, so a change to how the page names its commit fails this check once.
+          was="${before%/}"
+          was="${was##*/}"
+          if put_back; then
+            for try in $(seq 1 20); do
+              if page "${was::7}"; then
+                echo "put back on $before, which answers as itself"
+                # A deploy that failed is a release too, and the disk is small.
+                machine prune || true
+                exit 1
+              fi
+              sleep 1
+            done
+            echo "put back on $before, which does not answer as itself"
+          else
+            echo "$before could not be put back in three tries"
+            # The link moves before the restart, so it may not be what the service runs.
+            echo "current points at $($ssh 'readlink /opt/corten-site/current' 2>/dev/null || echo 'a release not known: the machine did not answer')"
+            if page "$commit"; then echo "the site answers as $commit, which was not checked in full"; fi
+          fi
+          exit 1
+      # The actions above have steps that run after this one; the key is gone before they do.
+      - name: Take the deploy key off the runner
+        if: always()
+        run: rm -f ~/.ssh/site

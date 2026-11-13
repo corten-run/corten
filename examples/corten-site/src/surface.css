@@ -1,0 +1,174 @@
+/* Surface: rows of a plate of text beside its specimen, off-center the way the mark is. */
+.row {
+  display: grid;
+  align-items: start;
+  gap: clamp(1.5rem, 3vw, 3rem);
+  margin-bottom: clamp(2.75rem, 6.5svh, 5rem);
+}
+
+.leading {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  max-width: 82rem;
+}
+
+.trailing {
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  max-width: 82rem;
+  margin-left: auto;
+}
+
+.exhibit {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  align-items: start;
+  gap: clamp(1.5rem, 3vw, 3rem);
+}
+
+@media (max-width: 62rem) {
+  .leading,
+  .trailing,
+  .exhibit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The cut: the page's scripts, running or blocked, said at the size of a plate marking, and
+   the one link that changes it. It lies straight on the rust, stamped dark as the layer's
+   name is. */
+.cut {
+  align-self: center;
+  min-width: 0;
+  padding: clamp(0.5rem, 2vw, 2rem) 0;
+}
+
+.state {
+  color: var(--pit);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(3rem, 6.4vw, 6rem);
+  line-height: 0.92;
+  text-shadow: 0 1px 0 rgb(255 214 170 / 28%);
+  text-transform: uppercase;
+}
+
+.told {
+  max-width: 34rem;
+  margin: 1.1rem 0 1.5rem;
+  color: #fff3e4;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 55%);
+}
+
+.throw {
+  display: inline-block;
+  padding: 0.8rem 1.5rem;
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  color: var(--bone);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.45rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.throw:hover {
+  background: var(--ember);
+  border-color: var(--ember);
+  color: var(--ink);
+}
+
+/* The page's components, as a plate of its own: one with a script a row, the rest in one. */
+.manifest {
+  min-width: 0;
+  background: color-mix(in srgb, var(--ink) 96%, transparent);
+  border-left: 3px solid var(--rust);
+  box-shadow:
+    0 1.5rem 3rem rgb(0 0 0 / 35%),
+    inset 0 0 0 1px color-mix(in srgb, var(--bone) 9%, transparent);
+  font-size: 0.875rem;
+}
+
+.files {
+  width: 100%;
+}
+
+.counted {
+  padding: 0.55rem 1.1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--bone) 12%, transparent);
+  color: var(--bone-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.manifest th,
+.manifest td {
+  padding: 0.6rem 1.1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--bone) 8%, transparent);
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.file {
+  color: var(--ember);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.does {
+  color: #d9d2c6;
+}
+
+.script {
+  margin-right: 0.35rem;
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
+.rest {
+  color: var(--bone-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.lines {
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.manifest td.lines {
+  text-align: right;
+}
+
+.manifest tfoot th,
+.manifest tfoot td {
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--bone) 5%, transparent);
+}
+
+.manifest tfoot .file {
+  color: var(--bone);
+}
+
+@media (max-width: 40rem) {
+  .manifest th,
+  .manifest td {
+    padding: 0.5rem 0.7rem;
+  }
+
+  .file {
+    white-space: normal;
+  }
+}

@@ -12,6 +12,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native Corten, ASP.NET Razor Pages and Express marketplace forms persist each
+  accepted alert, with independent session-scoped JSON readback. Rejected forms,
+  failed source reads and render failures do not append. This is process-local
+  benchmark state, not durable storage or load qualification.
+
+- Catalog runners preserve full native application stdout and stderr in raw evidence,
+  rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
+  longer repeatedly copy growing log strings. Log-collection errors still fail the run;
+  application settings, load thresholds and measurement windows are unchanged.
+
 - FastAPI's native record JSON routes bound complete upstream reads, cancel them
   on caller disconnect and return generic JSON source/serialization errors.
   Opt-in request tracing spans native serialization without changing successful
@@ -143,6 +153,35 @@ Corten is pre-1.0, so any minor version may change the API.
   `<template shadowrootmode="open">`, is drawn in the page and needs its own key) is an error, and a page
   whose only key field is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
   ([#1254 A script cannot mint a submit key for a form it makes from a template, so copied rows share one key](https://github.com/corten-run/corten/issues/1254)).
+
+- `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
+  itself: a link reloads it with every script blocked, one of its components is shown as the
+  lines where its three files meet, its own source is broken five ways with what the compiler
+  said, and the server streams its own readings, with the memory it holds, the machine it is on
+  and how much of its CPU and memory is in use (the machine's, or of the limits a container
+  or a systemd unit holds the server to), where the system counts them. Tests hold what it says to
+  `docs/performance.md`, the README,
+  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
+  machine behind nginx as a systemd service: each change on `main` is tested, built, copied over
+  SSH and switched to, and the release before is put back when the new one does not answer as its
+  commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
+  Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
+  behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
+  reads that the plate is no brighter under the steel's type than the type can stand.
+
+- `examples/corten-site/deploy/infra`: the machine that serves Corten's site as OpenTofu
+  configuration for DigitalOcean (a droplet, an address that stays when the droplet is replaced,
+  a firewall, and the DNS zone), applied on each change on `main` by the `Site machine`
+  workflow with its state in a Spaces bucket. A droplet made from it is handed `provision.sh`,
+  `nginx.conf` and the service file as it starts, waits until the site's name reaches it and
+  sets itself up, so nobody signs in; a change to anything it is handed makes a new droplet,
+  and the workflow then starts the `Site` workflow to ship it a release. The `Site` workflow
+  no longer runs for a change to those files and the deploy guide alone, and `provision.sh`
+  asks for the package lists again when another update holds their lock. `bootstrap.sh` gives
+  the repository the two environments, the keys and the variables this needs, once. The
+  workflow applies nothing until the repository names a bucket for the state. The site's
+  service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
+  from the metadata address.
 
 ### Changed
 
