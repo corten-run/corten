@@ -221,6 +221,36 @@ test("failed captured qualification bars measurement and preserves the offline f
   const r = await f.validate(); assert.equal(r.status, "blocked"); assert.equal(r.cells.react.qualification.oracle.functionalPassed, false);
   f.result.cells.react.measurement = pass("react", true); await f.save(); invalid(await f.validate(), "measurement-before-qualification");
 });
+
+for (const phase of ["qualification", "measurement"]) for (const rawOutcome of ["failed", "unsupported", "not-run"])
+  test(`outer semantic outcome must match the ${phase} capture's ${rawOutcome} state`, async (t) => {
+    const f = await fixture(t), c = { schema: "client-capture/v1", app: "react", effectiveWorkload: workload,
+      outcome: rawOutcome, reason: "native-pass-unavailable", records: null };
+    const unavailable = { capture: c, oracle: validateClientCapture(workload, c, settings), readyMs: null, actions: null,
+      failure: rawOutcome === "failed" ? { phase: "load", diagnostic: "Error", diagnosticSha256: hash("fixture"), records: [], errors: [] } : null };
+    const cell = { outcome: rawOutcome, qualification: phase === "qualification" ? unavailable : pass("react", false),
+      measurement: phase === "measurement" ? unavailable : null, readyForMeasurement: false };
+    f.result.cells.react = cell; f.result.passed = false; await f.save();
+    const consistent = await f.validate(); assert.equal(consistent.status, "blocked", JSON.stringify(consistent.errors));
+    assert.equal(consistent.diagnosticsPassed, true); assert.equal(consistent.cells.react.outcome, rawOutcome);
+    for (const outcome of ["failed", "unsupported", "not-run"].filter((value) => value !== rawOutcome)) {
+      cell.outcome = outcome; await f.save();
+      const r = await f.validate(); invalid(r, "cell-outcome-differs-from-raw-replay");
+      assert.equal(r.diagnosticsPassed, false); assert.equal(r.cells.react[phase].oracle.outcome, rawOutcome);
+      for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+      assert.equal(r.isolation, "unknown");
+    }
+  });
+
+test("qualification-only evidence stays blocked and cannot be relabeled as wholly unrun", async (t) => {
+  const f = await fixture(t), cell = f.result.cells.react;
+  cell.measurement = null; cell.readyForMeasurement = false; cell.outcome = "failed"; f.result.passed = false;
+  await f.save(); const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+  assert.equal(r.cells.react.measurement, null);
+  for (const outcome of ["unsupported", "not-run"]) {
+    cell.outcome = outcome; await f.save(); invalid(await f.validate(), "cell-outcome-differs-from-raw-replay");
+  }
+});
 test("failed native builds stay explicit", async (t) => {
   const f = await fixture(t); f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
   await f.write("native/react/failure.log", "fixture");

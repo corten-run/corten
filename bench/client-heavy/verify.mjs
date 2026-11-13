@@ -376,6 +376,8 @@ export async function validateSaved(request) {
       need(q?.oracle.functionalPassed === true || cell.measurement === null, "measurement-before-qualification");
       const passed = q?.oracle.functionalPassed === true && m?.oracle.functionalPassed === true;
       need(cell.readyForMeasurement === passed && (cell.outcome === "passed") === passed, "cell-flags-differ-from-raw-replay");
+      const unavailable = q?.oracle.functionalPassed === true ? m?.oracle : q?.oracle;
+      need(cell.outcome === (passed ? "passed" : unavailable?.outcome ?? "failed"), "cell-outcome-differs-from-raw-replay");
       if (passed && builds) need(builds[app]?.outcome === "built", "passing-cell-without-native-build");
       report.cells[app].replayPassed = passed;
       if (!passed) report.blockers.push(`unqualified-cell:${app}`);
