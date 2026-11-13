@@ -121,7 +121,8 @@ Its fixed API is `await validateSaved({ folder, round, commit })`, exported from
 `verify.mjs`. No validator, command, contender, plan, output or policy override is
 accepted. The matching CLI accepts exactly the arguments above, in that order.
 Local Git objects for the supplied commit must be available; the verifier explicitly
-disables Git lazy fetching, including inherited promisor configuration. Read-only
+disables Git lazy fetching and replacement objects, including inherited promisor
+configuration and local replacement refs. Read-only
 Git object queries compare the saved source/input hashes
 against that exact commit. v1 checkout hashes may match committed LF or CRLF bytes;
 this compatibility check cannot authenticate the source or the build. Reviewed
@@ -149,8 +150,11 @@ unavailable measurements `null`, never zero. A file ledger hashes every saved
 native output, including generated files not covered by v1's build receipt.
 Present native build/workload manifests are checked independently even when the
 summary has no builds. Missing manifests block verification; malformed or
-contradictory manifests invalidate it. Optional failure fields must have their
-declared shape whenever present, including when the supplied value is falsy.
+contradictory manifests invalidate it. Present summary build claims, failure-log
+hashes and artifact hashes are validated even if the separate build manifest is
+missing or inconsistent. Optional failure and resource-detail fields must have
+their declared shape whenever present, including falsy values and failed,
+unsupported or not-run passes that cannot supply timings.
 
 The verifier refuses traversal, absolute paths inside receipts, links/junctions,
 linked ancestors, hardlinks, duplicate/case-colliding files and build inputs,

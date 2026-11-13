@@ -115,7 +115,7 @@ function committed(commit) {
   if (cachedCommit === commit) return cachedSources;
   const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
     maxBuffer: limits.totalBytes, stdio: ["pipe", "pipe", "pipe"], timeout: 10000,
-    env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" } });
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" } });
   need(git(["rev-parse", `${commit}^{commit}`]).toString().trim() === commit, "unknown-commit");
   const entries = git(["ls-tree", "-r", "-z", commit, "--", "crates", "bench/client-heavy", "bench/browser/gen",
     "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json"])
@@ -154,6 +154,15 @@ function replay(pass, app, phase, workload, settings, timeoutMs) {
   need(pass.capture?.app === app, "wrong-pass-app");
   const oracle = validateClientCapture(workload, pass.capture, settings);
   need(same(pass.oracle, oracle), "saved-oracle-differs-from-raw-replay");
+  if (Object.hasOwn(pass, "resourceDetails")) {
+    need(Array.isArray(pass.resourceDetails), "missing-native-resource-details");
+    for (const detail of pass.resourceDetails) {
+      keys(detail, ["type", "target", "connected", "pageOwned", "property"]);
+      need(typeof detail.type === "string" && typeof detail.target === "string"
+        && [null, true, false].includes(detail.connected) && typeof detail.pageOwned === "boolean"
+        && typeof detail.property === "boolean", "invalid-native-resource-detail");
+    }
+  }
   if (oracle.functionalPassed !== true) {
     need(pass.readyMs === null && pass.actions === null, "unavailable-pass-has-timings");
     if (pass.capture.outcome === "failed") {
@@ -166,12 +175,6 @@ function replay(pass, app, phase, workload, settings, timeoutMs) {
   }
   need(pass.failure === null, "captured-pass-has-failure");
   need(Array.isArray(pass.resourceDetails), "missing-native-resource-details");
-  for (const detail of pass.resourceDetails) {
-    keys(detail, ["type", "target", "connected", "pageOwned", "property"]);
-    need(typeof detail.type === "string" && typeof detail.target === "string"
-      && [null, true, false].includes(detail.connected) && typeof detail.pageOwned === "boolean"
-      && typeof detail.property === "boolean", "invalid-native-resource-detail");
-  }
   need(Number.isFinite(pass.readyMs) && pass.readyMs >= 0 && pass.readyMs <= timeoutMs, "invalid-ready-timing");
   const records = pass.capture.records, operations = records.filter((r) => r.kind === "operation");
   need(same(records.map((r) => r.kind), ["resources", "initial", "resources", ...workload.operations.map(() => "operation"),
@@ -292,9 +295,11 @@ export async function validateSaved(request) {
     if (p.dirty) report.blockers.push("dirty-source-without-saved-diff-bytes");
     else need(p.diffSha256 === hash(""), "clean-source-with-nonempty-diff");
   });
-  let builds;
+  // Present summary claims remain checkable even when their separate manifest is
+  // missing or inconsistent. Neither copy authenticates the native build.
+  const builds = output.builds;
   if (output.builds === null) report.blockers.push("native-builds-not-saved");
-  if (files.has("native/build.json")) builds = await check("native/build.json", () => {
+  if (files.has("native/build.json")) await check("native/build.json", () => {
     const value = json("native/build.json");
     need(same(value, output.builds), "raw-builds-differ-from-summary");
     need(object(value) && same(Object.keys(value).sort(), [...apps].sort()), "incomplete-build-inventory");
