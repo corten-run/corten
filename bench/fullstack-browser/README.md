@@ -150,6 +150,19 @@ The live ref must be a writable own data field. Prefixes are checked in executio
 already-set guard cannot be treated as an unconditional POST. Hook aliases, missing identities,
 unsupported actions and unproved callbacks do not gain authority from their spelling.
 
+Dispatch proof also checks argument evaluation, not just statements before `fetch`. It accepts
+exactly URL plus a plain options object with one POST method and an optional modeled body;
+extra arguments, unknown option names, getters/spreads/duplicates, calls, awaits and object
+coercions outside the closed grammar reject. Supported bodies are scalar values, native
+FormData and native URLSearchParams with fully checked scalar record fields. FormData locals
+are tracked by lexical declaration, and `get` requires its document-start native identity plus
+an independently inventoried string-valued form control. File/custom/unknown fields cannot be
+assumed scalar. No option expression is executed to prove it benign.
+
+Native array capture requires a bounded own numeric length and every own data index exactly
+once. Leading, interior, trailing and all-hole arrays reject before effect analysis; absent
+indexes are never inferred from a hole-skipping iterator or silently lost during serialization.
+
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
 identity, rather than trusting `proved` or a stored endpoint. Native replay requires the
@@ -230,6 +243,12 @@ negative/rename controls carry separate synthetic identities, never image qualif
 retain the real React mount and compare actual HTTP requests for sibling/initializer/callback
 retention and helper/dependency substitution. These are apparatus tests, not new contender
 evidence; historical saved observations are not rewritten.
+Set `BINDING_NEXT_ORDINARY_ONLY=1` for just the unchanged production positive and its built-in
+replay/live-guard checks; the default still runs every existing bundle control. The ordinary
+test's child names are not independently selectable through a parent-matching Node test filter.
+`binding-dispatch.test.mjs` supplies local argument/descriptor grammar controls, while the focused
+native-dispatch test in `binding-effects.test.mjs` confirms unknown option work is never executed
+by discovery, real argument failures prevent HTTP dispatch, and sparse native props reject.
 
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That

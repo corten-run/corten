@@ -97,7 +97,9 @@ test("production Next: immutable native page links and independently POSTs reque
     }
     browser = await chromium.launch({ headless: true });
     let originalLinks;
-    for (const mode of ["ordinary", "earlier sibling", "later sibling", "ancestor prop", "form prop", "initializer", "callback", "renamed safe helper", "effectful helper substitution", "dependency initializer", "dispatcher dependency"]) await t.test(mode, { timeout: mode === "ordinary" ? 60000 : 30000 }, async () => {
+    assert.ok(!process.env.BINDING_NEXT_ORDINARY_ONLY || process.env.BINDING_NEXT_ORDINARY_ONLY === "1", "Unknown production control selector");
+    const modes = process.env.BINDING_NEXT_ORDINARY_ONLY ? ["ordinary"] : ["ordinary", "earlier sibling", "later sibling", "ancestor prop", "form prop", "initializer", "callback", "renamed safe helper", "effectful helper substitution", "dependency initializer", "dispatcher dependency"];
+    for (const mode of modes) await t.test(mode, { timeout: mode === "ordinary" ? 60000 : 30000 }, async () => {
     const activeArtifact = controlArtifact(artifact, originalLinks, mode);
     const context = await browser.newContext(), page = await context.newPage(), posts = [], errors = [];
     if (mode !== "ordinary") await page.route("**/_next/static/chunks/*.js", async (route) => {
@@ -146,6 +148,8 @@ test("production Next: immutable native page links and independently POSTs reque
           mutate((links) => { delete links.hooks[0].fiberIdentity; });
           mutate((links) => { delete links.hooks[0].queueIdentity; });
           mutate((links) => { links.hooks[0].target.location.columnNumber++; });
+          mutate((links) => { delete links.formDataFields; });
+          mutate((links) => { links.formDataFields.email = "unknown"; });
           await form.locator('button[type="submit"]').waitFor({ state: "visible" });
           await page.waitForFunction(() => !document.querySelector('.marketplace__alert button').disabled);
           const settled = await observer.capture(".marketplace__alert form", page.url());

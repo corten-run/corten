@@ -134,6 +134,7 @@ function syntaxEffects(candidate) {
   return checkBindingEffects(candidate, artifact, { schema: "native-binding-links/v1", artifactSha256: artifact.sha256,
     component: root.id, handler: handler.id, recordId: candidate.recordId, locale: candidate.locale, frames,
     realmObjectId: "-1.1.100", executionContextId: 1,
+    formDataFields: { email: "string", target_price: "string" },
     scripts: [{ scriptId: "syntax", path: root.script.path, sha256: root.script.sha256, executionContextId: 1, url: new URL(root.script.path, candidate.base).href }], intrinsicIdentities,
     props: { kind: "borrowed", fields: { record: { kind: "borrowed", fields: { id: { kind: "scalar", type: "string" } } }, locale: { kind: "scalar", type: "string" } } } });
 }
@@ -170,7 +171,7 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
     const bindsName = (name, text) => ts.isIdentifier(name) ? name.text === text
       : (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) && name.elements.some((e) => ts.isBindingElement(e) && bindsName(e.name, text));
     const within = (node, parent) => { for (; node; node = node.parent) if (node === parent) return true; return false; };
-    const protectedName = (name) => variables.has(name) || ["fetch", "encodeURIComponent", "FormData"].includes(name);
+    const protectedName = (name) => variables.has(name) || handlerIntrinsics.includes(name);
     const bindingScope = (node) => {
       if (ts.isFunctionExpression(node)) return node;
       if (ts.isCatchClause(node.parent)) return node.parent;
@@ -278,13 +279,48 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
       && ts.isIdentifier(node.expression) && node.expression.text === eventName && node.name.text === field
       && !declarations.some((d) => d !== eventParameter && within(d, handler)
         && bindsName(d.name, eventName) && within(node.expression, bindingScope(d)));
-    const prefixDeclaration = (node) => {
+    const datum = (node, locals) => {
+      if (ts.isParenthesizedExpression(node)) return datum(node.expression, locals);
+      if (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
+        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return "scalar";
+      if (ts.isIdentifier(node)) {
+        const bindings = declarations.filter((d) => within(d, handler) && bindsName(d.name, node.text) && within(node, bindingScope(d)));
+        // The nearest lexical declaration wins, including an uninitialized TDZ.
+        const nearest = bindings.filter((d) => !bindings.some((other) => bindingScope(other) !== bindingScope(d) && within(bindingScope(other), bindingScope(d))));
+        if (nearest.length) return nearest.length === 1 ? locals.get(nearest[0]) : undefined;
+      }
+      if (typeof evaluate(node) === "string") return "scalar";
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+        return datum(node.left, locals) === "scalar" && datum(node.right, locals) === "scalar" ? "scalar" : undefined;
+      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "FormData"
+        && node.arguments?.length === 1 && eventField(node.arguments[0], "currentTarget")) return "formData";
+      if (ts.isCallExpression(node) && !node.questionDotToken && node.arguments.length === 1) {
+        if (ts.isIdentifier(node.expression) && node.expression.text === "String" && datum(node.arguments[0], locals) === "scalar") return "scalar";
+        if (ts.isPropertyAccessExpression(node.expression) && !node.expression.questionDotToken && node.expression.name.text === "get"
+          && datum(node.expression.expression, locals) === "formData" && ts.isStringLiteral(node.arguments[0])
+          && (linked ? linked.receipt.formDataFields : { email: "string", target_price: "string" })?.[node.arguments[0].text] === "string") return "scalar";
+      }
+      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URLSearchParams" && node.arguments?.length === 1) {
+        const input = node.arguments[0];
+        if (ts.isStringLiteralLike(input)) return "search";
+        if (ts.isObjectLiteralExpression(input)) {
+          const keys = [];
+          for (const p of input.properties) {
+            if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+              || ["__proto__", "prototype", "constructor"].includes(p.name.text) || keys.includes(p.name.text)
+              || datum(p.initializer, locals) !== "scalar") return undefined;
+            keys.push(p.name.text);
+          }
+          return "search";
+        }
+      }
+      return undefined;
+    };
+    const prefixDeclaration = (node, locals) => {
       if (!ordinaryDeclarations(node.parent) || !ts.isIdentifier(node.name) || !node.initializer) return false;
-      const value = node.initializer;
-      return typeof evaluate(value) === "string" || ts.isNumericLiteral(value)
-        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)
-        || ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "FormData"
-          && value.arguments?.length === 1 && eventField(value.arguments[0], "currentTarget");
+      const value = datum(node.initializer, locals);
+      if (!value) return false;
+      locals.set(node, value); return true;
     };
     const hook = (node, kind) => ts.isIdentifier(node) && effects.hookBindings?.[node.text]?.kind === kind
       && !declarations.some((d) => within(d, handler) && bindsName(d.name, node.text) && within(node, bindingScope(d)))
@@ -305,9 +341,10 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
       }
       return false;
     };
-    const prefixStatement = (node, refs) => {
+    const prefixStatement = (node, refs, locals) => {
+      if (ts.isVariableDeclaration(node)) return prefixDeclaration(node, locals);
       if (ts.isEmptyStatement(node)) return true;
-      if (ts.isVariableStatement(node)) return node.declarationList.declarations.every(prefixDeclaration);
+      if (ts.isVariableStatement(node)) return node.declarationList.declarations.every((d) => prefixDeclaration(d, locals));
       if (ts.isExpressionStatement(node)) return prefixExpression(node.expression, refs);
       if (ts.isIfStatement(node) && !node.elseStatement && ts.isReturnStatement(node.thenStatement) && !node.thenStatement.expression) {
         let test = node.expression;
@@ -328,9 +365,11 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
           || ts.isBlock(parent) || ts.isExpressionStatement(parent)
           || ts.isReturnStatement(parent) || ts.isVariableDeclaration(parent) || ts.isVariableDeclarationList(parent) || ts.isVariableStatement(parent)
           || ts.isTryStatement(parent) && node === parent.tryBlock);
-        if (!supported) return false;
-        if (ts.isVariableDeclarationList(parent) && (!ordinaryDeclarations(parent)
-          || parent.declarations.slice(0, parent.declarations.indexOf(node)).some((d) => !prefixDeclaration(d)))) return false;
+        if (!supported) return null;
+        if (ts.isVariableDeclarationList(parent)) {
+          if (!ordinaryDeclarations(parent)) return null;
+          prefixes.push(parent.declarations.slice(0, parent.declarations.indexOf(node)));
+        }
         if (ts.isBlock(parent)) {
           // Only modeled pre-fetch effects are supported. In particular an
           // unknown alias write, getter read, helper call or await is not pure.
@@ -339,15 +378,19 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
         }
       }
       const refs = new Map(Object.values(effects.hookBindings ?? {}).filter((v) => v.kind === "hookRef").map((v) => [v.slot, v.value.value]));
-      return prefixes.reverse().flat().every((statement) => prefixStatement(statement, refs));
+      const locals = new Map();
+      return prefixes.reverse().flat().every((statement) => prefixStatement(statement, refs, locals)) ? locals : null;
     };
     const visit = (node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "fetch" && node.arguments.length >= 2
-        && ts.isObjectLiteralExpression(node.arguments[1]) && unconditional(node)) {
+      if (ts.isCallExpression(node) && !node.questionDotToken && ts.isIdentifier(node.expression) && node.expression.text === "fetch" && node.arguments.length === 2
+        && ts.isObjectLiteralExpression(node.arguments[1])) {
+        const locals = unconditional(node);
         const properties = node.arguments[1].properties;
         const methods = properties.filter((p) => ts.isPropertyAssignment(p) && p.name.text === "method");
-        if (methods.length === 1 && evaluate(methods[0].initializer) === "POST"
-          && properties.every((p) => ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)))) {
+        if (locals && methods.length === 1 && evaluate(methods[0].initializer) === "POST"
+          && new Set(properties.map((p) => p.name?.text)).size === properties.length
+          && properties.every((p) => ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+            && (p.name.text === "method" || p.name.text === "body" && ["scalar", "formData", "search"].includes(datum(p.initializer, locals))))) {
           const url = evaluate(node.arguments[0]); if (typeof url === "string") { urls.push(url); fetches.push(node); }
         }
       }

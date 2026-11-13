@@ -226,3 +226,63 @@ test("linked whole-render effects reject sibling, initializer and callback reten
     });
   } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
 });
+
+test("native dispatch evaluation rejects unmodeled option work and sparse props without executing them", { timeout: 60000 }, async (t) => {
+  const cases = ["body call", "body await", "option accessor", "extra argument", "nested field", "file field", "changed form get", "dictionary iterator", "sparse leading", "sparse trailing", "sparse all holes", "dense"];
+  let scripts, browser;
+  const requests = [], server = createServer((req, res) => {
+    const script = scripts.find((s) => s.path === req.url);
+    if (script) { res.setHeader("content-type", "text/javascript"); res.end(script.source); }
+    else if (req.url.startsWith("/api/")) { requests.push(req.url); res.end("accepted"); }
+    else { res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"><input name="email" value="safe"><input name="target_price" value="1"></form>'); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const mode of cases) await t.test(mode, async () => {
+      const options = mode === "body call" ? '{method:"POST",body:stop()}'
+        : mode === "body await" ? '{method:"POST",body:await stop()}'
+        : mode === "option accessor" ? '{method:"POST",headers:({get value(){return stop()}}).value}'
+        : mode === "nested field" ? '{method:"POST",body:new URLSearchParams({email:stop()})}'
+        : mode === "dictionary iterator" ? '{method:"POST",body:new URLSearchParams({email:"safe"})}'
+        : ["file field", "changed form get"].includes(mode) ? '{method:"POST",body:new URLSearchParams({email:String(form.get("email")??"")})}' : '{method:"POST"}';
+      const prefix = ["file field", "changed form get"].includes(mode) ? "const form=new FormData(e.currentTarget);" : "";
+      scripts = [
+        { path: "/component.mjs", source: `import {jsx} from "/runtime.mjs";const stop=()=>{globalThis.argumentCalls++;throw Error("local control stopped before dispatch")};export function M({record:r,locale:l}){const rows=r.rows.map(value=>value);return jsx("form",{onSubmit:async e=>{e.preventDefault();${prefix}return fetch("/api/marketplace/"+r.id+"?locale="+l,${options}${mode === "extra argument" ? ",stop()" : ""});}});}` },
+        { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
+      ];
+      requests.length = 0;
+      const artifact = createBindingArtifact({ ...identity, scripts }), context = await browser.newContext(), page = await context.newPage();
+      const observer = new BindingLinkObserver(await context.newCDPSession(page), artifact); await observer.enable();
+      try {
+        await page.goto(base);
+        await page.evaluate(async (mode) => {
+          globalThis.argumentCalls = 0;
+          if (mode === "file field") document.querySelector('[name="email"]').type = "file";
+          if (mode === "changed form get") FormData.prototype.get = function () { globalThis.argumentCalls++; throw Error("local replacement stopped before dispatch"); };
+          if (mode === "dictionary iterator") Object.prototype[Symbol.iterator] = function* () { globalThis.argumentCalls++; throw Error("local dictionary iterator stopped before dispatch"); };
+          const { M } = await import("/component.mjs"), rows = mode === "sparse leading" ? [, "safe"]
+            : mode === "sparse trailing" ? ["safe", ,] : mode === "sparse all holes" ? new Array(2) : ["safe"];
+          const props = { record: { id: "item_2", rows }, locale: "fr-FR" }, tree = M(props), form = document.querySelector("form"), handler = tree.props.onSubmit;
+          form.__reactProps$control = { onSubmit: handler }; form.__reactFiber$control = { type: M, memoizedProps: props };
+          form.addEventListener("submit", (event) => { globalThis.controlOutcome = handler(event).then(() => "sent", (error) => error.message); });
+        }, mode);
+        const observed = await observer.capture("form", page.url());
+        assert.equal(await page.evaluate(() => globalThis.argumentCalls), 0, "Discovery must never execute option work or getters");
+        const discovered = observed.outcome === "observed" ? discoverReactEndpoint([observed.candidate], observed.linked) : null;
+        if (mode.startsWith("sparse") || ["changed form get", "dictionary iterator"].includes(mode)) assert.equal(observed.outcome, "unknown", "Unproved native array/method must be rejected before effect proof");
+        else assert.equal(observed.outcome, "observed", observed.reason);
+        await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
+        if (mode === "dense" || mode.startsWith("sparse") || mode === "file field") {
+          assert.deepEqual(requests, ["/api/marketplace/item_2?locale=fr-FR"]);
+          assert.equal(await page.evaluate(() => globalThis.argumentCalls), 0);
+        } else {
+          assert.deepEqual(requests, []);
+          assert.equal(await page.evaluate(() => globalThis.argumentCalls), 1, "The actual handler stopped in argument evaluation before native dispatch");
+        }
+        if (mode !== "dense") assert.equal(discovered, null);
+        else { assert.equal(discovered?.path, "/api/marketplace/item_2"); assert.equal(replayBindingProof(discovered, artifact), true); }
+      } finally { await observer.close(); await context.close(); }
+    });
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+});

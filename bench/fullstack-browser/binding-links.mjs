@@ -6,6 +6,22 @@ import { bindingRealm } from "./binding-intrinsics.mjs";
 import { emittedModules, reactContract } from "./binding-modules.mjs";
 import ts from "typescript";
 const observers = new WeakMap();
+// CDP own descriptors, not a JS sparse array: array iteration skips holes.
+export function denseBindingEntries(descriptors) {
+  const lengths = descriptors.filter((p) => p.name === "length"), length = lengths[0];
+  assert.ok(lengths.length === 1 && length.isOwn && length.value?.type === "number" && !length.get && !length.set && !length.symbol
+    && Number.isInteger(length.value.value) && length.value.value >= 0 && length.value.value <= 4096, "Unsupported native array length");
+  const rows = descriptors.filter((p) => p !== length), indexed = new Map();
+  assert.equal(rows.length, length.value.value, "Sparse native array unsupported");
+  for (const row of rows) {
+    assert.ok(row.isOwn && row.value && !row.get && !row.set && !row.symbol && /^(?:0|[1-9]\d*)$/.test(row.name)
+      && Number(row.name) < length.value.value && !indexed.has(row.name), "Unsupported native array index/descriptor");
+    indexed.set(row.name, row);
+  }
+  return Array.from({ length: length.value.value }, (_, i) => {
+    const row = indexed.get(String(i)); assert.ok(row, "Sparse native array unsupported"); return row;
+  });
+}
 export async function observeBindingLinks(cdp, selector, base) {
   return observers.get(cdp)?.capture(selector, base) ?? { outcome: "unknown", reason: "Immutable emitted binding artifact/native observer unavailable" };
 }
@@ -23,18 +39,18 @@ export function installBindingIntrinsics() {
     IteratorKeys: JSON.stringify(Object.getOwnPropertyNames(iterator).sort()),
     ReactFragment: Symbol.for("react.fragment"), ReactElement: Symbol.for("react.transitional.element"),
     NumberFormat: Intl.NumberFormat, PluralRules: Intl.PluralRules,
-    StringPrototype: String.prototype, SearchPrototype: URLSearchParams.prototype,
+    StringPrototype: String.prototype, SearchPrototype: URLSearchParams.prototype, FormDataPrototype: FormData.prototype,
     ObjectPrototypeKeys: JSON.stringify(Object.getOwnPropertyNames(Object.prototype).sort()),
     ArrayPrototype: Array.prototype, ObjectPrototype: Object.prototype, MapPrototype: Map.prototype,
     NumberFormatPrototype: Intl.NumberFormat.prototype, PluralRulesPrototype: Intl.PluralRules.prototype,
   };
   for (const [owner, keys] of [[Array.prototype, ["map", "filter", "slice", "sort"]], [Map.prototype, ["get", "set"]],
     [Intl.NumberFormat.prototype, ["format"]], [Intl.PluralRules.prototype, ["select"]],
-    [String.prototype, ["startsWith"]], [URLSearchParams.prototype, ["toString"]]])
+    [String.prototype, ["startsWith"]], [URLSearchParams.prototype, ["toString"]], [FormData.prototype, ["get"]]])
     for (const key of keys) {
       const d = descriptor(owner, key);
       values[(owner === Array.prototype ? "Array." : owner === Map.prototype ? "Map." : owner === Intl.NumberFormat.prototype ? "NumberFormat."
-        : owner === Intl.PluralRules.prototype ? "PluralRules." : owner === String.prototype ? "String." : "Search.") + key] = d.value ?? d.get;
+        : owner === Intl.PluralRules.prototype ? "PluralRules." : owner === String.prototype ? "String." : owner === FormData.prototype ? "FormData." : "Search.") + key] = d.value ?? d.get;
     }
   Object.defineProperty(globalThis, "__cortenBindingIntrinsics$v1", { value: Object.freeze(values) });
 }
@@ -113,7 +129,9 @@ export class BindingLinkObserver {
       await method(intrinsic.get("ArrayIteratorPrototype"), "next", "ArrayIterator.next");
       for (const name of ["NumberFormat", "PluralRules"])
         assert.ok(await same(await data(intrinsic.get("Intl").objectId, name), intrinsic.get(name), name), `Changed Intl constructor ${name}`);
-      const objectKeys = (await properties(intrinsic.get("ObjectPrototype").objectId)).result.map((p) => p.name).sort();
+      const objectProperties = (await properties(intrinsic.get("ObjectPrototype").objectId)).result;
+      assert.ok(!objectProperties.some((p) => p.symbol), "Unproved inherited dictionary iterator/coercion");
+      const objectKeys = objectProperties.map((p) => p.name).sort();
       assert.equal(JSON.stringify(objectKeys), snapshot.result.find((p) => p.name === "ObjectPrototypeKeys")?.value?.value, "Changed plain-data prototype properties");
       for (const key of ["map", "filter", "slice", "sort"]) await method(intrinsic.get("ArrayPrototype"), key, `Array.${key}`);
       for (const key of ["get", "set"]) await method(intrinsic.get("MapPrototype"), key, `Map.${key}`);
@@ -121,6 +139,8 @@ export class BindingLinkObserver {
       await method(intrinsic.get("PluralRulesPrototype"), "select", "PluralRules.select");
       await method(intrinsic.get("StringPrototype"), "startsWith", "String.startsWith");
       await method(intrinsic.get("SearchPrototype"), "toString", "Search.toString");
+      assert.ok(await same(await data(intrinsic.get("FormData").objectId, "prototype"), intrinsic.get("FormDataPrototype"), "FormDataPrototype"), "Changed native form data prototype");
+      await method(intrinsic.get("FormDataPrototype"), "get", "FormData.get");
       const locate = async (remote, capture = true) => {
         assert.equal(remote.type, "function");
         const props = await properties(remote.objectId);
@@ -212,14 +232,12 @@ export class BindingLinkObserver {
           assert.ok(array ? await same(prototype, intrinsic.get("ArrayPrototype"), "ArrayPrototype")
             : prototype?.subtype === "null" || await same(prototype, intrinsic.get("ObjectPrototype"), "ObjectPrototype"), "Unproved data prototype/getters");
           const fields = {}, items = [];
-          for (const p of result.result) {
-            if (array && p.name === "length") continue;
+          for (const p of array ? denseBindingEntries(result.result) : result.result) {
             assert.ok(p.isOwn && p.value && !p.get && !p.set && !p.symbol
               && !["__proto__", "prototype", "constructor"].includes(p.name), "Unsupported data property/accessor");
-            if (array) { assert.match(p.name, /^(?:0|[1-9]\d*)$/); items[Number(p.name)] = await encode(p.value, borrowed, depth + 1); }
+            if (array) items.push(await encode(p.value, borrowed, depth + 1));
             else fields[p.name] = await encode(p.value, borrowed, depth + 1);
           }
-          assert.ok(!array || items.every(Boolean), "Sparse borrowed array unsupported");
           return array ? { kind: "array", fresh: false, items } : { kind: borrowed ? "borrowed" : "object", fields };
         } finally { active.delete(remote.objectId); }
       };
@@ -281,6 +299,18 @@ export class BindingLinkObserver {
       assert.ok(!slot?.objectId, "Native hook inventory exceeds supported bound");
       const root = index.functions.get(owner.function), submit = index.functions.get(handler.function);
       const attributes = (await cdp.send("DOM.getAttributes", { nodeId: found.nodeId })).attributes;
+      const formDataFields = {}, formIdAt = attributes.indexOf("id"), formId = formIdAt >= 0 ? attributes[formIdAt + 1] : null;
+      const descendants = new Set((await cdp.send("DOM.querySelectorAll", { nodeId: found.nodeId, selector: "[name]" })).nodeIds);
+      const controls = new Set([...descendants, ...(formId ? (await cdp.send("DOM.querySelectorAll", { nodeId: document.root.nodeId, selector: "[form][name]" })).nodeIds : [])]);
+      assert.ok(controls.size <= 128, "Native form field inventory exceeds supported bound");
+      for (const nodeId of controls) {
+        const row = (await cdp.send("DOM.describeNode", { nodeId, depth: 0 })).node, attrs = row.attributes ?? [];
+        const get = (key) => { const at = attrs.indexOf(key); return at < 0 ? null : attrs[at + 1]; };
+        if (get("form") !== null ? get("form") !== formId : !descendants.has(nodeId)) continue;
+        const name = get("name"); if (!name) continue;
+        const supported = ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(row.nodeName) && !(row.nodeName === "INPUT" && get("type")?.toLowerCase() === "file");
+        Object.defineProperty(formDataFields, name, { value: supported && formDataFields[name] !== "unknown" ? "string" : "unknown", enumerable: true, configurable: true });
+      }
       const actionAt = attributes.indexOf("action"), action = new URL(actionAt >= 0 ? attributes[actionAt + 1] : base, base).href;
       const candidate = { handlerSource: bindingFunctionText(submit), componentSource: bindingFunctionText(root), recordId: id, locale,
         action, base, basis: "mounted-react-emitted-module-and-native-scope-links" };
@@ -314,7 +344,7 @@ export class BindingLinkObserver {
       }
       const receipt = { schema: "native-binding-links/v1", artifactSha256: this.artifact.sha256, component: owner.function, handler: handler.function,
         recordId: id, locale, props, realmObjectId: global.result.objectId, executionContextId: realm.context,
-        hooks, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
+        formDataFields, hooks, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
       return { candidate, receipt, linked: { artifact: this.artifact, receipt }, outcome: "observed" };
     } catch (error) { return { outcome: "unknown", reason: error.message }; }
     finally { await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }); }

@@ -7,6 +7,7 @@ export const requiredBindingIdentities = [
   "Array.map", "Array.filter", "Array.slice", "Array.sort", "Map.get", "Map.set",
   "NumberFormat.format", "PluralRules.select", "String.startsWith", "Search.toString",
   "Array.iterator", "ArrayIterator.next", "ArrayIteratorPrototype", "IteratorPrototype",
+  "FormDataPrototype", "FormData.get",
 ];
 
 export function bindingRealm(objectId) {
