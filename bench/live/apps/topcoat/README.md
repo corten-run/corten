@@ -175,6 +175,13 @@ Integration belongs to the owner of `native.mjs`. Register both profiles with
 `Topcoat native keyed components / live! and emit! / runtime WebSocket`,
 `wire: 'topcoat-live'`, `wireModule: './apps/topcoat/wire.mjs'`. The wire binding
 validates native run/frame envelopes and the exact app-owned serialized diagnostic
-element grammar, then preserves the event/snapshot unchanged. It does not search
+element grammar, then preserves events, snapshots, resume acknowledgements and
+ready/overflow resource counters unchanged. It does not search
 arbitrary payload strings for fixture events. No runner, registry, other app or
 native fullstack implementation is changed by this port.
+
+The first attachment accepts the initial cursor but still requests and acknowledges
+an authoritative snapshot. Reconnecting before that snapshot is confirmed reports
+an expired cursor rather than treating an unobserved screen as initialized. Cleanup
+uses the reader-specific endpoint to observe its own release and the common
+`/parity/resources` endpoint for recorded counters, within the same deadline.

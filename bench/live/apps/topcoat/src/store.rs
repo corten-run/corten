@@ -44,6 +44,7 @@ pub struct Delivery {
 }
 struct Session {
     state: Client,
+    attached: bool,
     next_serial: u64,
     pending: Option<Client>,
     inactive_since: Option<Instant>,
@@ -198,7 +199,13 @@ impl Store {
         }
         self.clients.insert(
             id.into(),
-            Session { state: self.initial_client(), next_serial: 0, pending: None, inactive_since: Some(Instant::now()) },
+            Session {
+                state: self.initial_client(),
+                attached: false,
+                next_serial: 0,
+                pending: None,
+                inactive_since: Some(Instant::now()),
+            },
         );
         Ok(())
     }
@@ -346,13 +353,17 @@ impl Store {
         }
         self.register(client)?;
         let session = self.clients.get_mut(client).unwrap();
+        let initial_attach = !session.attached;
+        session.attached = true;
         session.inactive_since = None;
         // A canceled, unobserved emission is not a confirmed resume cursor.
         session.pending = None;
         let c = &mut session.state;
         let from = c.through;
-        let expired =
-            c.needs_snapshot || !c.initialized || from < self.through && self.history.front().is_none_or(|e| from < e.seq - 1);
+        let expired = !initial_attach
+            && (c.needs_snapshot
+                || !c.initialized
+                || from < self.through && self.history.front().is_none_or(|e| from < e.seq - 1));
         if expired {
             c.needs_snapshot = true;
         }
@@ -517,6 +528,20 @@ mod tests {
         assert_eq!(r["acks"].as_array().unwrap().len(), 1044);
         assert_eq!(s.history.len(), 1025);
         assert_eq!(s.history_peak, 1025);
+    }
+    #[tokio::test]
+    async fn initial_attach_accepts_zero_but_unconfirmed_reconnect_requires_snapshot() {
+        let s = shared(2, 4);
+        let client = s.0.lock().unwrap().new_client().unwrap();
+        let first = Subscription::new(s.clone(), &client).unwrap();
+        let ready = first.next().await;
+        assert_eq!(ready.message["from"], 0);
+        assert_eq!(ready.message["status"], "accepted");
+        drop(first);
+        // No ready or initial snapshot was acknowledged. A reconnect cannot claim
+        // the first attachment's accepted cursor as confirmed screen state.
+        let again = Subscription::new(s.clone(), &client).unwrap();
+        assert_eq!(again.next().await.message["status"], "expired");
     }
     #[tokio::test]
     async fn native_consumer_holds_saturates_overflows_and_releases() {

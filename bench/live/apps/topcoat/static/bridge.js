@@ -54,7 +54,7 @@ async function api(path, value, signal) {
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   return response.json();
 }
-async function resources() { const r = await api('resources'); log('resources', r); return r; }
+async function resources(signal) { const r = await api('resources', undefined, signal); log('resources', r); return r; }
 async function read(signal) {
   log('snapshot-request');
   await api(`snapshot?client=${encodeURIComponent(client)}`, undefined, signal);
@@ -192,14 +192,14 @@ window.liveApp = {
       for (;;) {
         controller.signal.throwIfAborted();
         const reader = await api(`reader?client=${encodeURIComponent(client)}`, undefined, controller.signal);
-        log('resources', reader.resources);
+        const observed = await resources(controller.signal);
         controller.signal.throwIfAborted();
         if (!reader.active) {
           await socketsClosed(controller.signal);
           await until(settled(), controller.signal);
           if (finish) await until(api('finish', { client }, controller.signal), controller.signal);
           controller.signal.throwIfAborted();
-          return reader.resources;
+          return observed;
         }
         let poll;
         try { await until(new Promise(resolve => { poll = setTimeout(resolve, 10); }), controller.signal); }
