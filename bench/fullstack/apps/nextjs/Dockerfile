@@ -1,8 +1,8 @@
-FROM node:24-bookworm-slim AS build
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . .
 # The matched tier builds its own image with --build-arg PROFILE=matched (apps.mjs, buildArgs):
 # Next.js fixes its config when it builds (next.config.mjs), which reads both arguments from the
@@ -13,7 +13,7 @@ ARG EDGE_HOST=localhost:19411
 RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
-FROM node:24-bookworm-slim
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=8080
 ARG PROFILE=

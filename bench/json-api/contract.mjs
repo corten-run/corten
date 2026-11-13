@@ -10,8 +10,8 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const receiptSchema = "json-api-native-audit/v1";
-export const nodeImage = "node:24-bookworm-slim";
-export const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
+export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export { k6Image } from "../load-tool.mjs";
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const payloads = Object.freeze({
   "catalog-v1": { path: "catalog", first: "record_1", fixture: "bench/catalog/fixtures/catalog.json", records: catalogRecords, errors: [503] },

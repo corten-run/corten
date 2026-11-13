@@ -77,9 +77,11 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         }
         Failure::CrossSite => ("Not allowed", "This request came from another site."),
         Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
-        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
-            ("Something went wrong", "Please try again.")
-        }
+        Failure::WrongMethod
+        | Failure::UnknownMethod
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
     };
     req.page(html! {
         <Layout req={&req} title={title}>

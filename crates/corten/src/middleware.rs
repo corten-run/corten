@@ -27,8 +27,8 @@
 //!    measures around `next` includes the reads' wait (`docs/design.md#choice-layout-reads`).
 //! 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's
 //!    error page for a browser ([`crate::App::error_page`]). For a failure the request is at fault
-//!    for (an unknown URL, a wrong method, a refusal other than a 429, a request that does not
-//!    parse), the error page starts the layout reads not started yet and waits for them, here,
+//!    for (an unknown URL, a wrong method, a method no route in the app has (the router's 501), a
+//!    refusal other than a 429, a request that does not parse), the error page starts the layout reads not started yet and waits for them, here,
 //!    outside 5: a middleware sees neither the error page nor that wait.
 //! 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak
 //!    `ETag` on the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and

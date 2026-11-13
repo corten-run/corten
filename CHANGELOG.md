@@ -32,6 +32,21 @@ Corten is pre-1.0, so any minor version may change the API.
   with the element's ref. corten-ui's `rows::sort` still reads the `data-sort` an app writes
   (moving it onto ref values is [#1387](https://github.com/corten-run/corten/issues/1387)).
 
+- Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
+  images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
+  and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
+  historical results; the new toolchain and dependency graph are new-round inputs.
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure. Livewire saves must
+  match the native component, item, locale and submitted values.
+
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
+
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
   the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`
@@ -282,6 +297,54 @@ Corten is pre-1.0, so any minor version may change the API.
   without `Display`'s formatter: the same digits, measured with callgrind as about 4,400
   instructions less a page on card-market's item page, whose listing rows (22 on average) each give
   their ref their cents (`docs/design.md#choice-ref-values`).
+
+- A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
+  or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
+  where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
+  server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
+  it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
+  where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
+  CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+  `HandleTransientHttpError`, .NET's standard resilience handler) retries it. The app does not
+  log it as an error. CloudFront's `5xxErrorRate` and Cloudflare's error-rate notifications
+  cannot leave it out, since neither filters by method (Cloudflare's Monitors may, not verified
+  here); the deploy guide says how to build one from access logs that leaves out
+  `status = 501 AND method not in the app's served methods`, which hides neither the app's own
+  501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
+  to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
+  some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
+  route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
+  501; an unknown URL is still a 404 whatever the method, and so is a `CONNECT` to a host and port
+  (the authority form a client sends), which names no path. A browser gets the error page as the
+  new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
+  page waits for the layout's reads (only the router's 501 is, while it is still its empty 501: a
+  middleware that turns it into another status, or gives it a body that is not plain text, keeps
+  what it wrote, a plain-text body is `Failure::Rejected` with status 501 for a browser and JSON
+  for an API's client, and an empty body of unknown size is sent as a bare 501; a 501 a handler
+  or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
+  `Failure::Failed`), and
+  an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
+  `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
+  405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
+  within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
+  fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
+  355 to 481 more as a 501, which allocates the router's marker
+  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
+  ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+- Pin the benchmark suites to one verified k6 release and record its actual
+  executable, immutable image and platform. Native saved replay requires this
+  identity, and legacy continuation/trends refuse incompatible or unidentified
+  tool boundaries instead of assigning new metadata to old measurements.
+
+- Refresh the JavaScript benchmark framework/compiler dependencies and retain
+  committed package locks in their production builds and build recipes. React
+  Router uses its current native Express dispatcher. Previous rounds are not
+  relabeled; version choices, checks and remaining transitive audit findings are
+  recorded in `bench/fullstack/refresh-js.md`.
+
+- Lock Express's existing production dependency tree and use the same `npm ci`
+  command in its image and build recipe. Historical full-stack results retain
+  their original dependency-reproducibility caveat.
 
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a

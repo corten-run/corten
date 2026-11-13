@@ -28,6 +28,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyK6Provenance } from "../load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -167,6 +168,20 @@ export function report(rounds, baselines) {
   for (const metric of metrics) {
     const own = baselines.metrics?.[metric.name];
     const base = index(own?.round ?? baselines.round);
+    const compared = rounds.slice(base);
+    // Historical rounds retain their unknown tool identity. Once identity is
+    // recorded, a baseline must not cross that measurement-tool boundary.
+    if (compared.some((round) => round.summary.tools?.k6 != null)) {
+      let identity;
+      for (const round of compared) {
+        const tool = round.summary.tools?.k6;
+        try { verifyK6Provenance(tool); }
+        catch (error) { throw new Error(`incompatible k6 provenance in ${round.round} for "${metric.name}": ${error.message}`, { cause: error }); }
+        const current = JSON.stringify([tool.image, tool.imageId, tool.platform, tool.version, tool.versionOutput]);
+        if (identity != null && identity !== current) throw new Error(`incompatible k6 identity in ${round.round} for "${metric.name}": choose a baseline measured with the same tool`);
+        identity = current;
+      }
+    }
     const values = rounds.map((r) => metric.of(r.summary));
     if (!has(values[base])) throw new Error(`the baseline ${rounds[base].round} has no "${metric.name}": name another round for it in trend-baseline.json`);
     const t = trendOf(values, base, metric);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readLoadSummary, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
   assert.doesNotMatch(inventory.phoenix.label, /LiveView/);
@@ -49,7 +49,15 @@ test("legacy selection cannot silently reduce the twenty-app default", () => {
 
 function k6(metrics = {}, { status = [100, 0], kind = [100, 0] } = {}) {
   const check = ([passes, fails]) => ({ passes, fails });
-  return { metrics: { http_reqs: { count: 100, rate: 10 }, http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 }, http_req_failed: { value: 0 }, checks: { passes: 200, fails: 0 }, ...metrics },
+  const latency = { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 };
+  const native = { http_reqs: { count: 100, rate: 10 }, iterations: { count: 100, rate: 10 }, vus_max: { value: 10, min: 10, max: 10 },
+    http_req_duration: latency, iteration_duration: latency, http_req_failed: { passes: 0, fails: 100, value: 0 }, checks: { passes: 200, fails: 0, value: 1 }, ...metrics };
+  if (metrics.http_req_failed) {
+    const failed = Math.round(metrics.http_req_failed.value * 100);
+    native.http_req_failed = { passes: failed, fails: 100 - failed, ...metrics.http_req_failed };
+  }
+  if (metrics.checks) native.checks = { value: metrics.checks.passes / (metrics.checks.passes + metrics.checks.fails), ...metrics.checks };
+  return { metrics: native,
     root_group: { checks: { "marketplace status 200": check(status), "marketplace content type": check(kind) } } };
 }
 test("what an app fails to serve is its outcome; a summary that is not a measurement still fails (#1128)", () => {
@@ -59,7 +67,7 @@ test("what an app fails to serve is its outcome; a summary that is not a measure
   const timedOut = readOutcome(k6({ http_req_failed: { value: 0.25 }, checks: { passes: 175, fails: 25 } }, { status: [75, 25] }));
   assert.equal(timedOut.failed, 25); assert.equal(timedOut.checksFailed, 25); assert.equal(timedOut.appOutcome, true);
   // a request cut off at the phase's end may have its failure and not its check
-  assert.equal(readOutcome(k6({ http_req_failed: { value: 0.25 } }, { status: [76, 24] })).checksFailed, 24);
+  assert.equal(readOutcome(k6({ http_req_failed: { value: 0.25 }, iterations: { count: 99, rate: 9.9 }, checks: { passes: 174, fails: 24 } }, { status: [75, 24], kind: [99, 0] })).checksFailed, 24);
   const behind = readOutcome(k6({ dropped_iterations: { count: 40 } }));
   assert.equal(behind.dropped, 40); assert.equal(behind.appOutcome, true);
   for (const s of [null, {}, k6({ http_reqs: { count: 0, rate: 0 } }), k6({ http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": null, max: 4 } }),
@@ -72,10 +80,92 @@ test("the load script has no thresholds, so a phase an app cannot serve does not
   assert.doesNotMatch(script, /^\s*thresholds\s*:/m);
   assert.match(script, /http\.setResponseCallback\(http\.expectedStatuses\(200\)\)/);
 });
+test("complete stopped traffic parses without successful requests, but never without the full k6 schema", () => {
+  const raw = k6({ http_req_failed: { value: 1 }, checks: { passes: 100, fails: 100 } }, { status: [0, 100] });
+  assert.equal(readLoadSummary(raw).failed, 100);
+  assert.throws(() => readOutcome(raw), /no request succeeded/);
+  for (const edit of [
+    (v) => { delete v.metrics.http_req_duration; },
+    (v) => { delete v.metrics.http_req_failed; },
+    (v) => { delete v.metrics.checks; },
+    (v) => { delete v.root_group; },
+    (v) => { delete v.root_group.checks["marketplace status 200"]; },
+    (v) => { delete v.root_group.checks["marketplace content type"]; },
+    (v) => { v.root_group.checks["marketplace content type"].fails = 1; },
+  ]) { const v = structuredClone(raw); edit(v); assert.throws(() => readLoadSummary(v)); }
+});
+
+test("native k6 accounting reconciles every named check, aggregate, rate sample and unfinished iteration", () => {
+  for (const [label, edit] of [
+    ["sparse checks", (v) => { v.metrics.checks = { passes: 1, fails: 0, value: 1 }; for (const c of Object.values(v.root_group.checks)) c.passes = 0; v.root_group.checks["marketplace status 200"].passes = 1; }],
+    ["aggregate failures", (v) => { v.metrics.checks = { passes: 0, fails: 200, value: 0 }; }],
+    ["aggregate passes", (v) => { v.metrics.checks.passes--; }],
+    ["aggregate rate", (v) => { v.metrics.checks.value = 0.5; }],
+    ["failure sample count", (v) => { v.metrics.http_req_failed.fails--; }],
+    ["failure sample rate", (v) => { v.metrics.http_req_failed.value = 0.5; }],
+    ["extra iterations", (v) => { v.metrics.iterations.count++; }],
+    ["unchecked completed iteration", (v) => { v.root_group.checks["marketplace content type"].passes--; v.metrics.checks.passes--; }],
+    ["cutoff exceeds VUs", (v) => { v.metrics.iterations.count = 1; }],
+    ["missing iterations", (v) => { delete v.metrics.iterations; }],
+    ["missing VU bound", (v) => { delete v.metrics.vus_max; }],
+    ["extra check", (v) => { v.root_group.checks.other = { passes: 1, fails: 0 }; }],
+  ]) { const v = k6(); edit(v); assert.throws(() => readLoadSummary(v), undefined, label); }
+  // One interrupted failed request lacks both checks; another can be cut off
+  // between the status and content checks. No percentage-of-traffic allowance.
+  const cutoff = k6({ iterations: { count: 99, rate: 9.9 }, checks: { passes: 199, fails: 0 } }, { kind: [99, 0] });
+  assert.equal(readLoadSummary(cutoff).requests, 100);
+  cutoff.metrics.http_req_failed = { passes: 1, fails: 99, value: 0.01 };
+  assert.throws(() => readLoadSummary(cutoff), /status check/);
+});
+
+test("all native latency exports obey ordering and statistical bounds, not just reported percentiles", () => {
+  for (const name of ["http_req_duration", "iteration_duration", "http_req_waiting", "http_req_duration{expected_response:true}"]) {
+    for (const edit of [
+      (v) => { v.max = 0; v.avg = 10000; },
+      (v) => { v["p(50)"] = 3; v["p(95)"] = 2; },
+      (v) => { v["p(95)"] = 4; v["p(99)"] = 3; },
+      (v) => { v["p(99)"] = 5; },
+      (v) => { v.avg = 5; },
+      (v) => { v.avg = 0; },
+    ]) {
+      const v = k6(); v.metrics[name] = { ...v.metrics.http_req_duration }; edit(v.metrics[name]);
+      assert.throws(() => readLoadSummary(v), /statistical bounds|mean cannot contain/, name);
+    }
+  }
+  const zero = k6(); for (const name of ["http_req_duration", "iteration_duration"]) for (const key of Object.keys(zero.metrics[name])) zero.metrics[name][key] = 0;
+  assert.equal(readLoadSummary(zero).p99, 0);
+});
+
+test("nonnegative k6 linear quantiles constrain the mean for every latency export", () => {
+  for (const name of ["http_req_duration", "iteration_duration", "http_req_waiting", "http_req_duration{expected_response:true}"]) {
+    for (const trend of [
+      { avg: 1, "p(50)": 100, "p(95)": 100, "p(99)": 100, max: 100 },
+      { avg: 50, "p(50)": 1, "p(95)": 1, "p(99)": 1, max: 100 },
+    ]) {
+      const v = k6(); v.metrics[name] = trend;
+      assert.throws(() => readLoadSummary(v), /mean\/quantile feasibility/, name);
+    }
+  }
+  // Construct real nonnegative sample histories, including small-sample linear
+  // interpolation and skewed tails, rather than prescribing arbitrary stats.
+  for (const samples of [[100], [0, 100], [0, 0, 100], [0, 100, 100], Array(2249).fill(0).concat(100)]) {
+    const q = (p) => { const i = (samples.length - 1) * p, f = Math.floor(i); return samples[f] + (samples[Math.ceil(i)] - samples[f]) * (i - f); };
+    const v = k6(); v.metrics.http_reqs.count = samples.length; v.metrics.iterations.count = samples.length;
+    v.metrics.http_req_failed.fails = samples.length; v.metrics.checks.passes = samples.length * 2;
+    for (const c of Object.values(v.root_group.checks)) c.passes = samples.length;
+    const trend = { avg: samples.reduce((a, b) => a + b, 0) / samples.length, "p(50)": q(0.5), "p(95)": q(0.95), "p(99)": q(0.99), max: samples.at(-1) };
+    v.metrics.http_req_duration = trend; v.metrics.iteration_duration = trend;
+    assert.equal(readLoadSummary(v).requests, samples.length);
+  }
+  const boundary = k6();
+  boundary.metrics.http_req_duration = { avg: 50, "p(50)": 100, "p(95)": 100, "p(99)": 100, max: 100 };
+  assert.throws(() => readLoadSummary(boundary), /mean\/quantile feasibility/);
+});
 test("an upstream error answer during a phase is counted, so the run fails on it", () => {
-  assert.equal(upstreamErrors({ answers: { 200: 10 } }, { answers: { 200: 50 } }), 0);
-  assert.equal(upstreamErrors({ answers: { 200: 10, 503: 1 } }, { answers: { 200: 50, 503: 3, 404: 1 } }), 3);
-  for (const [a, b] of [[{ answers: { 200: 10 } }, { answers: { 200: 9 } }], [{}, { answers: {} }], [{ answers: { 200: -1 } }, { answers: { 200: 1 } }]]) assert.throws(() => upstreamErrors(a, b));
+  const counts = (answers) => ({ status: 200, answers, requests: { item_1: Object.values(answers).reduce((sum, n) => sum + n, 0) } });
+  assert.equal(upstreamErrors(counts({ 200: 10 }), counts({ 200: 50 })), 0);
+  assert.equal(upstreamErrors(counts({ 200: 10, 503: 1 }), counts({ 200: 50, 503: 3, 404: 1 })), 3);
+  for (const [a, b] of [[counts({ 200: 10 }), counts({ 200: 9 })], [{}, counts({})], [counts({ 200: -1 }), counts({ 200: 1 })]]) assert.throws(() => upstreamErrors(a, b));
 });
 test("an app container that exits or is OOM-killed during a load phase is a recorded stop, with why (#1128)", () => {
   assert.equal(appStop({ Running: true, OOMKilled: false, ExitCode: 0 }, 1, "sat64"), null);
@@ -126,6 +216,10 @@ test("a phase ends in the app's stop only when nothing else the phase depends on
     [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: { Running: true, StartedAt: "2026-01-01T00:00:09Z" } }, alive("upstream")] }, /cpu stopped or restarted/],
     [{ sidecars: [alive("cpu"), { name: "upstream", startedAt: "2026-01-01T00:00:00Z", state: { Running: false, StartedAt: "2026-01-01T00:00:00Z" } }] }, /upstream stopped or restarted/],
     [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: null }] }, /cpu stopped or restarted/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, OOMKilled: true } }] }, /cpu unhealthy/],
+    [{ sidecars: [{ ...alive("upstream"), state: { ...alive("upstream").state, Error: "daemon error" } }] }, /upstream unhealthy/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, Restarting: true } }] }, /cpu unhealthy/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, ExitCode: 137 } }] }, /cpu unhealthy/],
     [{ events: [{ action: "kill" }, { action: "die" }] }, /Docker kill on the app container/],
     [{ app: { ...exited, Error: "daemon shutdown" } }, /Docker reported an error/],
     // stopped before the phase began (after the cold start's first 200, or between phases): not

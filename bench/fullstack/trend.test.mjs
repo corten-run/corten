@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { report, roundsIn, trendOf } from "./trend.mjs";
+import { k6Image, k6Provenance } from "../load-tool.mjs";
 
 const instructions = /** @type {const} */ ({ better: "lower", noise: 0.01 });
 const memory = /** @type {const} */ ({ better: "lower", noise: 0.05 });
@@ -100,6 +101,25 @@ test("one number's baseline can move on its own, so accepting it does not reset 
   assert.equal(page.baselineWhy, "accepted");
   assert.equal(page.verdict, "ok");
   assert.equal(out.metrics.find((m) => m.name === "page HTML, gzip").baselineRound, "r1");
+});
+
+test("recorded load-tool identity cannot cross a missing or changed tool baseline", () => {
+  const tool = k6Provenance({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [k6Image],
+    Os: "linux", Architecture: "amd64" }, "k6 v2.4.0 (synthetic test executable)");
+  const withTool = () => roundsOf([100_000, 105_000, 110_000]).map((round) => ({
+    ...round, summary: { ...round.summary, tools: { k6: structuredClone(tool) } },
+  }));
+  assert.deepEqual(report(withTool(), { round: "r1" }).drift, ["instructions, item page"]);
+  for (const change of [null, { ...tool, imageId: `sha256:${"b".repeat(64)}` },
+    { ...tool, versionOutput: "k6 v2.4.0 (different executable)" }, { ...tool, version: "2.3.0" }]) {
+    const rounds = withTool();
+    rounds[0].summary.tools.k6 = change;
+    assert.throws(() => report(rounds, { round: "r1" }), /incompatible k6/);
+    assert.doesNotThrow(() => report(rounds, { round: "r2" }), "an explicit later baseline excludes the incompatible round");
+  }
+  const aliases = withTool();
+  aliases[0].summary.tools.k6.repoDigests.push(`grafana/k6@sha256:${"c".repeat(64)}`);
+  assert.doesNotThrow(() => report(aliases, { round: "r1" }), "another alias is not a different executable");
 });
 
 test("a baseline round that is not among the rounds, or lacks the number, is an error, not a fallback", () => {

@@ -1399,9 +1399,14 @@ async fn unknown_urls_and_methods_get_the_error_page_and_the_app_can_replace_it(
     let (status, _, body) = call_with(app(routes(), Some("ada")), "GET", "/nope", None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("<title>Not found</title>") && body.contains(">home</a>"), "in the shell: {body}");
-    let (status, headers, body) = call_with(app(routes(), None), "DELETE", "/", None, None).await;
+    // A method the app implements and the route lacks keeps the route's `Allow`; one no route has
+    // is a 501 with none (RFC 9110 9.1). Both are drawn in the error page.
+    let (status, headers, body) = call_with(app(routes(), None), "OPTIONS", "/", None, None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert!(headers.contains_key("allow") && body.contains("Something went wrong"));
+    let (status, headers, body) = call_with(app(routes(), None), "DELETE", "/", None, None).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(!headers.contains_key("allow") && body.contains("Something went wrong"));
     let custom = App::new(Routes::from(routes())).error_page(oops, ()).router();
     let (_, _, body) = call_with(custom, "GET", "/nope", None, None).await;
     assert!(body.contains("<title>Oops 404</title>") && body.contains("<h1>Lost?</h1>"));
@@ -4662,9 +4667,13 @@ async fn api_routes_answer_every_failure_as_json_whatever_the_client_accepts() {
             body.starts_with(r#"{"title":"Bad Request","status":400,"detail":"Invalid URL"#),
             "an extractor's rejection: {body}"
         );
-        let (status, headers, body) = call_with(router.clone(), "DELETE", "/api/post", None, accept).await;
+        let (status, headers, body) = call_with(router.clone(), "GET", "/api/post", None, accept).await;
         assert_eq!((status, &headers["allow"]), (StatusCode::METHOD_NOT_ALLOWED, &"POST".parse().unwrap()));
         assert_eq!(body, r#"{"title":"Method Not Allowed","status":405}"#);
+        // No route has a `DELETE`: the server implements it for no resource.
+        let (status, headers, body) = call_with(router.clone(), "DELETE", "/api/post", None, accept).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert_eq!(body, r#"{"title":"Not Implemented","status":501}"#);
         let (status, _, body) = get("/api/slow").await;
         assert_eq!((status, &body[..]), (StatusCode::SERVICE_UNAVAILABLE, r#"{"title":"Service Unavailable","status":503}"#));
         let (status, _, body) = get("/api/teapot").await;
@@ -5720,8 +5729,9 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "raw"), "a 4xx is sent as it is, not as the error page");
     assert_eq!(headers.get("x-raw").unwrap(), "GET 7");
     assert!(!headers.contains_key("cache-control") && headers["x-content-type-options"] == "nosniff", "{headers:?}");
-    // It answers no write, so another site's is the router's plain 405; another host's read is
-    // the 421 every route gives it, with the headers an unstaged answer gets.
+    // It answers no write, so another site's is the router's plain answer, not the stages' 403: a
+    // 501, since no route in this app takes a `POST`; another host's read is the 421 every route
+    // gives it, with the headers an unstaged answer gets.
     let (status, _, body) = call_with_any(
         router.clone(),
         "POST",
@@ -5729,7 +5739,7 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
         &[("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")],
     )
     .await;
-    assert_eq!((status, body.as_str()), (StatusCode::METHOD_NOT_ALLOWED, ""));
+    assert_eq!((status, body.as_str()), (StatusCode::NOT_IMPLEMENTED, ""));
     let (status, headers, body) =
         call_with_any(router.clone(), "GET", "/ping", &[("host", "rebound.attacker.example:3917")]).await;
     assert_eq!((status, body.as_str()), (StatusCode::MISDIRECTED_REQUEST, "Misdirected request."));
@@ -5778,9 +5788,14 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "not the error page's policy");
     // A method it has no handler for is a plain 405 with the router's `Allow` and the headers
-    // every unstaged answer gets, not the error page.
-    let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
+    // every unstaged answer gets, not the error page; one no route in the app has (`PUT` here) a
+    // plain 501 with no `Allow`, the same way.
+    let (status, headers, body) = call_with(router.clone(), "OPTIONS", "/ping", None, Some("text/html")).await;
     assert_eq!((status, headers["allow"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "GET,HEAD"));
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
+    assert!(!body.contains("<html"), "{body}");
+    let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
+    assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
     assert!(!body.contains("<html"), "{body}");
     // A segment without the route's suffix is a plain 404, not the error page.
@@ -5829,7 +5844,7 @@ async fn the_stages_hold_beside_an_unstaged_route() {
     let (status, _, _) = call_with_any(router.clone(), "POST", "/page", &cross).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
     let (status, _, _) = call_with_any(router, "POST", "/raw/7", &cross).await;
-    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the unstaged one answers no write");
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "the unstaged one answers no write, and no route here takes one");
 }
 
 /// An unstaged JSON route's failure outside an API's prefix is sent as its handler made it: plain
@@ -6064,9 +6079,13 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
     assert_eq!(headers["content-security-policy"], "sandbox");
     let (status, headers, _) = call_with_any(router.clone(), "GET", "/lane/items/seven", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::BAD_REQUEST, problem));
-    let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
+    let (status, headers, _) = call_with_any(router.clone(), "OPTIONS", "/lane/items/7", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, problem));
     assert_eq!(headers["allow"], "GET,HEAD");
+    // One no route in the app has, with no `Allow`.
+    let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_IMPLEMENTED, problem));
+    assert!(!headers.contains_key("allow") && headers["content-security-policy"] == "sandbox", "{headers:?}");
     // A segment without the route's suffix.
     let (status, _, body) = call_with_any(router.clone(), "GET", "/lane/files/a.txt", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "a"));
@@ -6101,9 +6120,14 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
             })
         })
         .router();
-    let (status, headers, body) = call_with_any(shaped, "GET", "/lane/items/0", &[]).await;
+    let (status, headers, body) = call_with_any(shaped.clone(), "GET", "/lane/items/0", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, "application/json"));
     assert_eq!(body, r#"{"type":"error","error":{"code":404,"message":"Not Found"}}"#);
+    // The router's 501, for a method no route in the app has, is in the API's shape too.
+    let (status, headers, body) = call_with_any(shaped, "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_IMPLEMENTED, "application/json"));
+    assert_eq!(body, r#"{"type":"error","error":{"code":501,"message":"Not Implemented"}}"#);
+    assert!(!headers.contains_key("allow"), "{headers:?}");
 
     // A panic there is the API's 500.
     let router = App::new(Routes::new()).api(unstaged_api::api).router();
@@ -6355,8 +6379,10 @@ async fn a_parameter_followed_by_text_is_read_without_it() {
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
         }
     }
-    let (status, _, _) = call_with(router.clone(), "DELETE", "/sitemap/items/3.xml", None, None).await;
+    let (status, _, _) = call_with(router.clone(), "OPTIONS", "/sitemap/items/3.xml", None, None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "a path the route serves, by another method");
+    let (status, _, _) = call_with(router.clone(), "DELETE", "/sitemap/items/3.xml", None, None).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "matched, by a method no route here has");
     // A value that is not the parameter's type is refused as any path parameter is.
     let (status, _, body) = call_with(router.clone(), "GET", "/sitemap/items/x.xml", None, Some("text/plain")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -13481,6 +13507,148 @@ mod layout_reads {
         let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/nowhere", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A middleware that answers `/soon` itself with a bare `501`, as one for a part of the app not
+    /// built yet would, and rewrites a `501` when the query asks: `?to=418` changes only the
+    /// status, `?to=418-page` gives it a page of its own too, and `?to=501-page` keeps the `501`
+    /// and gives it a page of its own.
+    struct NotBuilt;
+
+    impl crate::Middleware for NotBuilt {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            if req.uri().path() == "/soon" {
+                return crate::response::IntoResponse::into_response(StatusCode::NOT_IMPLEMENTED);
+            }
+            let to = req.uri().query().map(str::to_owned);
+            let mut res = next.run(req).await;
+            if res.status() == StatusCode::NOT_IMPLEMENTED {
+                match to.as_deref() {
+                    Some("to=418") => *res.status_mut() = StatusCode::IM_A_TEAPOT,
+                    Some("to=418-page") => {
+                        *res.status_mut() = StatusCode::IM_A_TEAPOT;
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>teapot</p>");
+                    }
+                    Some("to=501-page") => {
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>not here yet</p>");
+                    }
+                    _ => {}
+                }
+            }
+            res
+        }
+    }
+
+    /// An app with no `any` route, so `PROPFIND` is a method no route has, and with `501`s of its
+    /// own: a handler's `Error::status` (`/said`), a handler's bare status (`/bare`) and a
+    /// middleware's (`/soon`). Its error page names the failure it got.
+    fn not_built(count: CartCount) -> Router {
+        let routes = Table::new()
+            .route(
+                "/",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+            )
+            .route("/said", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::NOT_IMPLEMENTED)) }))
+            .route("/bare", get(|_req: Req| async move { StatusCode::NOT_IMPLEMENTED }));
+        App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    let kind = match &failure {
+                        Failure::UnknownMethod => "unknown method",
+                        Failure::Failed { .. } => "failed",
+                        _ => "other",
+                    };
+                    req.page::<ForOne>(Layout {
+                        req: &req,
+                        children: html! {
+                            <p>{failure.status().as_u16()}</p>
+                            <p>{kind}</p>
+                        },
+                    })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), NotBuilt))
+            .router()
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_the_routers_501_starts_the_reads_and_waits_for_them() {
+        // A method no route in the app has: the request's fault, as a 405 is.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, headers, body) = call_with(not_built(count.clone()), "PROPFIND", "/", None, None).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>501</p>"), "{body}");
+        assert!(body.contains("<p>unknown method</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_501_the_app_answers_is_failed_and_waits_for_none() {
+        // A part of the app not built yet, not a method no route has: `Failure::Failed`, as any
+        // 5xx, whether the handler said so with `Error::status`, with the bare status, or a
+        // middleware answered it.
+        for path in ["/said", "/bare", "/soon"] {
+            let at = std::time::Instant::now();
+            let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+            let (status, _, body) = call_with(not_built(slow), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{path}");
+            assert!(!body.contains("count") && body.contains("<p>501</p>") && body.contains("<p>failed</p>"), "{path}: {body}");
+            assert!(at.elapsed() < Duration::from_secs(1), "{path}: {:?}", at.elapsed());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_middleware_that_turns_the_routers_501_into_another_status_keeps_it() {
+        // Only the status changed: the error page for that status, not for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418", None, None).await;
+        assert_eq!(status, StatusCode::IM_A_TEAPOT, "{body}");
+        assert!(body.contains("<p>418</p>") && body.contains("<p>failed</p>"), "{body}");
+        // With a page of its own, which goes out as it wrote it.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "<p>teapot</p>"));
+    }
+
+    #[tokio::test]
+    async fn a_middleware_that_gives_the_routers_501_a_body_keeps_it() {
+        // Still a 501, now with the middleware's own page: sent as it wrote it, not replaced by the
+        // error page for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=501-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_IMPLEMENTED, "<p>not here yet</p>"));
+    }
+
+    /// Corten logs an `Error` a handler returns, not a status: the router's `501` (a refusal, as
+    /// its `405` is) logs nothing as an error, nor does a handler's bare `501`, which the error
+    /// page counts as a failure all the same; a handler's `Error::status(NOT_IMPLEMENTED)` is
+    /// logged.
+    #[cfg(feature = "log")]
+    #[tokio::test]
+    async fn a_501_status_alone_is_not_logged_as_an_error() {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let _logging = tracing::subscriber::set_default(subscriber);
+        let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+        for accept in [None, Some("application/json")] {
+            let (status, _, _) = call_with(not_built(CartCount::default()), "PROPFIND", "/", None, accept).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+            let logged = text();
+            assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "{accept:?}: {logged}");
+        }
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/bare", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "/bare: {logged}");
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/said", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(logged.contains("ERROR") && logged.contains("corten: request failed"), "{logged}");
     }
 
     #[tokio::test(start_paused = true)]

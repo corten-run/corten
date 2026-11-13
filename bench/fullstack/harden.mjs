@@ -109,11 +109,11 @@ process.on("exit", () => { for (const n of started) docker("rm", "-f", "fsw-" + 
 for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(/** @type {NodeJS.Signals} */ (signal), () => process.exit(/** @type {number} */ (code)));
 docker("network", "create", network);
 docker("rm", "-f", "fsw-items");
-const items = docker("run", "-d", "--name", "fsw-items", "--network", network, ...loadCpus, "-v", here + ":/b:ro", "node:24-bookworm-slim", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
+const items = docker("run", "-d", "--name", "fsw-items", "--network", network, ...loadCpus, "-v", here + ":/b:ro", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
 if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
 // The probe holds thousands of connections; the apps keep the file limit their image and Docker give them.
-const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, ...loadCpus, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
+const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, ...loadCpus, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "sleep", "infinity");
 if (prober.status !== 0) throw new Error("fsw-probe: " + prober.stderr);
 
 const git = (/** @type {string[]} */ ...args) => {

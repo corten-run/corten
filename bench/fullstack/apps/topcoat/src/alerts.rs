@@ -7,7 +7,13 @@ use topcoat::{
     Result,
     context::Cx,
     cookie::{Cookie, SameSite},
-    router::{content::Json, error::service_unavailable, header, request, response::response_headers, route},
+    router::{
+        content::Json,
+        error::service_unavailable,
+        header, request,
+        response::{IntoResponse, response_headers},
+        route,
+    },
     session::{Token, TokenHash},
 };
 
@@ -69,15 +75,14 @@ pub fn append(cx: &Cx, row: Alert) -> Result<()> {
 }
 
 #[route(GET "/api/alerts")]
-pub async fn read(cx: &Cx) -> Result<Json<Vec<Alert>>> {
-    response_headers(cx).append(header::CACHE_CONTROL, "no-store".parse()?);
+pub async fn read(cx: &Cx) -> Result<impl IntoResponse> {
     let sessions = SESSIONS.lock().map_err(|_| service_unavailable(60))?;
     let rows = presented(cx)
         .and_then(|hash| sessions.get(&hash))
         .filter(|s| Instant::now() < s.expires)
         .map(|s| s.rows.clone())
         .unwrap_or_default();
-    Ok(Json(rows))
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(rows)))
 }
 
 #[cfg(test)]
@@ -132,5 +137,18 @@ mod tests {
             router.handle(Request::get("/api/alerts").header(header::COOKIE, credential).body(Body::empty()).unwrap()).await;
         assert_eq!(&to_bytes(response.into_body(), 1 << 20).await.unwrap()[..], b"[]");
         assert_eq!(SESSIONS.lock().unwrap()[&token.hash()].rows.len(), 17, "GET does not reset storage");
+    }
+
+    #[tokio::test]
+    async fn readback_no_store_precedes_matched_profile_fallback() {
+        let router = Router::builder().route(read).layer(crate::profile_layer()).build();
+        let response = router.handle(Request::get("/api/alerts").body(Body::empty()).unwrap()).await;
+        assert_eq!(response.status(), 200);
+        let cache: Vec<_> = response.headers().get_all(header::CACHE_CONTROL).iter().collect();
+        assert_eq!(cache, ["no-store"]);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        assert_eq!(response.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+        assert_eq!(&to_bytes(response.into_body(), 1 << 20).await.unwrap()[..], b"[]");
     }
 }

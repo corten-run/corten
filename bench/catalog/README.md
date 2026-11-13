@@ -88,7 +88,9 @@ log-collection failures remain explicit failures; incomplete logs are not silent
 This does not disable native access logging or change measured application settings.
 
 Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
-`catalog-saved-evidence/v1` observations without running Docker, Git or a browser.
+`catalog-saved-evidence/v2` observations without running Docker, Git or a browser.
+This schema requires the selected k6 image, platform and actual executable version;
+older evidence is not retroactively assigned that identity.
 The native producer preserves the fixture, checker receipts, native build/image
 receipts, cold probe and container identity, k6 summaries, before/after cgroup
 counters, raw Docker memory/CPU samples and a final owned-resource query. The
