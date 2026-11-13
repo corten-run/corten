@@ -3142,3 +3142,59 @@ by design; where it is known, a limit says what would lift it or why it is so.
     a forwarded scheme read only from the proxies `Policy::proxy` lists (as `ClientIp` reads
     `X-Forwarded-For`), or the connection's own TLS state when `serve_wrapped` ends TLS in the
     app.
+27. <a id="limit-path-values"></a>A path parameter cannot carry a value its link would not read
+    back as. A browser resolves a `.` or `..` segment away before it asks (the URL Standard, which
+    reads `%2e` as a dot there too), so `/items/..` opens `/` and the `{*rest}` key
+    `public/../private/x` opens `/files/private/x`; and the router has no segment for an empty
+    value first or last in the path (`//posts` is another host to a browser, `/items/` matches no
+    `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
+    `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
+    written as they are by a `#[derive(Route)]` link: a debug build panics when the link is
+    written, naming the route by its module path (`shop::url::Item`) and the field, and a release
+    build writes `%FF` after the value (`/items/..%FF`, `/files/public/..%FF/private/x`,
+    `/%FF/posts`), which no browser resolves and the route answers with a 400, since no parameter
+    reads a value that is not UTF-8, and logs that as an error the first time for each route and
+    field in the process, so a list that links a stored value on every row is one line, not one
+    per link and render. A route is known by its name and module path, which leaves out function
+    bodies, so two routes of one name declared in two functions of one module share their line. A
+    refusal counts as that time only when the subscriber takes an error event of Corten's
+    (`tracing::event_enabled!`), as Corten's default subscriber and one that filters by level and
+    target do, so one written before the app installs its subscriber does not use it up. The check
+    asks before the event exists, so a subscriber that filters on an event's message text or its
+    line can disagree with it either way: a refusal it drops still uses up the one line, and one
+    it would log may never be logged. Later refusals of a route and field read the list of those
+    logged and do not wait on each other. The link opens no
+    other page or file either way. A route that starts with a `{*rest}` refuses a dot segment after
+    the value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
+    browser resolves: the refusal is kept, since it costs nothing where no value has such a
+    segment and the value means a path above the route's. A value that only contains dots
+    (`a.b`, `...`, `.hidden`) is written as it is, and so is an empty one between two segments
+    (`/notes//edit`, or `/shelves//` for `/shelves/{id}/`), which reads back. A route's own path
+    cannot have a `.` or `..` segment, or that text after a parameter: with `#[derive(Route)]`
+    neither compiles, and a `Route` written by hand does not build with that text after a
+    parameter in its `WRITTEN` path, or with a dot segment in its `PATH` where an area or an API
+    adds it. A hand-written `Route` the app adds at its top level is not checked for a dot segment
+    in its `PATH`, and the values a hand-written `write_href` writes are its own, which nothing
+    checks. The check is where a
+    link is written, not where a request is read: no browser sends such a segment, so a check on
+    every request with parameters would cost them all to stop what no link sends, and a value
+    decoded from a segment can hold `../` anyway (`..%2F`), so it would not make a parameter safe
+    to use as a file path; an app that does that checks the value itself. Writing a link pays
+    inside the pass that already encodes each value, which also says whether the value has a dot,
+    so a whole-segment value pays a comparison of its length, and one of two bytes or fewer a look
+    at its first byte. Counted with callgrind in a release build (1,000 and 11,000 links of one
+    route, the difference over 10,000), at `076abde0` against `80dbd7db`, a link costs:
+    `/items/{id}` 120 instructions against 117, `/{user}/posts` 128 against 131, `/{lang}/news`
+    with `en` 114 against 113, `/feeds/{name}.xml` 125 against 121, three parameters (one a
+    `u32`, checked on what its `Display` wrote) 525 against 506, and `/files/{*path}` with a
+    29-byte value 178 against 170 without a dot and 270 against 170 with one (`sum.md`): whether a
+    dot starts a segment depends on the bytes beside it, which that pass does not keep, so a
+    `{*rest}` value with a dot is read again, eight bytes at a time. Where a page writes a link
+    into an attribute, the check made the link too large to be inlined there at `9aee73ad`, which
+    cost the item page's `render_cost` run about 27M instructions of 28,365M; checking a value of
+    two bytes or fewer out of line (`ce50dab8`) inlines it again, and at `076abde0` the run counts
+    28,366.4M, 28,359.7M and 28,368.4M against 28,346.8M, 28,362.2M and 28,356.3M at `80dbd7db`:
+    the ranges overlap, and the medians are 10.1M apart, less than the 15.4M between
+    `80dbd7db`'s own runs.
+    An app whose slugs, names or file keys come from people refuses these values where it stores
+    them, so its links never reach the check.
