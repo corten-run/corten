@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Align the native Corten parity and Leptos live Dockerfiles with the reviewed
+  digest-pinned Rust/trixie production toolchain and cargo-leptos version. Prior
+  captures remain historical, not qualification of the new image inputs.
+
 - Pin grouped benchmark helper images, native live Express and the Express/Bun
   Node comparator to Node 26.13.1 by immutable digest. Retain their separate
   native qualification requirements instead of borrowing older runtime results.

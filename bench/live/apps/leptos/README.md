@@ -70,3 +70,8 @@ held queue saturation/overflow, finite history and reader RAII cleanup.
 `leptos-axum-sse` wire binding. It runs one native application process and gives
 the separate WASM/native build its own build deadline. Registration establishes
 neither qualification nor group readiness, and cannot upgrade older captures.
+
+The native image now uses the same digest-pinned Rust 1.100.0/trixie toolchain,
+cargo-leptos 0.3.12 and dated Debian runtime as the production Leptos benchmark.
+This changes its build inputs, not the application work. Existing captures do not
+qualify this new image; new native browser and group evidence remains required.
