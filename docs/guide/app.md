@@ -3,7 +3,9 @@
 [Back to the guides](../../README.md#documentation)
 
 `corten::serve(App::new(url::router())).await` puts everything a production app needs around
-your routes. Each default can be replaced in one line.
+your routes. Each default can be replaced in one line. An app with live streams also needs
+an HTTP/2 proxy or CDN in front ([Deploying](deploy.md)); ending TLS in `serve_wrapped` does
+not remove that requirement.
 
 | Concern | Default | Override |
 |---|---|---|
@@ -754,6 +756,13 @@ open stream holds one, and a page with a few live elements open in a few tabs us
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
 puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
 HTTP/2 itself: [design Limit 14](../design.md#limit-http1)).
+This requirement has an operational cost: a second server and nine proxy-specific concerns
+in the deployment guide (the other three rows concern optional caching, health and HTTPS).
+The [HTTP/2 prototype](../../bench/http2/README.md) allowed eight live tabs but missed a send
+timeout and, by inspection, never returned its h2 watch to idle. Its partial-header probe kept
+a response open, when HTTP/1.1's watch is busy too; an idle h2 connection was not tested.
+A stream-counting idle watch and a body-stall detector that closes the connection remain
+untried. There is no supported `http2` feature yet.
 An app whose own default port is not 3000 (another service has it on that machine) passes its
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.
