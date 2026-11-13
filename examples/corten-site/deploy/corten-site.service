@@ -32,6 +32,11 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 RestrictAddressFamilies=AF_INET AF_INET6
+# nginx reaches the site over loopback, and the site reaches nothing. On a cloud machine that
+# keeps it from the metadata address, where anything on the machine can read what the machine
+# was handed as it started (infra/main.tf hands it its SSH host key).
+IPAddressDeny=any
+IPAddressAllow=localhost
 RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes

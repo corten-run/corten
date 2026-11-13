@@ -42,25 +42,39 @@ export function sortedListings(record, query) {
 
 // Intl exposes decimal symbols, but not a parser. Accept ungrouped decimals only
 // instead of guessing whether a separator means grouping or a fraction.
-export function targetAmount(locale, text) {
+function parseTarget(locale, text) {
   const decimal = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
   const escaped = decimal === "." ? "\\." : decimal;
   if (!new RegExp("^\\d+(?:" + escaped + "\\d{1,2})?$").test(text)) return null;
-  const amount = Number(text.replace(decimal, "."));
-  return Number.isFinite(amount) && amount > 0 && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
+  const [whole, fraction = ""] = text.split(decimal);
+  const digits = (whole + fraction.padEnd(2, "0")).replace(/^0+/, "");
+  if (digits.length > 16) return null;
+  // Convert an integer decimal string, not a binary floating-point amount times 100.
+  const minor = Number(digits);
+  return minor > 0 && Number.isSafeInteger(minor) ? { minor, amount: `${whole}.${fraction || "0"}` } : null;
+}
+
+export function targetAmount(locale, text) {
+  const parsed = parseTarget(locale, text);
+  return parsed === null ? null : Number(parsed.amount);
+}
+
+export function alertResult(locale, title, email, target) {
+  const f = formatters(locale);
+  if (!email.includes("@")) return { message: f.labels.invalid_email, targetMinor: null };
+  const parsed = parseTarget(locale, target);
+  if (parsed === null) return { message: f.labels.invalid_price, targetMinor: null };
+  const replacements = { email, title, price: f.money.format(parsed.amount) };
+  return { message: f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name) => replacements[name]),
+    targetMinor: parsed.minor };
 }
 
 export function alertMessage(locale, title, email, target) {
-  const f = formatters(locale);
-  if (!email.includes("@")) return f.labels.invalid_email;
-  const amount = targetAmount(locale, target);
-  if (amount === null) return f.labels.invalid_price;
-  const replacements = { email, title, price: f.money.format(amount) };
-  return f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name) => replacements[name]);
+  return alertResult(locale, title, email, target).message;
 }
 
 /** What the page shows, formatted for this request. */
-export function pageModel(locale, record, query, form) {
+export function pageModel(locale, record, query, form, message = form ? alertMessage(locale, record.title, form.email, form.target) : "") {
   const f = formatters(locale);
   const money = (minor) => (minor === null ? "\u2014" : f.money.format(minor / 100));
   const path = marketplacePath(locale, record.id);
@@ -81,7 +95,7 @@ export function pageModel(locale, record, query, form) {
     contents: record.contents.map((row) => ({ ...row, quantityText: f.count.format(row.quantity) })),
     included: record.included_in.map((row) => ({ ...row, quantityText: f.count.format(row.quantity) })),
     email: form?.email ?? "", target: form?.target ?? "",
-    message: form ? alertMessage(locale, record.title, form.email, form.target) : "",
+    message,
   };
 }
 

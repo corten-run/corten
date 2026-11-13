@@ -8,7 +8,8 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { alertMessage, fetchItem, shelf } from "./lib/view-model.mjs";
 import { fetchCatalogRecord } from "./lib/catalog.mjs";
-import { fetchMarketplaceRecord, isLocale, pageModel, readQuery } from "./lib/marketplace.mjs";
+import { alertResult, fetchMarketplaceRecord, isLocale, pageModel, readQuery } from "./lib/marketplace.mjs";
+import { appendAlert, readAlerts } from "./lib/alerts.mjs";
 import { recordJson, recordMethod, recordError } from "./lib/record-json.mjs";
 
 const profile = process.env.PROFILE === "matched";
@@ -108,7 +109,7 @@ const crossSite = (req) => {
   return req.get("Sec-Fetch-Site") === "cross-site" || (origin !== undefined && origin !== `${req.protocol}://${req.get("Host")}`);
 };
 
-async function marketplace(req, res) {
+async function marketplace(req, res, next) {
   const { locale, id } = req.params;
   if (!isLocale(locale)) return res.status(400).type("text").send("Unsupported locale");
   if (req.method === "POST" && crossSite(req)) return res.status(403).type("text").send("Forbidden");
@@ -116,12 +117,23 @@ async function marketplace(req, res) {
   if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   const posted = req.method === "POST" ? { email: field(req.body, "email"), target: field(req.body, "target_price") } : null;
-  res.render("marketplace", pageModel(locale, record, readQuery(req.query), posted));
+  const alert = posted && alertResult(locale, record.title, posted.email, posted.target);
+  const view = pageModel(locale, record, readQuery(req.query), posted, alert?.message);
+  if (!posted) return res.render("marketplace", view);
+  // Finish rendering before committing; a failed render must not accept a write.
+  res.render("marketplace", view, (error, html) => {
+    if (req.timedout || res.destroyed) return;
+    if (error) return next(error);
+    if (alert.targetMinor !== null) appendAlert(req, res, { item_id: id, email: posted.email, target_minor: alert.targetMinor });
+    res.set("Cache-Control", "no-store");
+    res.send(html);
+  });
 }
 app.get("/marketplace/:locale/:id", marketplace);
 app.post("/marketplace/:locale/:id", ...parsed(form), marketplace);
 
 app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord)).all(recordMethod);
+app.get("/api/alerts", readAlerts);
 
 app.get("/catalog/:id", async (req, res) => {
   const record = await fetchCatalogRecord(req.params.id);

@@ -32,6 +32,7 @@ builder.Services.AddHttpClient<MarketplaceSource>(Client)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<MarketplaceSource>();
 builder.Services.AddSingleton<LivePrices>();
+builder.Services.AddSingleton<AlertStore>();
 if (matched)
 {
     builder.WebHost.ConfigureKestrel(o =>
@@ -94,6 +95,11 @@ string[] get = matched ? ["GET", "HEAD"] : ["GET"];
 app.MapMethods("/api/items/{id}", get, async (string id, ItemSource items) => await items.Get(id) is { } item ? Results.Ok(item) : Results.NotFound());
 app.MapMethods("/api/catalog/{id}", ["GET", "HEAD"], async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
 app.MapMethods("/api/marketplace/{id}", ["GET", "HEAD"], async (string id, MarketplaceSource source) => await source.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
+app.MapGet("/api/alerts", (HttpContext context, AlertStore alerts) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(alerts.Read(context.Request));
+});
 // The live benchmark (bench/live): server-sent events, and the publisher that feeds them.
 app.MapGet("/live/prices", (LivePrices live, CancellationToken cancel) => TypedResults.ServerSentEvents(live.Subscribe(cancel)));
 app.MapPost("/live/publish", async (HttpRequest request, LivePrices live) =>

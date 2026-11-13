@@ -1,8 +1,12 @@
-import { Fragment } from "react";
+import { Fragment, useRef, useState } from "react";
 import { formatters, marketplacePath, sortedListings, type Locale, type MarketplaceQuery, type MarketplaceRecord } from "./marketplace";
 
-export type MarketplaceProps = { record: MarketplaceRecord; locale: Locale; query: MarketplaceQuery; message?: string };
-export function Marketplace({ record, locale, query, message = "" }: MarketplaceProps) {
+export type MarketplaceProps = { record: MarketplaceRecord; locale: Locale; query: MarketplaceQuery; message?: string;
+  submitAlert?: (form: FormData) => Promise<{ message: string }> };
+export function Marketplace({ record, locale, query, message = "", submitAlert }: MarketplaceProps) {
+  const [submitted, setSubmitted] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const [pending, setPending] = useState(false);
   const f = formatters(locale);
   const t = f.labels;
   const money = (minor: number | null) => minor === null ? "\u2014" : f.money.format(minor / 100);
@@ -55,13 +59,30 @@ export function Marketplace({ record, locale, query, message = "" }: Marketplace
     </section>
     <section className="marketplace__alert">
       <h2>{t.alert}</h2>
-      <form method="post" action={path + (query.seller || query.sort !== "asc" || query.allOffers
+      <form method="post" onSubmit={async (event) => {
+        if (!submitAlert) return;
+        event.preventDefault();
+        if (submitting.current) return;
+        submitting.current = true;
+        setPending(true);
+        const form = new FormData(event.currentTarget);
+        form.set("locale", locale); form.set("item_id", record.id);
+        try {
+          const result = await submitAlert(form);
+          setSubmitted(result.message);
+        } catch (error) {
+          setSubmitted(error instanceof Error ? error.message : "Request failed");
+        } finally {
+          submitting.current = false;
+          setPending(false);
+        }
+      }} action={path + (query.seller || query.sort !== "asc" || query.allOffers
         ? "?" + new URLSearchParams({ seller: query.seller, sort: query.sort, ...(query.allOffers ? { offers: "all" } : {}) }) : "")}>
         <label>{t.email}<input name="email" type="email" /></label>
         <label>{t.target}<input name="target_price" type="text" inputMode="decimal" /></label>
-        <button type="submit">{t.submit}</button>
+        <button type="submit" disabled={pending}>{t.submit}</button>
       </form>
-      <p className="marketplace__message" aria-live="polite">{message}</p>
+      <p className="marketplace__message" aria-live="polite">{submitted ?? message}</p>
     </section>
     <section className="marketplace__details">
       <h2>{t.details}</h2><p>{record.description}</p>

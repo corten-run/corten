@@ -5,8 +5,44 @@ import { createServer } from "node:http";
 import { chromium } from "@playwright/test";
 import { records } from "./fixtures.mjs";
 import { expectedPage, labels } from "./records.mjs";
-import { alignNumberSpaces, comparePage, compareStyles, navigationFinished, numericFields, numericText, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
+import { alertResponse, alignNumberSpaces, comparePage, compareStyles, navigationFinished, numericFields, numericText, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
 import { referenceHtml } from "./reference.mjs";
+
+test("native generated form actions require same-origin exact submitted fields", async () => {
+  const fields = { email: "native@example.test", target_price: "1234,50" }, action = "http://localhost/marketplace/fr-FR/item_1";
+  const candidate = async (url = "http://localhost/_server/generated", edits = {}, marked = true) => {
+    const data = new FormData();
+    for (const [key, value] of Object.entries({ ...fields, locale: "fr-FR", item_id: "item_1", ...edits })) data.set(key, value);
+    const native = new Request(url, { method: "POST", body: data, headers: marked ? { "x-tsr-serverfn": "true" } : {} });
+    const body = Buffer.from(await native.arrayBuffer());
+    return { url: () => url, request: () => ({ method: () => native.method,
+      headers: () => Object.fromEntries(native.headers), postDataBuffer: () => body }) };
+  };
+  assert.equal(await alertResponse(await candidate(), action, fields), true);
+  for (const row of [await candidate("http://foreign.example/_server/generated"), await candidate(undefined, {}, false),
+    await candidate(undefined, { email: "other@example.test" }), await candidate(undefined, { target_price: "1" }),
+    await candidate(undefined, { locale: "de-DE" }), await candidate(undefined, { item_id: "item_2" })]) {
+    assert.equal(await alertResponse(row, action, fields), false);
+  }
+});
+
+test("native enhanced form posts to a generated endpoint without changing its plain form action", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: route.request().method() === "POST" ? "application/json" : "text/html",
+      body: route.request().method() === "POST" ? '{"message":"saved"}' : '<form method="post"><input name="email" value="native@example.test"><input name="target_price" value="1"><button type="submit">Send</button></form><p class="marketplace__message"></p>' }));
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    await page.evaluate(() => document.querySelector("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = new FormData(event.currentTarget); body.set("locale", "en-US"); body.set("item_id", "item_1");
+      const response = await fetch("/_server/generated", { method: "POST", body, headers: { "x-tsr-serverfn": "true" } });
+      document.querySelector(".marketplace__message").textContent = (await response.json()).message;
+    }));
+    await submitAlert(page, page.locator("form"), true);
+    assert.equal(await page.locator(".marketplace__message").textContent(), "saved");
+  } finally { await browser.close(); }
+});
 
 test("script-free alert POST checks the new document at the same URL", async () => {
   const browser = await chromium.launch({ headless: true });
