@@ -356,73 +356,121 @@ A reader is an IPv4 address or an IPv6 network of 64 bits, as for the streams.
 | live streams | 64, and 3,584 for all readers | 429 | `nginx.conf` (`limit_conn`) |
 | requests on one connection | 100 | the connection ends, and a browser opens another | `nginx.conf` (`keepalive_requests`) |
 | connections held | 256 | the next is reset | `provision.sh` (the firewall) |
-| connections opened | 19 in any one second | the next waits and is tried again | `provision.sh` (the firewall) |
+| connections opened | 19 in any one second | the next is let in a second later | `provision.sh` (the firewall) |
 
 A first visit asks for 14 things, 13 or 14 of them in one second, and twenty reloads one after
-another for 261, 26 or 27 in the busiest second (Chromium; 38 in one of four runs): all were
-answered through these limits, the twenty reloads in 16.0 and 16.3 seconds against 15.3 and
-16.1 without them. No request under them waits: a refusal is the only thing they
-add. Readers behind one address share them. Seven can make a first visit in the same instant
-and one or two a second after that, and where more than 19 open a connection in the same
-second the rest connect a second later: of 40 opened at once, 19 connected at once, 19 after
-about a second and 2 after about three, and all 40 were answered. A reader over a limit is
-answered 429 by nginx, with its own plain page where it was the page that was asked for; a
-stylesheet or script refused leaves the page without it until it is loaded again, and a stream
-refused leaves the page's readings still.
+another for 261, 26 or 27 in the busiest second (Chromium; 38 in one of eight runs): all
+were answered through these limits, the twenty reloads in 16.0 to 16.9 seconds against 15.3
+to 31.8 without them (four runs each, on a machine busy with other work). Firefox asked for
+172 to 187 in its twenty reloads, 17 to 25 in the busiest second and 56 in one run, and
+every one that reached nginx was answered, in 19 to 31 seconds through the limits and 14 to
+30 without (four runs each). In two of the four runs through the limits Firefox gave up two
+requests of its own, for the page's icons, as the next reload began, and in none of the four
+without; whether the limits have a part in that is not settled (a later try, on a machine
+with no CPU to spare, timed out with them and without). No limit keeps a request under it
+waiting: a refusal is what they add, and a connection opened for one request in a hundred
+(below).
+
+Readers behind one address share its limits: an office, a room of people, a phone
+company's address for many phones. Seven can make a first visit in the same instant and one
+or two a second after that, and the next is refused. Where more than 19 open a connection in
+the same second the rest are let in 19 a second: of 40 opened at once, 19 connected at once,
+19 a second later and 2 a second after that; of 100, the last 5 in the sixth second; all
+were answered. A reader over a limit is answered 429 by nginx, with its own plain page where
+it was the page that was asked for; a stylesheet or script refused leaves the page without
+it until it is loaded again, and a stream refused leaves the page's readings still. The
+requests and the answers are two lines of `nginx.conf` (`rate=` and `burst=`, and the
+`limit_conn` beside them): more there is more for a room behind one address, and as much
+more for one address that means harm.
 
 Each limit is there for something one address could otherwise do, each tried against the
 configuration before it (below). Asking for the page as fast as it can: every page is
 rendered and compressed on the one CPU, and the others got none. Being refused as fast as it
 can: a refusal costs nginx its answer, so the requests on one connection and the connections
 opened in a second are counted too, which together are 1,900 requests a second from one
-address at the most, and fewer from one that keeps trying for more. Asking for pages and not
-reading them: nginx keeps each answer
-until it is read. Holding connections that ask for nothing: nginx drops the oldest of those
-when it has no more, so the others are still served, and each one held is some of its memory.
-And filling the disk: a refusal is written to neither of nginx's logs, nor is a redirect of
-another name or of port 80, which nginx answers before it counts a request and so does not
-slow.
+address, after the 25,600 that the connections it may hold can ask at once. Asking for pages
+and not reading them: nginx keeps each answer until it is read. Holding connections that ask
+for nothing: nginx drops the oldest of those when it has no more, so the others are still
+served, and each one held is some of its memory.
+
+And filling the disk. A request refused for asking too fast is written to neither of nginx's
+logs (so nothing on the machine says how many there were), nor is one that nginx answers
+before it counts a request and so does not slow: a
+redirect of another name or of port 80, a method it does not take (405), and a body that
+says it is 100,000 bytes or more (413, by a `return`: nginx's own refusal of a body over its
+limit is a line in each log, and 300 of those were 27 KB in one and 55 KB in the other). 300
+of each wrote nothing. A challenge file that is not there is counted, and is not a line in
+the error log. One refused for the answers or the streams its address holds is written to
+both logs, as before: it was counted first, so there are 20 a second at the most (of 300
+streams asked for at once by an address holding its 64, 108 and 112 were lines in two runs
+and the rest were not). What an address under its limits asks for is still written, a line
+of some 90 bytes each time, so many addresses fill the disk as they did before; logrotate
+turns the logs once a day.
 
 This is one address's limit and no more. Someone with many addresses is not slowed by it:
 a few dozen addresses each at its limit ask for more pages than one CPU renders, and all
 readers together hold 3,584 streams, after which a page is served and its readings stay
 still. Nothing here answers a flood of packets larger than the machine's link, or one of
-connections with made-up addresses, which is left to the kernel as before (the firewall's
-count of connections opened forgets its oldest address when it is full, where a table that
-refused a new address could be filled for everyone). Those need a network in front of the
+connections with made-up addresses, which is left to the kernel as before. The firewall's
+count of connections opened remembers the last 100 addresses: with more than that opening
+connections in a second it forgets each before the second is out and counts none of them, so
+it is no limit while the machine is busy with many readers, where a table that refused a new
+address when it was full could be filled for everyone. Those need a network in front of the
 machine that takes the load, a CDN or the provider's own; this machine has none. SSH is not
-limited: someone holding its connections could keep a deploy out, not the site.
+limited: someone holding its connections could keep a deploy out, not the site. And nginx's
+429 says nothing of when to ask again (no `Retry-After`).
 
-Measured at `f12d3daa3`, in containers on a workstation that other work was using: the site's
-image and nginx (Ubuntu 24.04's, one worker) with a self-signed certificate, the two held to
-one CPU between them, the firewall's lines read by ufw itself in nginx's network, and each
-other party (the one address, the other reader) a container with an address of its own.
-None of it is the droplet's number.
+Measured in containers on a workstation that other work was using: the site's image as
+`f12d3daa3` builds it and nginx (Ubuntu 24.04's 1.24, one worker) with this `nginx.conf` or
+the one before it and a self-signed certificate, the two held to one CPU between them, the
+firewall's lines read by ufw itself in nginx's network, and each other party (the one
+address, the other reader) a container with an address of its own. The one address is
+h2load (nghttp2 1.59) or a script of some lines that does what its row says, and the other
+reader a script that asks for the page over one HTTP/2 connection five times a second and
+gives a request up after 5 seconds; the scripts are not kept here. None of it is the
+droplet's number.
 
 | One address | Before | With the limits |
 |---|---|---|
-| asks for the page as fast as it can for 19 seconds (100 connections, 100 requests at a time on each), while another reader asks for the page 5 times a second | the other reader was answered 6, 0 and 12 times in 14 seconds, in 686 to 748 ms where it was, and its other requests were reset or given up after 5 seconds; nginx's log grew by 1.5 to 2.5 MB | every request answered (69 or 70 in the 14 seconds), half within 9.4 to 14.8 ms and nine in ten within 19 to 32 ms, which is what the same reader saw with no one else asking (9.6 to 11.2 ms and 28 to 46 ms); the log grew by 19 KB |
-| holds TLS connections that ask for nothing | 8,000 held, and nginx's memory went from 7 to 11 MiB to 117 to 138 MiB; every new reader was still served | 256 held and the rest reset or left waiting, nginx's memory up by 5 MiB; every new reader served |
+| asks for the page as fast as it can for 19 seconds (`h2load -c 100 -m 100`, begun again as often as it ends) | the other reader was answered 27, 0 and 19 times in 14 seconds, half of those within 397 to 742 ms, and its other requests were reset or given up; nginx's logs grew by 1.8 to 5.6 MB | every request answered (67 to 69), half within 12 to 16 ms and nine in ten within 139 to 176 ms; the address was answered 481 to 492 times and refused 1,800 to 1,900 times a second; the logs grew by 58 KB |
+| opens 19 connections a second and asks 100 times on each, for 19 seconds (`h2load -r 19 -c 361 -m 100`) | not run | every request answered (68 to 70), half within 9 to 17 ms and nine in ten within 65 to 134 ms; the address was refused 1,500 times a second |
+| opens 256 connections, 15 a second, holds them, and asks 100 times on each at once | 7,000 to 7,300 of the 25,600 answered in 25 to 28 seconds and the rest failed; one or two of the other reader's requests failed in each run | all 25,600 answered in 10 to 13 seconds, 102 or 103 with the page; every one of the other reader's answered (113 to 115), nine in ten within 26 to 33 ms and the slowest, in each run, after 0.8 to 1.4 seconds |
+| holds TLS connections that ask for nothing | 8,000 held, and nginx's memory went from 7 to 11 MiB to 117 to 138 MiB; every new reader was still served | 256 held and the rest reset or left waiting, nginx's memory up by 4 to 5 MiB; every new reader served |
 | asks for 150 pages, 15 a second, and reads none | 150 held | 100 held, 50 answered 429 |
 
-Three runs of the first row and two of the second, each in turn with the other
-configuration, and one of the third. With nginx's limits and not the firewall's, the other
-reader in the first row was answered every time, half within 39 to 87 ms and nine in ten
-within 459 to 999 ms (three runs): nginx was then refusing 5,200 to 9,400 requests a second,
-where with the firewall's count the address got 1,900 requests in over the 19 seconds.
+Three runs of each of the first three rows for each configuration, the one before an hour
+ahead of the one with the limits. With no one else asking, the other reader's answers came
+half within 6 to 10 ms and nine in ten within 20 to 47 ms (nine runs of 8 seconds, one before
+each run with the limits; 5.5 to 9.9 ms and 16 to 39 ms before each of the others). So one
+address at its limits is still felt, and no more than felt: half of another reader's pages
+took some 6 ms longer and one in ten a tenth of a second longer, and none was lost. The last
+two rows are two runs of each configuration and one.
+
+With nginx's limits and not the firewall's, the other reader in the first row was answered
+every time, half within 39 to 87 ms and nine in ten within 459 to 999 ms (three runs, of the
+limits as they were first written): nginx was then refusing 5,200 to 9,400 requests a
+second.
 
 What the limits cost a reader under them, with the same one worker: 8,000 requests for a
 small file, one after another on each of 8 connections, went at 1,764 to 1,822 a second
 before and 1,513 to 1,969 with nginx's limits read and set too high to refuse; 2,000 for the
 page on 4 connections at 256 to 338 a second before and 266 to 315 with. Three runs of each
-in turn, which cannot be told apart. The requests on one connection are the one thing a
-reader under the limits meets: after 100 a browser's next request opens a connection, which
-a first visit's 14 do not reach.
+in turn, which cannot be told apart. No limit keeps a request under it waiting. The requests
+on one connection are the one thing a reader under the limits meets: after 100, where it was
+1,000, a browser's next request opens a connection, which a first visit's 14 do not reach
+and about seven reloads do. A page asked for on a connection of its own came half within 19
+to 23 ms and on a kept one within 6 (three runs of 75 each, with no one else asking): about
+15 ms more for the one request in a hundred that opens a connection, and on the machine the
+round trips of TCP and TLS besides, which were not measured.
 
 On the machine itself the workflow asks after every apply (`site-machine.yml`): of 300
-requests at once about 100 are answered and the rest refused, and of 40 connections at once
-about 21 wait a second or more. It fails where nginx refuses too few or no connection waits,
-which is what says the firewall's lines were read there.
+requests at once about 100 are answered and the rest refused, of 40 connections at once
+about 21 wait a second or more, and 250 requests one after another take three connections
+from each of nginx's servers. It fails where nginx refuses too few, no connection waits, or
+a server keeps a connection, and the second is what says the firewall's lines were read
+there: where the machine's kernel refuses them, `provision.sh` takes them out and the
+machine serves without the firewall's two counts. The answers on their way and the
+connections held are not asked for there: each takes hundreds of connections held open.
 
 ## What has and has not been checked
 
@@ -589,34 +637,57 @@ after the first answer. The Site run the workflow started shipped the same commi
 was answered as it 4 min 6 s after the machine's first answer; the times above say where
 those minutes went.
 
-The limits on one address were checked at `f12d3daa3`, in the containers that
+The limits on one address were checked in the containers that
 [What one address can do](#what-one-address-can-do) describes and not on the droplet. The
 firewall's lines were run by ufw itself, as `provision.sh` has them from `ufw allow OpenSSH`
-to `ufw reload`: they are read into `ufw-before-input` and `ufw6-before-input` ahead of the
-rules that open the ports, and a second run leaves the same three in each file. The lines for
-IPv6 were read and never counted against, since every request was made over IPv4. The modules
-they need (`xt_connlimit`, `xt_recent`, `xt_multiport`, `xt_comment`, and `REJECT` for both
-families) are in `linux-modules-6.8.0-149-generic`, which Ubuntu 24.04's `linux-image-virtual`
-depends on; which kernel the droplet runs was not looked at, and a line its kernel refuses
-ends `provision.sh` there, before the site is served. The rest of `provision.sh` was not run
-again.
+to the `fi` that ends them: they are read into `ufw-before-input` and `ufw6-before-input`
+after the rule for connections already made and ahead of the rules that open the ports, and
+a second run leaves the same three in each file. The lines for IPv6 were read and never
+counted against, since every request was made over IPv4. The modules they need
+(`xt_connlimit`, `xt_recent`, `xt_multiport`, `xt_comment`, and `REJECT` for both families)
+are in `linux-modules-6.8.0-149-generic`, which Ubuntu 24.04's `linux-image-virtual` depends
+on; which kernel the droplet runs was not looked at. With one line made to name a match that
+does not exist, ufw refused the file and left the firewall dropping what nginx sends the app
+(the page was answered 504). `provision.sh` takes its lines out then and starts the firewall
+again: tried on a machine with no firewall, a second time on that machine, and on one whose
+firewall had the lines, each ended with ufw's own rules and none of these and the page
+answered 200. The rest of `provision.sh` was not run again.
 
-The workflow's step was run as it is written (bash, curl 8.5.0) four ways: with the limits
-and the firewall's lines it said 104 answered, 196 refused and 21 waited, and passed; with
-nginx's limits and not the firewall's it failed, none having waited; with neither it failed,
-300 answered; and for an address that answers nothing it warned and passed.
+A review found that the line counting connections opened, as it was first written, also
+counted the ones it turned away, so an address that kept trying stayed out: of 100 opened at
+once, 19 were let in at 0, 7, 12, 20 and 36 seconds and 5 not within 40 (the review's run).
+As it is now, counting only those let in, 100 at once were let in 19 a second and the last 5
+in the sixth second, 60 at once in four seconds and 40 in three (two runs of 40 and of 100,
+one of 60). The same review found the server for the names that redirect keeping an HTTP/1.1
+connection for any number of requests, its `return` being outside a location; with it
+inside, 250 requests one after another took three connections from each server, over
+HTTP/1.1 and HTTP/2, and from port 80 for a redirect and for a challenge file.
 
-The site's smoke test, in Chromium and then Firefox on a machine held to one CPU, passed
-through the limits and the firewall's lines in 7 runs of 10, and through the configuration
-before them in 8 of 9 (6 of those 9 behind a firewall with no such lines). Chromium passed in
-all 19. Each failure was in Firefox: a click or a wait given up after 30 seconds in three of
-the four, one of them with no limits, and once a check of where the window was after a click.
-Where nginx's answers and the firewall's counts were read after a failure with the limits,
-every request had been answered 200 or 303, none refused, and no connection counted out, so
-no limit was seen to act in one. A click that
-Playwright's Firefox acknowledges late on a loaded Windows machine is known
-([CONTRIBUTING.md](../../../CONTRIBUTING.md#checks)), and the workstation was loaded; 3 of 10
-against 1 of 9 does not say the limits have no part in it.
+The workflow's step was run as it is written (bash, curl 8.5.0, jq 1.7), with the rig's
+address for the machine's: with the limits, the firewall's lines and one name that redirects
+it said 104 answered, 196 refused, 21 waited and three connections for each of the three
+servers, and passed in 13 seconds; with nginx's limits and not the firewall's it failed, none
+having waited; with the configuration as it was first written it failed for the name that
+redirects, one connection; with the one before the limits it failed on all three counts; and
+for an address that answers nothing it warned and passed after 24 seconds (as first written
+it asked that address 300 times, one after another, and was stopped after five minutes). It
+has not been run from one of GitHub's runners: it takes the runner's 40 connections to leave
+from one address.
+
+The site's smoke test, in Chromium and then Firefox on a machine held to one CPU, was run six
+times in turn against the limits as they are now, with two lines of `nginx.conf` changed so
+that a refusal for asking too fast is written to the logs and can be counted. It passed
+through the limits and the firewall's lines in 4 runs of 4: 123 answers each time (121 of
+200 and 2 of 303), none refused by nginx, and no connection reset or dropped by the
+firewall, by its own counters. It passed through the configuration before them in 1 run of
+2, the other giving up a click in Firefox after 30 seconds. With the limits as they were
+first written it had passed in 7 runs of 10, and without them in 8 of 9. Each of those
+failures was in Firefox too: a click or a wait given up after 30 seconds in three of the
+four, one of them with no limits, and once a check of where the window was after a click;
+where nginx's answers and the firewall's counts were read after one, nothing had been
+refused. A click that Playwright's Firefox acknowledges late on a loaded Windows machine is
+known ([CONTRIBUTING.md](../../../CONTRIBUTING.md#checks)), and the workstation was loaded.
+Four runs say that no limit acted in them, not that none ever does in this test.
 
 Among what has still not run on a real machine: an apply that fails once begun or a droplet
 that cannot be made, a first deploy that fails, a put-back of the release before, a machine

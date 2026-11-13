@@ -194,18 +194,24 @@ jobs:
       # once nginx answers about 100 and refuses the rest with 429, before it asks the app, so
       # a machine with no release is asked too. Of 40 connections at once the firewall lets 19
       # in and leaves the rest to try again, a second later or more; all 40 are then answered.
+      # And 250 requests one after another take three connections, from each of nginx's servers:
+      # what one address can ask for in a second is those two counts together.
       - name: See that the machine slows one address that asks too fast
         env:
           ADDRESS: ${{ steps.apply.outputs.address }}
+          REDIRECTS: ${{ vars.SITE_REDIRECTS || '[]' }}
         run: |
-          at=(--resolve "$SITE_DOMAIN:443:$ADDRESS" --max-time 20)
-          codes=$(curl -s -Z --parallel-max 100 -o /dev/null -w '%{http_code}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-300]" || true)
-          refused=$(grep -c '^429$' <<< "$codes" || true)
-          answered=$(grep -c -v -e '^429$' -e '^000$' <<< "$codes" || true)
-          if [ "$refused" = 0 ] && [ "$answered" = 0 ]; then
+          at=(--resolve "$SITE_DOMAIN:443:$ADDRESS" --resolve "$SITE_DOMAIN:80:$ADDRESS" --max-time 20)
+          # Asked once first: curl makes the first connection of many alone, so for a machine that
+          # answers nothing the 300 below would each wait their 20 seconds in turn.
+          first=$(curl -s -o /dev/null -w '%{http_code}' "${at[@]}" "https://$SITE_DOMAIN/robots.txt" || true)
+          if [ "$first" = 000 ]; then
             echo "::warning::The machine at $ADDRESS does not answer as $SITE_DOMAIN, so what it refuses was not asked for."
             exit 0
           fi
+          codes=$(curl -s -Z --parallel-max 100 -o /dev/null -w '%{http_code}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-300]" || true)
+          refused=$(grep -c '^429$' <<< "$codes" || true)
+          answered=$(grep -c -v -e '^429$' -e '^000$' <<< "$codes" || true)
           # The count of connections is over one second: these start after the ones above.
           sleep 5
           waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-40]" || true)
@@ -220,4 +226,19 @@ jobs:
             echo "::error::Of 40 connections at once to $ADDRESS, $late waited a second or more: about 21 do where the firewall has the lines provision.sh writes for it."
             lost=1
           fi
+          # Over HTTP/1.1, where nginx counts a connection's requests only once it has chosen a
+          # location: the site's server, port 80, and the server for the names that redirect.
+          urls=("https://$SITE_DOMAIN/robots.txt" "http://$SITE_DOMAIN/robots.txt")
+          for name in $(jq -r '.[]' <<< "$REDIRECTS"); do
+            at+=(--resolve "$name:443:$ADDRESS")
+            urls+=("https://$name/robots.txt")
+          done
+          for url in "${urls[@]}"; do
+            made=$(curl -s --http1.1 -o /dev/null -w '%{num_connects}\n' "${at[@]}" "$url?[1-250]" | awk '{ made += $1 } END { print made + 0 }' || true)
+            echo "Connections made for 250 requests one after another to $url: $made."
+            if [ "$made" -lt 3 ]; then
+              echo "::error::Connections made for 250 requests one after another to $url at $ADDRESS: $made. Three are, where deploy/nginx.conf ends a connection after 100 requests."
+              lost=1
+            fi
+          done
           exit "$lost"
