@@ -160,6 +160,7 @@ jobs:
         run: |
           npm run check
           npm run check:workloads
+          npm run check:groups:host
           node --test bench/client-heavy/verify.test.mjs
           echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system
@@ -177,9 +178,7 @@ jobs:
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: Native workload group apparatus
         if: contains(env.PARTS, ' npm-check ')
-        env:
-          MIXED_BROWSER_TESTS: 1
-        run: $PLAYWRIGHT -e MIXED_BROWSER_TESTS npm run check:groups
+        run: $PLAYWRIGHT env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
       - name: watchlist
         if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |
