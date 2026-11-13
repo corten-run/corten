@@ -261,3 +261,23 @@ test("two paint callbacks cannot be collapsed to one timestamp after application
   frame.secondFrameAt = frame.firstFrameAt; delete a.summary;
   assert.throws(() => verifyFanout(a, expected), /frame chronology/);
 });
+
+for (const key of ["queuePeak", "historyPeak"]) test(`host resource ${key} cannot decrease at release`, async () => {
+  const { a, expected } = await measured();
+  const receipt = a.host.requests[a.resourceObservations.released], body = JSON.parse(receipt.body);
+  body[key] = a.resources.released[key] = 0;
+  // Keep this mutation within the instantaneous bounds to isolate cumulative history.
+  if (key === "historyPeak") body.historyEvents = a.resources.released.historyEvents = 0;
+  receipt.body = JSON.stringify(body); delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /resource peak regressed/);
+});
+
+for (const timestamp of [undefined, null, NaN, Infinity, -1]) test(`SSE source chronology requires a finite request timestamp: ${timestamp}`, async () => {
+  const { a, expected } = await measured(), b = a.browsers[3];
+  for (const r of b.network) {
+    if (r.kind === "native-request" && r.type === "EventSource") r.timestamp = timestamp;
+    if (r.kind === "native-sse") r.timestamp = 0;
+  }
+  delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /measurement clock binding|native connection event/);
+});
