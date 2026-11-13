@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Grouped catalog runs preserve versioned raw load, counted CPU, memory samples,
+  cold-start, image/check and cleanup observations. An offline validator replays
+  the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
+  acquire missing evidence retroactively. Host isolation and independent source
+  audit remain separate gates, not inferred from replay success.
+
 - Native Corten, ASP.NET and Express marketplace reads retain request-owned
   cancellation and explicit trace context. ASP.NET and Express also bound
   unfinished form parsing and prevent a timed-out parser from resuming routing.
