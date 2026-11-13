@@ -76,10 +76,13 @@ class MarketplaceSource:
             with open(os.environ.get("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"), encoding="utf-8") as file:
                 self.fixture = json.load(file)
 
-    def get(self, record_id):
+    def get(self, record_id, traceparent=None):
         if self.fixture is not None:
             return self.fixture.get(record_id)
-        response = self.session.get(f"{self.base}/marketplace/records/{requests.utils.quote(record_id, safe='')}", allow_redirects=False, timeout=10)
+        # WSGI decodes header bytes as Latin-1; Requests validates str whitespace
+        # as Unicode, which would reject legal obs-text such as 0x85 and 0xa0.
+        context = {} if traceparent is None else {"headers": {"traceparent": traceparent.encode("latin-1")}}
+        response = self.session.get(f"{self.base}/marketplace/records/{requests.utils.quote(record_id, safe='')}", allow_redirects=False, timeout=10, **context)
         if response.status_code == 404:
             return None
         response.raise_for_status()

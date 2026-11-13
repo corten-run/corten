@@ -95,6 +95,9 @@ matrix over real HTTP in both profile environments; setup is in that app's READM
 
 ## Unreleased
 
+- Forward marketplace `traceparent` per native MVC request through explicit
+  source arguments and request-local RestClient headers, including POST reads.
+
 - Document the native MVC/RestClient page request-lifetime limit with real-socket
   probes, without changing runtime, adding a response heartbeat or inventing a
   timeout solely to satisfy the mixed workload gate.
@@ -108,6 +111,29 @@ matrix over real HTTP in both profile environments; setup is in that app's READM
   atomic appends and cross-site write rejection.
 - Complete native template rendering before committing an accepted alert so a
   failed render cannot mutate the session store.
+
+## Request-scoped Trace Propagation
+
+Page/POST and JSON handlers capture the incoming W3C `traceparent` as an immutable
+optional string. `MarketplaceSource.get` and `getForWrite` accept it explicitly;
+their original one-argument overloads remain compatible. Only the individual
+RestClient request receives the header, never the shared client's defaults.
+There is no ambient current operation, exporter or extra fetch. Fixture reads
+still bypass HTTP, and JSON parsing, deadlines and worker settings are unchanged.
+
+This is transparent forwarding, not a trace participant: missing headers stay
+absent, and malformed headers pass through unchanged with no child span or
+identity repair. The mixed runner retains invalid/orphan evidence instead of
+attributing it to a newer operation.
+
+`mvn -B test` includes `TraceContextHttpTest`, using embedded Tomcat and a real
+upstream HTTP server. It overlaps distinct valid contexts, delays the first
+fetch until a newer request completes, holds an upstream body, and covers JSON,
+every locale's page and accepted POST/readback, invalid/missing headers,
+subsequent untraced requests and fixture bypass. This is functional evidence,
+not performance or lifetime qualification. The MVC lifetime limit below remains;
+new source hashes require a later independent source audit, not a self-issued
+positive receipt.
 
 ## Page Request Lifetime Limit
 

@@ -21,6 +21,12 @@ Corten is pre-1.0, so any minor version may change the API.
   compression, body/connection bounds and upstream-independent liveness. Native
   browser and HTTP checks remain separate from comparative load qualification.
 
+- Native FastAPI, Django and Spring marketplace page, JSON and alert source reads
+  forward trace headers per request, without changing shared client headers or
+  successful payloads. Concurrent, delayed and untraced native HTTP regressions
+  check isolation, including non-ASCII header bytes in FastAPI and Django. These observations
+  support source auditing; they do not qualify mixed-workload performance.
+
 - Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
   marketplace forms persist accepted alerts with session-isolated readback,
   preserve their framework's enhanced and plain-form paths, and reject writes
@@ -212,6 +218,18 @@ Corten is pre-1.0, so any minor version may change the API.
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
   from the metadata address.
+- `examples/corten-site`'s machine sends other names on to the site's: the repository variable
+  `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
+  by hand) gives each name a record at the machine's address and a place on the site's
+  certificate, and nginx answers it on both ports with a redirect (308) to the same path at
+  the site's name. A new machine serves the site under its own name first, then takes the
+  other names on once each reaches it, so a name that is late or refused a certificate holds
+  back only itself. A run of `provision.sh` asks for a certificate only when the names the
+  one in place holds are not the ones given, and after an apply the `Site machine` workflow
+  fails where a name does not send its visitors to the site. Port 80 now redirects to the
+  site's name whatever host was asked for, not to the host the request named. A test of the
+  site looks in the checkout for every file or directory the page links to in the repository
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Changed
 
@@ -263,6 +281,9 @@ Corten is pre-1.0, so any minor version may change the API.
   would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
   would fail to build. The data block the issue asks for is left open
   ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+- The seven crates name `https://corten.run` as their `homepage` again, now that the site is
+  served there
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
 
@@ -384,6 +405,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The corten-site deploy guide has the times of the first replacement of the site's machine
+  (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six
+  until the run the workflow starts was answered) in place of "a replacement has not been
+  timed", says that with names that redirect a machine asks Let's Encrypt for two certificates,
+  each from its own set of names' five a week, and its list of what has not run on a real
+  machine no longer names the address moving or a name that redirects and names more of what
+  has not
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 - The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
   listings-feed README and its failover benchmark remove their Postgres containers with
   `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
