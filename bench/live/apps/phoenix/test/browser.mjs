@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { createLiveWorkload, validateLiveCapture, liveCaptureSchema, liveContracts } from '../../../../workloads/live.mjs';
-import { wireEvents, wireSnapshots } from '../wire.mjs';
+import { wireEvents, wireSnapshots, wireResources, wireResumes } from '../wire.mjs';
 
 const base = process.argv[2];
 assert.ok(base, 'native app URL required');
@@ -79,9 +79,13 @@ try {
         records: await page.evaluate(() => window.liveApp.records) };
       await Promise.all(responses);
       const summary = validateLiveCapture(workload, capture, settings);
+      assert.deepEqual(capture.records.filter(r => r.kind === 'resume').map(({ from, status }) => ({ from, status })), wireResumes(network).slice(1), 'resume cursor/status must match every native ready after initial attach');
       assert.deepEqual(errors, []);
       assert.deepEqual(capture.records.filter(r => r.kind === 'event').map(r => r.event), wireEvents(network));
       assert.deepEqual(capture.records.filter(r => r.kind === 'snapshot').map(({ through, rows, work }) => ({ through, rows, work })), wireSnapshots(network));
+      for (const native of wireResources(network)) {
+        assert.ok(capture.records.some(({ kind, at, ...value }) => kind === 'resources' && JSON.stringify(value) === JSON.stringify(native)), 'raw native resources must be recorded without alteration');
+      }
       assert.deepEqual(network.filter(r => r.kind === 'write-request').flatMap(r => {
         const body = JSON.parse(r.body); return body.events || [body.event];
       }), [...workload.events, workload.cleanupProbe]);

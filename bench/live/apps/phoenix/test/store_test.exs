@@ -20,10 +20,15 @@ defmodule NativeLive.StoreTest do
 
   defp reader(client \\ "browser") do
     :ok = Store.call({:connect, self(), client})
-    Store.call({:subscribe, self(), 0, true})
-    Store.call({:snapshot, self(), client})
-    Store.call({:ack, self()})
+    Store.call({:subscribe, self(), 0, true, nil})
+    {snapshot, _} = Store.call({:snapshot, self(), client})
+    ack(snapshot.through, 0)
   end
+
+  defp observed(through, count),
+    do: %{"through" => through, "effectCount" => count, "rowCount" => 1}
+
+  defp ack(through, count), do: Store.call({:ack, self(), observed(through, count)})
 
   setup do
     # The previous test's monitored process is dead before the next configuration.
@@ -90,10 +95,11 @@ defmodule NativeLive.StoreTest do
     reader()
     publish(1)
     assert_receive {:parity_event, _, "applied", %{through: 1, count: 1}}
-    Store.call({:ack, self()})
+    assert Store.call({:client, "browser"}).count == 0
+    ack(1, 1)
     :ok = Store.call({:control, %{"action" => "duplicate"}})
     assert_receive {:parity_event, _, "duplicate", %{through: 1, count: 1}}
-    Store.call({:ack, self()})
+    ack(1, 1)
     Store.call({:control, %{"action" => "drop", "seq" => 2}})
     publish(2)
     publish(3)
@@ -114,15 +120,45 @@ defmodule NativeLive.StoreTest do
   end
 
   test "replay copy is history bounded and expired cursor is actually detected" do
-    for n <- 1..6, do: publish(n)
-    :ok = Store.call({:connect, self(), "browser"})
-    assert %{status: "expired"} = Store.call({:subscribe, self(), 1, false})
-    assert %{status: "accepted"} = Store.call({:subscribe, self(), 4, false})
+    publish(1)
+    reader()
+    # Snapshot at sequence one was actually acknowledged before the outage.
+    ack(1, 0)
+    for n <- 2..6, do: publish(n)
+    assert %{status: "expired"} = Store.call({:subscribe, self(), 1, false, observed(1, 0)})
+    Store.call({:snapshot, self(), "browser"})
+    ack(6, 0)
+    publish(7)
+    publish(8)
+    assert %{status: "accepted"} = Store.call({:subscribe, self(), 6, false, observed(6, 0)})
     assert Store.call(:resources).inventory.replayCopyEvents == 3
-    Store.call({:ack, self()})
-    assert_receive {:parity_event, %{"seq" => 4}, "gap", _}
+    ack(6, 0)
+    assert_receive {:parity_event, %{"seq" => 6}, "duplicate", _}
     assert Store.call(:resources).historyPeak == 4
     assert Store.call(:resources).historyEvents == 4
+  end
+
+  test "dropped native delivery replays against acknowledged state, not the staged effect" do
+    reader()
+    publish(1)
+    assert_receive {:parity_event, _, "applied", %{count: 1}}
+    assert Store.call({:client, "browser"}).count == 0
+    assert {:error, _} = ack(1, 0)
+    assert %{status: "accepted"} = Store.call({:subscribe, self(), 0, false, observed(0, 0)})
+    ack(0, 0)
+    assert_receive {:parity_event, _, "applied", %{count: 1}}
+    ack(1, 1)
+    assert Store.call({:client, "browser"}).count == 1
+  end
+
+  test "lost native acknowledgement reconciles the actual browser cursor and effect count" do
+    reader()
+    publish(1)
+    assert_receive {:parity_event, _, "applied", %{count: 1}}
+    assert %{status: "accepted"} = Store.call({:subscribe, self(), 1, false, observed(1, 1)})
+    assert Store.call({:client, "browser"}).count == 1
+    ack(1, 1)
+    assert_receive {:parity_event, _, "duplicate", %{count: 1}}
   end
 
   test "four independently monitored native readers retain separate application state and clean up" do
