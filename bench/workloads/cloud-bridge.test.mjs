@@ -94,3 +94,17 @@ test("verified schema, all-group completeness and terminal lifecycle cannot be w
   for (const [status, code] of [["blocked", 0], ["failed", 0], ["verified", 1]])
     assert.throws(() => campaignOutcome(syntheticInspection(status), { round: "r21", commit, selection: selection() }, code));
 });
+
+test("collector rejects missing/nonboolean eligibility and eligible failed or unsupported outcomes", () => {
+  for (const value of [undefined, null, 0, 1, "false", "true", {}, []]) {
+    const report = syntheticInspection("verified"); report.groups[0].appOutcomes[0].comparisonEligible = value;
+    assert.throws(() => campaignOutcome(report, { round: "r21", commit, selection: selection() }, 0));
+  }
+  for (const outcome of ["failed", "unsupported"]) {
+    const report = syntheticInspection("verified");
+    Object.assign(report.groups[0].appOutcomes[0], { outcome, comparisonEligible: true });
+    assert.throws(() => campaignOutcome(report, { round: "r21", commit, selection: selection() }, 0));
+    report.groups[0].appOutcomes[0].comparisonEligible = false;
+    assert.equal(campaignOutcome(report, { round: "r21", commit, selection: selection() }, 0).fullGroupQualified, false);
+  }
+});

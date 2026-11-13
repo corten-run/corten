@@ -1,7 +1,7 @@
 // Synthetic source/audit controls through the real integrated core APIs. No
 // provider, benchmark, image build or claim of an independently performed audit.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { payloads } from "../json-api/contract.mjs";
@@ -10,7 +10,9 @@ import { auditDelivery } from "./cloud-audit.mjs";
 import { campaignOutcome } from "./cloud-options.mjs";
 import { digest } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { campaign, commit, harness, syntheticDelivery } from "./cloud-fixtures.mjs";
+import { campaign, commit, harness, syntheticDelivery, syntheticInspection } from "./cloud-fixtures.mjs";
+import { selection } from "./cloud-contract.mjs";
+import { evaluateLatestStable, latestStableSources } from "./latest-stable.mjs";
 
 const integrated = ["campaign-entry.mjs", "campaign-verify.mjs", "json-staging.mjs", "mixed-staging.mjs"]
   .every((name) => existsSync(new URL(`isolated/${name}`, import.meta.url)));
@@ -62,4 +64,29 @@ test("real current core inspection rejects unsealed synthetic evidence through t
   const h = harness(t), report = await inspectCampaign({ folder: h.temp, round: "r21", commit });
   assert.equal(report.status, "invalid"); assert.equal(report.deletionAuthorized, false);
   assert.throws(() => campaignOutcome(report, { round: "r21", commit }, 0));
+});
+
+for (const group of ["client-heavy", "mixed-production"]) test(`collector retains actual core ${group} passed-but-ineligible outcomes`, { skip: !integrated }, async () => {
+  const { composePhase } = await import("./isolated/composition.mjs");
+  const report = syntheticInspection("verified"), row = report.groups.find((r) => r.group === group);
+  const apps = row.appOutcomes.map((r) => r.app), failed = group === "mixed-production";
+  const sourceInputs = Object.fromEntries(Object.entries(latestStableSources)
+    .map(([key, path]) => [key, readFileSync(new URL(`../../${path}`, import.meta.url))]));
+  const latestStable = evaluateLatestStable({ group, ...sourceInputs });
+  assert.equal(latestStable.valid, true);
+  assert.equal(latestStable.status, failed ? "not-applicable" : "blocked");
+  const native = { status: failed ? "failed" : "verified", attemptComplete: true, cleanupComplete: true,
+    resources: "verified", comparisonEligibleApps: [],
+    outcomes: apps.map((app, i) => ({ app, outcome: failed && i === 0 ? "failed" : "passed" })) };
+  const code = failed ? 1 : 2;
+  const composed = composePhase({ request: { group }, latestStable, preparation: { fixtures: [] }, selection: { apps } },
+    native, { cleanupComplete: true, resources: "verified" },
+    [{ terminal: true, code, error: null, cancelled: false, forced: false, success: code === 0 }]);
+  assert.equal(composed.outcome, "native-validated");
+  assert.ok(composed.appOutcomes.some((r) => r.outcome === "passed"));
+  assert.ok(composed.appOutcomes.every((r) => r.comparisonEligible === false));
+  row.appOutcomes = composed.appOutcomes;
+  assert.deepEqual(campaignOutcome(report, { round: "r21", commit, selection: selection() }, 0),
+    { fullGroupQualified: false, evidenceOutcome: "validated" });
+  assert.deepEqual(row.appOutcomes, composed.appOutcomes, "collection does not promote native eligibility");
 });

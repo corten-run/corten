@@ -116,7 +116,8 @@ export function campaignOutcome(report, s, exitCode) {
       assert.deepEqual(group.appOutcomes.map((r) => r.app), s.selection.groups[index].apps);
       for (const row of group.appOutcomes) {
         assert.ok(["passed", "failed", "unsupported"].includes(row.outcome));
-        assert.equal(row.comparisonEligible, row.outcome === "passed");
+        assert.equal(typeof row.comparisonEligible, "boolean");
+        if (row.comparisonEligible) assert.equal(row.outcome, "passed");
       }
     }
   } else {

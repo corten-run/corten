@@ -157,6 +157,10 @@ observed terminal command lifecycle and native CLI marker 0. Complete sealed
 blocked/failed inspection requires marker 1; marker 2 or disagreement preserves
 the host. A failed framework outcome remains failed even within intrinsically
 complete apparatus evidence; it does not become comparison-eligible.
+Passed app outcomes may also remain comparison-ineligible under the committed
+dependency policy or a native whole-group timing gate. Collection preserves that
+boolean distinction; it never promotes a passed row to eligibility. Failed and
+unsupported rows cannot be comparison-eligible.
 
 ## Reservation And Ownership
 

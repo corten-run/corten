@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
+  including dependency-policy and whole-group timing gates. Failed and unsupported
+  outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
+
 - Quote Spring's colon-bearing htmx attribute name in the native Thymeleaf layout,
   restoring catalog and marketplace HTML without changing boosting behavior or checks.
 
