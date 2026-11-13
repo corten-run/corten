@@ -217,6 +217,29 @@ unsupported under the current strict oracle. There is no automatic platform-dest
 waiver. Opaque global ownership similarly needs native lifecycle attribution before full
 qualification; a browser context closing is not that proof.
 
+`lifecycle.mjs` correlates observed instrumentation realms with native default execution
+contexts, frame/loader commits, target discovery and page WebSocket/EventSource receipts.
+The native journal is frozen before harness context closure; the post-harness journal is
+separate. Worker network coverage, shared-worker ownership and server peer socket cleanup
+remain explicitly unproved. See [the separate evidence proposal](LIFECYCLE.md); no oracle
+variant or platform-destruction exemption is implemented.
+
+For a retained same-realm root, `retired.mjs` freshly extracts text, rows, forms and component
+IDs from that actual detached node. It never reattaches the root or copies the previous page
+model. Its route/locale metadata identifies the original observed document. Unavailable fresh
+enhancement bindings are explicit and cannot become a passing strict capture.
+
+Every invocation also writes `captures/<app>.json` (`browser-journey-capture/v1`) and
+`captures/manifest.json` (`native-browser-strict-export/v1`). `capture.mjs` projects only
+complete independently observed cases and calls the unchanged `validateBrowserCapture`.
+Every candidate/profile survives; partial failed/unsupported observations stay in the raw
+summary, with null evidence in strict unavailable cells as that schema requires. The manifest
+binds raw case and capture hashes and retains exact code/image/browser provenance. Failed,
+unfinished, intentionally disabled preload and body-capture-error requests are never dropped
+to make export pass. Native SvelteKit/RR paths map only through their recorded transport proof.
+An oracle rejection is reported as a failed case, not normalized into success. Export does not
+certify native qualification, comparative timing or load readiness.
+
 Owned contexts are closed and closure is observed; owned Docker containers, anonymous volumes
 and networks are removed with ownership checks in `finally`, including interruption/failure.
 The raw schema preserves partial evidence. Full `browser-journey-capture/v1` qualification

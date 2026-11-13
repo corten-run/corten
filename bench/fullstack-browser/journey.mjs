@@ -9,6 +9,7 @@ import { labels } from "../marketplace/records.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { PlatformLifecycle } from "./lifecycle.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -85,17 +86,19 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
-  let network;
+  let network, lifecycle;
   const runtimeErrors = [];
   const started = performance.now();
+  evidence.clock = { origin: "node.performance.now", startedAt: started };
   try {
     await context.route("**/*", (route) => new URL(route.request().url()).origin === base ? route.continue() : route.abort("blockedbyclient"));
     const page = await context.newPage();
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
+    lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession()); await lifecycle.enable();
     network.attachCDP(cdp);
-    const resources = new ResourceAudit(page, cdp, profile.js);
+    const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
     await cdp.send("Runtime.enable");
     await cdp.send("Network.enable"); await cdp.send("Page.enable"); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
@@ -140,7 +143,9 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         if (profile.js) await observedFrame(page, deadline);
         await network.settle(offset, deadline, Boolean(step.input));
         row.timing.settledObservedMs = performance.now() - at;
+        row.resourcesAtDOM = await resources.checkpoint();
         row.dom = await visibleDOM(page);
+        await nativeForm(page, row.dom.native, app, profile.js, cdp);
         assert.equal(row.dom.url.path, step.path, "visible logical route differs from action");
         if (step.kind === "initial") {
           assert.ok(response, "initial document response missing");
@@ -181,6 +186,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       }
       row.resources = await resources.checkpoint();
       row.retired = resources.retired(previousResources, row.resources);
+      if (previousResources && previousResources.realm !== row.resources.realm) row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
       if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
       if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
@@ -223,6 +229,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
   finally {
+    evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
     if (network) { await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows); }
     const beforeClose = performance.now();
     try {
@@ -230,6 +237,8 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,
         nativePageScope: evidence.nativeCleanup ?? null };
     } catch (e) { evidence.cleanup = { contextClosed: false, error: e.message, nativePageScope: null }; evidence.failures.push("Browser context cleanup failed"); }
+    evidence.harnessClosedLifecycle = lifecycle?.snapshot() ?? null;
+    if (lifecycle) try { await lifecycle.close(); } catch (error) { evidence.failures.push(`Platform observer detach: ${error.message}`); }
   }
   evidence.gaps = [...new Set(evidence.gaps)];
   result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length && evidence.nativeCleanup?.outcome === "observed";
