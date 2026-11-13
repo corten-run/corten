@@ -101,6 +101,11 @@ async def marketplace(request: Request, locale: str, record_id: str):
     record = await marketplace_source.get(record_id)
     if record is None:
         raise HTTPException(status_code=404)
+    if request.method == "POST":
+        try:
+            record.validate_for_write(record_id)
+        except ValueError:
+            return PlainTextResponse("Bad Gateway", status_code=502)
     fmt = MarketplaceFormat(locale)
     query = request.query_params
     prefix = query.get("seller", "")

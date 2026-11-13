@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
@@ -43,6 +44,28 @@ class AlertPageTests(unittest.TestCase):
         with TestClient(main.app, base_url="https://testserver") as client:
             result = client.post("/marketplace/en-US/item_1", data={"email": "a@b", "target_price": "1"})
             self.assertIn("Secure", result.headers["set-cookie"])
+
+    def test_source_contract_failure_does_not_append(self):
+        form = {"email": "contract@example.test", "target_price": "12.50"}
+        path = "/marketplace/en-US/item_1"
+        self.assertEqual(self.client.post(path, data=form).status_code, 200)
+        before = self.client.get("/api/alerts").json()
+        mutations = [{**deepcopy(test_marketplace.RECORD), "id": "item_2"}]
+        for key in ("listings", "offers", "contents", "included_in"):
+            record = deepcopy(test_marketplace.RECORD)
+            record[key].append(deepcopy(record[key][0]))
+            mutations.append(record)
+        record = deepcopy(test_marketplace.RECORD)
+        record["summary"]["count"] = 10**9 + 1
+        mutations.append(record)
+        for record in mutations:
+            with self.subTest(record=record):
+                self.records["item_1"] = record
+                self.assertEqual(self.client.post(path, data=form).status_code, 502)
+                self.assertEqual(self.client.get("/api/alerts").json(), before)
+        self.records["item_1"] = deepcopy(test_marketplace.RECORD)
+        self.assertEqual(self.client.post(path, data=form).status_code, 200)
+        self.assertEqual(self.client.get("/api/alerts").json(), before + before)
 
 
 class StoreTests(unittest.TestCase):

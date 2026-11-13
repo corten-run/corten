@@ -35,8 +35,9 @@ public class MarketplaceController {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN);
             response.setHeader("Cache-Control", "private, no-store");
         }
-        var record = source.get(id);
+        var record = post ? source.getForWrite(id) : source.get(id);
         if (record == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        if (post) record.validateForWrite(id);
         var format = new MarketplaceFormat(locale);
         sort = "desc".equals(sort) ? "desc" : "asc";
         model.addAttribute("record", record);

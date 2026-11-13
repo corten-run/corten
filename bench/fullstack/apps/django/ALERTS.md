@@ -8,7 +8,10 @@ missing records, missing CSRF tokens and cross-site requests do not write alerts
 Validation returns the localized message and half-up rounded minor units from one
 parse; amounts beyond signed 64-bit minor units are rejected safely.
 Before a POST renders or persists, its complete source record is checked for required
-keys, nested row shapes, primitive types and nullability. An incomplete or
+keys, nested row shapes, primitive types, nullability, requested ID and unique IDs
+within each row list. Numeric checks follow `bench/marketplace/records.mjs`:
+counts 0..1e9, signed minor units -1e9..1e9, and ratings 0..500. Validation uses
+the already fetched native dictionary, without another source read or JSON parse. An incomplete or
 wrong-shaped upstream record produces the native 500 without adding alerts or
 creating a session. GET page and record-JSON behavior is unchanged.
 
@@ -35,6 +38,9 @@ image with its native workers, not Django's in-process test client.
 `itempage.test_marketplace_record` also uses Django's real live HTTP server and a
 real upstream HTTP server to check malformed-record writes and recovery with the
 same cookie jar, in both profiles. Include localhost in matched `HOSTS` for it.
+`../fastapi/alert-contract.test.mjs` additionally exercises both ordinary production
+images over real HTTP with the complete contract failure matrix; its setup is
+documented in that app's README.
 
 ## Unreleased
 
@@ -42,3 +48,5 @@ same cookie jar, in both profiles. Include localhost in matched `HOSTS` for it.
   readback while retaining Django security middleware and existing JS behavior.
 - Reject incomplete source records before alert writes, including fields silently
   tolerated by Django templates.
+- Enforce the record contract's numeric bounds, requested ID and per-list unique
+  row IDs before writes, retaining read-only page and JSON behavior.

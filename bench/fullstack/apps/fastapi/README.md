@@ -105,6 +105,13 @@ sessions; this is synthetic benchmark state, not a durable notification service.
 The existing cross-site write check remains; reads and form answers are no-store.
 Ordinary read-only page and record-JSON routes do not establish sessions.
 
+Before rendering a POST, the already parsed native Pydantic record also checks
+the requested ID, unique IDs within each row list, and the integer bounds from
+`bench/marketplace/records.mjs`: counts 0..1e9, signed minor units -1e9..1e9,
+and ratings 0..500. Required types, exact keys and nullability remain Pydantic's
+checks. A bad source returns 502 without creating a session or appending an alert.
+No extra source read or JSON parse is performed. GET page/JSON parsing is unchanged.
+
 `python -m unittest app.test_marketplace app.test_record_json app.test_alerts`
 runs native tests. Run in both default and matched profiles (`HOSTS=testserver`
 for matched). `native-alerts.test.mjs` also checks each of FastAPI, Django and Spring
@@ -118,7 +125,21 @@ at Django's `itempage/marketplace_test_fixture.json`, and `ITEM_SOURCE=fixture`
 pointing `FIXTURE_PATH` at this directory's `alert-items-fixture.json`.
 These checks are functional evidence only, not throughput qualification.
 
+`alert-contract.test.mjs` starts ordinary native images and a real mutable HTTP
+upstream. Set `ALERT_FRAMEWORK=fastapi|django|spring` and `ALERT_CONTRACT_IMAGE`
+to the corresponding locally built image, then run `node --test alert-contract.test.mjs`.
+It tests both profiles; Django additionally requires `ALERT_CONTRACT_MATCHED_IMAGE`
+built with `--build-arg PROFILE=matched`, so its matched run uses native Granian.
+Spring has no separate matched configuration; both environment values use its
+unchanged production command. Each malformed record is checked against the existing
+record contract, POSTed with existing and fresh cookie jars, and followed by an
+independent GET readback. The test checks one upstream fetch per POST, no session
+on failures, recovery and valid boundary values. It does not run the JSON matrix
+or change its readiness gates.
+
 ### Unreleased
 
 - Persist native session-isolated marketplace alerts and expose independent JSON
   readback without changing the unresolved FastAPI load behavior or server settings.
+- Reject mismatched record IDs, duplicate row IDs and out-of-contract integers
+  before marketplace alert writes, with both-profile real HTTP regressions.

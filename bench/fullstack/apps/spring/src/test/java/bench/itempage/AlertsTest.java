@@ -32,7 +32,7 @@ class AlertsTest {
 
     @Test void validationAndCrossSiteRequestsNeverAppend() throws Exception {
         var source = org.mockito.Mockito.mock(MarketplaceSource.class);
-        org.mockito.Mockito.when(source.get("item_1")).thenReturn(MarketplaceTest.sample());
+        org.mockito.Mockito.when(source.getForWrite("item_1")).thenReturn(MarketplaceTest.sample());
         var views = org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class);
         var view = org.mockito.Mockito.mock(org.springframework.web.servlet.View.class);
         org.mockito.Mockito.when(views.resolveViewName(org.mockito.ArgumentMatchers.eq("marketplace"), org.mockito.ArgumentMatchers.any())).thenReturn(view);
@@ -52,7 +52,7 @@ class AlertsTest {
 
     @Test void failedOrErrorStatusViewDoesNotAppendOrExposePartialHtml() throws Exception {
         var source = org.mockito.Mockito.mock(MarketplaceSource.class);
-        org.mockito.Mockito.when(source.get("item_1")).thenReturn(MarketplaceTest.sample());
+        org.mockito.Mockito.when(source.getForWrite("item_1")).thenReturn(MarketplaceTest.sample());
         var views = org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class);
         var view = org.mockito.Mockito.mock(org.springframework.web.servlet.View.class);
         org.mockito.Mockito.when(views.resolveViewName(org.mockito.ArgumentMatchers.eq("marketplace"), org.mockito.ArgumentMatchers.any())).thenReturn(view);

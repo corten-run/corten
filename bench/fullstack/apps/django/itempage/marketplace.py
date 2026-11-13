@@ -21,7 +21,7 @@ def _object(value, fields):
         raise ValueError("Invalid marketplace field type")
 
 
-def validate_record(record):
+def validate_record(record, requested_id):
     """Validate a write's complete source record, not what the template happens to use."""
     text, number = (str,), (int,)
     nullable_text, nullable_number = (str, type(None)), (int, type(None))
@@ -30,6 +30,8 @@ def validate_record(record):
         "id": text, "title": text, "subtitle": nullable_text, "description": text,
         "summary": (dict, type(None)), **{key: (list,) for key in arrays},
     })
+    if record["id"] != requested_id:
+        raise ValueError("Marketplace record ID mismatch")
     for key in ("badges", "tags", "images"):
         if any(not isinstance(value, str) for value in record[key]):
             raise ValueError("Invalid marketplace text array")
@@ -45,9 +47,24 @@ def validate_record(record):
     for key, schema in schemas.items():
         for row in record[key]:
             _object(row, schema)
+            for field in ("quantity", "reviews", "price_minor", "rating_hundredths"):
+                if field in row:
+                    _integer(row[field], -10**9 if field == "price_minor" else 0,
+                        500 if field == "rating_hundredths" else 10**9)
+        if key in ("listings", "offers", "contents", "included_in"):
+            if len({row["id"] for row in record[key]}) != len(record[key]):
+                raise ValueError("Duplicate marketplace row ID")
     summary = record["summary"]
     if summary is not None:
         _object(summary, {"lowest_minor": nullable_number, "count": number, "quantity": number})
+        _integer(summary["lowest_minor"], -10**9)
+        _integer(summary["count"])
+        _integer(summary["quantity"])
+
+
+def _integer(value, minimum=0, maximum=10**9):
+    if value is not None and not minimum <= value <= maximum:
+        raise ValueError("Marketplace integer outside record contract")
 
 
 class MarketplaceSource:
