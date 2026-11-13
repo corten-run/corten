@@ -15,6 +15,8 @@ Corten is pre-1.0, so any minor version may change the API.
 - Native Corten, ASP.NET and Express marketplace reads retain request-owned
   cancellation and explicit trace context. ASP.NET and Express also bound
   unfinished form parsing and prevent a timed-out parser from resuming routing.
+  Express flushes the timeout response before closing an unfinished upload and
+  cancels body-parser's native decompressor as well as its incoming request.
   Real-socket probes retain caller-abort, upload, JSON-error and alert-readback
   outcomes. The original Corten stalled-body abort failure remains unresolved;
   later passing probes are not a complete group qualification or timing baseline.
