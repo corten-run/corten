@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Grouped catalog runs preserve versioned raw load, counted CPU, memory samples,
+  cold-start, image/check and cleanup observations. An offline validator replays
+  the complete native matrix and exact aggregates; historical summaries cannot
+  acquire missing evidence retroactively. Host isolation and independent source
+  audit remain separate gates, not inferred from replay success.
+
 - A native Drogon keyed live application uses its own acknowledged WebSocket
   delivery, bounded reader queues, snapshot recovery and reader-scoped cleanup.
   Group registration preserves original wire observations and historical missing
