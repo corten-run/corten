@@ -135,11 +135,15 @@ acknowledgement in every reader's aligned browser clock. No capture bytes or
 historic qualification identities were changed. Retained rounds revalidated
 under these stronger checks; the regression tests mutate temporary copies only.
 
-Repair checks: 129 tests passed with
+Repair checks: 133 tests passed with
 `node --test bench/live/review.test.mjs bench/live/parity.test.mjs bench/workloads/live.test.mjs`;
 all 241 workload tests, `node scripts/design-refs.mjs` and `git diff --check`
-also passed. The retained set has
-42 successful native journeys and 24 successful measured levels. Its shortest
+also passed. Exhaustive artifact reopening revalidated
+38 native journeys and 24 measured levels. Four old Corten success-schema captures
+inside the already-failed `native-recovery-timing-limit` round (normal, disconnect,
+missed-updates and gap) lack the later required batch-negative controls and remain
+unqualified; regression tests require their rejection. They are not rewritten.
+The measured levels' shortest
 final raw-bound zero-resource observation is 181.3 ms after acknowledgement;
 Corten's shortest is 193.9 ms across delivery and recovery. No fresh capture,
 native build, browser service or container was needed for these verifier-only
