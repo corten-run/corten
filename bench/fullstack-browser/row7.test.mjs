@@ -503,6 +503,65 @@ test("row7: the repository's native Next marketplace handler remains supported",
   } finally { if (browser) await browser.close(); await close(server); }
 });
 
+test("row7: native Next helper effects are not resolved by identical component source", { timeout: 30000 }, async (t) => {
+  const compilerOptions = { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext };
+  const compile = (name) => ts.createSourceFile(name,
+    ts.transpileModule(readFileSync(new URL(`../fullstack/apps/nextjs/lib/${name}`, import.meta.url), "utf8"), { compilerOptions }).outputText,
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const componentSource = compile("marketplace-page.tsx").statements.find((s) => ts.isFunctionDeclaration(s) && s.name.text === "Marketplace").getText().replace(/^export /, "");
+  const helperSource = compile("marketplace.ts").statements.filter((s) => !ts.isImportDeclaration(s))
+    .map((s) => s.getText().replace(/^export /, "")).join("\n");
+  const labels = JSON.parse(readFileSync(new URL("../fullstack/apps/nextjs/lib/marketplace-labels.json", import.meta.url), "utf8"));
+  const requests = [], captures = [], server = createServer((req, res) => {
+    if (req.url.startsWith("/api/")) {
+      requests.push({ path: req.url, method: req.method });
+      res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ message: "native accepted" }));
+    } else {
+      res.setHeader("content-type", "text/html");
+      res.end('<form action="/marketplace/fr-FR/item_2"><input name="email" value="native@example.test"><input name="target_price" value="1,25"></form><p></p>');
+    }
+  }), base = await listen(server); let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    for (const mode of ["native", "retaining-helper"]) await t.test(mode, async () => {
+      await page.goto(base); requests.length = 0;
+      await page.evaluate(({ componentSource, helperSource, labels, record, mode }) => {
+        const helpers = new Function("labels", `${helperSource}\nreturn {formatters,marketplacePath,sortedListings};`)(labels);
+        const sortedListings = mode === "native" ? helpers.sortedListings : (value, query) => {
+          document.addEventListener("submit", () => { value.id = "item_1"; }, { capture: true, once: true });
+          return helpers.sortedListings(value, query);
+        };
+        // Execute the real component with its real repository value helpers.
+        // Only the test JSX/runtime adapter and the adversarial helper differ.
+        const jsx = (tag, props) => ({ tag, props }), form = document.querySelector("form");
+        const component = new Function("_jsx", "_jsxs", "_Fragment", "Fragment", "useState", "formatters", "marketplacePath", "sortedListings", `return (${componentSource})`)(
+          jsx, jsx, Symbol("Fragment"), Symbol("Fragment"), () => [null, (message) => { document.querySelector("p").textContent = message; }],
+          helpers.formatters, helpers.marketplacePath, sortedListings);
+        const props = { record, locale: "fr-FR", query: { seller: "", sort: "asc", allOffers: false } }, tree = component(props);
+        const find = (node) => !node || typeof node !== "object" ? null
+          : node.tag === "form" && node.props.onSubmit ? node.props.onSubmit
+            : Array.isArray(node) ? node.map(find).find(Boolean) : find(node.props?.children);
+        const handler = find(tree);
+        form.__reactProps$control = { onSubmit: handler };
+        form.__reactFiber$control = { type: component, memoizedProps: props };
+        form.addEventListener("submit", (event) => { globalThis.controlOutcome = handler(event); });
+      }, { componentSource, helperSource, labels, record: records().item_2, mode });
+      const candidates = await page.locator("form").evaluate(reactHandlerSources);
+      captures.push(candidates);
+      const discovered = discoverReactEndpoint(candidates);
+      await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
+      assert.deepEqual(requests, [{ path: `/api/marketplace/${mode === "native" ? "item_2" : "item_1"}?locale=fr-FR`, method: "POST" }]);
+      assert.equal(await page.locator("p").textContent(), "native accepted");
+      if (mode === "native") assert.equal(discovered?.path, "/api/marketplace/item_2");
+      else {
+        assert.deepEqual(candidates, captures[0], "The current capture cannot distinguish the real helper from one retaining the record");
+        assert.equal(discovered, null, "Unobserved helper identity cannot certify request intent from component source alone");
+      }
+    });
+  } finally { if (browser) await browser.close(); await close(server); }
+});
+
 test("row7: actual socket receipts require unique ordered bounded native clocks", { timeout: 30000 }, async (t) => {
   const server = createServer((req, res) => { res.setHeader("content-type", "text/html"); res.end('<article class="marketplace">Native document</article>'); });
   const peers = new Set();
