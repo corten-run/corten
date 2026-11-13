@@ -169,4 +169,31 @@ class NativeStoreTest < Minitest::Test
     NativeStore.pump(@reader)
     assert_equal 1, NativeStore.client("client")[:pending][:count]
   end
+
+  def test_per_consumer_inventory_does_not_require_an_unrelated_reader_to_close
+    connections = [Object.new, Object.new]
+    connections.each { |connection| NativeStore.connection(connection) }
+    NativeStore.bind_connection(connections[0], "client")
+    NativeStore.bind_connection(connections[1], "peer")
+    peer = Reader.new("peer")
+    NativeStore.subscribe(peer, "peer", 0, true)
+    NativeStore.snapshot_client(peer, "peer")
+    ack(0, 0, peer)
+    assert_equal 2, NativeStore.resources[:connections]
+    assert_equal 1, NativeStore.resources[:inventory][:consumers]["client"][:subscriptions]
+    NativeStore.unsubscribe(@reader)
+    NativeStore.disconnection(connections[0])
+    inventory = NativeStore.resources[:inventory][:consumers]
+    assert_equal({ subscriptions: 0, connections: 0, pendingTasks: 0, queueEvents: 0 }, inventory["client"])
+    assert_equal({ subscriptions: 1, connections: 1, pendingTasks: 1, queueEvents: 0 }, inventory["peer"])
+    NativeStore.publish(event(1))
+    assert_empty @reader.events
+    assert_equal [event(1)], peer.events
+    NativeStore.finish(peer, "peer")
+    NativeStore.disconnection(connections[1])
+    refute NativeStore.resources[:inventory][:consumers].key?("peer")
+  ensure
+    NativeStore.finish(peer, "peer") if peer
+    connections&.each { |connection| NativeStore.disconnection(connection) }
+  end
 end

@@ -5,6 +5,8 @@ const { renderStreamMessage } = window.Turbo;
 
 const records = [], effects = [];
 let consumer, subscription, settings, detached = false, through = 0;
+let consumerId, publications = Promise.resolve();
+function enqueuePublication(work) { return publications = publications.then(work); }
 let chain = Promise.resolve(), publication = Promise.resolve(), resolveReady, resolveFinished;
 const record = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
 const rows = () => [...document.querySelector('#rows').children].map(tr => ({ id: tr.id,
@@ -55,6 +57,7 @@ async function connect(resume) {
         if (detached) return;
         if (message.kind === 'error') throw new Error(message.message);
         if (message.kind === 'ready') {
+          consumerId = message.consumer;
           record('resources', message.resources);
           if (resume) {
             record('resume', { from: message.from, status: message.status });
@@ -86,35 +89,43 @@ async function connect(resume) {
 window.liveApp = {
   records,
   async setup(value) { settings = value; await resources(); await connect(false); },
-  async publish(event, probe = false) {
-    let release; publication = new Promise(resolve => { release = resolve; });
-    const scheduledAt = performance.now(), startedAt = performance.now();
-    try {
-      const ack = await request('/parity/publish', { event });
-      if (ack.seq !== event.seq) throw new Error('publication acknowledgement mismatch');
-      record(probe ? 'cleanup-probe' : 'publish', probe ? { event } : { seq: ack.seq, scheduledAt, startedAt });
-      record('resources', ack.resources);
-    } finally { release(); }
-  },
-  async publishBatch(events) {
-    let release; publication = new Promise(resolve => { release = resolve; });
-    const scheduledAt = performance.now(), startedAt = performance.now();
-    try {
-      const response = await request('/parity/publish', { events });
-      if (response.acks?.length !== events.length || response.acks.some((ack, index) => ack.seq !== events[index].seq)) {
-        throw new Error('bulk publication acknowledgement mismatch');
-      }
-      for (const ack of response.acks) {
-        record('publish', { seq: ack.seq, scheduledAt, startedAt });
+  publish(event, probe = false) {
+    const scheduledAt = performance.now();
+    return enqueuePublication(async () => {
+      let release; publication = new Promise(resolve => { release = resolve; });
+      const startedAt = performance.now();
+      try {
+        const ack = await request('/parity/publish', { event });
+        if (ack.seq !== event.seq) throw new Error('publication acknowledgement mismatch');
+        record(probe ? 'cleanup-probe' : 'publish', probe ? { event } : { seq: ack.seq, scheduledAt, startedAt });
         record('resources', ack.resources);
-      }
-    } finally { release(); }
+      } finally { release(); }
+    });
+  },
+  publishBatch(events) {
+    const scheduledAt = performance.now();
+    return enqueuePublication(async () => {
+      let release; publication = new Promise(resolve => { release = resolve; });
+      const startedAt = performance.now();
+      try {
+        const response = await request('/parity/publish', { events });
+        if (response.acks?.length !== events.length || response.acks.some((ack, index) => ack.seq !== events[index].seq)) {
+          throw new Error('bulk publication acknowledgement mismatch');
+        }
+        for (const ack of response.acks) {
+          record('publish', { seq: ack.seq, scheduledAt, startedAt });
+          record('resources', ack.resources);
+        }
+      } finally { release(); }
+    });
   },
   async released() {
     const end = performance.now() + settings.maxCleanupMs;
     for (;;) {
       const value = await resources();
-      if (!value.subscriptions && !value.connections && !value.pendingTasks && !value.queueEvents) return;
+      if (!consumerId || !value.inventory?.consumers) throw new Error('missing native consumer inventory');
+      const own = value.inventory.consumers[consumerId];
+      if (!own || (!own.subscriptions && !own.connections && !own.pendingTasks && !own.queueEvents)) return;
       if (performance.now() >= end) throw new Error('native cleanup timeout');
       await new Promise(resolve => setTimeout(resolve, 10));
     }
@@ -133,4 +144,5 @@ window.liveApp = {
     consumer.disconnect(); consumer = subscription = null; await this.released();
   },
   get through() { return through; },
+  get consumerId() { return consumerId; },
 };
