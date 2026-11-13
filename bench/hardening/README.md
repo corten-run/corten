@@ -153,6 +153,12 @@ or `target-capacity-failure`. Loss of baseline service after successful prefligh
 is retained as an unavailable numeric measurement, not mislabeled broken injection.
 `numericComparisonQualified` also requires observed production qualification;
 `groupReady` means complete native apparatus evidence, not universal protection.
+Its source and deployment-specific native receipts must exist, including separate
+edge controls. A production-checklist pass alone cannot set the group ledger's
+`productionQualification` to `qualified`: all selected native content/browser and
+apparatus cells must actually be observed, and direct and edge production controls
+must qualify. Failed browser gates, absent edge receipts and unknown checks remain
+partial, while explicit native feature gaps remain gaps.
 
 ## Limits
 

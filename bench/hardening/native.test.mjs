@@ -93,6 +93,23 @@ test("capacity failure is an observed target outcome, not apparatus success or n
   assert.equal(groupReady(cells), false, "shared oracle flags cannot replace native assessment");
 });
 
+test("checklist-only, failed browser and missing edge receipts cannot label a complete native group qualified", () => {
+  const cells = matrix();
+  // Ledger-aggregation unit input only. No native captures or measurements are produced.
+  for (const c of cells) Object.assign(c, { status: "invalid", parity: "failed", apparatusValid: false,
+    nativeAssessment: { schema: "native-hardening-assessment/v1", productionQualified: true, missingProductionFeatures: [],
+      hostValidation: "observed", liveness: "observed", sourceControl: c.source === "api" ? "passed" : "not-applicable" } });
+  assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "partial" && app.observed === 0));
+  assert.equal(groupReady(cells), false);
+  for (const c of cells) Object.assign(c, { status: "observed", parity: "passed", apparatusValid: true });
+  assert.equal(groupReady(cells), false, "direct receipts cannot qualify deployed-edge cells");
+  assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "partial"));
+  for (const c of cells.filter((c) => c.mode === "deployed-edge")) c.edgeAssessment = { ...c.nativeAssessment, productionQualified: false, hostValidation: "missing" };
+  assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "gaps-observed"));
+  assert.equal(groupReady(cells), true, "complete apparatus evidence may retain observed native defense gaps without qualifying production");
+  cells[0].nativeAssessment.hostValidation = "unknown"; assert.equal(groupReady(cells), false);
+});
+
 test("asynchronous resource reads retain real counters, PID inventory and collection interval", async () => {
   const folder = mkdtempSync(join(tmpdir(), "hardening-cgroup-"));
   try {
