@@ -6,7 +6,8 @@ Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come fro
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
-release profile an app builds with, and what to know when monitoring it.
+release profile an app builds with, how its image builds beside other apps', and what to know when
+monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
 to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
@@ -205,6 +206,44 @@ time: in the second round, the quieter one for the default, its rebuild took 135
 its clean build 361 s against 206 s. One codegen unit against sixteen costs about 1% more per page in
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
+
+## Building the image
+
+The Dockerfile `corten new` writes compiles the app with two BuildKit
+[cache mounts](https://docs.docker.com/reference/dockerfile/#run---mounttypecache), which stay on
+the builder between builds and are not part of the image.
+
+The target directory is a cache of the app's own, `id=<app>-target` with `sharing=locked`: a
+rebuild compiles only what changed, and two builds of the same app take turns, since each touches
+its sources first and cargo decides what is current by file times. BuildKit names a cache by its
+`id`, and by its path when it has none, so without the `id` every image on the builder that mounts
+`/src/target` would share one cache, and each build would wait for every other one, whatever app it
+was. With it, apps on one Docker host build alongside each other. Two apps of the same name on one
+host would still share a cache; give one of them another `id`. Each app keeps a full target cache
+of its own on the builder's disk, every dependency it compiled included, so two apps with the same
+dependencies compile them once each, at the same time if they build at once, and store them twice.
+The caches a Dockerfile without an `id` used, `/src/target` and `/usr/local/cargo/registry`, stay
+on the builder until `docker builder prune` removes them.
+
+Downloaded crates are one cache for every app on the host: cargo's whole home, `/var/cache/cargo`
+(`CARGO_HOME`), shared. The home is mounted rather than its `registry` alone because cargo keeps its
+lock on the downloaded crates there (`.package-cache`), so builds that download at once wait for
+each other's lock instead of writing the same files unseen. Setting `CARGO_HOME` also moves where
+cargo reads its global configuration and credentials; the `rust` image has none, and a project's
+`.cargo/config.toml` is read as before.
+
+Every app's build on the host mounts that home, so a file one build leaves in it applies to every
+other's: a `config.toml`, a `credentials.toml`, or a program in its `bin/`, which cargo runs for a
+subcommand ahead of one on `PATH`
+([External tools](https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands)).
+A private registry's token goes to the build through a
+[secret mount](https://docs.docker.com/reference/dockerfile/#run---mounttypesecret) or the
+`CARGO_REGISTRIES_<NAME>_TOKEN` environment variable of that `RUN`
+([registries](https://doc.rust-lang.org/cargo/reference/config.html#registriesnametoken)), never into
+the shared home.
+
+Cache mounts are not exported with `--cache-to` or restored with `--cache-from`, so on a new
+builder, such as a hosted CI runner's, the build starts from clean.
 
 ## Monitoring
 
