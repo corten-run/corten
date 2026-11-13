@@ -81,7 +81,7 @@ export function transportOf(request) {
   if (/\/_next\/data\//.test(request.url()) || h["x-react-router-request"] || h["x-sveltekit-action"]) return "router";
   return "fetch";
 }
-export function publicInput(request) {
+export function publicInput(request, form = null) {
   if (request.method() !== "POST") return { input: null, components: [] };
   const type = request.headers()["content-type"] ?? "";
   const body = request.postData() ?? "";
@@ -94,8 +94,13 @@ export function publicInput(request) {
     const value = JSON.parse(body);
     const rows = value.components ?? [];
     components = rows.map((row) => JSON.parse(row.snapshot).memo.id);
-    const updates = Object.assign({}, ...rows.map((row) => ({ ...JSON.parse(row.snapshot).data, ...row.updates })));
-    fields = new URLSearchParams(Object.entries(updates).filter(([k]) => ["email", "target_price"].includes(k)));
+    const bound = form?.component ? rows.filter((row) => JSON.parse(row.snapshot).memo.id === form.component) : rows;
+    const updates = Object.assign({}, ...bound.map((row) => ({ ...JSON.parse(row.snapshot).data, ...row.updates })));
+    fields = new URLSearchParams(["email", "target_price"].flatMap((name) => {
+      const model = form ? form.models?.[name] : name;
+      const value = model && updates[model];
+      return typeof value === "string" || typeof value === "number" ? [[name, String(value)]] : [];
+    }));
   }
   return { input: fields ? { email: fields.get("email"), target_price: fields.get("target_price") } : null, components };
 }

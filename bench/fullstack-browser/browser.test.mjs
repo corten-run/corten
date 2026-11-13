@@ -20,7 +20,7 @@ test("independent cookie readback and CSP-safe semantic observation", { timeout:
     }
     if (req.method === "POST") {
       if (req.headers["sec-fetch-site"] === "cross-site" || req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end("Forbidden"); return; }
-      if (req.url.endsWith("/item_missing")) { res.writeHead(404); res.end("Not found"); return; }
+      if (req.url.endsWith("/item_missing")) { res.writeHead(req.headers["x-csrf-token"] === "SECRET-META" ? 404 : 422); res.end("Not found"); return; }
       let body = ""; for await (const p of req) body += p;
       const values = new URLSearchParams(body), id = cookie ?? randomUUID();
       const rows = stores.get(id) ?? [];
@@ -28,7 +28,7 @@ test("independent cookie readback and CSP-safe semantic observation", { timeout:
       stores.set(id, rows); res.setHeader("set-cookie", `session=${id}; HttpOnly; SameSite=Lax; Path=/`);
     }
     res.setHeader("content-type", "text/html");
-    res.end(`<!doctype html><article class="marketplace"><h1>${req.method === "POST" ? "Submitted" : "Ready"}</h1><div class="marketplace__alert"><form method="post" action="/marketplace/en-US/item_1"><input name="email"><input name="target_price"><input type="hidden" name="csrf" value="SECRET"><button>Submit</button></form></div></article>`);
+    res.end(`<!doctype html><meta name="csrf-token" content="SECRET-META"><article class="marketplace"><h1>${req.method === "POST" ? "Submitted" : "Ready"}</h1><div class="marketplace__alert"><form method="post" action="/marketplace/en-US/item_1"><input name="email"><input name="target_price"><input type="hidden" name="csrf" value="SECRET"><button>Submit</button></form></div></article>`);
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
