@@ -8,6 +8,17 @@ in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
 the release profile an app builds with.
 
+For live streams this is a requirement, not just a choice of where to end TLS: another server
+to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
+row 5 is conditional on a shared cache, while health checks (9) and HTTPS policy (12) also apply
+without a proxy. Not every row is a new cost caused by the HTTP/2 requirement.
+An opt-in prototype passed an eight-tab h2 check but missed a flow-controlled send timeout;
+its idle watch also remained permanently busy by inspection. The partial-header probe kept
+a response open, which leaves the HTTP/1.1 watch busy too, so it did not establish a lost
+header-timeout guarantee. The idle h2 case and a connection-level body-stall detector remain
+untried. [Choice 25](../design.md#choice-axum-router) and the
+[partial weighing](../../bench/http2/README.md) record the evidence and reopening tests.
+
 ## What the proxy must do
 
 | | What | Why |

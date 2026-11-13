@@ -5,6 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
+  is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
+  Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left
+  its idle watch permanently busy. Its partial-header probe with an open stream did not show
+  a regression from HTTP/1.1. Publish the partial evidence and follow-up criteria, and put
+  the proxy caveat beside the README's production-defaults claim.
+
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
