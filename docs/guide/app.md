@@ -965,11 +965,13 @@ Like an area's deadline and policy, its middleware covers every request at its p
 it: its routes, its nested areas' and APIs' (the outer area's middleware runs first), an app
 route declared at a path under it, and an unknown URL there. Given again, a middleware runs after what was given before. Each one a request meets costs
 one boxed future on top of what it does (about 900 instructions for one that only passes the
-request on). In an app where no area or API has any, the request runs the same code as before.
-card-market limits writes this way. A request finds its area's or API's middleware, with its
-deadline, body limit and policy, on the route it matched, resolved once when the app starts; only
-an unknown URL and a route whose parameter or catch-all can match under an area's or API's prefix
-(a page's `/{*rest}`) look them up by the request's path.
+request on). In an app where no area or API has any, a request goes through the app's middleware
+alone, with no boxed step. card-market limits writes this way. A request finds its area's or API's
+middleware, with its deadline, body limit and policy, on the route it matched, resolved once when
+the app starts. Only an unknown URL and a route whose parameter or catch-all can match under
+another prefix look them up by the request's path, a scan of the prefixes: under an area's or an
+API's, or one of Corten's own (`/corten/`, the assets'), so every route with a parameter in its
+first segment (`/{slug}`, `/{*rest}`) does, even in an app with no areas.
 
 A tower layer still goes around the whole app (`.layer(l)`), outside the router and every stage, for
 what must see the raw request first: a cap on body size. It sees the request before its route is

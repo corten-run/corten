@@ -226,7 +226,8 @@ Corten is pre-1.0, so any minor version may change the API.
   once, with those of the areas and APIs around it, and gives it to each of their routes, where
   each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
   is its prefix's, and a route whose parameter or catch-all can match under another prefix (a
-  page's `/{*rest}`) look it up by path, so what a request meets is unchanged. A page in an
+  page's `/{*rest}`, and so every route with a parameter in its first segment, which can match
+  under Corten's own `/corten/`) look it up by path, so what a request meets is unchanged. A page in an
   inner area costs 328 instructions fewer and an API's JSON 223 fewer, and in an app with no
   areas or APIs each costs 138 fewer (callgrind, release, jemalloc, five runs each)
   ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
