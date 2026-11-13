@@ -1,0 +1,51 @@
+(✓) Post-generation event received, processing... [ updates=3 needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=3 duration=214.145697ms ]
+go: downloading github.com/bojanz/currency v1.5.0
+go: downloading github.com/nicksnyder/go-i18n/v2 v2.7.0
+go: downloading golang.org/x/text v0.43.0
+go: downloading github.com/cockroachdb/apd/v3 v3.2.1
+=== RUN   TestMarketplaceTraceHTTP
+=== RUN   TestMarketplaceTraceHTTP/default/api
+    trace_http_test.go:62: GET /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: HEAD /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: HEAD /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+=== RUN   TestMarketplaceTraceHTTP/default/fixture
+=== RUN   TestMarketplaceTraceHTTP/matched/api
+    trace_http_test.go:62: GET /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: HEAD /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: HEAD /api/marketplace/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/en-US/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/fr-FR/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: GET /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-11111111111111111111111111111111-1111111111111111-00" "vendor=\xe9"}
+    trace_http_test.go:62: POST /marketplace/de-DE/item_1: source got={"/marketplace/records/item_1" "" ""} want={"/marketplace/records/item_1" "00-22222222222222222222222222222222-2222222222222222-01" "vendor=\xe9"}
+=== RUN   TestMarketplaceTraceHTTP/matched/fixture
+--- FAIL: TestMarketplaceTraceHTTP (0.41s)
+    --- FAIL: TestMarketplaceTraceHTTP/default/api (0.13s)
+    --- PASS: TestMarketplaceTraceHTTP/default/fixture (0.04s)
+    --- FAIL: TestMarketplaceTraceHTTP/matched/api (0.15s)
+    --- PASS: TestMarketplaceTraceHTTP/matched/fixture (0.09s)
+FAIL
+FAIL	itempage	0.435s
+FAIL

@@ -19,6 +19,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
+  preserving native rendering and source clients. Keep Drogon's native parser
+  normalization and repeated-header failures explicit; this does not qualify
+  that contender for traced production work. Add an opt-in native instruction-cost
+  diagnostic with complete dump validation and all-resource cleanup.
+
 - Register the native Topcoat keyed live application in its selected recoverable-live
   group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
   Historical missing-port evidence stays unchanged; functional integration is not a
