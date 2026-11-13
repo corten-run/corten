@@ -133,6 +133,99 @@ function requests(rows) {
   }
 }
 
+function ssrResponse(row, block) {
+  const doc = row.document;
+  if (doc === null || doc === undefined) { block("Independent SSR response observation unavailable"); return; }
+  need(object(doc), "Malformed independent SSR response observation");
+  const present = (value) => value !== null && value !== undefined;
+  for (const key of ["observer", "scope"]) {
+    if (present(doc[key])) need(text(doc[key]), "Malformed independent SSR parser identity");
+    else block("Independent SSR parser identity unavailable");
+  }
+  if (present(doc.responseSha256)) need(typeof doc.responseSha256 === "string" && hash.test(doc.responseSha256), "Malformed SSR response hash");
+  else block("SSR response hash unavailable");
+  if (present(doc.status)) need(Number.isInteger(doc.status) && doc.status >= 100 && doc.status <= 599, "Malformed SSR response status");
+  else block("SSR response status unavailable");
+  let path = null, query = null;
+  if (present(doc.url)) {
+    need(object(doc.url) && Object.keys(doc.url).every((k) => ["path", "query"].includes(k)), "Malformed SSR response URL");
+    if (present(doc.url.path)) {
+      need(typeof doc.url.path === "string" && /^\/(?!\/)/.test(doc.url.path) && !/[\\?#\s\x00-\x1f\x7f]/.test(doc.url.path), "Malformed SSR response path");
+      path = doc.url.path;
+    } else block("SSR response path unavailable");
+    if (present(doc.url.query)) {
+      need(object(doc.url.query) && Object.entries(doc.url.query).every(([k, v]) => ["seller", "sort", "offers"].includes(k) && typeof v === "string"), "Malformed SSR response query");
+      query = doc.url.query;
+    } else block("SSR response query unavailable");
+  } else block("SSR response URL unavailable");
+  const documents = row.requests.filter((r) => r.method === "GET" && r.resource === "document" && !(r.status >= 300 && r.status < 400));
+  if (!documents.length) { block("Native browser document response receipt unavailable for SSR binding"); return; }
+  const matches = documents.filter((r) => (path === null || r.path === path) && (query === null || isDeepStrictEqual(r.query, query)));
+  need(matches.length > 0, "SSR response URL contradicts native browser document request");
+  // A matching hash/status cannot select a dispatch when its identity is ambiguous.
+  if (matches.length !== 1) { block("SSR response has ambiguous native browser document identity"); return; }
+  const native = matches[0];
+  if (present(doc.status) && present(native.status)) same(doc.status, native.status, "SSR status contradicts native browser document response");
+  if (present(doc.responseSha256) && present(native.bodySha256)) same(doc.responseSha256, native.bodySha256, "SSR hash contradicts native browser document response");
+  if (!native.completed || native.failure || native.captureError || !present(native.bodySha256)) block("SSR native browser response body/completion proof unavailable");
+}
+
+function observationTiming(e, block) {
+  let latest = e.clock.startedAt, previous = e.clock.startedAt;
+  const durationKeys = ["dispatchMs", "visibleChangeObservedMs", "settledObservedMs"];
+  for (const row of e.steps) {
+    need(finite(row.at), "Malformed native action start");
+    // row.at precedes dispatch preparation; start + duration is only a lower bound.
+    const start = e.clock.startedAt + row.at;
+    need(finite(start) && start >= previous, "Native action starts before the previous observation finished");
+    let end = start;
+    if (row.timing === null || row.timing === undefined) block("Action timing receipts unavailable");
+    else {
+      need(object(row.timing) && Object.keys(row.timing).every((k) => durationKeys.includes(k)), "Malformed action timing shape");
+      let last = 0;
+      for (const key of durationKeys) {
+        const value = row.timing[key];
+        if (value === null || value === undefined) { block("Action timing receipts incomplete"); continue; }
+        need(finite(value) && value >= last, "Malformed or backwards action duration");
+        last = value; end = start + value;
+        need(finite(end), "Action duration exceeds the observation clock");
+      }
+    }
+    for (const sample of [row.resourcesAtDOM, row.resources]) if (sample !== null && sample !== undefined) {
+      need(finite(sample.at) && sample.at >= end, "Resource observation predates action timing evidence");
+      end = sample.at;
+    }
+    latest = Math.max(latest, end); previous = end;
+  }
+  const ready = e.readiness;
+  if (ready === null || ready === undefined) block("Native readiness observation unavailable");
+  else {
+    need(object(ready) && Object.keys(ready).every((k) => ["definition", "actionableObservedMs"].includes(k)), "Malformed native readiness shape");
+    if (ready.definition === null || ready.definition === undefined) block("Native readiness definition unavailable");
+    else need(text(ready.definition), "Malformed native readiness definition");
+    const value = ready.actionableObservedMs;
+    if (value === null || value === undefined) block("Native readiness timing unavailable");
+    else {
+      need(finite(value) && e.steps.length > 0, "Malformed native readiness duration");
+      const first = e.steps[0], settled = first.timing?.settledObservedMs;
+      if (finite(settled)) need(value >= settled, "Readiness predates initial action settlement");
+      const at = e.clock.startedAt + first.at + value;
+      need(finite(at), "Readiness exceeds the observation clock");
+      if (first.resources) need(at <= first.resources.at, "Readiness follows the initial action observation");
+      if (e.steps.length > 1) need(at <= e.clock.startedAt + e.steps[1].at, "Readiness follows a later action");
+      latest = Math.max(latest, at);
+    }
+  }
+  // Only supplied host-clock observations contribute bounds, never inferred times.
+  const cleanup = e.nativeCleanup;
+  for (const at of [e.resourceBaseline?.at, cleanup?.before?.at, cleanup?.navigation?.at, cleanup?.after?.at,
+    cleanup?.released?.at, cleanup?.detachedAt, cleanup?.probe?.at, cleanup?.probe?.afterAt,
+    e.platformLifecycle?.boundaries?.endedAt, e.upstreamLedger?.terminal?.finishedAt]) {
+    if (at !== null && at !== undefined) { need(finite(at), "Malformed terminal observation timestamp"); latest = Math.max(latest, at); }
+  }
+  return latest;
+}
+
 function replayCell(cell, profile, app, summary, records, block) {
   need(object(cell) && ["not-run", "failed", "unsupported", "captured"].includes(cell.outcome) && typeof cell.qualificationPassed === "boolean", "Malformed native cell outcome");
   if (cell.evidence === null) {
@@ -147,6 +240,7 @@ function replayCell(cell, profile, app, summary, records, block) {
   if (e.functionalChecksPassed === undefined) block("Functional checks interrupted before aggregate observation");
   same(e.environment, { ...settings.profiles[profile.device], js: profile.js }, "Native environment differs from profile");
   need(e.clock?.origin === "node.performance.now" && finite(e.clock.startedAt), "Native observation clock missing/malformed");
+  const latestObservation = observationTiming(e, block);
   if (e.resourceBaseline) { resource(e.resourceBaseline); same(e.resourceBaseline.scriptExecutionEnabled, profile.js, "Baseline JS configuration differs from profile"); }
   else block("Native resource baseline missing");
   if (e.storeBefore?.outcome === "read") {
@@ -159,6 +253,7 @@ function replayCell(cell, profile, app, summary, records, block) {
     same(row.action, profile.steps[index], "Raw native action differs from current plan/order");
     need(finite(row.at) && (!index || row.at >= e.steps[index - 1].at) && list(row.failures) && list(row.lifecycleFailures) && list(row.errors), "Malformed native step timing/errors");
     requests(row.requests);
+    if (index === 0 || row.document !== null && row.document !== undefined) ssrResponse(row, block);
     if (row.resourcesAtDOM && row.dom) {
       resource(row.resourcesAtDOM); same(row.resourcesAtDOM.scope, row.dom.scope, "DOM/resource native scope identity differs");
     } else block("Native resources-at-DOM binding unavailable");
@@ -178,9 +273,10 @@ function replayCell(cell, profile, app, summary, records, block) {
         if (row.document) comparePage(row.document.page, records[step.itemId], profile.locale, options);
       }
       if (index === 0) {
-        need(row.document && row.document.observer !== row.dom.observer && row.document.scope !== row.dom.scope, "Independent initial SSR observation missing/reused");
-        const initial = architecture(app, row.dom.native), detected = initial.startsWith("unverified-") ? architecture(app, row.document.native) : initial;
-        same(e.architecture, detected, "Native architecture differs from observed markers");
+        if (row.document) need(row.document.observer !== row.dom.observer && row.document.scope !== row.dom.scope, "Independent initial SSR observation reused");
+        const initial = architecture(app, row.dom.native);
+        if (initial.startsWith("unverified-") && !row.document?.native) block("Independent SSR architecture markers unavailable");
+        else same(e.architecture, initial.startsWith("unverified-") ? architecture(app, row.document.native) : initial, "Native architecture differs from observed markers");
       }
     } catch (error) { passed = false; semanticFailures.push(error.message); }
     // A retained failure may precede semantic extraction; it cannot claim a pass.
@@ -251,8 +347,8 @@ function replayCell(cell, profile, app, summary, records, block) {
   }
   const requestProof = reconcileRequests(e);
   if (e.requestLedger !== undefined) requests(e.requestLedger); else block("Final raw browser request ledger unavailable");
-  if (e.requestLedgerEndedAt === undefined) block("Final browser request ledger boundary unavailable");
-  else need(finite(e.requestLedgerEndedAt) && e.requestLedgerEndedAt >= e.clock.startedAt, "Malformed final browser request boundary");
+  if (e.requestLedgerEndedAt === null || e.requestLedgerEndedAt === undefined) block("Final browser request ledger boundary unavailable");
+  else need(finite(e.requestLedgerEndedAt) && e.requestLedgerEndedAt >= latestObservation, "Final browser request boundary predates retained observations or is malformed");
   if (e.requestReconciliation !== undefined) same(e.requestReconciliation, requestProof, "Stored final request reconciliation differs from raw ledger");
   else block("Final request reconciliation not retained by producer");
   if (requestProof.outcome !== "reconciled") block(`Final request coverage unknown: ${requestProof.reasons.join("; ")}`);

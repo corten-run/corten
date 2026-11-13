@@ -194,6 +194,69 @@ test("well-formed but unauthenticated source hashes and dirty execution stay blo
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("coherently reprojected SSR/timing contradictions are invalid, absent receipts stay blocked", async (t) => {
+  const summary = unavailable(), { cell, e, profile } = failedRaw(summary);
+  // Deliberately failed synthetic metadata, not browser execution or a qualification fixture.
+  const request = { id: "synthetic-document", method: "GET", path: profile.steps[0].path, query: {}, resource: "document", transport: "document",
+    completed: true, status: 200, failure: null, hasCsp: false, input: null, components: [], bodySha256: sha256("synthetic failed-only body"),
+    bytes: { encodedBody: 26, headers: 0, decodedBody: 26 } };
+  e.steps = [{ action: structuredClone(profile.steps[0]), at: 10, requests: [request], dom: null, domPassed: false,
+    document: { observer: "synthetic-parser", scope: "synthetic-parser-scope", url: { path: request.path, query: {} }, status: 200, responseSha256: request.bodySha256, page: null, native: {} },
+    timing: { dispatchMs: 2, visibleChangeObservedMs: 3, settledObservedMs: 4 }, retired: null,
+    failures: ["No native page observed"], lifecycleFailures: [], errors: [] }];
+  e.readiness = { definition: "Synthetic failed-only apparatus metadata", actionableObservedMs: 5 };
+  e.requestLedgerEndedAt = 20;
+  const f = fixture(t, summary), original = structuredClone(e), baseline = f.check();
+  assert.equal(baseline.outcome, "blocked", baseline.invalid.join("; "));
+  const invalid = [
+    ["malformed SSR hash", (e) => { e.steps[0].document.responseSha256 = true; }, /SSR response hash/],
+    ["conflicting SSR hash", (e) => { e.steps[0].document.responseSha256 = "0".repeat(64); }, /SSR hash contradicts/],
+    ["conflicting SSR status", (e) => { e.steps[0].document.status = 404; }, /SSR status contradicts/],
+    ["conflicting SSR path", (e) => { e.steps[0].document.url.path = "/unrelated"; }, /SSR response URL contradicts/],
+    ["conflicting SSR query", (e) => { e.steps[0].document.url.query = { sort: "price" }; }, /SSR response URL contradicts/],
+    ["malformed SSR URL", (e) => { e.steps[0].document.url = false; }, /Malformed SSR response URL/],
+    ["malformed SSR status", (e) => { e.steps[0].document.status = "200"; }, /Malformed SSR response status/],
+    ["malformed SSR parser", (e) => { e.steps[0].document.observer = false; }, /SSR parser identity/],
+    ["negative dispatch duration", (e) => { e.steps[0].timing.dispatchMs = -1; }, /action duration/],
+    ["backwards visible duration", (e) => { e.steps[0].timing.visibleChangeObservedMs = 1; }, /action duration/],
+    ["backwards settlement duration", (e) => { e.steps[0].timing.settledObservedMs = 2; }, /action duration/],
+    ["boolean action duration", (e) => { e.steps[0].timing.dispatchMs = true; }, /action duration/],
+    ["malformed timing shape", (e) => { e.steps[0].timing = false; }, /timing shape/],
+    ["malformed readiness shape", (e) => { e.readiness = false; }, /readiness shape/],
+    ["boolean readiness duration", (e) => { e.readiness.actionableObservedMs = true; }, /readiness duration/],
+    ["negative readiness duration", (e) => { e.readiness.actionableObservedMs = -1; }, /readiness duration/],
+    ["readiness before settlement", (e) => { e.readiness.actionableObservedMs = 3; }, /Readiness predates/],
+    ["final boundary before action", (e) => { e.requestLedgerEndedAt = 0; }, /boundary predates/],
+    ["final boundary before settlement", (e) => { delete e.readiness; e.requestLedgerEndedAt = 13; }, /boundary predates/],
+    ["final boundary before readiness", (e) => { e.requestLedgerEndedAt = 14; }, /boundary predates/],
+    ["overlapping subsequent action", (e) => { e.steps.push({ ...structuredClone(e.steps[0]), action: profile.steps[1], at: 13 }); }, /previous observation/],
+  ];
+  const missing = [
+    ["missing SSR observation", (e) => { delete e.steps[0].document; }],
+    ["missing SSR hash", (e) => { delete e.steps[0].document.responseSha256; }],
+    ["missing SSR status", (e) => { delete e.steps[0].document.status; }],
+    ["missing SSR URL", (e) => { delete e.steps[0].document.url; }],
+    ["missing SSR query", (e) => { delete e.steps[0].document.url.query; }],
+    ["missing SSR parser identity", (e) => { delete e.steps[0].document.observer; }],
+    ["missing browser document", (e) => { e.steps[0].requests = []; }],
+    ["ambiguous browser document", (e) => { e.steps[0].requests.push({ ...e.steps[0].requests[0], id: "second-synthetic-document" }); }],
+    ["missing timing", (e) => { delete e.steps[0].timing; }],
+    ["partial timing", (e) => { e.steps[0].timing.visibleChangeObservedMs = null; }],
+    ["missing readiness", (e) => { delete e.readiness; }],
+    ["partial readiness", (e) => { e.readiness.actionableObservedMs = null; }],
+    ["missing final boundary", (e) => { delete e.requestLedgerEndedAt; }],
+    ["null final boundary", (e) => { e.requestLedgerEndedAt = null; }],
+  ];
+  for (const [name, mutate, message] of [...invalid, ...missing]) await t.test(name, () => {
+    cell.evidence = structuredClone(original); mutate(cell.evidence); f.save(); // Regenerate every projection and raw/capture hash.
+    const result = f.check();
+    assert.equal(result.outcome, message ? "invalid" : "blocked", `${name}: ${result.invalid.join("; ")}`);
+    if (message) assert.match(result.invalid.join("; "), message);
+    else assert.deepEqual(result.invalid, []);
+    assert.equal(result.qualificationPassed, false); assert.equal(result.readyForLoad, false);
+  });
+});
+
 test("actual HTTP upstream receipts are conserved through probes/cleanup/final, with hostile terminal mutations rejected", async (t) => {
   const summary = unavailable(), { e, profile } = failedRaw(summary), source = createUpstream({ item_1: { value: 1 } });
   source.listen(0, "127.0.0.1"); await once(source, "listening"); const base = `http://127.0.0.1:${source.address().port}`;
@@ -264,12 +327,32 @@ test("retained real w28 stays blocked and raw lifecycle/DOM/asset tampering cann
     ["asset response deleted", (e) => { e.platformLifecycle.events = e.platformLifecycle.events.filter((r) => !(r.event === "Network.responseReceived" && r.type === "Stylesheet")); }],
     ["document method nulled", (e) => { e.platformLifecycle.events.find((r) => r.event === "Network.requestWillBeSent").method = null; }],
     ["DOM text edited", (e) => { e.steps[0].dom.page.title = "Forged title"; }],
+    ["SSR hash malformed", (e) => { e.steps[0].document.responseSha256 = "malformed"; }],
+    ["SSR hash conflicts with browser response", (e) => { e.steps[0].document.responseSha256 = "0".repeat(64); }],
+    ["SSR status conflicts with browser response", (e) => { e.steps[0].document.status = 404; }],
+    ["SSR URL conflicts with browser response", (e) => { e.steps[0].document.url.path = "/unrelated"; }],
+    ["negative action duration", (e) => { e.steps[0].timing.dispatchMs = -1; }],
+    ["backwards action durations", (e) => { e.steps[0].timing.visibleChangeObservedMs = e.steps[0].timing.settledObservedMs + 1; }],
+    ["boolean readiness time", (e) => { e.readiness.actionableObservedMs = true; }],
+    ["final boundary before all actions", (e) => { e.requestLedgerEndedAt = e.clock.startedAt; }],
     ["DOM resource scope changed", (e) => { e.steps[0].resourcesAtDOM.scope = "unobserved-scope"; }],
     ["initial store changed", (e) => { e.storeBefore.alerts.push({ item_id: "item_2", email: "unexpected@example.test", target_minor: 125 }); }],
     ["mutation store emptied", (e) => { e.mutationProbes.before.alerts = []; }],
     ["fresh worker zeros invented", (e) => { e.nativeCleanup.retired.owned = Object.fromEntries(["subscriptions", "connections", "listeners", "timers", "pendingTasks"].map((k) => [k, 0])); }],
   ]) await t.test(name, () => {
     cell.evidence = structuredClone(original); mutate(cell.evidence); f.save(); assert.equal(f.check().outcome, "invalid", name);
+  });
+  for (const [name, mutate] of [
+    ["absent SSR observation", (e) => { delete e.steps[0].document; }],
+    ["absent SSR hash", (e) => { delete e.steps[0].document.responseSha256; }],
+    ["absent SSR status", (e) => { delete e.steps[0].document.status; }],
+    ["absent SSR URL", (e) => { delete e.steps[0].document.url; }],
+    ["absent action timing", (e) => { delete e.steps[0].timing; }],
+    ["absent readiness", (e) => { delete e.readiness; }],
+  ]) await t.test(name, () => {
+    cell.evidence = structuredClone(original); mutate(cell.evidence); f.save();
+    const result = f.check(); assert.equal(result.outcome, "blocked", result.invalid.join("; "));
+    assert.deepEqual(result.invalid, []); assert.equal(result.qualificationPassed, false);
   });
   cell.evidence = structuredClone(original);
   cell.evidence.platformLifecycle.events = cell.evidence.platformLifecycle.events.filter((r) => r.event !== "Page.frameNavigated");

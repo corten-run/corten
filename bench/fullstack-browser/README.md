@@ -159,7 +159,15 @@ canonical producer JSON, fixture/plan/settings/options, dirty and image/build pr
 raw-case/capture hashes and manifest correspondence. It re-derives native DOM/request,
 resource retirement, no-JS/platform lifecycle and final browser/upstream conservation using
 the current proof functions and unchanged strict oracle. Stored derived summaries must
-match exactly. Links (including junctions, ancestors and hard links), network/device/ADS or
+match exactly. Independent SSR parser status, response hash and public path/query must
+agree with an unambiguous native browser document response. Missing receipts or ambiguous
+document identities remain blocked; malformed fields and conflicting receipts are invalid.
+Supplied action/readiness durations must be finite, nonnegative and chronologically
+consistent. The final browser ledger boundary must follow the retained action, resource,
+readiness, lifecycle, cleanup and upstream terminal observations. Action durations use the
+producer's later dispatch clock, so action-start plus duration is a lower bound, not an
+invented exact dispatch timestamp. Missing timings do not become zero observations.
+Links (including junctions, ancestors and hard links), network/device/ADS or
 traversal paths, non-regular files, extra/missing files and changing evidence are refused.
 
 `outcome: "invalid"` (CLI exit 2) means malformed, inconsistent or stale derived evidence.
