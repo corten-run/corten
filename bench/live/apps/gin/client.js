@@ -68,6 +68,18 @@
         log(probe ? "cleanup-probe" : "publish", probe ? { event } : { seq: response.seq, scheduledAt, startedAt }); log("resources", response.resources);
       } finally { release(); }
     },
+    async publishBatch(events) {
+      let release; publication = new Promise((resolve) => { release = resolve; });
+      const startedAt = performance.now();
+      try {
+        const response = await http("publish", { events });
+        if (response.acks?.length !== events.length) throw new Error("Gin batch size mismatch");
+        response.acks.forEach((item, i) => {
+          if (item.seq !== events[i].seq) throw new Error("Gin batch acknowledgement mismatch");
+          log("publish", { seq: item.seq, scheduledAt: startedAt, startedAt }); log("resources", item.resources);
+        });
+      } finally { release(); }
+    },
     async released() {
       const deadline = performance.now() + settings.maxCleanupMs;
       while (true) { const r = await resources(); if (r.subscriptions + r.connections + r.pendingTasks + r.queueEvents === 0) return;

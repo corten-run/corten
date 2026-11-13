@@ -46,7 +46,8 @@ app.get("/client.js", (_req, res) => res.sendFile(fileURLToPath(new URL("client.
 app.post("/parity/configure", (req, res) => {
   if (clients.size) return res.sendStatus(409);
   const p = req.body;
-  if (!Array.isArray(p.initial) || p.initial.length > 1000 || p.queueLimit !== 2 || p.historyLimit !== 4) return res.sendStatus(400);
+  if (!Array.isArray(p.initial) || p.initial.length > 1000
+    || !((p.queueLimit === 2 && p.historyLimit === 4) || (p.queueLimit === 1024 && p.historyLimit === 1025))) return res.sendStatus(400);
   rows = new Map(p.initial.map((r) => [r.id, r])); through = 0; history = [];
   queueLimit = p.queueLimit; historyLimit = p.historyLimit; queuePeak = historyPeak = snapshotReads = bytes = socketPeak = 0;
   hold = false; dropSeq = 0;
@@ -58,7 +59,7 @@ app.get("/parity/snapshot", (_req, res) => {
   res.json({ through, rows: [...rows.values()], work: { reads: 1, rows: rows.size } });
 });
 app.get("/parity/events", (req, res) => {
-  if (clients.size) return res.sendStatus(409);
+  if (clients.size >= 16) return res.sendStatus(429);
   const from = Number(req.query.from);
   if (!Number.isSafeInteger(from) || from < 0 || from > through) return res.sendStatus(400);
   res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
@@ -73,15 +74,21 @@ app.get("/parity/events", (req, res) => {
   res.on("close", () => { clients.delete(c); c.queue.length = 0; c.blocked = false; });
 });
 app.post("/parity/publish", (req, res) => {
-  const e = req.body.event;
-  if (!e || e.seq !== through + 1 || typeof e.key !== "string" || typeof e.effectId !== "string"
-    || !["remove", "upsert"].includes(e.op) || e.op === "upsert" && e.row?.id !== e.key) return res.sendStatus(400);
+  const batch = Object.hasOwn(req.body, "events");
+  const events = batch ? req.body.events : [req.body.event];
+  if (batch && (queueLimit !== 1024 || Object.hasOwn(req.body, "event")) || !Array.isArray(events) || !events.length || events.length > 1044
+    || events.some((e, i) => !e || e.seq !== through + i + 1 || typeof e.key !== "string" || typeof e.effectId !== "string"
+      || !["remove", "upsert"].includes(e.op) || e.op === "upsert" && e.row?.id !== e.key)) return res.sendStatus(400);
+  const acks = [];
+  for (const e of events) {
   through = e.seq;
   if (e.op === "remove") rows.delete(e.key); else rows.set(e.key, e.row);
   if (history.length === historyLimit) history.shift(); history.push(e);
   historyPeak = Math.max(historyPeak, history.length);
   if (e.seq !== dropSeq) for (const c of clients) enqueue(c, e);
-  res.json({ seq: through, resources: resources() });
+    acks.push({ seq: through, resources: resources() });
+  }
+  res.json(batch ? { acks } : acks[0]);
 });
 app.post("/parity/control", (req, res) => {
   const p = req.body;

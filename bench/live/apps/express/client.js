@@ -79,6 +79,18 @@
         record("resources", ack.resources);
       } finally { release(); }
     },
+    async publishBatch(events) {
+      let release; publication = new Promise((r) => { release = r; });
+      const startedAt = performance.now();
+      try {
+        const response = await request("/parity/publish", { events });
+        if (response.acks?.length !== events.length) throw new Error("wrong batch size");
+        response.acks.forEach((ack, i) => {
+          if (ack.seq !== events[i].seq) throw new Error("wrong batch acknowledgement");
+          record("publish", { seq: ack.seq, scheduledAt: startedAt, startedAt }); record("resources", ack.resources);
+        });
+      } finally { release(); }
+    },
     async disconnect() { record("disconnect", { reason: "forced" }); source.close(); source = null; await this.released(); },
     async released() {
       const until = performance.now() + settings.maxCleanupMs;

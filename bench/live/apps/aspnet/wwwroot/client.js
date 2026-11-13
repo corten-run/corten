@@ -79,6 +79,18 @@
         log("resources", result.resources);
       } finally { release(); }
     },
+    async publishBatch(events) {
+      let release; ack = new Promise((resolve) => { release = resolve; });
+      const startedAt = performance.now();
+      try {
+        const result = await api("publish", { events });
+        if (result.acks?.length !== events.length) throw new Error("batch not fully acknowledged");
+        result.acks.forEach((item, i) => {
+          if (item.seq !== events[i].seq) throw new Error("batch sequence mismatch");
+          log("publish", { seq: item.seq, scheduledAt: startedAt, startedAt }); log("resources", item.resources);
+        });
+      } finally { release(); }
+    },
     async released() {
       const deadline = performance.now() + options.maxCleanupMs;
       for (;;) {

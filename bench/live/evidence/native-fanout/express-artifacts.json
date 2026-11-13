@@ -1,0 +1,14 @@
+{
+  "app": "express",
+  "group": "live-delivery",
+  "files": [
+    {
+      "file": "express-normal.json.gz",
+      "sha256": "20de0d75e20e315f2150dec95bbf21488113c64e0ae70628fbe0b2dc883ca50f"
+    },
+    {
+      "file": "express-slow-reader.json.gz",
+      "sha256": "9e85ce49368da32961de30acf0e346b1bd9083daaa0287f75cee73295ba975e4"
+    }
+  ]
+}

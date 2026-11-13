@@ -1,0 +1,14 @@
+{
+  "app": "gin",
+  "group": "live-delivery",
+  "files": [
+    {
+      "file": "gin-normal.json.gz",
+      "sha256": "b7c0107e3614440f91dd6f21bec435a7e1d86cbfcf2d25a7298e5c92f4c0d2f9"
+    },
+    {
+      "file": "gin-slow-reader.json.gz",
+      "sha256": "9fe98cbdab745181a78dcb03aa18802fce6d8cd7befa8a690f905646bb89d924"
+    }
+  ]
+}

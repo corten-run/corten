@@ -13,41 +13,65 @@ application probes are separate:
 ```sh
 node bench/live/run.mjs local-check --group live-delivery --apps express,aspnet,gin --build
 node bench/recoverable-live/run.mjs local-check --apps aspnet --build
+node bench/recoverable-live/run.mjs native-check --apps corten,aspnet --profile native-feed --measure
 node bench/live/verify.mjs bench/live/results/parity/local-check
 node --test bench/live/parity.test.mjs bench/workloads/live.test.mjs
 ```
 
 Install the root tooling dependencies and Playwright Chromium first. Docker builds each new
-port from `bench/live/apps/<app>`, not the historical fullstack directories. Without `--build`,
-the immutable image must carry the source fingerprint that matches the current native port.
+port from `bench/live/apps/<app>`, not the historical fullstack directories. Missing or stale
+images build automatically; `--build` forces a source rebuild. Corten's native image uses the
+repository-root context and `Dockerfile.parity`, including the actual framework sources and
+embedded runtime. Its separate source-image build deadline is 20 minutes; other ports retain
+five minutes. A build failure never qualifies a port or starts measurement.
 An existing output directory is an error, not permission to overwrite raw evidence.
 
 `bench/live/run.mjs` requires `--group live-delivery` for new parity mode. Without that option
 its old positional arguments and historical workload remain the default. Both new entry
 points export `async run(args)` accepting either an argv array (round followed by options,
-without `--group`) or `{ round, apps, build, out }`. `apps` is an optional comma-separated
+without `--group`) or `{ round, apps, build, out, profile, measure }`. `apps` is an optional comma-separated
 registry subset, `build` a boolean, and `out` an optional artifact directory. The CLI accepts
-only `--apps` and `--build` after selecting the group. The round is mandatory and must be a
+`--apps`, `--build`, `--profile` and `--measure` after selecting the group. The round is mandatory and must be a
 safe single path segment. Outputs default to `results/parity/<round>/` here and
 `bench/recoverable-live/results/<round>/`. `run` returns a boolean; false produces CLI exit 1.
 
 Every registry candidate remains in `coverage.json`, even on an explicitly partial run.
 A missing/failed candidate keeps the group incomplete and the exit status nonzero. No port
-is silently admitted from the historical transport test. Comparative measurement remains
-`not-run`, and `readyForLoad` is always false. These one-browser probes produce no throughput
-claim and do not time unqualified native adapters.
+is silently admitted from the historical transport test. Measurement defaults to `not-run`.
+Explicit `--measure` admits only an app whose complete required native fault suite has just
+passed, revalidating saved artifacts before timing. See [bounded fan-out](#bounded-fan-out).
+No unqualified app is timed. Group readiness is derived from complete selected native
+qualification and, when requested, all measured levels, never a manually enabled flag.
 
 Implemented native ports are Express (its response writer and EventSource), ASP.NET Core
 (`TypedResults.ServerSentEvents`, a bounded `Channel<Change>` and EventSource), and Gin
-(`SSEvent`, a bounded Go channel and EventSource). Their state stores, bounded history,
+(`SSEvent`, a bounded Go channel and EventSource), plus Corten in the explicit native-feed
+profile (`Feed`, `subscribe()` and generated keyed views). Their state stores, bounded history,
 subscription lifecycle and browser DOM renderers are independent implementations; the runner
 only publishes the shared fixture and drives faults. The oracle is imported only by the
 runner/verifier, never by an application.
 
-Exact unfinished ports: live-delivery still needs **Corten, Phoenix, Rails, Drogon and Leptos**;
-recoverable-live still needs **Corten, Phoenix, Rails, Laravel, Leptos and Topcoat**. Corten's
-existing historical feed port remains intact, but has no new keyed browser application or
-native queue/history high-water capture and is not qualified. Phoenix Channels, Action Cable,
+The default `bounded` profile remains 24 events, queue 2 and history 4. Corten's native Feed
+has fixed backlog/replay policies, so it is visible but never timed in that incompatible
+profile. Explicit `--profile native-feed` uses 1,044 events, queue 1,024 and history 1,025 for
+every candidate. The history budget accounts for Corten's transient insert-before-evict
+entry; steady native replay retains 1,024. No framework limits or browser runtime are replaced.
+Large missed-write/overflow fault setup uses an explicit native batch control: every native
+write still runs in order with its own sequence/resource acknowledgement, retained in the
+raw HTTP response. The entire batch is validated before mutation. This avoids over 1,024
+cross-host HTTP round trips just constructing a fault; recovery/slow-reader gates remain
+10 seconds. Ordinary delivery and every measurement remain individual native requests.
+Corten's publisher/body instrumentation accounts accepted writes and emitted native patches;
+ring/history occupancy follows the fixed source policies, not private-memory introspection.
+The inventory records the native coalesced frame and diagnostic duplicate slots separately.
+The browser's EventSource decorator only observes original native instances: `subscribe()`
+owns cursor handling, retry, deduplication, gap recovery and snapshot fetching; `rows()` and
+generated views own keyed screen updates. Historical Corten behavior remains the default
+binary mode; the separate parity image explicitly enables `LIVE_PARITY`.
+
+Unfinished independent ports remain **Phoenix, Rails, Laravel, Drogon, Leptos and Topcoat**
+in their registry-selected groups. Corten implementation is not qualification until its
+actual captures pass. Phoenix Channels/LiveView, Action Cable/Turbo,
 Reverb, Leptos hydration and Topcoat runtime work must remain native when those ports are added.
 An SSE port under one of those names would not satisfy that requirement.
 
@@ -84,8 +108,9 @@ HTTP publish response with an unacknowledged write. `receivedAt` and raw Chromiu
 messages retain actual arrival observations separately. Setup/recovery durations and native
 CPU/memory/byte observations include the probes' instrumentation and this barrier; they are
 not standalone production latency/efficiency numbers. Each app container has one CPU and
-1 GiB with no extra swap; only one browser journey is active. A journey has a 45-second hard
-deadline, individual waits are bounded, startup is bounded, and owned containers are removed
+1 GiB with no extra swap; only one correctness browser journey is active. A default journey
+has a 45-second hard deadline (180 seconds for the larger explicit native-feed fixture),
+individual waits are bounded, startup is bounded, and owned containers are removed
 in `finally`. The local browser runs outside that app budget and is explicitly inventoried.
 
 Each final detach closes the real EventSource and waits for the native subscription, writer
@@ -96,11 +121,12 @@ created. No authentication, multi-node or process-restart durability is claimed.
 
 ### Evidence
 
-`native-live-plan/v1` records the complete selection, effective fixture/settings, machine,
+`native-live-plan/v2` records the complete selection, explicit profile, optional measurement
+profile, effective fixture/settings, machine,
 budgets, source diff fingerprint, runner/oracle fingerprints and registry contract fingerprint.
 Each gzip JSON artifact is `native-live-evidence/v1` on success or `native-live-failure/v1`
 on failure. It retains native source hashes, image/source-label binding, exact image/container
-identity, actual browser application records, JSON HTTP bodies/acknowledgements, raw CDP SSE,
+identity, actual browser application records, JSON HTTP bodies/acknowledgements, raw CDP SSE/WebSocket,
 native resource counters, final HTML, browser version and browser CPU/heap/DOM/resource costs.
 Per-app manifests hash the saved gzip bytes. `verify.mjs` reopens bytes, checks provenance and
 scenario completeness, matches application snapshots/events against native HTTP/SSE evidence,
@@ -112,6 +138,39 @@ concurrently loaded local workstation, not a framework ranking or a passing whol
 `parity.test.mjs` mutates those real captures to reject wrong DOM, duplicate effects, lost
 updates, queue overflows hidden by labels, leaks, raw-wire mismatches, altered provenance and
 invented aggregates. These offline hostile tests do not replace rerunning the native ports.
+
+Historical `native-live-plan/v1` evidence retains its original three-port inventory. The
+verifier checks that versioned inventory, not today's available adapters; adding a port never
+upgrades an old missing row to a passing qualification or changes its identity.
+
+### Bounded Fan-Out
+
+`--measure` runs the actual keyed application at 1, 2 and 4 simultaneous browser screens on
+one native app instance, after all of that app's group-specific correctness scenarios pass.
+Every level resets the same five-row state, publishes the same 60 upserts/removals/reinserts
+at an offered 20 events/second, and checks every native wire delivery, DOM state and effect.
+More than 500 ms publisher schedule lag fails the level; a snapshot concealing loss fails it.
+Each level has a 90-second hard bound, and includes a duplicate native delivery plus final
+detach, post-detach publication and zero-resource observation. Native ports cap readers at 16.
+
+Raw browser frame observations retain the first animation frame seeing a version and the
+following frame (a paint opportunity, not a pixel-photometry claim). Visible latency uses
+that second frame against the publisher browser's actual publication start, with Chromium
+time origins retained. Server cost uses actual cgroup CPU usage and current/peak memory,
+including all processes in the declared container topology. Memory peak is explicitly since
+container start, including qualification/setup; it is not relabeled as an isolated level peak.
+Browser process costs are separately retained, outside the server's one-CPU/1-GiB budget.
+
+Per-level `native-live-fanout/v1` gzip artifacts reference the hashed successful native
+qualification artifacts and retain all browser/application/raw-wire traces, frame samples,
+publication schedule, native resource counts, kernel counters and source/image identity.
+`verify.mjs` reopens both qualification and measurements and reconstructs every aggregate.
+Failed or missing qualification never starts measurement. Completed bounded measurement is
+recorded as such, not permanently `not-run`; it does not by itself qualify missing candidates
+or establish Corten wins. `readyForLoad` requires the entire selected group to have verified
+native parity and every explicitly requested measurement level; it is admission evidence,
+not a quiet/dedicated-host throughput claim. One local repeat at three small fan-out levels cannot
+establish saturation, scalability limits or a general framework ranking.
 
 | App | Transport | How the app does it | Code |
 |---|---|---|---|

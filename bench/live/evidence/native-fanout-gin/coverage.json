@@ -1,0 +1,91 @@
+{
+  "schema": "benchmark-group-coverage/v1",
+  "registry": "benchmark-groups/v1",
+  "contractSha256": "ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328",
+  "group": "live-delivery",
+  "apps": [
+    "corten",
+    "aspnet",
+    "express",
+    "phoenix",
+    "rails",
+    "gin",
+    "drogon",
+    "leptos"
+  ],
+  "cases": [
+    {
+      "key": "delivery",
+      "target": "live"
+    }
+  ],
+  "cells": [
+    {
+      "app": "corten",
+      "case": "delivery",
+      "implementation": "implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Native corten port requires explicit --profile native-feed; not run in bounded profile"
+    },
+    {
+      "app": "aspnet",
+      "case": "delivery",
+      "implementation": "implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Native application port; qualification requires every scenario's browser evidence"
+    },
+    {
+      "app": "express",
+      "case": "delivery",
+      "implementation": "implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Native application port; qualification requires every scenario's browser evidence"
+    },
+    {
+      "app": "phoenix",
+      "case": "delivery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing phoenix native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "rails",
+      "case": "delivery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing rails native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "gin",
+      "case": "delivery",
+      "implementation": "implemented",
+      "parity": "passed",
+      "measurement": "complete",
+      "measurementArtifact": "gin-measurements.json",
+      "reason": "2/2 bounded native browser journeys passed; no load qualification",
+      "artifact": "gin-artifacts.json"
+    },
+    {
+      "app": "drogon",
+      "case": "delivery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing drogon native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "leptos",
+      "case": "delivery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing leptos native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    }
+  ],
+  "readyForLoad": false
+}

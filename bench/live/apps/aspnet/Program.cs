@@ -14,19 +14,19 @@ app.MapGet("/parity/resources", () => feed.Resources());
 app.MapGet("/parity/snapshot", () => feed.Snapshot());
 app.MapGet("/parity/events", (long from, HttpContext http) =>
     TypedResults.ServerSentEvents(feed.Subscribe(from, http.RequestAborted)));
-app.MapPost("/parity/publish", (Publication p) => feed.Publish(p.Event));
+app.MapPost("/parity/publish", (Publication p) => feed.Publish(p));
 app.MapPost("/parity/control", (Control c) => feed.Control(c));
 app.Run();
 
 record Listing(string Id, long Version, int PriceCents, int Quantity);
 record Change(long Seq, string EffectId, string Key, string Op, Listing? Row);
 record Configuration(Listing[] Initial, int QueueLimit, int HistoryLimit);
-record Publication(Change Event);
+record Publication(Change? Event, Change[]? Events);
 record Control(string Action, long Seq);
 
-sealed class Reader
+sealed class Reader(int capacity)
 {
-    public readonly Channel<Change> Queue = Channel.CreateBounded<Change>(new BoundedChannelOptions(2)
+    public readonly Channel<Change> Queue = Channel.CreateBounded<Change>(new BoundedChannelOptions(capacity)
     { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     // One replaceable wake signal, not an unbounded second payload queue.
     public readonly SemaphoreSlim Wake = new(0, 1);
@@ -42,6 +42,7 @@ sealed class KeyedFeed
     readonly HashSet<Reader> readers = new();
     long through, dropSeq;
     int queuePeak, historyPeak, snapshotReads;
+    int queueLimit = 2, historyLimit = 4;
     long transportBytes;
     bool hold;
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -52,7 +53,8 @@ sealed class KeyedFeed
         lock (gate)
         {
             if (readers.Count != 0) return Results.Conflict();
-            if (c.QueueLimit != 2 || c.HistoryLimit != 4 || c.Initial.Length > 1000) return Results.BadRequest();
+            if (!((c.QueueLimit == 2 && c.HistoryLimit == 4) || (c.QueueLimit == 1024 && c.HistoryLimit == 1025)) || c.Initial.Length > 1000) return Results.BadRequest();
+            queueLimit = c.QueueLimit; historyLimit = c.HistoryLimit;
             rows.Clear(); foreach (var row in c.Initial) rows.Add(row.Id, row);
             through = dropSeq = transportBytes = 0; queuePeak = historyPeak = snapshotReads = 0;
             history.Clear(); hold = false;
@@ -63,12 +65,12 @@ sealed class KeyedFeed
     {
         using var p = Process.GetCurrentProcess();
         return new { subscriptions = readers.Count, connections = readers.Count, pendingTasks = readers.Count,
-            queueLimit = 2, queueEvents = readers.Sum(r => r.Queue.Reader.Count), queuePeak,
-            historyLimit = 4, historyEvents = history.Count, historyPeak,
+            queueLimit, queueEvents = readers.Sum(r => r.Queue.Reader.Count), queuePeak,
+            historyLimit, historyEvents = history.Count, historyPeak,
             process = new { pid = Environment.ProcessId, workingSetBytes = p.WorkingSet64, peakWorkingSetBytes = p.PeakWorkingSet64, cpuMs = p.TotalProcessorTime.TotalMilliseconds, version = Environment.Version.ToString() },
             inventory = new { applicationQueues = readers.Count, wakeSignals = readers.Sum(r => r.Wake.CurrentCount),
                 overflowSlots = readers.Count(r => r.Overflow != null), historyRows = rows.Count, snapshotReads,
-                transportPayloadBytes = transportBytes, replayCopyLimitEvents = 4, overflowSlotsLimit = 1, timers = 0, backgroundPublishers = 0,
+                transportPayloadBytes = transportBytes, replayCopyLimitEvents = historyLimit, overflowSlotsLimit = 1, timers = 0, backgroundPublishers = 0,
                 nativeWriter = "one awaited SseItem at a time; Kestrel default response backpressure" } };
     }
     public object Resources() { lock (gate) return Counters(); }
@@ -93,15 +95,24 @@ sealed class KeyedFeed
         queuePeak = Math.Max(queuePeak, reader.Queue.Reader.Count);
         reader.Notify();
     }
-    public IResult Publish(Change e)
+    public IResult Publish(Publication input)
     {
         lock (gate)
         {
-            if (e.Seq != through + 1 || e.Op is not ("remove" or "upsert") || e.Op == "upsert" && e.Row?.Id != e.Key) return Results.BadRequest();
+            var batch = input.Events != null;
+            var events = input.Events ?? (input.Event == null ? [] : new[] { input.Event });
+            if (batch && (queueLimit != 1024 || input.Event != null) || events.Length is < 1 or > 1044
+                || events.Where((e, i) => e == null || e.Seq != through + i + 1 || e.Key == null || e.EffectId == null
+                    || e.Op is not ("remove" or "upsert") || e.Op == "upsert" && e.Row?.Id != e.Key).Any()) return Results.BadRequest();
+            var acks = new List<object>();
+            foreach (var e in events)
+            {
             through = e.Seq; if (e.Op == "remove") rows.Remove(e.Key); else rows[e.Key] = e.Row!;
-            if (history.Count == 4) history.RemoveAt(0); history.Add(e); historyPeak = Math.Max(historyPeak, history.Count);
+            if (history.Count == historyLimit) history.RemoveAt(0); history.Add(e); historyPeak = Math.Max(historyPeak, history.Count);
             if (e.Seq != dropSeq) foreach (var r in readers) Enqueue(r, e);
-            return Results.Json(new { seq = through, resources = Counters() });
+                acks.Add(new { seq = through, resources = Counters() });
+            }
+            return batch ? Results.Json(new { acks }) : Results.Json(acks[0]);
         }
     }
     public IResult Control(Control c)
@@ -117,10 +128,11 @@ sealed class KeyedFeed
     }
     public async IAsyncEnumerable<SseItem<string>> Subscribe(long from, [EnumeratorCancellation] CancellationToken cancel)
     {
-        var reader = new Reader(); string ready;
+        Reader reader; string ready;
         lock (gate)
         {
-            if (readers.Count > 0 || from < 0 || from > through) throw new InvalidOperationException("invalid subscription");
+            if (readers.Count >= 16 || from < 0 || from > through) throw new InvalidOperationException("invalid subscription");
+            reader = new Reader(queueLimit);
             readers.Add(reader);
             var expired = from < through && (history.Count == 0 || from < history[0].Seq - 1);
             ready = Encode(new { from, status = expired ? "expired" : "accepted", resources = Counters() });

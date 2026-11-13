@@ -1,0 +1,33 @@
+{
+  "app": "aspnet",
+  "group": "live-delivery",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "aspnet-fanout-1.json.gz",
+      "sha256": "c3444a95705bee11a2605bf9014ee01dd03765695f411053aecc3ec0ad14d086"
+    },
+    {
+      "file": "aspnet-fanout-2.json.gz",
+      "sha256": "1f679f1114b927c92f82e835975576d59ab96444a7e77bffeeef9698ddca20c0"
+    },
+    {
+      "file": "aspnet-fanout-4.json.gz",
+      "sha256": "6c3298b975307e422f5206cff7e18557c818f5d9c03be4a75c20507d2391b30a"
+    }
+  ]
+}

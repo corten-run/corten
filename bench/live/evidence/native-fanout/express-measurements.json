@@ -1,0 +1,33 @@
+{
+  "app": "express",
+  "group": "live-delivery",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "express-fanout-1.json.gz",
+      "sha256": "98df29c3b068ebb77843eee5b8b8dab898ef880ec7d144a11f3d10204890fbd5"
+    },
+    {
+      "file": "express-fanout-2.json.gz",
+      "sha256": "734e8c2590f5b72d4caf892c2b21ce316bdbeb56acf10440b1e2576db2116e75"
+    },
+    {
+      "file": "express-fanout-4.json.gz",
+      "sha256": "7eb2683060b1e6c5ca99861a17870af3ab5c60075e2305538f0f888e4a0af3a5"
+    }
+  ]
+}
