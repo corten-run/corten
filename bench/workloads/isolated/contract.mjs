@@ -47,6 +47,8 @@ const isSource = (path) => !path.split("/").some((part) => ["results", "evidence
 
 /** Hash committed Git bytes, not platform-dependent CRLF checkouts. No network or writes. */
 export function captureSources(commit) {
+  const selectors = ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"].filter((key) => process.env[key]);
+  assert.equal(selectors.length, 0, `unset legacy selection/profile overrides before binding: ${selectors.join(", ")}`);
   assert.match(commit ?? "", /^[a-f0-9]{40}$/, "full measured commit required");
   assert.equal(git(["rev-parse", "HEAD"]).toString().trim(), commit, "measured commit must be current HEAD");
   assert.equal(commit, loadedCommit, "HEAD changed since module load; reload the contract module");
@@ -186,7 +188,7 @@ function resources(group, recipe) {
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
     measurement: recipe === "mixed-measure" ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
-      memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 30 } } : null,
+      memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, qualificationWorker: 2 ** 30, load: 2 ** 31 }, loadSharedMemoryBytes: 512 * 2 ** 20 } : null,
     requestedCpuEnv: recipe === "mixed-measure" ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];

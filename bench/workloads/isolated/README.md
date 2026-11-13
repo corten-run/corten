@@ -39,6 +39,7 @@ derived, never interpolated from caller-provided command fragments.
 
 `captureSources` requires the full current HEAD, the same HEAD the module loaded, and an
 entirely clean checkout including untracked files. The contract itself must be committed.
+Nonempty legacy contender/tier/edge/profile selectors are refused before any binding.
 It hashes the actual committed Git blob bytes for the fixed source boundary: root manifests
 and instructions, docs, bench, crates, scripts and the card-market example. Runtime/build
 inputs and locks within that boundary are retained, including native app Dockerfiles and
@@ -98,7 +99,8 @@ isolation remain unobserved. Timed HTTP roles retain native 1/2/4 CPU quotas and
 record intended app/upstream/load pinning `1`/`2-3`/`4-7` using each native environment prefix.
 Those settings are expectations, not observed environment or native defaults. Mixed
 functional capture has separate 1/2/2 CPU app/upstream/capture budgets; only its explicit
-measurement recipe requests the measured CPU placement. Host drivers/checkers remain
+measurement recipe requests the measured CPU placement. Its qualification worker has 1 GiB;
+the steady-load worker has 2 GiB and 512 MiB shared memory. Host drivers/checkers remain
 unisolated. Browser/live/client-heavy and hardening cannot borrow the HTTP pinning adapter.
 Hardening keeps its declared complete direct/edge process budgets, not one normalized server.
 

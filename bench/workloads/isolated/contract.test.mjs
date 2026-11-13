@@ -87,6 +87,9 @@ test("mixed keeps native functional defaults separate from explicit measurement"
     assert.equal(measured.execution.effectiveOptions[key], value, key);
   }
   assert.equal(measured.resources.measurement.cpu.load.cpuset, "4-7");
+  assert.equal(measured.resources.measurement.memoryBytes.qualificationWorker, 2 ** 30);
+  assert.equal(measured.resources.measurement.memoryBytes.load, 2 ** 31);
+  assert.equal(measured.resources.measurement.loadSharedMemoryBytes, 512 * 2 ** 20);
 });
 
 test("browser recipe supplies only required build/output options, not subset or target manifests", () => {
@@ -205,6 +208,19 @@ test("stale or shortened commit identities cannot bind or validate", () => {
   }
   const b = structuredClone(bind("json-api")); b.request.commit = "0".repeat(40);
   assert.throws(() => validateBinding(reseal(b)), /HEAD/);
+});
+
+test("inherited native selectors cannot silently change the bound execution", () => {
+  for (const key of ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"]) {
+    const previous = process.env[key];
+    try {
+      process.env[key] = "untrusted-override";
+      assert.throws(() => bind("catalog-page"), /unset legacy selection\/profile overrides/);
+      assert.throws(() => captureSources(commit), /unset legacy selection\/profile overrides/);
+    } finally {
+      if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+    }
+  }
 });
 
 test("actual dirty source is refused and restoring owned bytes restores binding", () => {
