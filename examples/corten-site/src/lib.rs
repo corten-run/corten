@@ -559,6 +559,30 @@ mod tests {
         corten::types::Types::new().components(COMPONENTS).sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
     }
 
+    /// The page's links into the repository are addresses on GitHub, which a test cannot ask.
+    /// Each names a file or a directory on `main`, so the one in this checkout is looked for: a
+    /// guide that moves takes its link with it, or fails here.
+    #[tokio::test]
+    async fn every_link_into_the_repository_names_what_is_there() {
+        let page = app().test().get(&page()).await;
+        let html = page.text();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = 0;
+        for (kind, file) in [("blob", true), ("tree", false)] {
+            let start = format!("{}/{kind}/main/", links::repository());
+            for link in html.split(&start).skip(1) {
+                let path = link.split(['"', '#']).next().unwrap_or_default();
+                let there = root.join(path);
+                assert!(
+                    if file { there.is_file() } else { there.is_dir() },
+                    "the page links to {path}, which is not in the repository"
+                );
+                found += 1;
+            }
+        }
+        assert!(found >= 10, "the page's links into the repository were not found: {found}");
+    }
+
     #[test]
     fn the_handler_on_the_page_is_the_handler() {
         assert!(include_str!("lib.rs").contains(seam::STRIKE), "the page shows a strike handler this file does not have");

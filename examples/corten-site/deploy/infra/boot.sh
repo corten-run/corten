@@ -5,8 +5,8 @@
 # machine before this one until OpenTofu moves it.
 set -eu
 
-# Written by main.tf: the three it sets.
-domain='' email='' machine=''
+# Written by main.tf: the four it sets.
+domain='' email='' machine='' redirects=''
 . /root/deploy/site.conf
 
 export DEBIAN_FRONTEND=noninteractive
@@ -22,8 +22,10 @@ until apt-get update; do
 done
 apt-get install -y --no-install-recommends nginx curl
 
-# Two ways to know the name reaches this machine; either will do. A certificate asked for then
-# is asked for by the machine the name reaches.
+# Two ways to know a name reaches this machine; either will do. A certificate asked for then
+# is asked for by the machine the name reaches. The certificate holds the site's name and each
+# name that redirects to it, and is refused if one of them is not here yet, so the wait is for
+# all of them.
 #
 # One: a word only this machine knows, served where certbot's challenge will be (nginx as
 # installed serves /var/www/html, and so does the site's own configuration under this path),
@@ -33,7 +35,7 @@ install -d /var/www/html/.well-known/acme-challenge
 printf '%s' "$word" > /var/www/html/.well-known/acme-challenge/corten-site-boot
 systemctl start nginx
 answers() {
-    [ "$(curl -fsS --max-time 5 "http://$domain/.well-known/acme-challenge/corten-site-boot" 2>/dev/null || true)" = "$word" ]
+    [ "$(curl -fsS --max-time 5 "http://$1/.well-known/acme-challenge/corten-site-boot" 2>/dev/null || true)" = "$word" ]
 }
 
 # Two: the name resolves to the reserved address that DigitalOcean's metadata says is on this
@@ -46,13 +48,18 @@ assigned() {
     [ "$(curl -fsS --max-time 5 "$metadata/active" 2>/dev/null || true)" = true ] || return 1
     address=$(curl -fsS --max-time 5 "$metadata/ip_address" 2>/dev/null || true)
     [ -n "$address" ] || return 1
-    getent ahostsv4 "$domain" | awk -v address="$address" '$1 == address { found = 1 } END { exit !found }'
+    getent ahostsv4 "$1" | awk -v address="$address" '$1 == address { found = 1 } END { exit !found }'
+}
+reached() {
+    for name in $domain $redirects; do
+        answers "$name" || assigned "$name" || return 1
+    done
 }
 
-until answers || assigned; do
+until reached; do
     sleep 30
 done
 rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
 
-sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine"
+sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
 touch /var/lib/corten-site-boot.done

@@ -2,19 +2,26 @@
 # Sets up a fresh Ubuntu 24.04 machine to serve the site: nginx with a Let's Encrypt certificate
 # in front, the site as a systemd service behind it, and a `deploy` user the workflow ships
 # releases as. Run once, as root, from this directory on the machine (README.md here):
-#   sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>']
+#   sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>' ['<names that redirect>']]
+# The last argument is the other names that send their visitors to the site's, with spaces
+# between them, such as 'www.example.com': each must reach this machine already.
 # Safe to run again: each step leaves what is already in place.
 set -eu
 
-if [ $# -lt 3 ] || [ $# -gt 4 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
-    echo "usage: sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>']" >&2
+if [ $# -lt 3 ] || [ $# -gt 5 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+    echo "usage: sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>' ['<names that redirect>']]" >&2
     exit 1
 fi
 domain=$1
 email=$2
 key=$3
 machine=${4:-}
+redirects=${5:-}
 here=$(cd "$(dirname "$0")" && pwd)
+# The names are written into nginx's configuration and read there as nginx reads them.
+case $domain$redirects in
+*[!a-z0-9.\ -]*) echo "give each name alone, in lower case: no scheme, path or port" >&2; exit 1 ;;
+esac
 # What the machine is, as the page states it: the argument, or what an earlier run was given.
 [ -n "$machine" ] || machine=$(sed -n 's/^CORTEN_SITE_MACHINE=//p' /etc/corten-site.env 2>/dev/null || true)
 # systemd reads quotes and backslashes in an environment file as its own, not as the text, and
@@ -34,7 +41,7 @@ until apt-get update; do
 done
 # sudo and sshd are on a cloud image already; the deploy's one sudo rule and the firewall's
 # OpenSSH profile need them wherever this runs.
-apt-get install -y --no-install-recommends nginx certbot ufw sudo openssh-server
+apt-get install -y --no-install-recommends nginx certbot openssl ufw sudo openssh-server
 
 # Each deploy's release lands in a directory of its own under /opt/corten-site/releases, and
 # `current` points at the one served.
@@ -77,14 +84,29 @@ ufw allow 443/tcp
 ufw --force enable
 
 # The certificate first, answered by nginx as it is installed, then the site's own configuration,
-# which names it. certbot's timer renews it; nginx takes the new one on reload.
+# which names it. certbot's timer renews it; nginx takes the new one on reload. One certificate
+# holds the site's name and each name that redirects to it, and is asked for again only when
+# the one in place lacks a name: then it is replaced by one that holds them all.
+certificate=/etc/letsencrypt/live/$domain/fullchain.pem
+holds_every_name() {
+    [ -e "$certificate" ] || return 1
+    for name in $domain $redirects; do
+        openssl x509 -in "$certificate" -noout -checkhost "$name" | grep -q 'does match certificate' || return 1
+    done
+}
 install -d /var/www/html
-if [ ! -e "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+if ! holds_every_name; then
     systemctl start nginx
-    certbot certonly --webroot -w /var/www/html -d "$domain" -m "$email" --agree-tos --non-interactive \
-        --deploy-hook 'systemctl reload nginx'
+    set -- -d "$domain"
+    for name in $redirects; do
+        set -- "$@" -d "$name"
+    done
+    certbot certonly --webroot -w /var/www/html --cert-name "$domain" "$@" --renew-with-new-domains \
+        -m "$email" --agree-tos --non-interactive --deploy-hook 'systemctl reload nginx'
 fi
-sed "s/SITE_DOMAIN/$domain/g" "$here/nginx.conf" > /etc/nginx/sites-available/corten-site
+# A name nginx never matches stands where there are none, so the server that redirects is
+# there and answers nothing.
+sed -e "s/SITE_DOMAIN/$domain/g" -e "s/SITE_REDIRECTS/${redirects:-_}/g" "$here/nginx.conf" > /etc/nginx/sites-available/corten-site
 ln -sf /etc/nginx/sites-available/corten-site /etc/nginx/sites-enabled/corten-site
 rm -f /etc/nginx/sites-enabled/default
 nginx -t

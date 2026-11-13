@@ -13,7 +13,7 @@ what is in use of that limit instead, and each gauge says which it is.
 |---|---|
 | `provision.sh` | sets up a fresh Ubuntu 24.04 machine, once |
 | `corten-site.service` | the systemd service: the binary as a user that owns nothing |
-| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, and the streams asked for as zstd or uncompressed |
+| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, the streams asked for as zstd or uncompressed, and other names sent on to the site's |
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
 | `hold.mjs` | measures what the site holds: memory idle and with streams open, uncompressed or as a browser asks for them, and pages a second meanwhile, with the CPU and memory the server says are in use |
 | [`site.yml`](../../../.github/workflows/site.yml) | the workflow that builds and ships each change on `main` |
@@ -40,8 +40,10 @@ until the site's name reaches it, and runs them itself.
 1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
    droplets, reserved addresses, firewalls, tags, and domains with their records; one with
    full access is the simple choice. A Spaces key with full access lets the workflow make the
-   bucket on its first run and keep each version of the state in it. A key limited to one
-   bucket has not been tried: the workflow sets versioning on the bucket in every run.
+   bucket on its first run and keep each version of the state in it. A key that may not make
+   a bucket ends that run at its first step (`AccessDenied` on `CreateBucket`, as the first
+   run for corten.run did). A key limited to one bucket made beforehand has not been tried:
+   the workflow sets versioning on the bucket in every run.
 2. From a clone of the repository, with `gh` signed in as someone who administers it:
 
    ```sh
@@ -68,9 +70,13 @@ until the site's name reaches it, and runs them itself.
    answers at once if the registrar already names DigitalOcean's servers: add its records to
    `infra/main.tf` first, or leave the zone where it is with `SITE_DNS_ELSEWHERE`.
 5. At the name's registrar, name `ns1.digitalocean.com`, `ns2.digitalocean.com` and
-   `ns3.digitalocean.com` as the zone's name servers. Records the zone had elsewhere do not
-   come along: add each to `infra/main.tf` first. The machine waits for the name to reach it,
-   however long that takes, then asks for its certificate and finishes setting itself up.
+   `ns3.digitalocean.com` as the zone's name servers. Where the registrar signs the zone
+   (DNSSEC), turn that off there first and wait until the zone's `DS` record is gone:
+   DigitalOcean's servers do not sign their answers, and a resolver that checks refuses them
+   while the record is there (`SERVFAIL`, as corten.run answered until its record was gone).
+   Records the zone had elsewhere do not come along: add each to `infra/main.tf` first. The
+   machine waits for the name to reach it, however long that takes, then asks for its
+   certificate and finishes setting itself up.
 6. When `https://<domain>/` answers (502, with no release yet), turn deploys on and ship:
 
    ```sh
@@ -92,8 +98,11 @@ and also while the service is down.
 
 The site is down from the move until that release is served. That is the time a machine takes
 to install its packages and get a certificate, and then a whole run of the Site workflow, which
-tests and builds before it ships; none of it has been timed yet. The old machine and its
-certificate are gone by then, and Let's Encrypt issues the same name five certificates a week:
+tests and builds before it ships. For the first machine made for corten.run (one run, on
+`a7bbe4cc9`, with the name already at DigitalOcean's servers) the machine answered under its
+certificate 1 min 42 s after the apply ended, and the Site run started then had shipped and
+checked the release 1 min 54 s after that; a replacement has not been timed. The old machine and its
+certificate are gone by then, and Let's Encrypt issues the same names five certificates a week:
 a sixth replacement inside a week leaves the site down until its limit allows another. So
 gather changes to those files into one merge. When an apply fails, run the workflow again
 (`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
@@ -109,7 +118,7 @@ when it moves it.
 | environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC` (variables) | what a new machine is handed |
 | repository variables | `SITE_DOMAIN`, `SITE_STATE_BUCKET`, `SITE_STATE_ENDPOINT`, `SITE_REFUSES_MAIL` | set by `bootstrap.sh` |
 | repository variables | `SITE_HOST` | set last, by hand: the Site workflow ships once it is |
-| repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE` | below |
+| repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE`, `SITE_REDIRECTS` | below |
 
 `SITE_MACHINE` is what the page adds after the machine's own count of itself (without it, the
 droplet's size and region). `SITE_ADMIN_KEYS` is a JSON list of the fingerprints of SSH keys in
@@ -121,6 +130,15 @@ the zone where it is not the site's name itself (`example.com` for `www.example.
 `SITE_DNS_ELSEWHERE` set to `true` leaves the zone where it is: point an A record at the address
 the workflow's apply prints. Changing `SITE_MACHINE` or `SITE_ADMIN_KEYS` replaces the droplet
 on the next apply.
+
+`SITE_REDIRECTS` is a JSON list of other names in the zone that send their visitors to the
+site's, such as `["www.example.com"]` for a site at `example.com`. Each gets a record at the
+same address (yours to make, with the zone elsewhere) and a place on the site's certificate,
+and nginx answers it on both ports with a redirect (308) to the same path at the site's name;
+the app never sees it. A new machine waits until every one of the names reaches it before it
+asks for the certificate, which is refused if one does not. After an apply the workflow asks
+the machine for each name and fails where one does not send its visitors to the site. Changing
+the list replaces the droplet on the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
@@ -156,7 +174,11 @@ are kept apart on GitHub and not on the machine.
    quotes keep the shell from reading a price's `$`; the text itself takes no quotes or
    backslashes. Run again without it, the script keeps what it was given before, so the text can
    be changed but not removed that way; the page shows a change after the service next starts
-   (`systemctl restart corten-site`, or the next deploy).
+   (`systemctl restart corten-site`, or the next deploy). A fifth argument is the other names
+   that send their visitors to the site's, with spaces between them (`'www.<domain>'`): point
+   each at the machine first, as in step 2. It is given on every run: a run without it stops
+   redirecting them, and a run with a name the certificate lacks asks for a certificate that
+   holds them all.
 4. Make the `site` environment, which only `main` may deploy to, and give it the key. A
    repository secret could be read by a workflow on any pushed branch; an environment's is
    handed only to a job the environment's rule lets in.

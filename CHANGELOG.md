@@ -188,6 +188,17 @@ Corten is pre-1.0, so any minor version may change the API.
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
   from the metadata address.
+- `examples/corten-site`'s machine sends other names on to the site's: the repository variable
+  `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
+  by hand) gives each name a record at the machine's address and a place on the site's
+  certificate, and nginx answers it on both ports with a redirect (308) to the same path at
+  the site's name. A new machine waits for every name to reach it before it asks for the
+  certificate, a run of `provision.sh` asks for a new one only when the one in place lacks a
+  name, and after an apply the `Site machine` workflow fails where a name does not send its
+  visitors to the site. Port 80 now redirects to the site's name whatever host was asked for,
+  not to the host the request named. A test of the site looks in the checkout for every file
+  or directory the page links to in the repository
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Changed
 
@@ -239,6 +250,9 @@ Corten is pre-1.0, so any minor version may change the API.
   would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
   would fail to build. The data block the issue asks for is left open
   ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+- The seven crates name `https://corten.run` as their `homepage` again, now that the site is
+  served there
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
 

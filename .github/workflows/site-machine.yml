@@ -86,6 +86,7 @@ jobs:
       SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
       TF_VAR_domain: ${{ vars.SITE_DOMAIN }}
       TF_VAR_zone: ${{ vars.SITE_ZONE }}
+      TF_VAR_redirects: ${{ vars.SITE_REDIRECTS || '[]' }}
       TF_VAR_manage_dns: ${{ vars.SITE_DNS_ELSEWHERE != 'true' }}
       TF_VAR_refuse_mail: ${{ vars.SITE_REFUSES_MAIL == 'true' }}
       TF_VAR_machine: ${{ vars.SITE_MACHINE }}
@@ -140,6 +141,7 @@ jobs:
           SITE_HOST: ${{ vars.SITE_HOST }}
           ADDRESS: ${{ steps.apply.outputs.address }}
           MADE: ${{ steps.apply.outputs.made }}
+          REDIRECTS: ${{ vars.SITE_REDIRECTS || '[]' }}
         run: |
           # A machine made now sets itself up first: half an hour for it, a minute otherwise.
           if [ "$MADE" = true ]; then tries=60; else tries=3; fi
@@ -163,3 +165,17 @@ jobs:
             gh workflow run site.yml --ref main --repo "$GITHUB_REPOSITORY"
             echo "The machine at $ADDRESS answers as $SITE_DOMAIN ($code); the Site workflow is started."
           fi
+          # A machine that answers as the site holds its whole configuration, so each name that
+          # redirects is asked too, under its own name and so its own place on the certificate.
+          [ "$code" != 000 ] || exit 0
+          lost=0
+          for name in $(jq -r '.[]' <<< "$REDIRECTS"); do
+            to=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$name:443:$ADDRESS" "https://$name/" 2>/dev/null) || to=000
+            if [ "$to" = "308 https://$SITE_DOMAIN/" ]; then
+              echo "https://$name/ sends its visitors to https://$SITE_DOMAIN/."
+            else
+              echo "::error::https://$name/ at $ADDRESS does not send its visitors to https://$SITE_DOMAIN/ (it answered: $to)."
+              lost=1
+            fi
+          done
+          exit "$lost"

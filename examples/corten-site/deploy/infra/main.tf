@@ -22,6 +22,7 @@ locals {
       "domain='${var.domain}'\n",
       "email='${var.email}'\n",
       "machine='${local.machine}'\n",
+      "redirects='${join(" ", var.redirects)}'\n",
     ])
   }
 
@@ -126,6 +127,24 @@ resource "digitalocean_record" "site" {
     precondition {
       condition     = var.domain == local.zone || endswith(var.domain, ".${local.zone}")
       error_message = "The site's name is not in the zone given: its record would be written under another name."
+    }
+  }
+}
+
+# A name that sends its visitors to the site's reaches the same machine, which answers it with
+# where the site is (../nginx.conf).
+resource "digitalocean_record" "redirect" {
+  for_each = var.manage_dns ? toset(var.redirects) : toset([])
+  domain   = digitalocean_domain.site[0].id
+  type     = "A"
+  name     = each.value == local.zone ? "@" : trimsuffix(each.value, ".${local.zone}")
+  value    = digitalocean_reserved_ip.site.ip_address
+  ttl      = 300
+
+  lifecycle {
+    precondition {
+      condition     = each.value == local.zone || endswith(each.value, ".${local.zone}")
+      error_message = "A name that redirects is not in the zone given: its record would be written under another name."
     }
   }
 }
