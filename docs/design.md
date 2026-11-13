@@ -1043,6 +1043,89 @@ rules something out.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
        for them as Corten could not be, and nothing measured here points at it.
+
+       While a connection is idle, a request's head must arrive within `App::header_timeout` (30
+       seconds), which also closes an idle keep-alive connection, and be at most
+       `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
+       progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
+       seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
+       bytes a second, which would need a count of bytes and a window in the connection's writer, for
+       every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
+       client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+       waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
+       minimum body rate, the idle time being how far behind it a client may fall), counting only the
+       time spent waiting for the client, since one byte resets an idle time alone and a long upload's
+       route has a long deadline or none. That reader is Corten's own and already notes when a wait
+       begins, so the rate costs it a count and clearing when the client went quiet for each piece,
+       and for each piece it waited for a second clock read, a sum and the earlier of two due times; a
+       request that reads no body makes no reader, so it pays nothing. Counted with callgrind against
+       `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats to within 0.1%): a
+       piece `Pieces` waited for, one byte each, went from 2,038 to 2,256 instructions (+218, 10.7%);
+       an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%) when they came at once and
+       from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a body read whole was unchanged.
+       A one-byte piece is the worst case: a piece of a few KiB, as clients send, pays the same
+       instructions over far more bytes. It assumes the handler asks for the next piece promptly, as
+       a handler that spends a fixed time on each piece lets a client that sends one in that time go
+       on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
+       by the route's deadline alone, which a route that removes it keeps for those; how many may be
+       open is `App::max_connections`, unbounded unless set.
+
+       Live streams still require a proxy or CDN speaking HTTP/2 to browsers, even when
+       `serve_wrapped` ends TLS itself. The earlier watchlist check (two streams per page)
+       saw the fourth HTTP/1.1 tab get no answer in 15 seconds, against eight loaded over h2
+       through nginx; the browser cap is about six connections per host, not eight tabs.
+       The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
+       and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
+       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
+       The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
+       failure. Operator time, money and memory have not been measured, not counted as zero.
+
+       The opt-in `http2` prototype at `1a8adcb5f`, retained under
+       [evidence/http2-prototype](https://github.com/corten-run/corten/tree/evidence/http2-prototype),
+       was weighed against `ecbef5eb`. Off, the template still has 59 dependency crates with
+       the same tree and the item test's identical executable code section (not identical
+       whole binaries). Three alternating callgrind pairs give 74,531 instructions per item
+       request against 74,751, with overlapping ranges, so no speed difference is shown.
+       On, it adds eight crates (67 total), with TLS still the app's choice. Eight direct-TLS
+       watchlist tabs loaded and received live events over h2 in Chromium and Firefox.
+       WebKit's SSL connect error was not investigated; environment versus protocol is unknown.
+       A small TLS page counted 58,724 instructions/request over h2 against 40,519 over HTTP/1.1
+       through the feature-on hyper-util auto builder, not the shipping `http1::Builder` path.
+       Events counted 5,174 against 2,806 through that same builder. These medians do not
+       include the missing security-bound implementation. Workloads, ranges, client scripts
+       and the partial coverage are in [HTTP/2 evidence](../bench/http2/README.md).
+
+       The prototype does not ship. With a 100 ms send timeout, a zero-window response
+       resumed after 500 ms once the client granted credit: the socket watch misses that wait.
+       The partial-head probe, however, kept stream 1 open at `/quiet` while stream 3 waited
+       for CONTINUATION. HTTP/1.1's header watch is BUSY while an answer is open too, so this
+       is not evidence of a weakened header guarantee. An idle h2 connection with no open
+       streams was not probed. Inspection finds a prototype bug there: on the first h2 request
+       `watch.take()` then `busy()` removes the response's path back to idle forever.
+       A stream-counting idle watch could preserve the connection-level contract; a header-block
+       timeout with an open sibling would be a stronger, separately chosen guarantee.
+
+       Hyper 1.12.0 has no per-stream send-wait hook. Its `PipeToSendStream` polls a body,
+       holds the returned chunk and waits in `poll_capacity` without polling the body again.
+       Corten's `Answered` wrapper can observe that handoff and lack of further polls; a
+       connection-level stall detector using it is untried, not ruled out. Closing the whole
+       connection is the same granularity as HTTP/1.1's timeout. False positives for quiet
+       producers, completed bodies and progressing sibling streams still need tests.
+       The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
+       limitation, not a reason HTTP/2 cannot ship: Corten could detect the preface itself
+       and retain its HTTP/1 builder. Decoded h2 head limits, concurrent-stream/reset bounds,
+       GOAWAY with open streams and HTTP/1 WebSocket fallback still need verification.
+       Do not advertise RFC 8441 unless implemented; explicit h2 refusal is an alternative.
+
+       This weighs two reliability failures, not reliability against convenience alone:
+       the no-proxy live app already fails at the fourth tab, and an opt-in feature would
+       leave the default unchanged. The reason to defer is that a feature must not silently
+       weaken a security bound. Keep the proxy requirement (option 2) while testing the
+       connection-level design (option 1). One stream per page (option 3) still exhausts the
+       cross-tab cap and adds a custom format where HTTP/2 is standard, against
+       [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
+       TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
        builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
@@ -1368,16 +1451,32 @@ rules something out.
     HTTP/1.1, matchit 0.8 matches paths, and `http` 1 is the type hyper and its clients share);
     platform (rustc names the argument no request can fill for one impl per arity, where one impl
     over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
-    holds a router of Corten's to what axum does without naming either); value (fast and proven
-    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed, the
-    order the Values give, which is why the suite comes first).
+    holds a router of Corten's to what axum does without naming either); measured (the partial
+    HTTP/2 weighing at `1a8adcb5f`, driver correction `70e523f3b`, against `ecbef5eb`:
+    three alternating differential callgrind runs per variant, 59 dependencies off and 67 on,
+    eight direct-TLS tabs live in Chromium and Firefox, and a zero-window send resumed after
+    500 ms with 100 ms configured, as [HTTP/2 evidence](../bench/http2/README.md) records);
+    reasoned (the open-sibling header probe matches HTTP/1.1's busy-watch contract, while
+    `watch.take()` in the prototype loses the return to idle; an `Answered` body-stall
+    detector could close the whole connection but has not been tried); value (fast and proven
+    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
+    which is why the dispatch suite comes first and an opt-in protocol must not silently
+    weaken a security bound even though the no-proxy live app already fails).
 
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
     (other than the `501` for a method no route in the app has, RFC 9110 9.1, which step 1
     records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
-    ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
+    hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
+    [hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928)),
+    or a stream-counting idle watch plus a body-stall detector passes the two connection-bound
+    cases specified for [limits.mjs](../bench/http2/README.md#follow-up-acceptance): an idle h2
+    connection with no open streams and a zero-window send. The historical open-sibling case
+    is a control, not a demand for a stronger header guarantee. Shipping still needs the
+    shutdown, reset-flood and full three-engine TLS checks omitted from the partial weighing.
+    HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
+    the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (step 1) is reopened when a widely used client or monitoring product breaks
     on these `501`s where it handled the `405` (a client that retries a 5xx, a monitor that pages
     on any 501), or when users report alert noise from them that an alert built from access logs
@@ -1402,7 +1501,10 @@ rules something out.
     for RFC 9110 9.1 (the `501`), on `794e6c7f` and on it with that change; 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
     them, and the seven requests Stands on counts for the `501`, on `8b02835d` and on it with
     the `501` and its marker; 2026-11-13, CloudFront's and Cloudflare's metric, alert and log
-    pages as Stands on cites them, read for step 1 with main at `c3d455a1`.
+    pages as Stands on cites them, read for step 1 with main at `c3d455a1`; 2026-11-13, hyper
+    1.12.0, hyper-util 0.1.21 and h2 0.4.20, prototype `1a8adcb5f` and driver `70e523f3b`
+    against `ecbef5eb`, with the corrected watch semantics read in `watch.rs` and `app.rs`,
+    and the untried connection-level alternative distinguished from the measured send stall.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -3131,56 +3233,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     frame the client sent, with pings so one that only listens answers) and should bound how
     many it keeps: otherwise sockets no one uses take the cap from every other request. The work
     on a switched connection is told when shutdown begins and is not waited for.
-14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
-    seconds), which also closes an idle keep-alive connection, and be at most
-    `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
-    progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
-    seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
-    bytes a second, which would need a count of bytes and a window in the connection's writer, for
-    every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
-    client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
-    waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
-    minimum body rate, the idle time being how far behind it a client may fall), counting only the
-    time spent waiting for the client, since one byte resets an idle time alone and a long upload's
-    route has a long deadline or none. That reader is Corten's own and already notes when a wait
-    begins, so the rate costs it a count and clearing when the client went quiet for each piece,
-    and for each piece it waited for a second clock read, a sum and the earlier of two due times; a
-    request that reads no body makes no reader, so it pays nothing. Counted with callgrind against
-    `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats to within 0.1%): a
-    piece `Pieces` waited for, one byte each, went from 2,038 to 2,256 instructions (+218, 10.7%);
-    an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%) when they came at once and
-    from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a body read whole was unchanged.
-    A one-byte piece is the worst case: a piece of a few KiB, as clients send, pays the same
-    instructions over far more bytes. It assumes the handler asks for the next piece promptly, as
-    a handler that spends a fixed time on each piece lets a client that sends one in that time go
-    on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
-    by the route's deadline alone, which a route that removes it keeps for those; how many may be
-    open is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from
-    a proxy or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
-    browser opens about six connections to a host, each open stream holds one, and requests queue
-    behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.
-    That holds for `serve_wrapped` too, which ends TLS but still speaks HTTP/1.1, so an app with
-    live streams has a proxy or CDN in front whatever ends its TLS. Measured with
-    `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth
-    tab got no answer in 15 seconds and nginx logged three documents; through the configuration
-    in [Deploying](guide/deploy.md#nginx) with `http2 on`, all eight tabs loaded over `h2`, the
-    first in 1.0 s and the other seven in 212 to 471 ms. Corten cannot check this at startup: a
-    stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
-    does not say whether a route streams, since its snapshot route has them too; and
-    `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
-    guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
-    connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
-    the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
-    `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
-    answer to each per-connection rule (a concurrent-streams limit beside
-    `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
-    WebSockets over extended `CONNECT`, [Limit 13](#limit-protocol-switch)), which the proxy handles or makes unnecessary,
-    and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
-    HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
-    fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
-    the user gives better than an origin. Either reopens for an app that must serve browsers or
-    native apps' platform clients with no proxy at all and has live streams; HTTP/3 also waits
-    for a stable `h3`.
+14. <a id="limit-http1"></a>Connections are HTTP/1.1. An app with live streams needs an HTTP/2
+    proxy or CDN even when it ends TLS itself. The connection bounds, measured tradeoff and
+    reopening criteria are in [Choice 25](#choice-axum-router), protocol step 2; configuration
+    is in [Deploying](guide/deploy.md).
 15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
