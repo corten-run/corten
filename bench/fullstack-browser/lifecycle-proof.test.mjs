@@ -48,6 +48,15 @@ test("real no-JS document replacement proves only platform retirement and journa
       assert.ok(classified.requests.some((r) => r.classification === "intentionally-disabled-preload" && r.dispatch.path === "/module.js" && r.terminal.event === "Network.loadingFailed"));
       assert.equal(JSON.stringify(snapshot), original); assert.ok(!original.includes("SECRET"));
 
+      // A malformed reduced journal must not classify documents merely because
+      // no remaining asset happens to expose their missing response receipts.
+      const documentsOnly = structuredClone(snapshot), ids = new Set(snapshot.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document").map((e) => e.request));
+      documentsOnly.events = documentsOnly.events.filter((e) => !e.event.startsWith("Network.") || ids.has(e.request));
+      documentsOnly.events = documentsOnly.events.filter((e) => e.event !== "Network.responseReceived");
+      const missingResponses = classifyNoJSRequests(documentsOnly);
+      assert.equal(missingResponses.outcome, "unknown", "Document success requires its own native response, independent of assets");
+      assert.ok(missingResponses.requests.every((r) => r.classification === "unknown"));
+
       const mutations = [
         (j) => { j.schema = "native-browser-platform-lifetimes/v1"; },
         (j) => { j.target.context = null; },
@@ -90,6 +99,8 @@ test("real no-JS document replacement proves only platform retirement and journa
         (j) => { j.documents.forEach((d) => { d.preloads = []; }); },
         (j) => { j.documents.forEach((d) => { d.hasMetaCsp = true; }); },
         (j) => { j.events.filter((e) => e.event === "Network.responseReceived").forEach((e) => { e.hasCsp = true; }); },
+        (j) => { j.events.filter((e) => e.event === "Network.responseReceived" && e.type === "Document").forEach((e) => { e.frame = "unmatched-frame"; }); },
+        (j) => { j.events.filter((e) => e.event === "Network.responseReceived" && e.type === "Document").forEach((e) => { e.status = null; }); },
         (j) => { j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type !== "Document").forEach((e) => { e.initiator.type = "script"; }); },
         (j) => { j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type !== "Document").forEach((e) => { e.sameDocumentOrigin = false; }); },
         (j) => { j.events.filter((e) => e.event === "Network.loadingFailed").forEach((e) => { e.blockedReason = null; e.errorText = "net::ERR_ABORTED"; }); },

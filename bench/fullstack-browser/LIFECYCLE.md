@@ -81,6 +81,9 @@ stylesheet initiator. The existing strict intentional-disabled-preload predicate
 unchanged; Chromium can report its initiator as script/about:blank, which is retained, not
 relabeled parser. A real CSP, unbound request, unrelated abort or application transport is
 not classified away. Neither validator filters the strict export or changes qualification.
+Document classification also requires its own matched frame/loader/status response receipt
+(or native redirect receipt); absent responses remain unknown even in a document-only ledger.
+Asset classification cannot borrow an unverified document's CSP/ownership facts.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
