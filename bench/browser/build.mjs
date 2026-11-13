@@ -106,7 +106,7 @@ async function server(entry, plugins = [], jsxImportSource = "remix/component") 
 const gen = join(out, "_gen");
 mkdirSync(gen, { recursive: true });
 writeFileSync(join(gen, "rows.json"), JSON.stringify(initial));
-execFileSync("cargo", ["run", "-q", "--release", "--manifest-path", join(here, "gen", "Cargo.toml"), "--", join(gen, "rows.json"), join(gen, "view")], { stdio: "inherit" });
+execFileSync("cargo", ["run", "-q", "--release", "--manifest-path", join(here, "gen", "Cargo.toml"), "--bin", "corten-bench-gen", "--", join(gen, "rows.json"), join(gen, "view")], { stdio: "inherit" });
 const viewPage = (name) => readFileSync(join(gen, "view", `${name}-main.html`), "utf8");
 
 const solidPage = await (await server("apps/solid/server.jsx", [solidJsx({ generate: "ssr", hydratable: true })]))(initial);

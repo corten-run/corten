@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A native client-heavy runner exercises Corten, React, Vue, Solid, Svelte and
+  Remix against the same keyed data and dashboard input. Independent visible-DOM,
+  network and lifecycle gates precede a separate measured journey. Builds are
+  fresh and source-bound; failed cleanup or qualification suppresses timings.
+  Bounded local diagnostics are not an isolated performance ranking.
+
 - Native Corten, ASP.NET Razor Pages and Express marketplace forms persist each
   accepted alert, with independent session-scoped JSON readback. Rejected forms,
   failed source reads and render failures do not append. This is process-local
