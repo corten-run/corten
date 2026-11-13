@@ -114,9 +114,12 @@ crate whose checksum crates.io stores.
 ## A whole app in one file
 
 Every route is a struct in the routes module, and its attribute names the handler for each method
-(`get = home`). Every page is a handler that returns `req.page(document)`, the app's layout
-with the page in it. A form with `data-patch` is submitted by the runtime, and its handler
+(`get = home, post = greet`). Every page is a handler that returns `req.page(document)`, the app's
+layout with the page in it. A form with `data-patch` is submitted by the runtime, and its handler
 answers with the fragment to replace; without JavaScript the same handler returns the whole page.
+The form posts to its page's own route, so that page is at an address that answers a `GET` and
+can be bookmarked and shared; a write with a path of its own redirects once it is done
+([the rule](requests-and-forms.md#request-modes)).
 
 ```rust,no_run
 use corten::prelude::*;
@@ -127,11 +130,8 @@ use corten::prelude::*;
 
 #[corten::routes]
 mod url {
-    #[route("/", get = home)]
+    #[route("/", get = home, post = greet)]
     pub struct Home;
-
-    #[route("/greet", post = greet)]
-    pub struct Greet;
 }
 
 #[tokio::main]
@@ -145,7 +145,7 @@ async fn home(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Home">
             <h1>"Welcome"</h1>
-            <form method="post" action={url::Greet} data-patch>
+            <form method="post" action={url::Home} data-patch>
                 <input name={name} required>
                 <button>"Greet me"</button>
             </form>
@@ -158,7 +158,7 @@ async fn home(req: Req) -> HtmlResult {
 struct GreetForm { name: String }
 
 /// With JavaScript the runtime swaps in the patch; without it the form posts and the whole page
-/// comes back. One handler serves both.
+/// comes back, at the page's own address. One handler serves both.
 async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
     let name = &form.name;
     let page = || async { req.page(html! { <Layout req={&req} title="Home"><Greeting name={name} /></Layout> }) };

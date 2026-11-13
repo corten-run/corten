@@ -4,9 +4,9 @@
 //! |---|---|
 //! | `GET /?tab=offers` | the gallery, with that tab selected |
 //! | `GET /?sale=last` | the gallery with the last sale's sheet open beside it |
-//! | `POST /sell` | the listing form: a patch with JavaScript, the page without; refused (422) when it ships nowhere or takes offers with no lowest one |
+//! | `POST /` | the listing form, the page's own: a patch with JavaScript, the page without; refused (422) when it ships nowhere or takes offers with no lowest one |
 //! | `POST /archive`, `POST /watch` | the menu's form actions: archive the draft, watch the card |
-//! | `POST /save` | saving the draft, answered with a toast |
+//! | `POST /save` | saving the draft, answered with a toast; without JavaScript, back to the draft, whose toaster says it (`req.redirect_with_notice`) |
 //! | `POST /publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
 //! | `GET /help` | the menu's link |
@@ -44,10 +44,12 @@ corten::assets::embed! {
     pub struct Static = "static";
 }
 
-/// Every URL the gallery serves and links to, with the handlers that serve it.
+/// Every URL the gallery serves and links to, with the handlers that serve it. The listing form
+/// is the draft's own, so it posts to the draft's address; the page's other writes each have a
+/// path of their own, since one path takes one `POST`, and send the browser back once done.
 #[corten::routes]
 pub mod url {
-    #[route("/", get = home)]
+    #[route("/", get = home, post = sell)]
     pub struct Home {
         pub tab: Option<crate::gallery::MarketTab>,
         pub sale: Option<crate::gallery::Sale>,
@@ -55,9 +57,6 @@ pub mod url {
         pub sold: Option<crate::gallery::SoldBy>,
         pub sales: Option<crate::gallery::SalesPage>,
     }
-
-    #[route("/sell", post = sell)]
-    pub struct Sell;
 
     #[route("/help", get = help)]
     pub struct Help;
@@ -297,13 +296,11 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     req.patch_or(OrderResult { text: &text }, page).await
 }
 
-/// Answers with a toast: the message as a patch, or in the page without JavaScript.
+/// Answers with a toast as a patch; without JavaScript, sends the browser back to the draft, whose
+/// toaster says it once (`req.redirect_with_notice`), since `/save` has no page of its own.
 async fn save(req: Req) -> HtmlResult {
     const SAVED: &str = "Draft saved.";
-    let none = Errors::new();
-    let toast = || Toast { message: Some(SAVED), failed: false };
-    let page = || async { req.page(Layout { req: &req, title: TITLE, toast: toast(), children: listings(&req, &none) }) };
-    req.patch_or(toast(), page).await
+    req.patch_or(Toast { message: Some(SAVED), failed: false }, || async { req.redirect_with_notice(&DRAFT, SAVED) }).await
 }
 
 /// Refuses to publish the draft (409, the card sold meanwhile) with a failed toast: the toaster
@@ -455,7 +452,7 @@ mod tests {
     fn listing<'c>(app: &'c Client, price: &str, ships: &[Region], pricing: Pricing, floor: &str) -> Call<'c, FormBody> {
         let f = SellForm::FIELDS;
         let call = app
-            .post(&url::Sell)
+            .post(&HOME)
             .field(f.qty, 1)
             .field(f.price, price)
             .field(f.weight, 1.0)
@@ -523,7 +520,7 @@ mod tests {
         let app = client();
         let f = SellForm::FIELDS;
         let listed = || {
-            app.post(&url::Sell)
+            app.post(&HOME)
                 .field(f.qty, 2)
                 .field(f.price, "12.50")
                 .field(f.weight, 0.5)
@@ -538,7 +535,9 @@ mod tests {
             patch.text(),
             r#"<p id="result" role="status">Listed 2 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.</p>"#
         );
+        // Without JavaScript the page comes back at the draft's own address, which answers a GET.
         let page = listed().await;
+        assert_eq!(page.status(), StatusCode::OK);
         assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
     }
 
@@ -576,21 +575,21 @@ mod tests {
         for (word, forged) in [
             (
                 "mint",
-                rest(app.post(&url::Sell))
+                rest(app.post(&HOME))
                     .field(f.condition.untyped(), "mint")
                     .field(f.ships, Region::Us)
                     .field(f.pricing, Pricing::Fixed),
             ),
             (
                 "mars",
-                rest(app.post(&url::Sell))
+                rest(app.post(&HOME))
                     .field(f.condition, Condition::LightlyPlayed)
                     .field(f.ships.untyped(), "mars")
                     .field(f.pricing, Pricing::Fixed),
             ),
             (
                 "auction",
-                rest(app.post(&url::Sell))
+                rest(app.post(&HOME))
                     .field(f.condition, Condition::LightlyPlayed)
                     .field(f.ships, Region::Us)
                     .field(f.pricing.untyped(), "auction"),
@@ -753,7 +752,11 @@ mod tests {
         let app = client();
         let patch = app.post(&url::Save).mode(Mode::Action).await;
         assert_eq!(patch.text(), r#"<div id="ui-toast">Draft saved.</div>"#);
-        let page = app.post(&url::Save).await;
+        // Without JavaScript: back to the draft, whose toaster says it once.
+        let saved = app.post(&url::Save).await;
+        assert_eq!((saved.status(), saved.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
+        let notice = saved.cookie("__Host-corten-notice").unwrap();
+        let page = app.get(&HOME).cookie("__Host-corten-notice", notice).await;
         assert!(
             page.text().contains(r#"<div data-ref="status" role="status"><div id="ui-toast">Draft saved.</div></div>"#),
             "{}",

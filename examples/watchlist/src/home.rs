@@ -70,7 +70,9 @@ impl Home {
     }
 }
 
-fn home_view(home: &Home, t: Msg) -> impl Render {
+/// The watchlist, with the notice a change of the list left for it when it sent a browser without
+/// JavaScript back here (`req.notice()`).
+fn home_view<'a>(home: &'a Home, t: Msg, notice: Option<&'a Notice>) -> impl Render {
     html! {
         <div class={(stack(Space::_1), mb_5())}>
             <h1>"Watchlist"</h1>
@@ -85,7 +87,7 @@ fn home_view(home: &Home, t: Msg) -> impl Render {
                 <LivePrices stocks={&home.stocks} t={t} />
             </section>
             <aside class={stack(Space::_5)}>
-                <WatchForm others={&home.others} message={&home.message} />
+                <WatchForm others={&home.others} message={&home.message} notice={notice} />
                 <section class={(card(), stack(Space::_2))}>
                     <h2>"Market activity"</h2>
                     <corten-live src={url::Trades} since={home.trades_seen}><LastTrade text={&home.last_trade} /></corten-live>
@@ -203,11 +205,16 @@ struct WatchFormId;
 #[derive(Id)]
 struct WatchMessageId;
 
-/// Adds a stock to the list: the stocks not watched yet, and what the last change did. The rows'
+/// Adds a stock to the list: the stocks not watched yet, and what the last change did (`message`
+/// in a patch, `notice` on the page a change without JavaScript was sent back to). The rows'
 /// Remove buttons belong to it too. A change that got no answer (the network failed) leaves the
 /// page as it was, and the form says so (`on:corten:error`); the next answer replaces it.
 #[component(js)]
-pub(crate) fn WatchForm<'a>(others: &'a [(&'static str, &'static str)], message: &'a str) -> impl Patch {
+pub(crate) fn WatchForm<'a>(
+    others: &'a [(&'static str, &'static str)],
+    message: &'a str,
+    notice: Option<&'a Notice>,
+) -> impl Patch {
     let f = StockForm::FIELDS;
     let unanswered = refs();
     html! {
@@ -229,7 +236,12 @@ pub(crate) fn WatchForm<'a>(others: &'a [(&'static str, &'static str)], message:
                 </label>
                 <button class={w_full()}>"Watch"</button>
             }
-            <p id={WatchMessageId} aria-live="polite">{message}</p>
+            <p id={WatchMessageId} aria-live="polite">
+                {message}
+                if let Some(notice) = notice {
+                    {notice}
+                }
+            </p>
             <p ref={unanswered} role="alert" hidden>"That change did not reach the market. Try again."</p>
         </form>
     }
@@ -283,7 +295,7 @@ fn PicksList<'a>(picks: &'a [Stock]) -> impl Render {
 /// The whole watchlist screen, for a browser or a data client, with the list's cookie for a
 /// browser that had none.
 fn home_screen(req: &Req, viewer: Option<&Viewer>, watching: &mut Watching, home: &Home) -> HtmlResult {
-    let view = home_view(home, req.t());
+    let view = home_view(home, req.t(), req.notice());
     let res = req.screen(home, html! { <Layout req={req} title="Stocks" viewer={viewer} head="">{view}</Layout> })?;
     Ok(watching.with_cookie(res))
 }
@@ -358,17 +370,22 @@ pub(crate) async fn unwatch(
     changed(&req, viewer.as_deref(), &market, &mut watching, message)
 }
 
-/// The answer to a change of the list: with JavaScript, the prices and the form as a patch; without
-/// it, or to a native screen or an agent, the whole screen. The patch leaves the picks as they
+/// The answer to a change of the list: with JavaScript, the prices and the form as a patch; to a
+/// native screen or an agent, the whole screen. `/watch` and `/unwatch` are paths of their own
+/// (one form's two writes), so a browser without JavaScript is sent back to the watchlist, whose
+/// form says what changed, once (`req.redirect_with_notice`). The patch leaves the picks as they
 /// are, so until the page is read again they can still name a stock just watched.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
+    if !matches!(req.mode, Mode::Action | Mode::Data) {
+        return Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?));
+    }
     let home = Home::new(market, watching, message, None);
-    if req.mode != Mode::Action {
+    if req.mode == Mode::Data {
         return home_screen(req, viewer, watching, &home);
     }
     let res = req.patch(html! {
         <LivePrices stocks={&home.stocks} t={req.t()} />
-        <WatchForm others={&home.others} message={&home.message} />
+        <WatchForm others={&home.others} message={&home.message} notice={None} />
     })?;
     Ok(watching.with_cookie(res))
 }
@@ -562,9 +579,15 @@ mod tests {
             )),
             "{patch}"
         );
-        let page = watch(Mode::Document).await;
-        assert!(page.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
-        assert!(page.text().contains("<html") && page.text().contains("Watching Halcyon Health"));
+        // Without JavaScript `/watch` has no page of its own: back to the watchlist, whose form
+        // says what changed, once.
+        let sent = watch(Mode::Document).cookie("visitor", VISITOR).await;
+        assert_eq!((sent.status(), sent.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
+        let notice = sent.cookie("__Host-corten-notice").unwrap();
+        let page = app.get(&url::Home::default()).cookie("visitor", VISITOR).cookie("__Host-corten-notice", notice).await;
+        let page = page.text();
+        assert!(page.contains(r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p>"#), "{page}");
+        assert_eq!(rows(page), ["ACME", "GLBX", "INIT", "HLTH"], "{page}");
         let data = watch(Mode::Data).await;
         assert_eq!(data.headers()["content-type"], "application/json");
         assert!(data.text().ends_with(r#""message":"Watching Halcyon Health at $88.40."}}"#), "{}", data.text());

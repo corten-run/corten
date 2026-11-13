@@ -539,7 +539,7 @@ let app = app().test();
 let home = app.get(&url::Home).await;
 assert_eq!(home.status(), 200);
 let greeting = app
-    .post(&url::Greet)
+    .post(&url::Home)
     .mode(Mode::Action)
     .field(GreetForm::FIELDS.name, "Ada")
     .await;

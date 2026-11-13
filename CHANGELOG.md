@@ -258,6 +258,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- The app `corten new` writes posts its form to the page's own route
+  (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
+  with no `GET`, where a browser without JavaScript was left at an address that answers 405 when
+  it is reloaded from a bookmark. The README and the getting-started guide show the same, and the
+  requests-and-forms guide states the rule: a form that belongs to one page posts to that page's
+  route, and a write with a path of its own redirects once done and draws a page only to refuse.
+  A debug build answers a browser's plain post with a 500 that says so when a path whose route has
+  no `GET` handler answers it with a page and a success status; a release build compiles none of
+  the check. ui-gallery lists a card on the draft's route and `/save` sends the browser back to
+  the draft with a notice; watchlist uploads a picture to `/account`, and `/watch` and `/unwatch`
+  send a browser without JavaScript back to the watchlist with a notice
+  ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a

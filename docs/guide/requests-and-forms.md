@@ -85,6 +85,20 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
+Where a form posts decides what a browser without JavaScript is left at. A form that belongs to
+one page posts to that page's route (`#[route("/items/{id}", get = show, post = save)]`, the form's
+`action={url::Item { id }}`): the page drawn as its answer is at the page's own address, which
+answers a `GET`, so it can be bookmarked and shared, and a refusal drawn there keeps what the user
+typed. A path takes one `POST`, so a page with several writes, or a write several pages use,
+gives the write a path of its own (`/watch`, `/sign-out`). That write answers a redirect once it
+is done, `req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
+([Redirects](#redirects)), and draws a page only to refuse (`req.invalid`): drawn there after a
+success, the page would sit at an address with no `GET`, which answers 405 when it is reloaded
+from a bookmark or a shared link. A debug build answers a browser's post with a 500 that says so
+when a path with no `GET` handler answers it with a page and a success status. Either way, a page
+drawn as a post's answer is reloaded by posting again (the browser asks first), so a write that
+must not run twice carries a `SubmitKey` (below) or redirects too.
+
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer
 sends the browser to another page, until that page is), and for a navigation `<main>` and the
