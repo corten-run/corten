@@ -1,6 +1,7 @@
 // Synthetic test evidence only. Never imported by the runner or report.
 import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan } from "./contract.mjs";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
+import { k6Provenance } from "../load-tool.mjs";
 
 export function observations(profile, records) {
   const p = payloads[profile.payload], ids = Object.keys(records), first = ids[0], events = [];
@@ -63,7 +64,9 @@ export function result() {
     measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...phases] },
     runId: "json-api-j1-0123456789", host: { checkout: "/synthetic/checkout" },
-    tools: { node: { image: nodeImage, imageId: `sha256:${"c".repeat(64)}` }, k6: { image: k6Image, imageId: `sha256:${"d".repeat(64)}` } }, fixtures: {}, apps: {} };
+    tools: { node: { image: nodeImage, imageId: `sha256:${"c".repeat(64)}` },
+      k6: k6Provenance({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
+        "k6 v2.4.0 (synthetic test executable, not a native measurement)") }, fixtures: {}, apps: {} };
   const records = Object.fromEntries(Object.entries(payloads).map(([key, p]) => [key, p.records()]));
   const raw = Object.fromEntries(group.cases.map((p) => [p.key, observations(p, records[p.payload])]));
   for (const payload of group.payloads) s.fixtures[payload] = put(records[payload]);

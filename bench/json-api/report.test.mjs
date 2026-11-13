@@ -22,6 +22,17 @@ test("strict complete JSON baseline requires all 36 functional, audit and raw ti
   assert.match(markdown, /Functional checks do not prove native serialization/);
 });
 
+test("JSON timing requires retained executable provenance, never today's identity for old data", () => {
+  for (const field of ["version", "versionOutput", "repoDigests", "platform"]) {
+    const summary = copy(); delete summary.tools.k6[field];
+    const report = inspect(summary);
+    assert.equal(report.baseline, false, field);
+    assert.ok(report.warnings.some((warning) => warning.startsWith("configuration:")));
+  }
+  const summary = copy(); summary.tools.k6.versionOutput = "k6 v2.3.0";
+  assert.equal(inspect(summary).baseline, false);
+});
+
 test("a missing, reordered, duplicate or wrong-profile effective schedule cannot certify a baseline", () => {
   for (const mutate of [
     (s) => { delete s.timingPlan; },

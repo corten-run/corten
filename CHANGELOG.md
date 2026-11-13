@@ -271,6 +271,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- Pin the benchmark suites to one verified k6 release and record its actual
+  executable, immutable image and platform. Native saved replay requires this
+  identity, and legacy continuation/trends refuse incompatible or unidentified
+  tool boundaries instead of assigning new metadata to old measurements.
+
 - Refresh the JavaScript benchmark framework/compiler dependencies and retain
   committed package locks in their production builds and build recipes. React
   Router uses its current native Express dispatcher. Previous rounds are not

@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { aggregate, phases, readLoad } from "./contract.mjs";
 import { inspectCatalog } from "./report.mjs";
 import { summarizeSamples, memoryMiB } from "./stats.mjs";
+import { verifyK6Provenance } from "../load-tool.mjs";
 
-export const rawSchema = "catalog-saved-evidence/v1";
+export const rawSchema = "catalog-saved-evidence/v2";
 export function containerEvidence(info) {
   return { id: info.Id, imageId: info.Image, startedAt: info.State.StartedAt,
     quotaNanoCpus: info.HostConfig.NanoCpus, cpuset: info.HostConfig.CpusetCpus,
@@ -28,6 +29,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const cleanup = readJson("cleanup.json");
   assert.deepEqual(cleanup, { runId: summary.runId, containers: [], networks: [] }, "owned resources remain or cleanup proof differs");
   assert.deepEqual(readJson("tools.json"), summary.tools, "tool observations differ");
+  verifyK6Provenance(summary.tools.k6);
   for (const name of ["upstream", "checker", "k6"]) assert.match(summary.tools?.[name]?.imageId, /^sha256:[a-f0-9]{64}$/);
   let upstreamId;
   for (const [app, entry] of Object.entries(summary.apps)) {

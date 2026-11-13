@@ -48,6 +48,23 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
 });
 
+test("native replay requires the retained executable identity and raw version probe", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const expected = writeSavedFixture(folder, commit, sourceTree(commit));
+  for (const field of ["platform", "version", "versionOutput", "repoDigests"]) {
+    const changed = structuredClone(expected); delete changed.tools.k6[field];
+    writeFileSync(join(folder, "summary.json"), JSON.stringify(changed));
+    invalid(() => validateSaved(args));
+  }
+  writeFileSync(join(folder, "summary.json"), JSON.stringify(expected));
+  const tools = JSON.parse(readFileSync(join(folder, "tools.json")));
+  tools.k6.versionOutput = "k6 v2.4.0 (a different retained probe)";
+  writeFileSync(join(folder, "tools.json"), JSON.stringify(tools));
+  invalid(() => validateSaved(args));
+  writeFileSync(join(folder, "summary.json"), JSON.stringify({ ...expected, evidenceVersion: "marketplace-raw/v2" }));
+  invalid(() => validateSaved(args));
+});
+
 test("hostile saved edits fail replay, even when the summary remains internally plausible", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   writeSavedFixture(folder, commit, sourceTree(commit));

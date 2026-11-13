@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
 import { commandOutput } from "./output.mjs";
+import { describeK6, k6Image } from "../load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -124,7 +125,6 @@ async function portOf(name) {
 }
 const fixtureDir = join(here, "fixtures");
 const nodeImage = "node:24-bookworm-slim";
-const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
 const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
@@ -320,8 +320,7 @@ try {
   save();
   if (!summary.checksPassed) throw new Error("parity failed; no app will be load-tested");
   if (!options.checkOnly) {
-    const k6 = JSON.parse(await docker(["image", "inspect", k6Image]).catch(async () => { await docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") }); return docker(["image", "inspect", k6Image]); }))[0];
-    summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
+    summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
