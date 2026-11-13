@@ -1,8 +1,8 @@
 # The toolchain alone, which bench/fullstack/build.mjs builds the app with.
-FROM golang:1.27.3-alpine AS tools
+FROM golang:1.27.4-alpine AS tools
 WORKDIR /src
 # The templ CLI at the same version as the templ module in go.mod; it writes the *_templ.go files.
-RUN go install github.com/a-h/templ/cmd/templ@v0.3.1100
+RUN go install github.com/a-h/templ/cmd/templ@v0.3.1118
 
 FROM tools AS build
 COPY go.mod go.sum ./

@@ -295,12 +295,55 @@ defmodule ItemPage.MarketplaceTest do
           email: "#{n}@test",
           target_minor: n
         })
-      end, max_concurrency: 8)
+      end,
+      max_concurrency: 8
+    )
     |> Enum.each(fn result -> assert {:ok, :ok} = result end)
 
     alerts = ItemPage.MarketplaceAlerts.list(session_id)
     assert length(alerts) == 80
     assert length(Enum.uniq_by(alerts, & &1.email)) == 80
     assert ItemPage.MarketplaceAlerts.list(nil) == []
+  end
+
+  test "native form changes retain edits without accepting an alert" do
+    session_id = Base.encode64(:crypto.strong_rand_bytes(32))
+
+    socket = %Phoenix.LiveView.Socket{
+      assigns: %{
+        __changed__: %{},
+        item_id: "item_1",
+        locale: "fr-FR",
+        alert_session: session_id,
+        email: "",
+        target: "",
+        message: ""
+      }
+    }
+
+    {:noreply, changed} =
+      ItemPageWeb.MarketplaceAlertLive.handle_event(
+        "change",
+        %{"email" => "editing@example.test", "target_price" => "12,50"},
+        socket
+      )
+
+    assert changed.assigns.email == "editing@example.test"
+    assert changed.assigns.target == "12,50"
+    assert changed.assigns.message == ""
+    assert ItemPage.MarketplaceAlerts.list(session_id) == []
+
+    {:noreply, saved} =
+      ItemPageWeb.MarketplaceAlertLive.handle_event(
+        "save",
+        %{"email" => changed.assigns.email, "target_price" => changed.assigns.target},
+        changed
+      )
+
+    assert saved.assigns.message =~ "editing@example.test"
+
+    assert ItemPage.MarketplaceAlerts.list(session_id) == [
+             %{item_id: "item_1", email: "editing@example.test", target_minor: 1250}
+           ]
   end
 end

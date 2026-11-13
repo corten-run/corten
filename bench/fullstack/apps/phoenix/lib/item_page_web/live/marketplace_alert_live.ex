@@ -17,6 +17,14 @@ defmodule ItemPageWeb.MarketplaceAlertLive do
      )}
   end
 
+  def handle_event("change", params, socket) do
+    {:noreply,
+     assign(socket,
+       email: if(is_binary(params["email"]), do: params["email"], else: ""),
+       target: if(is_binary(params["target_price"]), do: params["target_price"], else: "")
+     )}
+  end
+
   def handle_event("save", params, socket) do
     record = Marketplace.get(socket.assigns.item_id) || raise ItemPageWeb.NotFound
     email = Map.get(params, "email", "")
@@ -45,7 +53,14 @@ defmodule ItemPageWeb.MarketplaceAlertLive do
     ~H"""
     <section class="marketplace__alert">
       <h2>{@t["alert"]}</h2>
-      <form method="post" action={~p"/marketplace/#{@locale}/#{@item_id}?#{@query}"} phx-submit="save">
+      <form
+        id="marketplace-alert-form"
+        phx-hook="MarketplaceAlert"
+        method="post"
+        action={~p"/marketplace/#{@locale}/#{@item_id}?#{@query}"}
+        phx-change="change"
+        phx-submit="save"
+      >
         <input type="hidden" name="_csrf_token" value={@csrf_token} />
         <label>{@t["email"]} <input name="email" type="email" value={@email} /></label>
         <label>{@t["target"]}

@@ -9,6 +9,14 @@ the same form's action and CSRF token keep ordinary no-JS POSTs working. The res
 of the read-only controller/HEEx page and numeric JSON route remain unchanged.
 The LiveView retains submitted email/target values after accepted and rejected
 actions, so the next localized validation uses the actual native form state.
+The form has a stable ID and `phx-change` handler for native LiveView form
+recovery. LiveView 1.2.13 skips recovery on the first join. A native
+`dom.onBeforeElUpdated` callback therefore copies only dirty email/target values
+into that initial patch, including blurred edits. The form's native mounted hook
+then synchronizes those edits through the same non-writing `change` event.
+After mount, the callback no longer preserves values against server patches;
+rejoins use LiveView's ordinary form recovery. No subtree ignores, replacement
+form transport or changes to the normal 2,500 ms long-poll fallback are involved.
 
 `MARKETPLACE_SOURCE=fixture` loads `MARKETPLACE_FIXTURE_PATH` once at startup
 (default `/fixtures/marketplace.json`). Otherwise each request reads one record
@@ -55,6 +63,7 @@ From the repository root, with Playwright installed and the native image running
 
 ```sh
 node bench/fullstack/apps/rails/test/native-alerts.mjs phoenix http://localhost:8080
+node bench/fullstack/apps/phoenix/test/native-preconnect.mjs http://localhost:8080
 ```
 
 This checks actual native LiveView events, independent HTTP readbacks with the
@@ -64,3 +73,11 @@ Its independent HTTP probes explicitly close connections because Bandit may clos
 native exception responses (CSRF rejection or missing item); Playwright must not
 pool that socket for the next request. No POST is retried, and browser forms and
 LiveView keep their ordinary native transports and security checks.
+
+The preconnection regression uses the same edge fixture as `native-alerts.mjs`.
+In EN/FR it compares ordinary no-JS forms, normally connected LiveViews and a
+real WebSocket with its join reply held while both inputs are filled and blurred.
+It checks retained values, no pre-submit mutation, real native save and independent
+readback. Delayed cases also disconnect/reconnect the native socket with blurred
+edits, reject an invalid recovered target, and accept a later valid edit without
+reloading or hiding subsequent server updates.
