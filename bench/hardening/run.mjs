@@ -11,7 +11,7 @@ import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits,
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { payload } from "./probe.mjs";
 import { emissionIdentity } from "./receipts.mjs";
-import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind } from "./lifecycle.mjs";
+import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalHealthPaths } from "./lifecycle.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -32,7 +32,7 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) if (!settling.has(child)) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 2, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 3, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false } = {}) {
@@ -114,7 +114,7 @@ export async function run(args) {
       "-v", `${dependencies}:/repo/node_modules:ro`, ...fixture, "-v", `${out}:/results`,
       ...(existsSync(cert) ? ["-e", "NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "-e", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : []),
       "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", tools.checker.Id, "node", ...args]);
-    try { await docker(["start", "-a", name], { timeout, file: join(out, file) }); }
+    try { return await docker(["start", "-a", name], { timeout, file: join(out, file) }); }
     finally { await remove(name); }
   }
   async function ready(namespace, out, image) {
@@ -144,6 +144,7 @@ export async function run(args) {
       stage = "production-qualification";
       await sidecar(`${prefix}-qualification`, appName, ["/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json"], out, "qualification.log", 8 * 60000);
       const qualification = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+      let edgeQualification;
       cell.nativeMissingFeatures = qualification.missing;
       stage = "native-controls";
       await sidecar(`${prefix}-native-controls`, appName, ["/repo/bench/hardening/native.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json", "/results/native-controls.json"], out, "native-controls.log", 90000);
@@ -168,7 +169,7 @@ export async function run(args) {
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;
         stage = "edge-production-qualification";
         await sidecar(`${prefix}-edge-qualification`, edgeName, ["/repo/bench/hardening/tls-qualification.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json"], out, "edge-qualification.log", 8 * 60000);
-        const edgeQualification = validateQualification(JSON.parse(readFileSync(join(out, "edge-qualification.json"), "utf8")));
+        edgeQualification = validateQualification(JSON.parse(readFileSync(join(out, "edge-qualification.json"), "utf8")));
         cell.edgeMissingFeatures = edgeQualification.missing;
         // The edge is a distinct deployment and must itself pass the complete content/browser gate.
         stage = "edge-parity";
@@ -192,6 +193,7 @@ export async function run(args) {
       }
       const deployment = { mode: cell.mode, countAllProcesses: true, processes: processList.map(({ containerId, ...p }) => p) };
       settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment,
+        terminalHealthPaths: terminalHealthPaths(qualification, edgeQualification),
         emissionPlan: budget.attack.scheduledAtMs.map((_, index) => emissionIdentity(payload(cell.phase, index, target, budget.attack, form), cell.phase)),
         effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
       verifyNativeLimits(settings, Object.fromEntries(targets.map((t) => [t.id, { before: snapshot[t.id].before, after: snapshot[t.id].before, events: [] }])));
@@ -211,12 +213,17 @@ export async function run(args) {
       lifecycle = {};
       stage = "native-lifecycle";
       for (const t of targets) {
+        const path = settings.terminalHealthPaths[t.role], running = (await inspect(t.name)).State.Running;
+        const base = t.role === "proxy" ? "https://localhost:8080" : "http://127.0.0.1:8080";
+        const health = !running ? { path, response: null, unavailable: "not-running" } : path === null ? { path, response: null }
+          : JSON.parse(await sidecar(`${prefix}-${t.id}-health`, t.name,
+            ["/repo/bench/hardening/lifecycle.mjs", base, path, String(budget.recovery.requestTimeoutMs)], out, `${t.id}-terminal-health.json`, 15000));
         const after = await inspect(t.name);
         const until = new Date().toISOString();
         const eventsText = await docker(["events", "--since", clock.wallAtStart, "--until", until, "--filter", `container=${t.info.Id}`, "--format", "{{json .}}"]);
         const events = eventsText ? eventsText.split("\n").map((line) => JSON.parse(line)) : [];
         const top = after.State.Running ? await docker(["top", t.name, "-eo", "pid,ppid,comm,args"]) : null;
-        lifecycle[t.id] = { ...snapshot[t.id], after, events, top }; json(join(out, `${t.id}-lifecycle.json`), lifecycle[t.id]);
+        lifecycle[t.id] = { ...snapshot[t.id], after, events, top, health }; json(join(out, `${t.id}-lifecycle.json`), lifecycle[t.id]);
         if (t.role === "upstream" && cell.source === "fixture") assert.ok(after.State.Running && after.State.StartedAt === t.info.State.StartedAt, "idle fixture upstream apparatus stopped/restarted");
       }
     } catch (e) { error = e; }

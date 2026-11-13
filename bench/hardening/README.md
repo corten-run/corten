@@ -12,6 +12,7 @@ node bench/hardening/run.mjs w1 --review approved-profile-reference --build
 node bench/hardening/verify.mjs bench/hardening/results/w1
 node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
 node bench/hardening/verify-network.mjs
+node bench/hardening/verify-health.mjs
 ```
 
 The dispatcher interface is `export async function run(args)`, where `args` is
@@ -42,16 +43,34 @@ Its alternatives list is empty until an actual native alternative has its own
 source/config/process-budget identity and passes the same complete gates. No
 alternative is presumed qualified and no default is weakened to fill that list.
 `nativeControlsVersion: 1` requires additional raw controls and replay validation.
-`semanticReceiptsVersion: 2` binds native client release to the reviewed release
-boundary (within the existing `maxWindowDriftMs`), requires full-duration trickle
-counts and cadence (within the existing `maxStartLagMs`), and rejects completed
-legitimate responses beyond the unchanged 600 ms deadline or their window.
-`lifecycleVersion: 2` requires terminal recovery of the application, edge proxy
-and API-source upstream, not only a successful earlier HTTP request. Verification
-rejects older producer versions explicitly; historical evidence is never backfilled.
+`semanticReceiptsVersion: 2` binds both native target closure and client release
+to the reviewed release deadline (within the existing `maxWindowDriftMs`), bounds
+establishment by the 2,000 ms connection timeout or release, whichever is earlier
+(within the existing `maxStartLagMs`), requires full-duration trickle counts and
+cadence, and rejects completed legitimate responses beyond the unchanged 600 ms
+deadline or their window.
+`lifecycleVersion: 3` requires terminal recovery of the application, edge proxy
+and API-source upstream, not only a successful earlier HTTP request. After the
+timed probe and its receiving controls finish, separate short-lived observers in
+each service's own network namespace request its native liveness path (the API
+upstream's `/health`). Paths are bound to direct/effective production qualification;
+there is no fallback endpoint. Complete, error-free HTTP 200 within 600 ms and
+the subsequent Docker running/health state must both support recovery. Docker
+`unhealthy`/`starting`, a terminal 503, timeout/reset or missing observation cannot
+establish recovery or numeric qualification. A missing native liveness path stays
+an explicit gap. No Docker healthcheck is installed or changed; absent checks are
+`not-configured`, not invented healthy results. Terminal target failures remain
+target-capacity outcomes; failure of the idle fixture upstream remains apparatus.
+Verification rejects older producer versions explicitly; historical evidence is
+never backfilled.
 `review-regressions.mjs CELL` independently replays retained API/edge slow-body
 bytes and mutates them in memory to exercise these gates. It does not upgrade
 the old capture or establish fresh native qualification.
+`verify-health.mjs` is a finite real-Docker control: a labeled local Node service
+stays running while its actual healthcheck turns unhealthy and its terminal HTTP
+probe returns 503. Each observation independently blocks recovery for the three
+critical roles. This is not native framework evidence. The control removes its
+container and volumes; it publishes no ports and changes no shared images.
 
 Each phase starts fresh native application and upstream containers. Production
 qualification uses the unchanged `bench/marketplace/qualify.mjs` infrastructure.

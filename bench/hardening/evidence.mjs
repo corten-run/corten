@@ -143,7 +143,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   const established = attack.filter((r) => r.established), closed = established.filter((r) => r.targetClosedAtMs !== null);
   const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
   const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
-  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle, source);
+  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle, source, settings.terminalHealthPaths);
   const rejected = established.filter((r) => defensiveRejection(settings.phase, r));
   const missing = ["slow-headers", "slow-bodies", "idle-connections"].includes(settings.phase) && established.length > 0 && closed.length === 0;
   // Closing a slow reader is not proof it reached write backpressure. No generic cap/timeout attribution.
