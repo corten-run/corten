@@ -40,6 +40,16 @@ defmodule NativeLive.Screen do
 
   def handle_event("snapshot", _, socket), do: {:noreply, snapshot(socket)}
 
+  def handle_event("pause", _, socket) do
+    :ok = Store.call({:pause, self(), true})
+    {:reply, %{paused: true}, socket}
+  end
+
+  def handle_event("resume", _, socket) do
+    :ok = Store.call({:pause, self(), false})
+    {:reply, %{paused: false}, socket}
+  end
+
   def handle_event("acknowledge", observed, socket) do
     :ok = Store.call({:ack, self(), observed})
     {:noreply, socket}

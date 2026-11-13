@@ -218,4 +218,70 @@ defmodule NativeLive.StoreTest do
     assert home.resp_body =~ "data-phx-session="
     assert home.resp_body =~ "csrf-token"
   end
+
+  test "native publication credit pauses actual delivery without skipping the authoritative write" do
+    reader()
+    :ok = Store.call({:pause, self(), true})
+    assert publish(1).seq == 1
+    assert Store.call(:snapshot).through == 1
+    assert Store.call(:resources).queueEvents == 1
+    assert Store.call(:resources).inventory.pausedConsumers == 1
+    refute_receive {:parity_event, _, _, _}, 20
+    :ok = Store.call({:pause, self(), false})
+    assert_receive {:parity_event, _, "applied", %{through: 1, count: 1}}
+    assert Store.call({:client, "browser"}).count == 0
+    ack(1, 1)
+    assert Store.call({:client, "browser"}).count == 1
+    assert Store.call(:resources).inventory.pausedConsumers == 0
+  end
+
+  test "per-consumer cleanup leaves a monitored peer connected and receiving" do
+    parent = self()
+
+    readers =
+      for id <- ["one", "peer"] do
+        spawn(fn ->
+          reader(id)
+          send(parent, {:ready, self()})
+
+          receive do
+            :stop ->
+              :ok
+
+            {:parity_event, event, disposition, state} ->
+              send(parent, {:delivery, id, event, disposition, state.count})
+              receive do: (:stop -> :ok)
+          end
+        end)
+      end
+
+    for pid <- readers, do: assert_receive({:ready, ^pid})
+    [one, peer] = readers
+    ref = Process.monitor(one)
+    send(one, :stop)
+    assert_receive {:DOWN, ^ref, :process, ^one, _}
+    wait_consumer_empty("one", 100)
+    resources = Store.call(:resources)
+    assert resources.connections == 1
+    assert resources.subscriptions == 1
+    assert resources.inventory.consumers["peer"].connections == 1
+    publish(1)
+    assert_receive {:delivery, "peer", %{"seq" => 1}, "applied", 1}
+    send(peer, :stop)
+    wait_empty(100)
+  end
+
+  defp wait_consumer_empty(id, attempts) do
+    owned = Store.call(:resources).inventory.consumers[id]
+
+    if owned.connections > 0 do
+      assert attempts > 0
+      Process.sleep(5)
+      wait_consumer_empty(id, attempts - 1)
+    else
+      assert owned.subscriptions == 0
+      assert owned.pendingTasks == 0
+      assert owned.queueEvents == 0
+    end
+  end
 end

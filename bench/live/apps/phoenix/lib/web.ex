@@ -1,6 +1,7 @@
 defmodule NativeLive.Session do
   import Plug.Conn
   def init(options), do: options
+  def extra(conn), do: %{"client" => get_session(conn, "client")}
 
   def call(conn, _),
     do:
@@ -28,7 +29,9 @@ defmodule NativeLive.Router do
 
   scope "/" do
     pipe_through :browser
-    live "/", NativeLive.Screen
+    live_session :native, session: {NativeLive.Session, :extra, []} do
+      live "/", NativeLive.Screen
+    end
   end
 
   # Synthetic publisher controls are not browser session actions.

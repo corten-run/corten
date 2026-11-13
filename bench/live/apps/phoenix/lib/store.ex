@@ -107,6 +107,7 @@ defmodule NativeLive.Store do
             count: 0,
             replay: :queue.from_list(replay),
             inflight: false,
+            paused: false,
             overflowed: false
           }
 
@@ -114,6 +115,7 @@ defmodule NativeLive.Store do
 
           {:reply,
            %{
+             consumer: client,
              from: from,
              status: if(expired, do: "expired", else: "accepted"),
              needs_snapshot: not state.initialized,
@@ -129,6 +131,15 @@ defmodule NativeLive.Store do
   end
 
   def handle_call({:client, client}, _, s), do: {:reply, Map.fetch!(s.clients, client), s}
+
+  def handle_call({:pause, pid, paused}, _, s) when is_boolean(paused) do
+    if Map.has_key?(s.readers, pid) do
+      s = put_in(s.readers[pid].paused, paused)
+      {:reply, :ok, pump(s, pid)}
+    else
+      {:reply, {:error, "unknown consumer"}, s}
+    end
+  end
 
   def handle_call(:snapshot, _, s) do
     {:reply, snapshot(s), %{s | reads: s.reads + 1}}
@@ -300,7 +311,7 @@ defmodule NativeLive.Store do
 
   defp pump(s, pid) do
     case s.readers[pid] do
-      %{inflight: false, overflowed: false} = reader when not s.held ->
+      %{inflight: false, overflowed: false, paused: false} = reader when not s.held ->
         {event, reader} =
           case :queue.out(reader.replay) do
             {{:value, event}, rest} ->
@@ -352,6 +363,22 @@ defmodule NativeLive.Store do
   defp resources(s) do
     readers = Map.values(s.readers)
 
+    consumers =
+      (Map.keys(s.clients) ++ Enum.map(Map.values(s.connections), & &1.client))
+      |> Enum.uniq()
+      |> Map.new(fn id ->
+        owned = Enum.filter(s.readers, fn {pid, _} -> s.connections[pid].client == id end)
+
+        {id,
+         %{
+           subscriptions: length(owned),
+           connections:
+             Enum.count(s.connections, fn {_, connection} -> connection.client == id end),
+           pendingTasks: length(owned),
+           queueEvents: Enum.sum(Enum.map(owned, fn {_, reader} -> reader.count end))
+         }}
+      end)
+
     %{
       subscriptions: map_size(s.readers),
       connections: map_size(s.connections),
@@ -370,6 +397,8 @@ defmodule NativeLive.Store do
         processes: :erlang.system_info(:process_count)
       },
       inventory: %{
+        consumers: consumers,
+        pausedConsumers: Enum.count(readers, & &1.paused),
         inflightEvents: Enum.count(readers, & &1.inflight),
         inflightLimitPerReader: 1,
         overflowSlotsLimit: 1,
