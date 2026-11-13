@@ -94,6 +94,18 @@ jobs:
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      - name: Test native Express alert persistence and rejected writes
+        if: matrix.app == 'express'
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund --prefix bench/fullstack/apps/express
+          node --test bench/fullstack/apps/express/marketplace.test.mjs
+      - name: Test native Razor alert persistence and render failures
+        if: matrix.app == 'aspnet'
+        run: >-
+          docker run --rm
+          -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
+          mcr.microsoft.com/dotnet/sdk:10.0
+          dotnet test tests/Marketplace.Tests.csproj -c Release
       - uses: actions/upload-artifact@v6
         if: always()
         with:

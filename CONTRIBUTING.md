@@ -22,6 +22,7 @@ examples/card-market/ A trading-card store (home, categories, item pages) with e
 examples/seller-desk/ A seller's inventory desk: a client-heavy screen built with handlers
 examples/listings-feed/ A seller's listings kept live by a feed on corten-cluster, served by several instances, and the failover benchmark; smoke.mjs tests the page
 examples/ui-gallery/ corten-ui and every UI kit component; smoke.mjs tests them in a browser
+examples/corten-site/ Corten's own site, a page that demonstrates itself, with the files that deploy it; smoke.mjs tests it
 docs/              Guides (docs/guide), design decisions and limits, surfaces (architecture.md)
 skills/corten/     The agent skill for building apps on Corten
 bench/fullstack/     Historical marketplace implementations and diagnostic scripts; localization work differs
@@ -58,8 +59,10 @@ the framework itself.
 ## Checks
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
-PowerShell from the repository root; in another shell use `$PWD` for `${PWD}` and
-`checkout=$(basename "$PWD")` for the first line).
+PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
+`checkout=$(basename "$PWD")` for the first line, and, for the three lines from `$env:SITE_HELD` to
+`Remove-Item`, the one line
+`SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium`).
 
 Each checkout builds into its own volumes, named after its folder (`corten-target-<folder>`,
 `corten-msrv-target-<folder>`), so two checkouts or worktrees never share one: every checkout is
@@ -97,6 +100,15 @@ docker build -f examples/ui-gallery/Dockerfile -t corten-ui-gallery .
 docker run -d --name corten-ui-gallery -p 18482:8080 corten-ui-gallery
 node examples/ui-gallery/smoke.mjs http://localhost:18482
 docker rm -f corten-ui-gallery
+docker build -f examples/corten-site/Dockerfile -t corten-site .
+docker run -d --name corten-site -p 18488:8080 corten-site
+node examples/corten-site/smoke.mjs http://localhost:18488
+docker rm -f corten-site
+docker run -d --name corten-site --cpus 1 --memory 512m -p 18488:8080 corten-site
+$env:SITE_HELD = "1"
+node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+Remove-Item Env:SITE_HELD
+docker rm -f corten-site
 docker build -f examples/seller-desk/Dockerfile -t corten-seller-desk .
 docker run -d --name corten-seller-desk -p 18484:8080 corten-seller-desk
 node examples/seller-desk/smoke.mjs http://localhost:18484

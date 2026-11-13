@@ -1,0 +1,21 @@
+/* Lost: the error page, a plate of its own. */
+.lost {
+  display: grid;
+  align-content: center;
+  gap: 1.25rem;
+  min-height: 100svh;
+  padding: 4rem var(--gutter);
+  background: linear-gradient(160deg, var(--rust) 0%, var(--rust-deep) 70%, #4a2114 100%);
+}
+
+.title {
+  font-size: clamp(4rem, 16vw, 14rem);
+  color: var(--pit);
+}
+
+.detail {
+  max-width: 100%;
+  padding: 1rem;
+  overflow-x: auto;
+  background: var(--ink);
+}

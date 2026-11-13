@@ -1,0 +1,17 @@
+# Runs boot.sh on a machine made by main.tf until it has set the machine up, then never again.
+# A run that fails (a certificate refused, a package mirror out of reach) is tried again after a
+# quarter of an hour: Let's Encrypt allows five failed validations of a name an hour.
+[Unit]
+Description=Sets this machine up to serve the site, once the site's name reaches it
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/corten-site-boot.done
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /root/deploy/boot.sh
+Restart=on-failure
+RestartSec=900
+
+[Install]
+WantedBy=multi-user.target

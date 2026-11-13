@@ -1,0 +1,44 @@
+/* Steel: the server's layer. */
+.live,
+.sent,
+.binary {
+  display: grid;
+  align-items: start;
+  gap: clamp(1.5rem, 3vw, 3rem);
+  margin-bottom: clamp(2.75rem, 6.5svh, 5rem);
+}
+
+.live {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+}
+
+.sent {
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+}
+
+.binary {
+  grid-template-columns: auto minmax(0, 32rem);
+  align-items: center;
+  justify-content: start;
+}
+
+@media (max-width: 62rem) {
+  .live,
+  .sent,
+  .binary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The binary's size, struck into the steel at the scale of a plate marking. */
+.weight {
+  color: var(--bone);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(5rem, 15vw, 13rem);
+  line-height: 0.82;
+  text-shadow: 0 -2px 0 rgb(0 0 0 / 60%);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
