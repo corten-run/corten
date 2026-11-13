@@ -142,14 +142,15 @@ each of the other names to reach it and asks for one certificate that holds them
 certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
 back only itself. The machine says which name it waits for, or why a certificate was refused
 (`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
-Taking the names on runs `provision.sh` a second time, which writes the deploy key's file and
-the deploy's `sudo` rule again: a deploy that reaches the machine in that instant can fail,
-and is run again. That has not been seen; where the names are there already, the second run
-is over well before the first release is built.
-After an apply the workflow asks the machine for each name, for twenty minutes where it made
-the machine (long enough to see one new try), and fails where one does not send its visitors
-to the site; the machine goes on trying after that. Changing the list replaces the droplet on
-the next apply.
+Taking the names on runs `provision.sh` a second time, which writes the deploy key's file,
+the deploy's `sudo` rule and the service's environment file again: a deploy that reaches the
+machine in the instant of one of those writes can fail, and is run again. That has not been
+seen; where the names are there already, the second run is over well before the first release
+is built. After an apply the workflow asks the machine for each name, for twenty minutes in
+all where it made the machine, and fails where one does not send its visitors to the site.
+Twenty minutes is by reckoning a little more than one new try takes, not a time that was
+waited out: a run can end red for a name the machine takes on minutes later, and the machine
+goes on trying either way. Changing the list replaces the droplet on the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
@@ -458,9 +459,11 @@ refused a name with a dot at either end or two together and `-n`. `boot.sh`, sta
 machine that held the site's certificate and nothing else of the site (as after a first step
 that ended early), set the site up without asking for a certificate, answered for it while it
 waited for a late name, and then went on as above; run again after it had finished, it asked
-for none. The workflow's step gave up on a name after a minute where the machine was not made
-in that run, and passed after a minute where it was and the name was taken on half a minute
-in; its twenty minutes were not waited out. A renewal of a certificate that had replaced the
+for none. The workflow's step ended in failure 60 seconds in where the machine was not made
+in that run and lacked the name, and passed 61 seconds in where it was and `provision.sh` was
+started with the name 30 seconds in (it asks each 20 seconds); its twenty minutes were not
+waited out. By hand a name given twice is not refused: nginx warns and ignores the second
+(seen by a review), and the workflow's path refuses it. A renewal of a certificate that had replaced the
 site's (`certbot renew --dry-run`, against Pebble) passed for all three names.
 
 On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on

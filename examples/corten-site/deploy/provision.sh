@@ -1,7 +1,7 @@
 #!/bin/sh
 # Sets up a fresh Ubuntu 24.04 machine to serve the site: nginx with a Let's Encrypt certificate
 # in front, the site as a systemd service behind it, and a `deploy` user the workflow ships
-# releases as. Run once, as root, from this directory on the machine (README.md here):
+# releases as. Run as root, from this directory on the machine (README.md here):
 #   sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>' ['<names that redirect>']]
 # The last argument is the other names that send their visitors to the site's, with spaces
 # between them, such as 'www.example.com': each must reach this machine already.
