@@ -1,0 +1,140 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 524B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for mcr.microsoft.com/dotnet/sdk:10.0
+#2 DONE 0.1s
+
+#3 [internal] load metadata for mcr.microsoft.com/dotnet/aspnet:10.0
+#3 DONE 0.4s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 61B done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 66.00kB done
+#5 DONE 0.0s
+
+#6 [build 6/7] ADD --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js wwwroot/htmx.min.js
+#6 DONE 0.1s
+
+#7 [stage-1 1/3] FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:bfd912c83295ce66d4b706ebb8541b9f14259b0e76fbb88b2751f58ce2399d2e
+#7 resolve mcr.microsoft.com/dotnet/aspnet:10.0@sha256:bfd912c83295ce66d4b706ebb8541b9f14259b0e76fbb88b2751f58ce2399d2e 0.0s done
+#7 sha256:22d6c03b5fd089637da59148309ebf59e100aba4568f9c7a5bffef18f48b8083 158B / 158B 0.0s done
+#7 sha256:f4520a21f3bde37067edbd4fba642a137f671a83f10b2e526fa86c524b177345 3.61kB / 3.61kB 0.0s done
+#7 sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97 5.24MB / 13.11MB 0.2s
+#7 sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97 8.39MB / 13.11MB 0.3s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 3.15MB / 37.60MB 0.2s
+#7 sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575 5.24MB / 17.16MB 0.2s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 4.19MB / 29.79MB 0.2s
+#7 sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97 11.53MB / 13.11MB 0.5s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 6.29MB / 37.60MB 0.3s
+#7 sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575 9.44MB / 17.16MB 0.3s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 8.39MB / 29.79MB 0.3s
+#7 sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97 13.11MB / 13.11MB 0.5s done
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 13.63MB / 37.60MB 0.6s
+#7 sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575 13.63MB / 17.16MB 0.5s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 12.58MB / 29.79MB 0.5s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 18.69MB / 37.60MB 0.8s
+#7 sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575 17.16MB / 17.16MB 0.6s done
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 16.78MB / 29.79MB 0.6s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 20.97MB / 37.60MB 0.9s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 20.97MB / 29.79MB 0.8s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 24.12MB / 37.60MB 1.1s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 24.12MB / 29.79MB 0.9s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 27.26MB / 37.60MB 1.2s
+#7 sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 29.79MB / 29.79MB 1.1s done
+#7 extracting sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 31.46MB / 37.60MB 1.4s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 34.60MB / 37.60MB 1.5s
+#7 sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 37.60MB / 37.60MB 1.6s done
+#7 extracting sha256:f8cdc4d30f6153f5575f21aec13f25c6825fb4433f788e78c946cd460e2c6d9f 0.9s done
+#7 extracting sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575
+#7 extracting sha256:2134cabc5f328f9c3919aeef221f7171dbb93bbe2a41e7bc01281c2a6653d575 0.4s done
+#7 extracting sha256:f4520a21f3bde37067edbd4fba642a137f671a83f10b2e526fa86c524b177345 0.0s done
+#7 extracting sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc
+#7 extracting sha256:5234006b2751f6b28f7df63972191876bbe82d1fede1677791f7702569dfd8fc 0.6s done
+#7 extracting sha256:22d6c03b5fd089637da59148309ebf59e100aba4568f9c7a5bffef18f48b8083 done
+#7 extracting sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97
+#7 extracting sha256:fdbd9a0d3e999cfd510670f29092f7303d208d82fd4ed8d15f56691c1b28fa97 0.2s done
+#7 DONE 3.4s
+
+#8 [build 1/7] FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+#8 resolve mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb 0.0s done
+#8 sha256:12074025c48415b1e438e97bb114451bfe2fd2a9aec5c0c991f7d192166c943e 18.47MB / 18.47MB 0.6s done
+#8 sha256:7cf7cfa94d9067a9f9f6fc01f4f78dc53560f51f01cb14074457d3e830f9fc46 531B / 531B 0.0s done
+#8 sha256:fea22b9d2d76fc11091e3d68a0c1c7a1b15a907c0b56ae159d74ec956cba6ea7 18.59MB / 18.59MB 0.9s done
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 62.91MB / 197.32MB 2.3s
+#8 sha256:67d9bba9ad22e4d10f39e0082c8589c0524d1190d56ead35f805d524f81b2c8d 26.97MB / 26.97MB 1.1s done
+#8 extracting sha256:67d9bba9ad22e4d10f39e0082c8589c0524d1190d56ead35f805d524f81b2c8d
+#8 ...
+
+#9 [stage-1 2/3] WORKDIR /app
+#9 DONE 0.2s
+
+#8 [build 1/7] FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 73.40MB / 197.32MB 2.7s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 83.89MB / 197.32MB 3.0s
+#8 extracting sha256:67d9bba9ad22e4d10f39e0082c8589c0524d1190d56ead35f805d524f81b2c8d 0.9s done
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 94.37MB / 197.32MB 3.3s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 106.95MB / 197.32MB 3.8s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 118.49MB / 197.32MB 4.2s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 132.12MB / 197.32MB 4.7s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 143.65MB / 197.32MB 5.1s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 155.19MB / 197.32MB 5.6s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 166.72MB / 197.32MB 6.0s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 179.31MB / 197.32MB 6.5s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 191.89MB / 197.32MB 6.9s
+#8 sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 197.32MB / 197.32MB 7.2s done
+#8 extracting sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e
+#8 extracting sha256:ed308b3f1c865e8137e77432f7b6a0215058eb6ab7f47b7c9740e76679a5411e 4.0s done
+#8 DONE 12.5s
+
+#8 [build 1/7] FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+#8 extracting sha256:fea22b9d2d76fc11091e3d68a0c1c7a1b15a907c0b56ae159d74ec956cba6ea7 0.1s done
+#8 DONE 12.6s
+
+#8 [build 1/7] FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+#8 extracting sha256:7cf7cfa94d9067a9f9f6fc01f4f78dc53560f51f01cb14074457d3e830f9fc46 0.0s done
+#8 extracting sha256:12074025c48415b1e438e97bb114451bfe2fd2a9aec5c0c991f7d192166c943e
+#8 extracting sha256:12074025c48415b1e438e97bb114451bfe2fd2a9aec5c0c991f7d192166c943e 0.4s done
+#8 DONE 13.0s
+
+#10 [build 2/7] WORKDIR /src
+#10 DONE 0.4s
+
+#11 [build 3/7] COPY ItemPage.csproj ./
+#11 DONE 0.0s
+
+#12 [build 4/7] RUN dotnet restore
+#12 0.934   Determining projects to restore...
+#12 2.176   Restored /src/ItemPage.csproj (in 826 ms).
+#12 DONE 2.2s
+
+#13 [build 5/7] COPY . .
+#13 DONE 0.0s
+
+#14 [build 6/7] ADD --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js wwwroot/htmx.min.js
+#14 DONE 0.0s
+
+#15 [build 7/7] RUN dotnet publish -c Release -o /out --no-restore
+#15 5.511   ItemPage -> /src/bin/Release/net10.0/ItemPage.dll
+#15 5.767   ItemPage -> /out/
+#15 DONE 5.8s
+
+#16 [stage-1 3/3] COPY --from=build /out ./
+#16 DONE 0.0s
+
+#17 exporting to image
+#17 exporting layers 0.1s done
+#17 exporting manifest sha256:c093c31b742453b47c368b2ccdeb6811caf5fad0376a501d4edd0dac0ac01145 done
+#17 exporting config sha256:7f482b843a2b04bba999208d76b51faeb02d9b58a94d2c4610d772decd876556 done
+#17 exporting attestation manifest sha256:cc642f5fc3163c16038a35d7225c38ad0c9acd30bee6385fd306354ef5bc55e3 done
+#17 exporting manifest list sha256:6451b4af4bfbb9829dca58a688777685305deeb66b71b18c8d48e993c43fff7e done
+#17 naming to docker.io/library/cb-marketplace-production-aspnet:latest done
+#17 unpacking to docker.io/library/cb-marketplace-production-aspnet:latest
+#17 unpacking to docker.io/library/cb-marketplace-production-aspnet:latest 1.9s done
+#17 DONE 2.0s

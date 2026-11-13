@@ -1,0 +1,29 @@
+
+
+  █ TOTAL RESULTS 
+
+    checks_total.......: 4502    300.101806/s
+    checks_succeeded...: 100.00% 4502 out of 4502
+    checks_failed......: 0.00%   0 out of 4502
+
+    ✓ marketplace status 200
+    ✓ marketplace content type
+
+    HTTP
+    http_req_duration..............: avg=547.34µs p(50)=536.91µs p(95)=686.12µs p(99)=763.65µs max=897.23µs
+      { expected_response:true }...: avg=547.34µs p(50)=536.91µs p(95)=686.12µs p(99)=763.65µs max=897.23µs
+    http_req_failed................: 0.00%  0 out of 2251
+    http_reqs......................: 2251   150.050903/s
+
+    EXECUTION
+    iteration_duration.............: avg=737.58µs p(50)=714.14µs p(95)=940.56µs p(99)=1.06ms   max=6.78ms  
+    iterations.....................: 2251   150.050903/s
+    vus............................: 0      min=0         max=0  
+    vus_max........................: 200    min=200       max=200
+
+    NETWORK
+    data_received..................: 14 MB  948 kB/s
+    data_sent......................: 384 kB 26 kB/s
+
+
+
