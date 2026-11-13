@@ -230,6 +230,11 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.functionalChecksPassed = evidence.steps.length === profile.steps.length && !evidence.failures.length;
     evidence.failures.push(...evidence.steps.flatMap((s) => s.lifecycleFailures.map((f) => `${s.action.kind}: ${f}`)));
     evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
+    if (evidence.nativeCleanup.after) try {
+      const terminalResources = await resources.checkpoint();
+      lifecycle.recordDocument({ observer: randomUUID(), scope: terminalResources.scope, url: { path: new URL(page.url()).pathname },
+        native: await page.evaluate(nativeDOM) }, terminalResources);
+    } catch (error) { evidence.gaps.push(`Terminal parser observation unavailable: ${error.message}`); }
     if (evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
