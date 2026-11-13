@@ -54,6 +54,24 @@ def malformed_records():
 
 @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
 class MarketplaceRecordTests(TestCase):
+    def test_transport_timeout_is_504_without_a_write_or_private_details(self):
+        client = Client(enforce_csrf_checks=True)
+        with patch("itempage.marketplace_views.source") as source:
+            source.get.return_value = RECORDS["item_1"]
+            client.get("/marketplace/en-US/item_1")
+            form = {"email": "timeout@example.test", "target_price": "12.50",
+                "csrfmiddlewaretoken": client.cookies["csrftoken"].value}
+            self.assertEqual(client.post("/marketplace/en-US/item_1", form).status_code, 200)
+            before = client.get("/api/alerts").json()
+            source.get.side_effect = requests.ReadTimeout("private upstream details")
+            for response in (client.get("/marketplace/en-US/item_1"), client.post("/marketplace/en-US/item_1", form)):
+                self.assertEqual(response.status_code, 504)
+                self.assertNotIn(b"private upstream", response.content)
+                self.assertIn("no-store", response["Cache-Control"])
+                self.assertEqual(client.get("/api/alerts").json(), before)
+            self.assertEqual(Session.objects.count(), 1)
+            self.assertEqual(Alert.objects.count(), 1)
+
     def test_incomplete_records_never_commit_and_valid_record_recovers(self):
         client = Client(enforce_csrf_checks=True, raise_request_exception=False)
         with patch("itempage.marketplace_views.source") as source:

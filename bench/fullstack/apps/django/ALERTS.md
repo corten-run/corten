@@ -44,9 +44,38 @@ documented in that app's README.
 
 ## Unreleased
 
+- Return a generic native 504 for the existing marketplace page Requests timeout,
+  without mutating alerts. The WSGI disconnect limitation below remains unresolved.
+
 - Add native database-session alert persistence and ordered, independent JSON
   readback while retaining Django security middleware and existing JS behavior.
 - Reject incomplete source records before alert writes, including fields silently
   tolerated by Django templates.
 - Enforce the record contract's numeric bounds, requested ID and per-list unique
   row IDs before writes, retaining read-only page and JSON behavior.
+
+## Page Request Lifetime Limit
+
+Both production representatives remain WSGI: default Gunicorn sync workers and
+matched Granian's WSGI interface. Their synchronous marketplace view uses Requests.
+There is no ASGI `http.disconnect` event in this view, and moving the blocking read
+to a thread does not make that upstream I/O cancellable when the client leaves.
+The native page still fails the mixed workload's 500 ms client-abort cleanup gate.
+No runtime/worker/loop switch or heartbeat response is used to hide that failure.
+
+The existing ten-second Requests inactivity timeout closes the upstream socket
+on a held-header timeout. The page now answers a generic native 504 in that case,
+instead of an unhandled 500; it does not append an alert. This is not an overall
+operation deadline: a continuously trickling response can exceed it. Record-JSON
+error handling remains unchanged. See [Requests' timeout semantics](https://requests.readthedocs.io/en/latest/user/quickstart/#timeouts).
+
+[Django's native async support](https://docs.djangoproject.com/en/6.1/topics/async/)
+provides disconnect cancellation for async views under ASGI. Taking that route
+would require an ASGI deployment, an async view and cancellable async outbound I/O,
+not merely wrapping Requests with `sync_to_async`. It would be an explicitly
+different configuration, not a demonstrated fix to these WSGI representatives.
+No such alternate contender or new HTTP dependency is introduced here.
+
+The real-socket probe in `../fastapi/page-lifetime.test.mjs` exercises all three
+locales in both production profiles and reports the remaining abort failures as
+failed tests, not skips. Setup is documented in that app's README.
