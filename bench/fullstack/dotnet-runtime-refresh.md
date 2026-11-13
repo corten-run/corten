@@ -61,9 +61,9 @@ Executable SHA-256: `3510777e6bfb0e9dad42d33f14a9b0eb917d6c9f9ba26bd700a37a4b9f4
 - Existing shared JSON gates against the Razor production image passed catalog-v1 and marketplace-v2 in both sources: all 500 records each, fixture zero reads, API one fresh read per request, reserialization, missing records and upstream errors/redirect handling.
 - Existing catalog browser gate in the catalog runner's default native profile passed both sources: 500 JSON records, 120 page checks and eight browser profiles per source, plus API freshness/error checks.
 - Existing marketplace browser gate in matched profile passed both sources: 500 JSON records, 264 page checks and 12 browser profiles per source, including native forms and API freshness/error checks.
-- Additional matched-profile catalog browser gates **failed in both sources** at `bench/catalog/check.mjs:182`: inline-style CSP violations with unchanged htmx loaded. No CSP, markup or gate was relaxed. This remains a combined-image integration check, not a qualified result; runtime causation was not established.
+- Initial additional matched-profile catalog browser gates **failed in both sources** at `bench/catalog/check.mjs:182`: inline-style CSP violations with unchanged htmx loaded. The follow-up below isolates the cause; this runtime-only image remains failing, not qualified.
 - The temporary Razor harness first probed nonexistent `/health`; that attempt failed before gates. It was corrected to the existing `/health/ready` for matched mode. Both attempt logs were retained.
-- Shared gate unit tests: 47/48 passed; the LiveView pre-fill readiness diagnostic test timed out in its own initial navigation at 500 ms. An unchanged focused rerun passed 1/1. The original suite is not reported as fully green.
+- Shared gate unit tests: 47/48 passed. The first failure was `LiveView pre-fill readiness retains the intended case and original failure` (`bench/marketplace/check.test.mjs:107`), duration 7611.8363 ms: `page.goto: Timeout 500ms exceeded`, navigating to `http://localhost/marketplace/fr-FR/item_1`, waiting until `load`, at line 113. The test sets its default timeout to 500 ms at line 110. This failed before the intended `alertReady` diagnostic assertion at line 114, not inside the ASP.NET app. An unchanged focused rerun passed 1/1 (test 9544.3363 ms, total 13275.4206 ms). It does not establish why the first navigation timed out, erase that failure, or make the original 47/48 suite green. No shared test was changed.
 
 Local ignored receipts are under `apps/aspnet-aot/tests/results/runtime-refresh/`:
 native-project logs, Razor gate results/raw responses, official metadata snapshots,
@@ -72,6 +72,103 @@ also retains `apps/aspnet-aot/tests/results/review-native-raw.ndjson`.
 These are development validation, not an official benchmark round or reusable
 combined-image provenance. No throughput, CPU or memory comparison was measured.
 Root-wide checks and independent review remain with parent integration.
+
+## Matched Catalog CSP Follow-up
+
+Fresh reproduction against the original .NET 11 production image failed in both
+fixture and API sources: `desktop-light`, JavaScript enabled, expected browser/
+resource errors `[]`, actual 15 identical inline-style CSP errors per source at
+`bench/catalog/check.mjs:182`. The blocked style hash was
+`sha256-faU7yAF8NxuMTNEwVmBz+VcYeIoBQ2EMHW3WaVxCvnk=`. Both attempts and the
+final nonzero assertion are retained in `csp-old-both-sources.log` and
+`razor-csp-old-matched-gates.json`; the checks were not filtered or weakened.
+
+The smallest control used the same native .NET 11 production page at
+`/catalog/record_1`, unchanged strict CSP and a fresh Chromium context per case:
+
+| Browser-side diagnostic variation | CSP events | Console errors |
+|---|---:|---:|
+| Original native response, htmx 2.0.11 | 1 | 1 |
+| Same response, only `includeIndicatorStyles:false` meta inserted | 0 | 0 |
+| Same response, only verified htmx 4.0.1 asset substituted | 0 | 0 |
+
+The event was `style-src-elem`, blocked URI `inline`, source
+`/htmx.min.6dpfg1qi0s.js:1`. Its injected CSS was exactly:
+
+```css
+.htmx-indicator{opacity:0;visibility: hidden} .htmx-request .htmx-indicator, .htmx-request.htmx-indicator{opacity:1;visibility: visible;transition: opacity 200ms ease-in}
+```
+
+Hashing that text yields the blocked hash above. These are diagnostic response/
+asset substitutions, not production qualifications. No meta configuration was
+added to the app. `csp-control.json` retains all three cases and identical policies.
+
+The old base and .NET 11 branch have identical `Program.cs` blob
+`1f476cddbd9365794889306baf5136126c7c2d46` and layout blob
+`a22579d36843b71664f886b4be194debfb2d5082`; all pages and browser scripts are
+unchanged. The original image's htmx asset SHA-256 is
+`d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`,
+the old base's exact Docker pin. The fullstack README's matched-tier ASP.NET
+description already records this indicator-style CSP violation from the old
+application. Together with the controlled reproduction, this identifies the
+preexisting htmx injection as the cause, not a .NET 11 compatibility regression.
+No .NET 10 binary was built or executed; this is not a cross-runtime binary A/B.
+
+The htmx owner was contacted before considering any markup change. Published
+[htmx 4.0.1 source](https://unpkg.com/htmx.org@4.0.1/dist/htmx.js) uses
+`CSSStyleSheet.replaceSync` and `document.adoptedStyleSheets` for indicators,
+instead of an inline style element. Its minified asset SHA-256 independently
+matched the owner's pin:
+`a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130`.
+No extra app workaround, CSP relaxation, htmx asset edit or markup edit is part
+of this .NET branch.
+
+A separate ignored production build context combines runtime commit
+`166b5437a35ca4b288f83aeac22277ac01bab1ce` with only the ASP.NET asset delta
+from `57764546bcc860aad36de48ca8245ca393306020` and the inherited-boost layout
+from `90aa7e2885d82a35cd0a28ede7c8813b38fc32a5`. Its layout is exactly the
+owner's blob `c079a5291f94f6e8987bc3fac1acb6b2f5b7dc2a`. The normal production
+Dockerfile built successfully using SDK 11.0.100 and ASP.NET 11.0.0 at the same
+MCR digests above; no old runtime was built. Control image:
+`sha256:354441ea169b84cbe5e18a6f43a4aa6d9eead7fbd2218b3171b5e33fd3fae31f`.
+It reports both runtime frameworks 11.0.0. Published `ItemPage.dll` SHA-256:
+`6e682c3e481959a30b63dda5bdd64f4ff8bb15a2a9f5d13b3a42fff760c2d959`.
+The local per-file source SHA-256 manifest is `combined-source-sha256.json`
+(SHA-256 `5891d1399181bc0a52a2f5a78d1ee050d18349bfb1fedfb7c6cd55b610cfec5c`).
+Build output is retained in `combined-build.log`.
+
+The actual combined production image passed all eight unmodified existing-gate
+invocations, exit 0: both JSON payloads, catalog browser and marketplace browser,
+each in fixture and API mode. Each JSON payload checked all 500 records per
+source. Catalog checked 500 records, 120 pages and eight browser profiles per
+source; marketplace checked 500 records, 264 pages and 12 browser profiles per
+source. API freshness, single reads, reserialization and upstream error checks
+also passed. Catalog's normal console/resource assertion now reports no CSP
+failure in either source; no errors were suppressed. Results and raw JSON are
+retained in `razor-htmx4-matched-gates.json`, `combined-gates.log` and the
+`razor-htmx4-*-raw.ndjson` receipts. The exact temporary harness is retained as
+`combined-gate-driver.mjs.txt`; diagnostic scripts are retained as text alongside
+their results. The copied build context was removed after retaining its per-file
+manifest and exact two-file patches (`combined-dockerfile.patch`,
+`combined-layout.patch`).
+
+The runtime-only htmx 2 image is still red in matched catalog mode. The CSP
+blocker is resolved by the separately owned htmx 4 migration in this combined
+control, not by a change to .NET or by relaxing the fair contract. Parent must
+merge both lanes and take fresh provenance from its final composed source.
+This local production control is not official grouped-run admission or a
+performance result. The previously verified native AOT image and separate
+native-live pin patch are unchanged.
+
+A separate browser probe against that native combined image confirmed catalog
+related navigation sent `HX-Request: true` and `HX-Boosted: true` without a document
+navigation and retained a per-document marker. Marketplace "show all" instead
+performed a full document navigation without either htmx header, preserving its
+native boost-disabled policy. There were zero console/page errors. Evidence:
+`boost-control.json` and `boost-control.log`. The first optional probe targeted
+the matrix runner's fixture container after it had been removed and got
+`net::ERR_CONNECTION_REFUSED`; the successful probe used its own dedicated
+container. This harness race is not an application result.
 
 ## Separate Native Live Patch
 
