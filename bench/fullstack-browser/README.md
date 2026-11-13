@@ -138,6 +138,47 @@ including real CSP failures and JS-enabled failures, still fail the action.
 
 ## Qualification Gaps
 
+### Saved Validation
+
+`verify.mjs` is the standalone, strict read-only replay entry point:
+
+```sh
+node bench/fullstack-browser/verify.mjs --folder bench/fullstack-browser/work/w1 --round w1 --commit <full-40-character-commit>
+```
+
+The equivalent API is `validateSaved({ folder, round, commit })` from `verify.mjs`.
+Relative folders resolve against the repository containing the validator, not the caller's
+working directory; absolute local folders may be relocated. The explicit commit must match
+the saved producer commit. No Browser, Docker, Git, remote service or installed browser
+package is required. Git replacement/graft configuration cannot affect replay because no
+Git query runs. On Windows, the stock PowerShell file-attribute reader also checks reparse
+tags without interpreting saved paths as code. Recorded external paths are never opened.
+
+Replay checks all ten candidates, all 24 current profiles and all ten native capture files,
+canonical producer JSON, fixture/plan/settings/options, dirty and image/build provenance,
+raw-case/capture hashes and manifest correspondence. It re-derives native DOM/request,
+resource retirement, no-JS/platform lifecycle and final browser/upstream conservation using
+the current proof functions and unchanged strict oracle. Stored derived summaries must
+match exactly. Links (including junctions, ancestors and hard links), network/device/ADS or
+traversal paths, non-regular files, extra/missing files and changing evidence are refused.
+
+`outcome: "invalid"` (CLI exit 2) means malformed, inconsistent or stale derived evidence.
+`outcome: "blocked"` (exit 1) means structurally consistent diagnostics with missing or
+failed qualification proof. A historical journal missing new receipts remains unknown;
+its old positive summaries are stale, not grandfathered. Replay never rewrites historical
+captures or updates their hashes. Tests may recompute summaries only in disposable copies.
+
+Both outcomes keep `qualificationPassed` and `readyForLoad` false. Current producers do not
+bundle independently authenticated source/commit receipts, raw process/configuration and
+isolation inspections, complete worker-network ownership or native app server-peer closure.
+Boolean coverage flags, a context close and unknown worker counts cannot replace those
+receipts. Runner source hashes are compared with local current sources, not authenticated
+as belonging to a Git commit. Browser binaries, response bytes and custom targets are not
+bundled for independent rehashing; build-log authenticity is not recorded. Absent proof stays blocked.
+The validator currently has no positive qualification path. It does not repair a producer,
+qualify a historical run or authorize load. Keep a saved folder immutable while replaying;
+identity/metadata checks detect changes but cannot lock out a hostile concurrent writer.
+
 The implementation performs native work even when a capability is missing. A DOM success
 message is never independent write evidence. An app with a real native alert store may
 configure `"readback": { "path": "/its-independent-store-read" }`; this must be a read-only,
