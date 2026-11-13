@@ -16,7 +16,7 @@ import * as nativeReplay from "./native-replay.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
-let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, abort, auditComplete = true;
+let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
@@ -66,8 +66,22 @@ mock.module("./host-observation.mjs", { namedExports: {
   verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
-  beginLifetime({ directory }) { mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}"); return { attach() {}, finish() { return evidence.tree(directory); } }; },
-  inspectLifetime(binding, invocation, directory) { return { status: mode === "complete" ? "verified" : "blocked", context: { bootId: "boot" }, manifestSha256: evidence.tree(directory).sha256 }; },
+  beginLifetime({ directory, command }) {
+    mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
+    return { attach() {}, finish(result) {
+      const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
+        unforced: !result.cancelled && !result.forced, leader: true };
+      if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
+      writeFileSync(join(directory, "terminal.json"), JSON.stringify(checks)); return evidence.tree(directory);
+    } };
+  },
+  inspectLifetime(binding, invocation, directory, expected) {
+    const checks = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    if (replayLifetimeFailure === expected.command) checks.accounting = false;
+    const complete = Object.values(checks).every(Boolean);
+    return { status: complete ? "verified" : "blocked", cleanupComplete: complete, checks,
+      context: { bootId: "boot" }, manifestSha256: evidence.tree(directory).sha256 };
+  },
   composeHostProof() { return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" }; },
 } });
 mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
@@ -120,7 +134,7 @@ const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true;
+  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
     bindings: groupNames.map((group) => ({ request: { group, round: `test${round}`, commit: "a".repeat(40) }, selection: { apps: ["corten", "selected-failure"] },
@@ -187,6 +201,29 @@ test("overlapping advance and semantic retry are refused", async () => {
   assert.equal(calls.length, 2);
 });
 
+for (const [name, command, checks] of [
+  ["fixture descendants remain", 0, { terminal: false, empty: false }],
+  ["native descendants remain", 1, { terminal: false, empty: false }],
+  ["fixture resource observation incomplete", 0, { accounting: false }],
+]) test(`${name}: no later command or qualification can follow an unproven lifetime`, async () => {
+  const s = setup(), h = await begin(s); mode = "complete"; lifetimeFailure = { command, checks };
+  await assert.rejects(s.campaign.advance(h), /lifetime|cleanup/);
+  assert.equal(calls.length, command + 1);
+  const status = s.campaign.status(h); assert.equal(status.state, "preserved-uncertain");
+  assert.equal(status.outcomes[0].outcome, "preserved-uncertain");
+  assert.ok(status.outcomes.every((o) => o.outcome !== "native-validated"));
+  assert.equal(status.uncollectedNativeRoots.length, 1);
+  assert.equal(existsSync(join(h.directory, "00-catalog-page-timing", "native-manifest.json")), false);
+  assert.equal(existsSync(join(repo, expectedPlan.bindings[0].validation.artifactRoot, "raw.log")), command === 1,
+    "native originals remain retained when native execution occurred");
+  const exits = evidence.tree(h.directory).entries.filter((e) => /^\d{5}-command-exited\.json$/.test(e.path))
+    .map((e) => JSON.parse(readFileSync(join(h.directory, e.path))));
+  assert.equal(exits.at(-1).success, true, "retain the actual leader exit, not a fabricated failure/terminal claim");
+  const saved = await validateSavedCampaign({ folder: root, round: expectedPlan.round, commit: expectedPlan.commit });
+  assert.equal(saved.status, "blocked", JSON.stringify(saved)); assert.equal(saved.collectionIntegrity, "unsealed-partial");
+  await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, command + 1);
+});
+
 test("mixed source review waits before any native spawn; only separate operator authorization stages the fixed bundle", async () => {
   const s = setup((subject) => subject.action !== "stage-mixed-audit"), h = await begin(s);
   let current = s.campaign.status(h);
@@ -202,6 +239,44 @@ test("mixed source review waits before any native spawn; only separate operator 
   assert.ok(["blocked", "failed"].includes(saved.status), JSON.stringify(saved));
 });
 
+for (const progress of ["intent", "started", "exited"]) test(`saved pending command ${progress} cannot advance past blocked fixture cleanup`, async () => {
+  const s = setup(), h = await begin(s); mode = "complete";
+  lifetimeFailure = { command: 0, checks: { terminal: false, empty: false } };
+  await assert.rejects(s.campaign.advance(h), /lifetime|cleanup/);
+  const input = { folder: root, round: expectedPlan.round, commit: expectedPlan.commit };
+  assert.equal((await validateSavedCampaign(input)).status, "blocked", "a halted fixture alone remains an honest partial");
+  const files = evidence.tree(h.directory).entries.filter((e) => /^\d{5}-[a-z-]+\.json$/.test(e.path));
+  const rows = files.map((e) => JSON.parse(readFileSync(join(h.directory, e.path))));
+  const fixtureExit = rows.find((e) => e.kind === "command-exited");
+  const metadata = Object.fromEntries(["schema", "campaign", "round", "campaignSha256", "at", "status"]
+    .map((key) => [key, structuredClone(fixtureExit[key])]));
+  const additional = [{ ...metadata, kind: "command-intent", group: "catalog-page", invocation: expectedPlan.bindings[0].execution.invocation }];
+  if (progress !== "intent") additional.push({ ...metadata, kind: "command-started", pid: 1234 });
+  if (progress === "exited") additional.push({ ...metadata, kind: "command-exited", terminal: true, code: 0,
+    signal: null, success: true, cancelled: false, forced: false, error: null });
+  rows.splice(-1, 0, ...additional);
+  for (const file of files) rmSync(join(h.directory, file.path));
+  const saveRows = () => rows.forEach((row, sequence) => {
+    row.sequence = sequence;
+    writeFileSync(join(h.directory, `${String(sequence).padStart(5, "0")}-${row.kind}.json`), JSON.stringify(row));
+  });
+  saveRows(); writeFileSync(join(h.directory, "00-catalog-page-timing", "command-1.log"), "pending native command\n");
+  const invalid = await validateSavedCampaign(input);
+  assert.equal(invalid.status, "invalid", JSON.stringify(invalid));
+  assert.equal(invalid.error, "saved-campaign-invalid");
+  if (progress !== "exited") {
+    const host = join(h.directory, "00-catalog-page-timing", "command-0-host");
+    const terminalPath = join(host, "terminal.json"), checks = JSON.parse(readFileSync(terminalPath));
+    checks.terminal = true; checks.empty = true; writeFileSync(terminalPath, JSON.stringify(checks));
+    fixtureExit.hostManifestSha256 = evidence.tree(host).sha256; saveRows();
+    const validPartial = await validateSavedCampaign(input);
+    assert.equal(validPartial.status, "blocked", JSON.stringify(validPartial));
+    assert.equal(validPartial.commandLifecycle, "incomplete-preserved");
+    assert.equal(validPartial.collectionIntegrity, "unsealed-partial");
+    assert.equal(validPartial.qualified, false); assert.equal(validPartial.deletionAuthorized, false);
+  }
+});
+
 test("all-nine intrinsic completion is reachable without claiming every framework passed or external authority", async () => {
   const s = setup(), h = await begin(s); mode = "complete";
   let current = s.campaign.status(h);
@@ -213,6 +288,11 @@ test("all-nine intrinsic completion is reachable without claiming every framewor
   const saved = await validateSavedCampaign({ folder: root, round: expectedPlan.round, commit: expectedPlan.commit });
   assert.equal(saved.status, "verified", JSON.stringify(saved)); assert.equal(saved.scope, "intrinsic-evidence");
   assert.equal(saved.groups.length, 9); assert.equal(Object.hasOwn(saved, "qualified"), false);
+  replayLifetimeFailure = 0;
+  assert.equal((await validateSavedCampaign({ folder: root, round: expectedPlan.round, commit: expectedPlan.commit })).status, "invalid",
+    "a valid last command proof cannot excuse an unproven earlier fixture");
+  replayLifetimeFailure = null;
+  assert.equal((await validateSavedCampaign({ folder: root, round: expectedPlan.round, commit: expectedPlan.commit })).status, "verified");
   const live = saved.groups.find((g) => g.group === "live-delivery");
   assert.deepEqual(live.appOutcomes[1], { app: "selected-failure", outcome: "failed", comparisonEligible: false });
   for (const target of ["00-catalog-page-timing/host-before.json", "00-catalog-page-timing/command-0-host/raw.json",

@@ -2,7 +2,9 @@
 // Run only inside an explicitly prepared owned delegated test unit. This test
 // never creates/configures a unit, changes limits or adopts an existing cgroup.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,21 +15,35 @@ let unit;
 if (process.platform === "linux") unit = /\/corten-bench-groups-(r[1-9]\d*)-[a-f0-9]{16}\.service\/supervisor\n?$/.exec(readFileSync("/proc/self/cgroup", "utf8"));
 test("actual delegated cgroup observes the gated Node child, accounting and positive empty terminal state", {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
-}, async () => {
+}, async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-observer-"));
   const directory = join(temporary, "command-host"), campaign = `${unit[1]}-0000000000000001`;
   const binding = { request: { group: "client-heavy", round: "observer-smoke", commit: "a".repeat(40) } };
   const invocation = { executable: "node", argv: ["bench/workloads/dispatcher-fixtures/native.mjs", "exit", "0"], shell: false };
-  let observer, pid;
+  let observer, pid, hashFinishedAt;
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
-      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); observer.attach(pid); } });
+      onStart(value) {
+        pid = value; const original = fs.readFileSync;
+        const delayed = t.mock.method(fs, "readFileSync", function (path, ...args) {
+          if (path === `/proc/${pid}/exe` && hashFinishedAt === undefined) {
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1200);
+            const bytes = original.call(this, path, ...args); hashFinishedAt = Date.now(); return bytes;
+          }
+          return original.call(this, path, ...args);
+        });
+        syncBuiltinESMExports();
+        try { observer = beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); observer.attach(pid); }
+        finally { delayed.mock.restore(); syncBuiltinESMExports(); }
+      } });
     assert.equal(result.success, true, JSON.stringify(result));
     const manifest = observer.finish(result);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
     assert.equal(proof.status, "verified", JSON.stringify({ checks: proof.checks,
       gaps: proof.samples.slice(1).map((s, i) => s.at - proof.samples[i].at), terminal: JSON.parse(readFileSync(join(directory, "terminal.json"))) }));
     assert.equal(proof.cleanupComplete, true); assert.equal(proof.manifestSha256, manifest.sha256);
+    assert.ok(Number.isSafeInteger(hashFinishedAt) && proof.samples[0].at >= hashFinishedAt,
+      "slow real executable hashing completes before initial sampling while native IPC stays gated");
     assert.ok(proof.identities.some((p) => p.pid === pid));
     assert.equal(existsSync(`/sys/fs/cgroup${proof.context.path}`), false, "only the owned empty command cgroup is removed");
   } finally {

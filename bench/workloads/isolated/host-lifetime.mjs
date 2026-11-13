@@ -32,6 +32,28 @@ function parents(path) {
   const values = [];
   for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
 }
+function effectiveControls(files) {
+  const cpu = files["cpu.max"], cpus = files["cpuset.cpus.effective"], memory = files["memory.max"];
+  if (cpu !== null) assert.match(cpu, /^(max|[1-9]\d*) [1-9]\d*\n?$/);
+  if (memory !== null) assert.match(memory, /^(max|0|[1-9]\d*)\n?$/);
+  if (cpus !== null) {
+    assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
+    let previous = -1;
+    for (const range of cpus.trim().split(",")) {
+      const [start, end = start] = range.split("-").map(Number);
+      assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > previous && end >= start);
+      previous = end;
+    }
+  }
+  return cpu !== null && cpus !== null && memory !== null;
+}
+function executableHash(at, executables) {
+  const executable = readlinkSync(`${at}/exe`), inode = statSync(`${at}/exe`);
+  const key = `${executable}:${inode.dev}:${inode.ino}:${inode.size}:${inode.mtimeMs}:${inode.ctimeMs}`;
+  let hash = executables.get(key);
+  if (!hash) { hash = sha(readFileSync(`${at}/exe`)); executables.set(key, hash); }
+  return hash;
+}
 function snapshot(path, executables) {
   const groups = [], processes = [];
   function walk(current) {
@@ -40,10 +62,7 @@ function snapshot(path, executables) {
       assert.match(pid, /^[1-9]\d*$/);
       // A racing exit is an observation gap, never silently omitted membership.
       const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
-      const executable = readlinkSync(`${at}/exe`), inode = statSync(`${at}/exe`);
-      const executableKey = `${executable}:${inode.dev}:${inode.ino}:${inode.size}:${inode.mtimeMs}:${inode.ctimeMs}`;
-      let executableSha256 = executables.get(executableKey);
-      if (!executableSha256) { executableSha256 = sha(readFileSync(`${at}/exe`)); executables.set(executableKey, executableSha256); }
+      const executableSha256 = executableHash(at, executables);
       const cgroup = readFileSync(`${at}/cgroup`, "utf8"); assert.equal(groupPath(cgroup), current);
       const type = readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null;
       assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
@@ -62,6 +81,7 @@ function snapshot(path, executables) {
 export function beginLifetime({ campaign, binding, invocation, directory, command, pid }) {
   assert.equal(process.platform, "linux"); assert.match(campaign, /^r[1-9]\d*-[a-f0-9]{16}$/);
   assert.ok(Number.isSafeInteger(command) && command >= 0);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
   const own = groupPath(readFileSync("/proc/self/cgroup", "utf8"));
   assert.equal(posix.basename(own), "supervisor", "owned unit must provide DelegateSubgroup=supervisor");
   const parent = posix.dirname(own);
@@ -114,7 +134,10 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     while (offset < data.length) { const n = writeSync(fd, data, offset); assert.ok(n > 0); offset += n; }
     samples++;
   }
-  try { sample(); }
+  // The fresh bootstrap still waits for IPC outside this empty command scope.
+  // Hash its actual executable before sampling starts, not across the empty-to-
+  // attached boundary. Attach independently rechecks the executable cache key.
+  try { executableHash(`/proc/${pid}`, executables); sample(); }
   catch (error) { closeSync(fd); rmdirSync(join(root, path)); throw error; }
   return Object.freeze({
     attach(pid) {
@@ -187,6 +210,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
       assert.ok(!group.path.split("/").includes(".."));
       assert.deepEqual(Object.keys(group.files).sort(), [...fields].sort());
       for (const field of fields) assert.ok(group.files[field] === null || typeof group.files[field] === "string");
+      if (!effectiveControls(group.files)) controlsComplete = false;
       if (!group.files["cpu.stat"] || !group.files["memory.current"] || !group.files["memory.peak"] || !group.files["memory.events"]) controlsComplete = false;
       else {
         assert.match(group.files["memory.current"], /^\d+\n?$/); assert.match(group.files["memory.peak"], /^\d+\n?$/);

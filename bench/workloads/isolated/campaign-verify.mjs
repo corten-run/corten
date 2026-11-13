@@ -86,7 +86,11 @@ export async function validateCampaign(input) {
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.deepEqual(status.outcomes[index].cleanup, boundary); }
       }
       if (allNine) for (const [commandIndex, result] of recorded.results.entries()) {
+        // An intent is already forbidden advancement, even if its exit is absent.
+        const advanced = commandIndex + 1 < recorded.count || replay.completed.has(group)
+          || phase === "prepare" && replay.reviewNeeded !== null;
         if (!result.hostManifestSha256) {
+          assert.ok(!advanced, "campaign advanced without command lifetime observations");
           assert.equal(result.success, false, "successful command lacks host observations");
           blockers.push(`${group}/${phase}: host observations incomplete`); continue;
         }
@@ -95,6 +99,10 @@ export async function validateCampaign(input) {
           { campaign: id, command: result.number, pid: result.pid, result: commandResult(result) });
         assert.equal(observation.manifestSha256, result.hostManifestSha256, "host observations differ from journal seal");
         if (hostBefore) assert.equal(observation.context.bootId, hostBefore.bootId);
+        if (advanced) {
+          assert.equal(observation.status, "verified", "campaign advanced past an unproven command lifetime");
+          assert.equal(observation.cleanupComplete, true);
+        }
         hostObservations[commandIndex] = observation;
         if (observation.status !== "verified") blockers.push(`${group}/${phase}: host observations incomplete`);
       }

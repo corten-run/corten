@@ -111,6 +111,15 @@ export function createCampaign({ authorize }) {
     }
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
+    const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
+      join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;
+    if (lifetime) assert.equal(lifetime.manifestSha256, hostManifestSha256, "command lifetime seal differs");
+    // A drained cancellation may be collected, never advanced or qualified. All
+    // other commands require complete actual lifetime proof before another spawn.
+    const drainedCancellation = (signal?.aborted || result.cancelled || result.forced) && lifetime
+      && ["accounting", "terminal", "empty", "observer", "leader"].every((key) => lifetime.checks?.[key] === true);
+    assert.ok((lifetime?.status === "verified" && lifetime.cleanupComplete === true) || drainedCancellation,
+      "command lifetime or cleanup unproven; retain pending native root");
     return { ...result, number, pid, hostManifestSha256 };
   }
   async function phase(c, binding, phaseName, signal) {

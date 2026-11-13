@@ -46,9 +46,38 @@ test("actual inherited controls need no invented cap; terminal observations comp
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
 });
+test("missing effective command controls cannot verify a client lifetime", (t) => {
+  const f = fixture(t, ({ samples }) => {
+    for (const sample of samples) for (const group of sample.groups)
+      for (const key of ["cpu.max", "cpuset.cpus.effective", "memory.max"]) group.files[key] = null;
+  });
+  const observed = f.observation(); assert.equal(observed.status, "blocked");
+  assert.equal(composeHostProof(binding, {}, observed).resources, "blocked");
+});
+for (const [name, controls] of [
+  ["unlimited", { "cpu.max": "max 100000\n", "memory.max": "max\n", "cpuset.cpus.effective": "0-3,5,7-9\n" }],
+  ["finite", { "cpu.max": "100000 100000\n", "memory.max": "1073741824\n", "cpuset.cpus.effective": "1\n" }],
+]) test(`${name} effective controls remain parseable without imposing a new budget`, (t) => {
+  const f = fixture(t, ({ samples }) => { for (const sample of samples) Object.assign(sample.groups[0].files, controls); });
+  assert.equal(f.observation().status, "verified");
+});
+for (const [key, value] of [
+  ["cpu.max", "max 0\n"], ["cpu.max", "0 100000\n"], ["cpu.max", "unlimited\n"],
+  ["memory.max", "-1\n"], ["memory.max", "max trailing\n"],
+  ["cpuset.cpus.effective", "\n"], ["cpuset.cpus.effective", "3-1\n"],
+  ["cpuset.cpus.effective", "0-3,2\n"], ["cpuset.cpus.effective", "0,0\n"],
+]) test(`malformed ${key} ${JSON.stringify(value)} cannot verify`, (t) => {
+  const f = fixture(t, ({ samples }) => { for (const sample of samples) sample.groups[0].files[key] = value; });
+  assert.throws(f.observation);
+});
+for (const key of ["cpu.max", "memory.max", "cpuset.cpus.effective"]) test(`missing ${key} remains blocked`, (t) => {
+  const f = fixture(t, ({ samples }) => { for (const sample of samples) sample.groups[0].files[key] = null; });
+  assert.equal(f.observation().status, "blocked");
+});
 for (const [name, change] of [
   ["other command", (f) => { f.context.command++; }],
   ["other binding", (f) => { f.context.bindingSha256 = "f".repeat(64); }],
+  ["other commit", (f) => { f.context.commit = "f".repeat(40); }],
   ["other boot", (f) => { f.terminal.bootId = "other"; }],
   ["changed exit", (f) => { f.terminal.command = { ...result, code: 0 }; }],
   ["escaped process", (f) => { f.samples[1].processes[0].cgroup = "0::/other\n"; }],

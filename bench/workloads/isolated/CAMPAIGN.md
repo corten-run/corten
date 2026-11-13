@@ -158,6 +158,11 @@ initial/final populated=0 and empty recursive membership must agree with termina
 Observations add driver work; they are not a claim of zero observer overhead or a benchmark
 timing result. Source-bound observation code is part of the campaign's evidence conditions.
 
+The fresh IPC-gated bootstrap's real executable is hashed before the initial empty-scope
+sample. Attachment rechecks the executable identity/cache key; slow startup hashing does
+not consume an unobserved interval between samples. The one-second gap gate is unchanged.
+The Linux fixture delays that real read to test ordering, without replacing kernel data.
+
 Each phase contains `command-N-host/{binding.json,samples.jsonl,terminal.json,processes/**}`.
 The journal commits each command observation tree; phase-sealed additionally commits the
 whole phase's host/native/log tree, including halted phases. JSON prepare images.json is
@@ -166,6 +171,20 @@ positive empty cgroup observations and unchanged inherited controls, not process
 Only the live-created empty child cgroup is removed; uncertain children remain for the
 parent's owned-unit terminal handling. No recursive cgroup cleanup or saved-handle adoption
 exists.
+
+Every command, including fixture preparation, replays its sealed lifetime observations
+before another command may start. A successful leader exit cannot clear a nonempty or
+unproven command scope. The API halts with the original pending native root retained;
+it does not fabricate a terminal/failed exit or collect potentially active producer bytes.
+A drained cancellation may collect only with positive accounting, terminal, empty-scope,
+observer and leader checks, and still halts without qualification. Saved replay rejects
+sequencing or group completion past missing/blocked command observations.
+
+Every sampled command cgroup must retain parseable cpu.max, cpuset.cpus.effective and
+memory.max in addition to accounting. Missing controls remain blocked; malformed controls
+are invalid. Unlimited max is valid, finite caps are not invented, and an effective CPU
+set must be a nonempty ordered set of CPU IDs/ranges. Ancestor controls remain separately
+bound and unchanged; absent root-only controller files do not become command defaults.
 
 The opt-in local OS fixture is `host-lifetime-linux.test.mjs`. In an already owned
 delegated unit it launches real Node processes only, verifies actual accounting/empty
