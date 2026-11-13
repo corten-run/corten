@@ -14,10 +14,36 @@ import { imageEvidence } from "./run.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
 import { missingAction } from "./probes.mjs";
+import { discoverReactEndpoint } from "./bindings.mjs";
 
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
+test("mounted native React endpoint resolution is independent and fails closed", () => {
+  const handlerSource = 'async e=>{e.preventDefault();await fetch("/api/marketplace/"+encodeURIComponent(r.id)+"?locale="+l,{method:"POST",body:e});}';
+  const observed = { handlerSource, componentSource: `function M({record:r,locale:l}){const submit=${handlerSource};return null}`,
+    recordId: "item_2", locale: "fr-FR", action: "http://local/marketplace/fr-FR/item_2", base: "http://local/marketplace/fr-FR/item_2", basis: "mounted-react-onSubmit-and-owning-fiber-props" };
+  const result = discoverReactEndpoint([observed]);
+  assert.equal(result.path, "/api/marketplace/item_2"); assert.equal(result.locale, "fr-FR"); assert.equal(result.handlerSha256.length, 64);
+  for (const source of [handlerSource.replace("POST", "GET"), handlerSource.replace("r.id", '"item_1"'),
+    handlerSource.replace("/api/marketplace/", "https://attacker.invalid/api/marketplace/"),
+    'e=>fetch(unknown(r.id),{method:"POST"})', 'e=>{const r={id:"item_2"};fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}']) {
+    assert.equal(discoverReactEndpoint([{ ...observed, handlerSource: source, componentSource: `function M({record:r,locale:l}){const submit=${source};return null}` }]), null);
+  }
+  assert.equal(discoverReactEndpoint([{ ...observed, action: "http://local/marketplace/en-US/item_2" }]), null);
+  assert.equal(discoverReactEndpoint([{ ...observed, componentSource: "function M({record:r,locale:l}){return null}" }]), null);
+  const nativeCatch = handlerSource.replace('e.preventDefault();await', 'e.preventDefault();try{await').replace(';}', ';}catch(r){console.error(r)}}');
+  assert.equal(discoverReactEndpoint([{ ...observed, handlerSource: nativeCatch, componentSource: `function M({record:r,locale:l}){const submit=${nativeCatch};return null}` }]).path, "/api/marketplace/item_2");
+});
+test("Livewire public input uses independently captured named field models and component identity", () => {
+  const request = req({ method: () => "POST", headers: () => ({ "x-livewire": "", "content-type": "application/json" }),
+    postData: () => JSON.stringify({ components: [{ snapshot: JSON.stringify({ memo: { id: "actual" }, data: { email: "before@example.test", target: "0", token: "SECRET" } }), updates: { email: "native@example.test", target: "1,25" } }] }) });
+  const form = { component: "actual", models: { email: "email", target_price: "target" } };
+  assert.deepEqual(publicInput(request, form), { input: { email: "native@example.test", target_price: "1,25" }, components: ["actual"] });
+  assert.equal(publicInput(request).input.target_price, null);
+  assert.deepEqual(publicInput(request, { ...form, component: "different" }).input, { email: null, target_price: null });
+  assert.ok(!JSON.stringify(publicInput(request, form)).includes("SECRET"));
+});
 test("SvelteKit native data normalization requires successful physical framework payload and transport", () => {
   const request = { id: "observed", method: "GET", path: "/marketplace/fr-FR/item_2/__data.json", status: 200, transport: "router", input: null, components: [],
     resource: "fetch", type: "application/json", nativeData: { framework: "sveltekit", type: "data", nodes: [null, "data"] } };

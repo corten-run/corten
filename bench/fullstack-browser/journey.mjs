@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
-import { architecture, classifyDisabledPreloads, nativeDOM, observeNetwork, responseDocument, visibleDOM } from "./observe.mjs";
+import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, visibleDOM } from "./observe.mjs";
 import { upstreamDelta } from "./upstream.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
@@ -117,13 +117,14 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     let previousResources = null;
     for (const step of profile.steps) {
       const row = { action: step, at: performance.now() - started, requests: [], dom: null, document: null, readback: null, upstream: null, formBefore: null, componentsBefore: [], domPassed: false,
-        timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [] };
+        timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [], lifecycleFailures: [] };
       evidence.steps.push(row);
       const beforeCounters = await counters();
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
       const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
-      row.formBefore = nativeBefore.form; row.componentsBefore = nativeBefore.components;
+      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js); row.componentsBefore = nativeBefore.components;
+      network.bindForm(row.formBefore);
       const at = performance.now();
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
@@ -176,7 +177,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       row.resources = await resources.checkpoint();
       row.retired = resources.retired(previousResources, row.resources);
       if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
-      if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.failures.push("Retired native page still owns browser resources");
+      if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
       if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
       previousResources = row.resources;
@@ -188,8 +189,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       const posts = row.requests.filter((r) => r.method === "POST");
       if (step.input) {
         if (posts.length !== 1 || JSON.stringify(posts[0]?.input) !== JSON.stringify(step.input)) row.failures.push("Native write missing, duplicate, or input not independently observable");
-        const endpoint = profile.js && posts[0]?.transport === "livewire" ? row.formBefore?.updatePath : row.formBefore?.action;
+        const enhancement = profile.js ? row.formBefore?.enhancement : null;
+        const endpoint = profile.js && posts[0]?.transport === "livewire" ? row.formBefore?.updatePath : enhancement?.path ?? row.formBefore?.action;
         if (!endpoint || posts[0]?.path !== endpoint) row.failures.push("Write did not use the independently discovered native form/update endpoint");
+        if (enhancement && posts[0]?.transport !== enhancement.transport) row.failures.push("Native write transport differs from its mounted enhancement");
         const allowed = step.kind === "accepted-write" ? [200, 201, 202, 204, 302, 303] : [200, 302, 303, 400, 422];
         if (!allowed.includes(posts[0]?.status)) row.failures.push("Native write returned unexpected status");
       } else if (posts.length) row.failures.push("Unexpected write");
@@ -205,6 +208,8 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
     evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback });
     evidence.failures.push(...evidence.mutationProbes.failures);
+    evidence.functionalChecksPassed = evidence.steps.length === profile.steps.length && !evidence.failures.length;
+    evidence.failures.push(...evidence.steps.flatMap((s) => s.lifecycleFailures.map((f) => `${s.action.kind}: ${f}`)));
     evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
     if (evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);

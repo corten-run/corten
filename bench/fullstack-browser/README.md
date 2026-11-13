@@ -88,6 +88,16 @@ Semantic DOM polling runs on the host, without eval or CSP changes. Document rep
 while sampling is retained in `observerTransitions`; only read-only observation continues,
 within the original action deadline. Actions and forms are never redispatched.
 
+Livewire input normalization binds the named HTML fields to their actual `wire:model` values
+and enclosing component ID before dispatch. It does not assume that `target_price` is the
+native state-property name. An absolute update URI is reduced to a pathname only when its
+origin matches the document. Next's custom React enhancement is discovered from the mounted
+form's real `onSubmit`, owning fiber props and containing component function before dispatch.
+`bindings.mjs` uses the already-installed TypeScript parser to resolve only a single supported
+native POST expression, without invoking that function or evaluating its source. Unresolved,
+shadowed, cross-origin or mismatched bindings remain failures. Source hashes and public native
+props establish the receipt; a sent POST is not used to invent a positive binding.
+
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That
 parser blocks resources and does not certify CSS parity. Initial and post-action DOM are
@@ -145,8 +155,16 @@ Unrecognized markers stay explicitly unverified.
 journey: a foreign Origin, cross-site Fetch Metadata, and a missing record. It discovers the
 ordinary native form action and preserves its native hidden fields/CSRF in memory. Every
 attempt is followed by independent store readback, even when the rejection status is wrong.
+For Rails' action-bound CSRF forms, the native layout's generic CSRF token is sent as its
+native header so the missing-record request reaches the handler rather than failing the
+wrong action's token check. Tokens are never saved. Rails' native Origin rejection may be 422;
+the missing-record check still requires 404 and every rejection must leave the store unchanged.
 A separate browser context must still read an empty store. These protocol probes do not
 claim to test browser SameSite-cookie enforcement or substitute for enhanced native forms.
+
+`functionalChecksPassed` separates actual DOM/navigation/form/input/readback/rejection/isolation
+checks from lifecycle observations. Nonzero retired resources still fail the cell and are
+retained in `lifecycleFailures`; a functional pass is never a cleanup or measurement pass.
 
 `navigation.mjs` recognizes SvelteKit's physical `.../item_N/__data.json` only for a successful
 JS-enabled native router fetch with an observed JSON `type:data`/data-node envelope and the

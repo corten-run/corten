@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { publicURL, publicInput, sha256, transportOf } from "./contract.mjs";
 import { snapshotPage } from "../marketplace/check.mjs";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
+import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";
 
 export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
   const document = rows.find((r) => r.resource === "document");
@@ -15,13 +16,14 @@ export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
 // No headers, cookies, transport tokens, full POST bodies or raw HTML are saved.
 export function observeNetwork(page) {
   const rows = [], pending = new Set(), byRequest = new Map(), failures = [];
+  let formBinding = null;
   const track = (promise) => { pending.add(promise); promise.catch((e) => failures.push(e.message)).finally(() => pending.delete(promise)); };
   page.on("request", (request) => {
     const row = { id: randomUUID(), ...publicURL(request.url()), method: request.method(), transport: transportOf(request),
       resource: request.resourceType(), status: null, completed: false, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
     rows.push(row); byRequest.set(request, row);
     track((async () => {
-      let input = publicInput(request);
+      let input = publicInput(request, formBinding);
       if (input === null) {
         const form = await new Response(request.postDataBuffer(), { headers: { "content-type": request.headers()["content-type"] } }).formData();
         input = { input: { email: form.get("email"), target_price: form.get("target_price") }, components: [] };
@@ -54,7 +56,7 @@ export function observeNetwork(page) {
       } catch { /* A malformed native payload is retained, never normalized. */ }
     }
   })()));
-  return { rows, failures, async drain() { while (pending.size) await Promise.allSettled([...pending]); } };
+  return { rows, failures, bindForm(form) { formBinding = form ? structuredClone(form) : null; }, async drain() { while (pending.size) await Promise.allSettled([...pending]); } };
 }
 
 // Read native bindings, never install a common navigation/form implementation.
@@ -70,6 +72,8 @@ export function nativeDOM() {
   const nextPage = next ? JSON.parse(next.textContent).page : null;
   const turbo = typeof globalThis.Turbo !== "undefined" || /@hotwired\/turbo/.test(inline) || scriptPaths.some((s) => /turbo/.test(s));
   const turboDisabled = article?.closest("[data-turbo]")?.getAttribute("data-turbo") === "false";
+  const updateURI = document.querySelector("script[data-update-uri]")?.getAttribute("data-update-uri");
+  const updateURL = updateURI ? new URL(updateURI, document.baseURI) : null;
   return { scriptPaths, nextPage, turbo, turboDisabled, components: [...new Set(wire.map((el) => el.getAttribute("wire:id")))],
     hasMetaCsp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy" i]')),
     preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, path: new URL(el.href).pathname })),
@@ -78,9 +82,17 @@ export function nativeDOM() {
       tanstack: /\$TSR|__TSR|tsr-stream/.test(inline), leptos: scriptPaths.some((s) => /leptos|hydrate/.test(s)) || /\.wasm|wasm_bindgen/.test(inline) },
     form: form ? { method: form.method.toUpperCase(), action: new URL(form.action).pathname,
       fields: [...form.elements].map((el) => el.name).filter(Boolean),
+      models: Object.fromEntries([...form.elements].filter((el) => ["email", "target_price"].includes(el.name)).map((el) => [el.name,
+        [...el.attributes].find((a) => /^wire:model(?:\.|$)/.test(a.name))?.value ?? null])),
+      component: form.closest("[wire\\:id]")?.getAttribute("wire:id") ?? null,
       binding: [...form.attributes].find((a) => a.name.startsWith("wire:submit"))?.name ?? (form.hasAttribute("data-patch") ? "data-patch" : null),
       turbo: form.closest("[data-turbo]")?.getAttribute("data-turbo") !== "false", encoding: form.enctype,
-      updatePath: document.querySelector("script[data-update-uri]")?.getAttribute("data-update-uri") ?? null } : null };
+      updatePath: updateURL?.origin === location.origin ? updateURL.pathname : null } : null };
+}
+export async function nativeForm(page, native, app, js) {
+  const form = native.form;
+  if (form && js && app === "nextjs") form.enhancement = discoverReactEndpoint(await page.locator(".marketplace__alert form").evaluate(reactHandlerSources));
+  return form;
 }
 export function architecture(app, native) {
   if (app === "nextjs") return native.nextPage?.startsWith("/marketplace/") ? "next-pages" : "unverified-next-architecture";

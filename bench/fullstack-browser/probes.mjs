@@ -16,6 +16,7 @@ export async function mutationProbes({ browser, context, page, base, profile, re
   try {
     const form = page.locator(".marketplace__alert form");
     const native = await form.evaluate((f) => ({ action: new URL(f.action).pathname, method: f.method.toUpperCase(),
+      csrf: document.querySelector('meta[name="csrf-token"]')?.content ?? null,
       fields: [...new FormData(f)].filter(([, value]) => typeof value === "string") }));
     assert.equal(native.method, "POST");
     const accepted = profile.steps.find((s) => s.kind === "accepted-write");
@@ -27,15 +28,15 @@ export async function mutationProbes({ browser, context, page, base, profile, re
     evidence.otherContext = { before: await readStore(base, readback, other.request), after: null };
     assert.deepEqual(evidence.otherContext.before.alerts, [], "a separate native session starts nonempty");
     const specs = [
-      { kind: "cross-site-origin", path: native.action, headers: { origin: "https://attacker.invalid" }, statuses: [400, 403, 419] },
-      { kind: "cross-site-fetch-metadata", path: native.action, headers: { origin: base, "sec-fetch-site": "cross-site" }, statuses: [400, 403, 419] },
+      { kind: "cross-site-origin", path: native.action, headers: { origin: "https://attacker.invalid" }, statuses: [400, 403, 419, 422] },
+      { kind: "cross-site-fetch-metadata", path: native.action, headers: { origin: base, "sec-fetch-site": "cross-site" }, statuses: [400, 403, 419, 422] },
       { kind: "no-record", path: missingAction(native.action, profile.steps.at(-1).itemId), headers: { origin: base }, statuses: [404] },
     ];
     for (const spec of specs) {
       const row = { kind: spec.kind, path: spec.path, method: "POST", input: { email: fields.email, target_price: fields.target_price }, status: null, readback: null, failure: null };
       evidence.attempts.push(row);
       try {
-        const response = await context.request.post(base + spec.path, { form: fields, headers: spec.headers, maxRedirects: 0, timeout: 15000 });
+        const response = await context.request.post(base + spec.path, { form: fields, headers: { ...spec.headers, ...(native.csrf ? { "x-csrf-token": native.csrf } : {}) }, maxRedirects: 0, timeout: 15000 });
         row.status = response.status(); await response.body();
         // Read even if the rejection status is wrong, so a mutated store survives
         // in the evidence rather than being hidden behind the status assertion.
