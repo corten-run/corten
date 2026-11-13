@@ -4085,23 +4085,27 @@ fn a_route_reaches_an_api_through_a_parameter_before_it() {
 }
 
 /// Counted by segment, a route can match under a prefix only where each of its segments can
-/// match the prefix's: a parameter one segment, a catch-all the rest (#1213).
+/// match the prefix's, as matchit 0.8.4 matches: a parameter the rest of one segment after the
+/// text before it, empty only before a `/` the route goes on with, a catch-all the rest (#1213).
 #[test]
 fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
     use crate::api::can_match_under;
-    let can = ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/{v}i/{b}", "/ap{*rest}"];
-    for route in can {
+    let can = ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/ap{*rest}"];
+    // An empty value before a `/` (`/api{x}/items` matches `/api/items`), and one byte at the end.
+    let empty = ["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}", "/api/item{x}"];
+    for route in can.into_iter().chain(empty) {
         assert!(can_match_under(route, "/api/items"), "{route}");
     }
-    let cannot = ["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/{a}x/{b}", "/api/items/{id}"];
-    for route in cannot.into_iter().chain(["/b{*rest}"]) {
+    let cannot = ["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/api/items/{id}"];
+    // A value that ends the route is never empty: `/api{x}` is never `/api`.
+    for route in cannot.into_iter().chain(["/b{*rest}", "/api{x}", "/api/items{x}"]) {
         assert!(!can_match_under(route, "/api/items"), "{route}");
     }
     // Corten's own `/corten/` holds only paths with a segment after it.
-    for route in ["/{a}/{b}", "/{*rest}", "/{a}/"] {
+    for route in ["/{a}/{b}", "/{*rest}", "/{a}/", "/corten{x}/{b}", "/cor{x}/{b}"] {
         assert!(can_match_under(route, "/corten/"), "{route}");
     }
-    for route in ["/{slug}", "/cor{x}", "/x/{a}", "/corten/{file}"] {
+    for route in ["/{slug}", "/cor{x}", "/corten{x}", "/x/{a}", "/corten/{file}"] {
         assert!(!can_match_under(route, "/corten/"), "{route}");
     }
     assert!(can_match_under("/{slug}", "/shop") && !can_match_under("/{*rest}", "/"), "the root holds every route");

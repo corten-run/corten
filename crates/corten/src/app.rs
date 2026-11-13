@@ -2517,12 +2517,15 @@ mod tests {
         assert_eq!(api.mount.as_ref().map(|mount| mount.prefix.as_str()), Some("/shop/api"));
         assert_eq!((api.deadline, api.body_limit, api.middleware.len(), api.shell), (eight, 16 << 10, 2, shop.shell));
         assert!(Arc::ptr_eq(scopes.of_route("/about/{id}").expect("outside every prefix"), &scopes.app));
-        for pattern in ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}"] {
+        // `/shop{x}/desk` matches `/shop/desk` with an empty value, and `/corten{x}/{b}` `/corten/a`.
+        let reach =
+            ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}", "/shop{x}/desk", "/corten{x}/{b}"];
+        for pattern in reach {
             assert!(scopes.of_route(pattern).is_none(), "{pattern} can match under another prefix");
         }
         // One segment matches `/shop`, never a path under `/corten/`.
         assert!(Arc::ptr_eq(scopes.of_route("/cor{x}").expect("one segment, not /shop"), &scopes.app));
-        assert!(Arc::ptr_eq(scopes.of_route("/item/{id}.json").expect("text before it"), &scopes.app));
+        assert!(Arc::ptr_eq(scopes.of_route("/item/{id}.json").expect("text after it; item is no prefix's"), &scopes.app));
         // Without the one-segment area, a first-segment parameter has the app's scope (#1213).
         let own = Own { exact: vec!["/health/live"], prefixes: vec!["/corten/".to_string()], companions: Vec::new() };
         let deep = Scopes::new((Some(Duration::from_secs(5)), 1 << 10), own, &areas[1..], Vec::new(), &policy);
