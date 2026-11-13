@@ -36,6 +36,7 @@ async function sources(directory, prefix = "") {
   const result = {};
   for (const e of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (["node_modules", "bin", "obj", "target"].includes(e.name)) continue;
+    if (prefix === "test/" && ["receipts", "receipts-final"].includes(e.name)) continue;
     const name = prefix + e.name;
     if (e.isDirectory()) Object.assign(result, await sources(join(directory, e.name), name + "/"));
     else if (e.isFile()) result[name] = hash(await readFile(join(directory, e.name)));

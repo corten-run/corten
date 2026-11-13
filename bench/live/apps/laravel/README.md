@@ -4,9 +4,10 @@ Independent Laravel/Livewire/Reverb implementation of the synthetic recoverable
 live workload. Shared-runner registration is separate from campaign admission,
 a performance result or full-group readiness.
 The fullstack Laravel marketplace application remains separate.
-Automatic reconnect has passed native wire/DOM/cleanup proof, but one unchanged
-2000ms deadline rerun missed its bound. That sensitivity remains open; a passing
-rerun is not a waiver. The original German marketplace finding is also open.
+Historical receipts retain an automatic-reconnect 2000ms deadline miss and a
+routed-close failure, not passes. Current replay avoids unnecessary already-seen
+work; fresh checks remain subject to the same deadline, not a timing waiver.
+The original German marketplace finding is separately open.
 
 ## Native Path
 
@@ -82,9 +83,10 @@ Livewire HTTP, native morphs, HTTP writes/ACKs and independent DOM/oracle checks
 `wire.mjs` extracts original native packets without sorting or manufacturing
 events. Browser raw receipts omit signed Livewire snapshots and CSRF material.
 
-See [test/receipts/README.md](test/receipts/README.md) for actual commands, results,
-fault controls, the preserved failed routed-close proof and limits. No shared
-runner, workload validator, original assertion or original deadline was changed.
+See [test/receipts/README.md](test/receipts/README.md) for the retained port's
+original commands, results, failed routed-close proof and limits. Those are
+historical app-local receipts, not qualification of this refreshed image.
+No workload validator, assertion bound or deadline was relaxed.
 The shared runner registers this port as `laravel-livewire`. It retains native
 Livewire HTTP calls/effects and raw Reverb frames, binds their request/socket
 identities and origins to the inspected container, and checks both against actual
@@ -100,8 +102,8 @@ and Pusher 8.6.0. The new image needs its own checks; old-image passes do not ap
 
 ## Unreleased
 
-Completed the scaffold's native client/asset integration, staged recovery,
-publisher-ACK ordering, native lifecycle/resource reporting and app-local proofs.
+Imported the retained native port, refreshed stable runtime/framework inputs,
+registered its real HTTP/Reverb capture and removed redundant observed-cursor replay.
 No general failed-Livewire-HTTP retry behavior or load/campaign qualification is
 claimed. Fresh independent review and the full repository check matrix remain
 outside this bounded owned-path checkpoint.
