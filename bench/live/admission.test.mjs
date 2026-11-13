@@ -15,7 +15,7 @@ const load = async (path) => JSON.parse(gunzipSync(await readFile(new URL(path, 
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
 const recovery = "../recoverable-live/evidence/native-feed-aspnet/aspnet-";
 async function measured() {
-  const a = await load("./evidence/review-v2-express/express-fanout-4.json.gz");
+  const a = await load("./evidence/review-v3-express/express-fanout-4.json.gz");
   return { a, expected: { app: a.app, group: a.group, provenance: a.provenance, qualification: a.qualification, settings: a.settings } };
 }
 
@@ -163,7 +163,101 @@ for (const [name, mutate, pattern] of [
 
 test("same native instance's different fan-out interval cannot lend kernel counters", async () => {
   const { a, expected } = await measured();
-  const other = await load("./evidence/review-v2-express/express-fanout-1.json.gz");
+  const other = await load("./evidence/review-v3-express/express-fanout-1.json.gz");
   a.kernel = other.kernel; delete a.summary;
   assert.throws(() => verifyFanout(a, expected), /kernel.*(binding|interval)/);
+});
+
+const thirdReviewMutations = [
+  ["browser network belongs to another instance", (a) => {
+    for (const b of a.browsers) for (const r of b.network) if (r.url) {
+      const url = new URL(r.url); url.host = "127.0.0.1:1"; r.url = url.href;
+    }
+  }, /browser.*instance|native.*connection/],
+  ["acknowledged resource counters exceed reader/queue bounds", (a) => {
+    const b = a.browsers[0], resource = b.records[b.records.findIndex((r) => r.kind === "publish") + 1];
+    const response = b.network.find((r) => r.kind === "response" && r.url.endsWith("/parity/publish"));
+    const body = JSON.parse(response.body);
+    for (const key of ["pendingTasks", "queueEvents", "queuePeak"]) resource[key] = body.resources[key] = 999;
+    response.body = JSON.stringify(body);
+  }, /resource|queue/],
+  ["cleanup acknowledgement resurrects a task after zero", (a) => {
+    const b = a.browsers[0], resource = b.records[b.records.findIndex((r) => r.kind === "cleanup-probe") + 1];
+    const response = b.network.filter((r) => r.kind === "response" && r.url.endsWith("/parity/publish")).at(-1);
+    const body = JSON.parse(response.body); resource.pendingTasks = body.resources.pendingTasks = 1;
+    response.body = JSON.stringify(body);
+  }, /resurrect|resource/],
+  ["paint precedes actual native effect application", (a) => {
+    const publisher = a.browsers[0], publications = publisher.records.filter((r) => r.kind === "publish");
+    for (const b of a.browsers) for (const frame of b.frames) if (frame.through > 0) {
+      frame.firstFrameAt = frame.secondFrameAt = publisher.timeOrigin + publications[frame.through - 1].startedAt - b.timeOrigin + .5;
+    }
+  }, /frame.*(appl|chronolog)|paint.*(appl|chronolog)/],
+  ["duplicate processing follows detach at the same timestamp", (a) => {
+    const b = a.browsers[3], index = b.records.findLastIndex((r) => r.kind === "event" && r.disposition === "duplicate");
+    const [r] = b.records.splice(index, 1), detach = b.records.findIndex((r) => r.kind === "detach");
+    r.at = b.records[detach].at; b.records.splice(detach + 1, 0, r);
+  }, /event.*detach|post-detach/],
+];
+
+test("third review input retains the exact native evidence bytes", async () => {
+  const bytes = await readFile(new URL("./evidence/review-v2-express/express-fanout-4.json.gz", import.meta.url));
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), "735ea017c37a1df8412ffa8e99eda4abeb57ba19d411092f68104f28d39e339f");
+});
+
+for (const [name, mutate, pattern] of thirdReviewMutations) test(`third review: ${name}`, async () => {
+  const { a, expected } = await measured(); mutate(a); delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), pattern);
+});
+
+test("v2 native connection provenance stays unqualified without rewriting capture bytes", async () => {
+  const result = await verifyRound(new URL("./evidence/review-v2-express/", import.meta.url));
+  assert.deepEqual(result.measured, []);
+  assert.equal(result.unqualified.filter((r) => /native connection/.test(r.reason)).length, 3);
+});
+
+for (const [field, value] of [["subscriptions", 5], ["connections", 5], ["pendingTasks", 5],
+  ["pendingTasks", 0], ["queueEvents", 999], ["queuePeak", 999], ["historyEvents", 999], ["historyPeak", 999], ["pendingTasks", -1]]) {
+  test(`every publication resource counter is checked: ${field}=${value}`, async () => {
+    const { a, expected } = await measured(), b = a.browsers[0];
+    const resource = b.records[b.records.findIndex((r) => r.kind === "publish") + 1];
+    const response = b.network.find((r) => r.kind === "response" && r.url.endsWith("/parity/publish"));
+    const body = JSON.parse(response.body); resource[field] = body.resources[field] = value;
+    response.body = JSON.stringify(body); delete a.summary;
+    assert.throws(() => verifyFanout(a, expected), /resource|budget|peak/);
+  });
+}
+
+for (const key of ["subscriptions", "connections", "pendingTasks", "queueEvents"]) test(`post-zero ${key} resurrection cannot be hidden by a later zero`, async () => {
+  const { a, expected } = await measured(), b = a.browsers[0];
+  const resource = b.records[b.records.findIndex((r) => r.kind === "cleanup-probe") + 1];
+  const response = b.network.filter((r) => r.kind === "response" && r.url.endsWith("/parity/publish")).at(-1);
+  const body = JSON.parse(response.body); resource[key] = body.resources[key] = 1;
+  response.body = JSON.stringify(body); delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /resurrect|resource/);
+});
+
+for (const kind of ["request", "response", "native-request"]) test(`browser ${kind} origin must match the inspected instance`, async () => {
+  const { a, expected } = await measured();
+  const r = a.browsers[3].network.find((r) => r.kind === kind);
+  const url = new URL(r.url); url.port = "1"; r.url = url.href; delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /browser.*instance/);
+});
+
+test("native SSE frames require the actual connection request receipt", async () => {
+  const { a, expected } = await measured(), b = a.browsers[3];
+  b.network = b.network.filter((r) => r.kind !== "native-request"); delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /native connection/);
+});
+
+test("the first paint callback cannot precede application even if the second is later", async () => {
+  const { a, expected } = await measured(), b = a.browsers[3], frame = b.frames.find((f) => f.through > 0);
+  frame.firstFrameAt = b.records.find((r) => r.kind === "event" && r.event.seq === frame.through).at - .1; delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /frame chronology/);
+});
+
+test("two paint callbacks cannot be collapsed to one timestamp after application", async () => {
+  const { a, expected } = await measured(), frame = a.browsers[3].frames.find((f) => f.through > 0);
+  frame.secondFrameAt = frame.firstFrameAt; delete a.summary;
+  assert.throws(() => verifyFanout(a, expected), /frame chronology/);
 });

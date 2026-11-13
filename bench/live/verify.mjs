@@ -108,7 +108,7 @@ export async function verifyRound(directory) {
           assert.equal(artifact.app, entry.app); assert.equal(artifact.group, plan.group);
           assert.deepEqual(artifact.provenance, artifacts[0].provenance);
           assert.deepEqual(artifact.qualification, manifest.files);
-          if (["native-live-fanout/v1", "native-live-fanout/v2"].includes(artifact.schema)) {
+          if (["native-live-fanout/v1", "native-live-fanout/v2", "native-live-fanout/v3"].includes(artifact.schema)) {
             capturedPasses++;
             if (attempt(entry.app, { clients: artifact.clients }, () => {
               verifyFanout(artifact, { app: entry.app, group: plan.group, provenance: artifacts[0].provenance,

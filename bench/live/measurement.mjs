@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { verifyIdentity } from "./admission.mjs";
+import { verifyResourceBounds } from "./resources.mjs";
 
 export const inspectFormat = '{"id":{{json .Id}},"image":{{json .Image}},"pid":{{.State.Pid}},"startedAt":{{json .State.StartedAt}},"ports":{{json .NetworkSettings.Ports}}}';
 export const kernelCommand = (id, phase) => `echo INTERVAL ${id} ${phase}; cat /sys/fs/cgroup/cpu.stat; echo MEMORY; cat /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.peak`;
 const finite = (v) => assert.ok(Number.isFinite(v) && v >= 0, "measurement clock binding missing");
 
 export function verifyMeasurementBindings(a) {
-  assert.equal(a.schema, "native-live-fanout/v2", "measurement binding unavailable in historical capture; fresh native capture required");
+  assert.ok(["native-live-fanout/v2", "native-live-fanout/v3"].includes(a.schema), "measurement binding unavailable in historical capture; fresh native capture required");
   verifyIdentity(a.provenance);
   const p = a.provenance, host = a.host, interval = a.interval;
   finite(host?.timeOrigin);
@@ -44,7 +45,9 @@ export function verifyMeasurementBindings(a) {
     const ids = new Set(b.network.filter((r) => ["native-sse", "native-websocket-created"].includes(r.kind)).map((r) => r.requestId));
     assert.ok(ids.size, "native reader transport identity missing");
     for (const id of ids) { assert.ok(id && !streams.has(id), "duplicate native reader transport identity"); streams.add(id); }
+    verifyBrowserInstance(b.network, host.base);
   }
+  assert.equal(a.schema, "native-live-fanout/v3", "native connection binding unavailable in historical capture; fresh native capture required");
   assert.ok(Array.isArray(host.requests) && host.requests.length >= 4, "raw host request receipts missing");
   let configured = 0;
   for (const [i, r] of host.requests.entries()) {
@@ -62,12 +65,7 @@ export function verifyMeasurementBindings(a) {
       assert.ok(["attach-poll", "delivered", "released"].includes(r.phase), "unrecognized host resource receipt");
       assert.deepEqual(r.request, { method: "GET", url: `${host.base}/parity/resources` }, "raw host resource request differs");
       const resources = JSON.parse(r.body);
-      for (const key of ["subscriptions", "connections", "pendingTasks", "queueEvents", "queuePeak", "historyEvents", "historyPeak"]) {
-        assert.ok(Number.isSafeInteger(resources[key]) && resources[key] >= 0, "raw host resource counter missing");
-      }
-      assert.equal(resources.queueLimit, a.settings.queueLimit); assert.equal(resources.historyLimit, a.settings.historyLimit);
-      assert.ok(resources.queuePeak <= a.settings.queueLimit && resources.queueEvents <= a.clients * a.settings.queueLimit
-        && resources.historyEvents <= a.settings.historyLimit && resources.historyPeak <= a.settings.historyLimit, "raw host resource budget exceeded");
+      verifyResourceBounds(resources, a.clients, a.settings);
     }
   }
   assert.equal(configured, 1, "raw host configuration receipt missing");
@@ -90,5 +88,28 @@ export function verifyMeasurementBindings(a) {
     const browserStarted = publisher.timeOrigin + publications[i].startedAt - host.timeOrigin;
     assert.ok(browserStarted >= r.startedAt - 2 && browserStarted <= r.finishedAt + 2, "publication clock binding differs from actual browser start");
     assert.ok(browserStarted - r.scheduledAt <= a.profile.maxScheduleLagMs, "browser missed offered cadence");
+  }
+}
+
+function verifyBrowserInstance(network, base) {
+  const expected = new URL(base).origin, connections = new Map();
+  for (const r of network) {
+    if (r.url) {
+      const url = new URL(r.url);
+      if (url.protocol === "ws:") url.protocol = "http:";
+      if (url.protocol === "wss:") url.protocol = "https:";
+      assert.ok(!url.username && !url.password && url.origin === expected, "browser request origin differs from inspected native instance");
+    }
+    if ((r.kind === "native-request" && r.type === "EventSource") || r.kind === "native-websocket-created") {
+      assert.ok(r.url && r.requestId, "native connection source receipt missing");
+      if (r.kind === "native-request") assert.equal(r.method, "GET", "native connection request is not EventSource GET");
+      connections.set(r.requestId, { kind: r.kind === "native-request" ? "sse" : "websocket", timestamp: r.timestamp });
+    }
+    if (["native-sse", "native-websocket-received", "native-websocket-sent"].includes(r.kind)) {
+      const connection = connections.get(r.requestId), kind = r.kind === "native-sse" ? "sse" : "websocket";
+      assert.ok(connection?.kind === kind, "native connection is not bound to the inspected instance's browser request");
+      if (connection.timestamp !== undefined) assert.ok(Number.isFinite(r.timestamp) && r.timestamp >= connection.timestamp,
+        "native connection event precedes its source request");
+    }
   }
 }
