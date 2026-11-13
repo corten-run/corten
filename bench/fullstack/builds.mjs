@@ -203,7 +203,7 @@ export const recipes = {
   astro: node("src/pages/items/[id].astro"),
   nuxt: node("app/pages/items/[id].vue"),
   aspnet: {
-    tools: "mcr.microsoft.com/dotnet/sdk:10.0",
+    tools: "mcr.microsoft.com/dotnet/sdk:11.0.100",
     context: "",
     workdir: "/src",
     add: htmx("wwwroot/htmx.min.js"),
