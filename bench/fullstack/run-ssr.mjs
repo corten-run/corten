@@ -21,6 +21,7 @@ import { roundNameError } from "./round.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 import { passFile, passesOf } from "./passes.mjs";
 import { formEnv, mixedSeconds, slowShare, tailSeconds } from "./mixed.mjs";
+import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", source = "api", fixedRate = "150", appsArg = Object.keys(catalog).join(","), target = "page", passesArg] = process.argv.slice(2);
@@ -29,6 +30,7 @@ const passes = passesOf(passesArg);
 if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const results = join(here, "results", round, source);
 mkdirSync(results, { recursive: true });
+await recordLoadTool(dirname(results));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const log = (msg) => console.log(new Date().toISOString(), msg);
@@ -43,7 +45,7 @@ function k6(name, base, envs, script = "ssr-load.js") {
   const args = ["run", "--rm", "--network", network, ...k6Net, ...loadCpusFor(source), ...k6User, "-v", `${here}:/bench`, "-e", `BASE=${base}`, "-e", `TARGET=${target}`];
   for (const [k, v] of Object.entries(envs)) args.push("-e", `${k}=${v}`);
   const run = `k6 run --quiet --summary-export /bench/results/${round}/${source}/${name}.json /bench/${script}; s=$?; echo "k6 $(grep usage_usec /sys/fs/cgroup/cpu.stat)"; exit $s`;
-  args.push("--entrypoint", "sh", "grafana/k6:latest", "-c", run);
+  args.push("--entrypoint", "sh", k6Image, "-c", run);
   const r = docker(...args);
   writeFileSync(join(results, `${name}.log`), (r.stdout ?? "") + (r.stderr ?? ""));
   // One failed phase is reported and the run goes on to the next, so it does not cost the apps after it.

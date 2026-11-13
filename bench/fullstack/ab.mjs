@@ -15,11 +15,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appCpus, k6User, loadCpusFor, network } from "./apps.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
+import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [out = "results/ab", ...images] = process.argv.slice(2);
 const dir = join(here, out);
 mkdirSync(dir, { recursive: true });
+await recordLoadTool(dir);
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** @type {Record<string, string>} */
@@ -55,7 +57,7 @@ try {
           const sampler = phase === "warmup" ? null : spawn("node", [join(here, "sample-stats.mjs"), stats, "42", "ab-app"], { stdio: "ignore", windowsHide: true });
           const args = ["run", "--rm", "--network", network, ...loadCpusFor("fixture"), ...k6User, "-v", `${here}:/bench`, "-e", "BASE=http://ab-app:8080", "-e", `ENC=${enc}`, "-e", `TARGET=${target}`];
           for (const [k, v] of Object.entries(env)) args.push("-e", `${k}=${v}`);
-          args.push("grafana/k6:latest", "run", "--quiet", "--summary-export", `/bench/${out}/${name}.json`, "/bench/ab-load.js");
+          args.push(k6Image, "run", "--quiet", "--summary-export", `/bench/${out}/${name}.json`, "/bench/ab-load.js");
           const before = cpuUsec("ab-app");
           const load = docker(...args);
           const after = cpuUsec("ab-app");

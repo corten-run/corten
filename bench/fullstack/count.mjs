@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
 import { roundNameError } from "./round.mjs";
+import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
@@ -25,11 +26,12 @@ const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const dir = join(here, "results", round);
 mkdirSync(dir, { recursive: true });
+await recordLoadTool(dir);
 
 function k6(base, target, envs, summary) {
   const args = ["run", "--rm", "--network", network, ...k6Net, ...loadCpus, ...k6User, "-v", `${here}:/bench`, "-e", `BASE=${base}`, "-e", `TARGET=${target}`];
   for (const [k, v] of Object.entries(envs)) args.push("-e", `${k}=${v}`);
-  args.push("grafana/k6:latest", "run", "--quiet", "--summary-export", `/bench/${summary}`, "/bench/ssr-load.js");
+  args.push(k6Image, "run", "--quiet", "--summary-export", `/bench/${summary}`, "/bench/ssr-load.js");
   const r = docker(...args);
   if (r.status !== 0) throw new Error(r.stderr);
 }
