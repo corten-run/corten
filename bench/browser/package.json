@@ -8,15 +8,20 @@
     "serve": "node serve.mjs",
     "bench": "node run.mjs"
   },
+  "overrides": {
+    "@remix-run/test": {
+      "esbuild": "$esbuild"
+    }
+  },
   "devDependencies": {
-    "@babel/core": "7.28.5",
-    "babel-preset-solid": "1.9.16",
+    "@babel/core": "7.29.13",
+    "babel-preset-solid": "1.9.19",
     "esbuild": "0.28.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "remix": "3.0.0",
-    "solid-js": "1.9.17",
-    "svelte": "5.57.2",
-    "vue": "3.5.44"
+    "remix": "3.2.0",
+    "solid-js": "1.9.19",
+    "svelte": "5.57.3",
+    "vue": "3.5.45"
   }
 }
