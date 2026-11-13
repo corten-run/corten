@@ -1,0 +1,25 @@
+v1.64.1-noble: Pulling from playwright
+7a48b8f0e5c7: Pulling fs layer
+7f09f8b6ee13: Pulling fs layer
+81918556fc04: Pulling fs layer
+6a04ac251623: Pulling fs layer
+1838e4eb65d9: Pulling fs layer
+cc4939249994: Pulling fs layer
+ec6213bdc8d0: Pulling fs layer
+7a48b8f0e5c7: Download complete
+7a48b8f0e5c7: Pull complete
+81918556fc04: Download complete
+7f09f8b6ee13: Download complete
+1838e4eb65d9: Download complete
+7f09f8b6ee13: Pull complete
+1838e4eb65d9: Pull complete
+ec6213bdc8d0: Download complete
+cc4939249994: Download complete
+6a04ac251623: Download complete
+6a04ac251623: Pull complete
+cc4939249994: Pull complete
+ec6213bdc8d0: Pull complete
+81918556fc04: Pull complete
+Digest: sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+Status: Downloaded newer image for mcr.microsoft.com/playwright:v1.64.1-noble
+mcr.microsoft.com/playwright:v1.64.1-noble

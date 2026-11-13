@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps } from "../fullstack/inventory.mjs";
 import { locales } from "../marketplace/contract.mjs";
 
 export const registrySchema = "benchmark-groups/v1";

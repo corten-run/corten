@@ -1,0 +1,9 @@
+corten: listening on http://localhost:8080
+2026-11-12T15:57:02.528106Z  WARN corten: refused a request for host "unrecognized.invalid" (421): if the app is served under that name, list it with Policy::host
+2026-11-12T15:57:03.316206Z ERROR corten: request failed status=500 error=marketplace API returned 503 Service Unavailable
+2026-11-12T15:57:03.416164Z ERROR corten: request failed status=500 error=marketplace API returned 503 Service Unavailable
+2026-11-12T15:57:13.532027Z ERROR corten: request failed status=500 error=error sending request for url (http://marketplace-r20-a6ab17d79f-upstream:8080/marketplace/records/item_1) error.sources=[operation timed out]
+2026-11-12T15:58:29.800675Z ERROR corten: request failed status=500 error=marketplace API returned 503 Service Unavailable
+2026-11-12T15:58:29.803892Z ERROR corten: request failed status=500 error=marketplace API returned 302 Found
+2026-11-12T15:58:29.825166Z ERROR corten: request failed status=500 error=marketplace API returned 503 Service Unavailable
+2026-11-12T15:58:29.827806Z ERROR corten: request failed status=500 error=marketplace API returned 302 Found

@@ -1,0 +1,11 @@
+{
+  "first200At": "2026-11-12T16:06:11.893Z",
+  "successfulRequestMs": 293.50972,
+  "bytes": 7362,
+  "attempts": 64,
+  "path": "/marketplace/en-US/item_1",
+  "first200MsFromContainerStart": 1004,
+  "containerStartedAt": "2026-11-12T16:06:10.889906591Z",
+  "clock": "Docker host wall clock; container start, not process exec; polling interval 10ms",
+  "measuredBeforeReadinessOrWarmup": true
+}
