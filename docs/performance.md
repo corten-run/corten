@@ -87,8 +87,10 @@ it is not launch-to-deletion time or a cloud-cost measurement. The app had 1 cor
 All 2 admitted adapters completed 8 profiles and 3 passes each, with no request
 failures, dropped iterations or app stops, including warmup. The qualification table below is
 specific to the measured commit, not later adapter repairs. It does not certify the newer
-group contracts or change their readiness. Corten's archived label names the implementation
-at that commit; it is not a statement about today's dependencies.
+group contracts or change their readiness. Corten's archived `0.1`/`axum` table label is stale
+metadata, not measured implementation provenance. The saved build used `corten-run v0.2.0`,
+with the hyper-backed Corten at the measured commit; raw labels and generated tables are
+preserved unchanged.
 
 No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core. The single-process upstream still has a one-core ceiling despite its two-core quota.
 
