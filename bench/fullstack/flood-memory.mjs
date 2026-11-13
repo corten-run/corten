@@ -122,7 +122,7 @@ const save = () => writeFileSync(join(dir, "flood-memory.json"), JSON.stringify(
 docker("network", "create", net);
 docker("rm", "-f", probe);
 try {
-  const started = docker("run", "-d", "--name", probe, "--network", net, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
+  const started = docker("run", "-d", "--name", probe, "--network", net, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "sleep", "infinity");
   if (started.status !== 0) throw new Error("probe: " + started.stderr);
   for (let run = 1; run <= runs; run++) {
     for (const [variant, env] of Object.entries(variants)) {
