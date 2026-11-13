@@ -9,7 +9,7 @@ foreach ($round in 1..3) {
                 Start-Sleep -Seconds 3
                 node work/http2/load.mjs $protocol $count $kind
                 if ($LASTEXITCODE) { throw "load failed: $name" }
-                docker exec corten-http2-measure sh -c 'kill -TERM "$(cat /tmp/http2-server.pid)"; while kill -0 "$(cat /tmp/http2-server.pid)" 2>/dev/null; do sleep 0.1; done'
+                docker exec corten-http2-measure sh work/http2/stop.sh
                 if ($LASTEXITCODE) { throw "shutdown failed: $name" }
             }
         }
