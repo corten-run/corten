@@ -9,6 +9,9 @@ import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
 import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, targetOutcome } from "./evidence.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
+import { payload } from "./probe.mjs";
+import { emissionIdentity } from "./receipts.mjs";
+import { trackedImageBuild, removeOwnedImage, requireSourceControl, failureKind } from "./lifecycle.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -29,7 +32,7 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false } = {}) {
@@ -88,10 +91,9 @@ export async function run(args) {
     if (options.build) {
       const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
       const dockerfile = app === "corten" ? join(repo, "bench/marketplace/corten/Dockerfile") : join(context, "Dockerfile");
-      await docker(["build", ...labels, "--label", `run.corten.marketplace.commit=${summary.commit}`, "--label", "run.corten.marketplace.dirty=false",
+      await trackedImageBuild(summary, tag, save, () => docker(["build", ...labels, "--label", `run.corten.marketplace.commit=${summary.commit}`, "--label", "run.corten.marketplace.dirty=false",
         "--label", `run.corten.marketplace.profile=${featureProfile}`, "--label", `run.corten.hardening.source=${source}`,
-        "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`, "-t", tag, "-f", dockerfile, context], { timeout: 20 * 60 * 1000, file: join(folder, `build-${app}.log`) });
-      summary.ownedImages ??= []; summary.ownedImages.push(tag);
+        "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`, "-t", tag, "-f", dockerfile, context], { timeout: 20 * 60 * 1000, file: join(folder, `build-${app}.log`) }));
       image = JSON.parse(await docker(["image", "inspect", tag]))[0];
     } else image = JSON.parse(await docker(["image", "inspect", `cb-marketplace-production-${app}`]))[0];
     assert.equal(image.Config.Labels?.["run.corten.marketplace.commit"], summary.commit, "image source commit mismatch; build current native adapter");
@@ -141,7 +143,7 @@ export async function run(args) {
       stage = "native-controls";
       await sidecar(`${prefix}-native-controls`, appName, ["/repo/bench/hardening/native.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json", "/results/native-controls.json"], out, "native-controls.log", 90000);
       cell.nativeAssessment = assessNative(JSON.parse(readFileSync(join(out, "native-controls.json"))), qualification);
-      assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure", "native API-source controls failed; no attack qualification");
+      requireSourceControl(cell.nativeAssessment, "native");
       // Missing defenses do NOT exclude an app. Functional/browser work is a separate prerequisite.
       stage = "native-parity";
       await sidecar(`${prefix}-parity`, appName, ["/repo/bench/hardening/parity.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/parity.json"], out, "parity.log", 10 * 60000);
@@ -170,7 +172,7 @@ export async function run(args) {
         stage = "edge-native-controls";
         await sidecar(`${prefix}-edge-controls`, edgeName, ["/repo/bench/hardening/native.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json", "/results/edge-native-controls.json", "deployed-edge"], out, "edge-native-controls.log", 90000);
         cell.edgeAssessment = assessNative(JSON.parse(readFileSync(join(out, "edge-native-controls.json"))), edgeQualification, "deployed-edge");
-        assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure", "edge API-source controls failed");
+        requireSourceControl(cell.edgeAssessment, "edge");
       }
       // Native form metadata is discovered in the measured namespace, never supplied by an oracle.
       stage = "native-form";
@@ -184,7 +186,9 @@ export async function run(args) {
         snapshot[t.id] = { before: info }; processList.push({ id: t.id, role: t.role, count, containerId: info.Id });
       }
       const deployment = { mode: cell.mode, countAllProcesses: true, processes: processList.map(({ containerId, ...p }) => p) };
-      settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment, effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
+      settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment,
+        emissionPlan: budget.attack.scheduledAtMs.map((_, index) => emissionIdentity(payload(cell.phase, index, target, budget.attack, form), cell.phase)),
+        effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
       verifyNativeLimits(settings, Object.fromEntries(targets.map((t) => [t.id, { before: snapshot[t.id].before, after: snapshot[t.id].before, events: [] }])));
       provenance = targets.map((t) => ({ id: t.id, image: t.info.Image, source: t.source, config: digest(readFileSync(join(out, `${t.id}-before.json`))), evidence: `${t.id}-before.json` }));
       const net = JSON.parse(await docker(["network", "inspect", network]))[0];
@@ -246,7 +250,7 @@ export async function run(args) {
         } catch (e) { error = e; }
       }
       if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; cell.failedStage = stage;
-        cell.failureKind = ["native-parity", "edge-parity", "native-form"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
+        cell.failureKind = failureKind(stage, error);
         json(join(out, "failure.json"), { error: error.stack, startedWall, stage, kind: cell.failureKind }); summary.failures.push({ key: cell.key, stage, kind: cell.failureKind, error: error.message }); }
     }
   }
@@ -271,7 +275,7 @@ export async function run(args) {
       const info = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0]; assert.equal(info.Labels?.[label], runId);
       assert.equal(Object.keys(info.Containers).length, 0); await docker(["network", "rm", info.Id], { cleanup: true });
     } catch (e) { summary.cleanupFailures.push(e.message); }
-    for (const image of summary.ownedImages ?? []) try { await docker(["image", "rm", image], { cleanup: true }); } catch (e) { summary.cleanupFailures.push(e.message); }
+    for (const image of summary.ownedImages ?? []) try { await removeOwnedImage(image, runId, docker); } catch (e) { summary.cleanupFailures.push(e.message); }
     if (summary.cleanupFailures.length) summary.groupReady = false;
     summary.finishedAt = new Date().toISOString(); save();
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);

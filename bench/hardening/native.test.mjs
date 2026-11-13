@@ -15,10 +15,20 @@ import { nativeControls, assessNative, assessTimedSource, observe } from "./nati
 import { resourceAsync } from "./probe.mjs";
 import { matrix, nativeGroup, groupReady, budgets } from "./plan.mjs";
 import { targetOutcome, verifyNativeLimits } from "./evidence.mjs";
-import { tlsRequest, tlsHold, tlsProbe } from "./tls-qualification.mjs";
+import { tlsRequest, tlsHold, tlsProbe, elapsedMs } from "./tls-qualification.mjs";
+import { trackedImageBuild, removeOwnedImage, requireSourceControl, failureKind, terminalRecovery } from "./lifecycle.mjs";
 
 const listen = async (server) => { await new Promise((r) => server.listen(0, "127.0.0.1", r)); return `http://127.0.0.1:${server.address().port}`; };
 const close = async (server) => { server.closeAllConnections(); await new Promise((r) => server.close(r)); };
+test("TLS hold durations retain the existing integer-millisecond qualification wire contract", () => {
+  const probes = qualificationProbes();
+  probes.unfinishedHead = { closedMs: elapsedMs(10.1, 30010.9) };
+  probes.cap.releaseMs = elapsedMs(1.1, 2.3);
+  assert.equal(probes.unfinishedHead.closedMs, 30001); assert.equal(probes.cap.releaseMs, 1);
+  validateQualification(qualification(probes, "fixture"));
+  probes.unfinishedHead.closedMs = 30000.8;
+  assert.throws(() => validateQualification(qualification(probes, "fixture")), /unfinished-head result/);
+});
 test("real API control receipts detect cache, double reads, passthrough and swallowed faults, and reset independently", async () => {
   const fixture = records(), upstreamServer = marketplaceServer(fixture), upstream = await listen(upstreamServer);
   let mode = "correct";
@@ -39,8 +49,7 @@ test("real API control receipts detect cache, double reads, passthrough and swal
   try {
     for (mode of ["correct", "cache", "double", "passthrough", "swallow", "health-depends"]) {
       const raw = await nativeControls({ base, source: "api", upstream, qualification: q, original: fixture.item_1 });
-      if (mode === "double") assert.throws(() => assessNative(raw, q), /exactly once/);
-      else assert.equal(assessNative(raw, q).sourceControl, ["correct", "health-depends"].includes(mode) ? "passed" : "target-functional-failure");
+      assert.equal(assessNative(raw, q).sourceControl, ["correct", "health-depends"].includes(mode) ? "passed" : "target-functional-failure");
       if (mode === "health-depends") { assert.equal(assessNative(raw, q).livenessDuringUpstreamFailure, "not-live"); assert.equal(assessNative(raw, q).productionQualified, false); }
       const restored = JSON.parse((await observe(upstream + "/marketplace/records/item_1")).body); assert.deepEqual(restored, fixture.item_1);
       if (mode === "correct") {
@@ -61,12 +70,57 @@ test("timed API receipts preserve independent actual read totals and explicit un
     await observe(base + "/marketplace/records/item_1"); await observe(base + "/marketplace/records/item_1");
     raw.push({ type: "upstream-control-after", response: await observe(base + "/__marketplace/control") });
     assert.deepEqual(assessTimedSource(raw).counts, { requests: { item_1: 2 }, status: 200, answers: { 200: 2 } });
+    const successful = [{ type: "legitimate", ok: true }, { type: "legitimate", ok: true }];
+    assessTimedSource([...raw, ...successful]);
+    assert.throws(() => assessTimedSource([...raw, ...successful, successful[0]]), /contradict completed/);
+    const zero = structuredClone(raw), response = zero[1].response;
+    response.body = JSON.stringify({ status: 200, requests: {}, answers: {} }); response.bytes = Buffer.byteLength(response.body);
+    const { createHash } = await import("node:crypto"); response.sha256 = createHash("sha256").update(response.body).digest("hex");
+    assert.throws(() => assessTimedSource([...zero, ...successful]), /contradict completed/);
     for (const mutate of [(r) => r.pop(), (r) => r.push(r[0]), (r) => r[1].response.sha256 = "invented"]) {
       const bad = structuredClone(raw); mutate(bad); assert.throws(() => assessTimedSource(bad));
     }
   } finally { await close(server); }
   raw[1].response = await observe(base + "/__marketplace/control");
   const result = assessTimedSource(raw); assert.equal(result.state, "unavailable"); assert.equal(result.counts, null);
+});
+
+test("terminal native exit after recovery midpoint blocks recovery and numeric qualification without inventing a sample", () => {
+  const processes = [{ id: "application", role: "application" }], samples = [{ id: "application", running: true }];
+  const lifecycle = { application: { after: { State: { Running: false, ExitCode: 137, OOMKilled: true, FinishedAt: "2026-11-12T12:00:13.000Z" } } } };
+  const recovery = terminalRecovery(true, processes, samples, lifecycle);
+  assert.equal(recovery.disposition, "not-recovered"); assert.equal(samples[0].running, true);
+  assert.equal(recovery.terminalApplications[0].exitCode, 137); assert.equal(recovery.terminalApplications[0].oomKilled, true);
+  const capture = { legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 4, ok: 4, errors: 0 } }])), recovery, measurement: "complete" };
+  assert.equal(targetOutcome(capture, { productionQualified: true }).classification, "target-capacity-failure");
+  assert.equal(targetOutcome(capture, { productionQualified: true }).numericComparisonQualified, false);
+});
+
+test("owned image registration precedes failed/cancelled build and cleanup refuses unrelated tags", async () => {
+  const summary = {}, tag = "owned-build", calls = []; let saved = false;
+  await assert.rejects(trackedImageBuild(summary, tag, () => { saved = true; }, async () => {
+    assert.deepEqual(summary.ownedImages, [tag]); assert.equal(saved, true); throw new Error("cancelled after daemon tagged image");
+  }), /cancelled/);
+  const docker = async (args, options) => {
+    calls.push(args); assert.equal(options.cleanup, true);
+    if (args[1] === "ls") return "image-id";
+    if (args[1] === "inspect") return JSON.stringify([{ Config: { Labels: { "run.corten.hardening": "owned-run" } } }]);
+    return "";
+  };
+  await removeOwnedImage(summary.ownedImages[0], "owned-run", docker);
+  assert.deepEqual(calls.at(-1), ["image", "rm", tag]);
+  await assert.rejects(removeOwnedImage(tag, "someone-else", docker), /unowned image/);
+  const absent = []; await removeOwnedImage(tag, "owned-run", async (args) => { absent.push(args); return ""; }); assert.equal(absent.length, 1);
+});
+
+test("target API functional failures are distinct from broken control apparatus and parity failures", () => {
+  for (const stage of ["native-controls", "edge-native-controls"]) {
+    let error; try { requireSourceControl({ sourceControl: "target-functional-failure" }, stage); } catch (e) { error = e; }
+    assert.equal(failureKind(stage, error), "target-functional-failure");
+    assert.equal(failureKind(stage, new Error("control channel failed")), "apparatus-invalid");
+  }
+  assert.equal(failureKind("edge-parity", new Error("browser differs")), "parity-blocked");
+  requireSourceControl({ sourceControl: "passed" }, "native");
 });
 
 test("missing native host and liveness remain observed gaps, while a catch-all 200 health is inconclusive", async () => {

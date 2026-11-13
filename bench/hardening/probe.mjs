@@ -10,9 +10,10 @@ import { request as httpsRequest } from "node:https";
 import { performance, monitorEventLoopDelay } from "node:perf_hooks";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 import { validateBudget } from "./plan.mjs";
 import { observe } from "./native.mjs";
+import { responseOk, emissionIdentity, validateLegitimate, validateAttack } from "./receipts.mjs";
+import { budgets } from "./plan.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -87,7 +88,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
   const p = payload(phase, index, target, attack, form);
   const row = { type: "attack", index, phase, startedAtMs: now(), established: false, variant: p.variant ?? phase,
     firstBytes: Buffer.byteLength(p.first), firstSha256: sha(p.first), bytesQueued: 0, writes: 0, drips: 0, backpressure: 0,
-    responsePrefix: "", targetClosedAtMs: null, releasedAtMs: null };
+    responsePrefix: "", targetClosedAtMs: null, releasedAtMs: null, dripAtMs: [] };
   if (p.declaredBodyBytes) row.declaredBodyBytes = p.declaredBodyBytes;
   const socket = pool.socket(target);
   let opened = false, timer, dripTimer;
@@ -117,6 +118,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
       row.established = true; row.connectedAtMs = now(); row.localPort = socket.localPort;
       onConnected?.(row.localPort);
       write(p.first);
+      row.emission = row.writes > 0 ? "emitted" : "target-refused-before-write";
       if (p.body) {
         // Bound injector buffers: honor writable backpressure instead of queuing MiB per client.
         let remaining = p.body;
@@ -131,7 +133,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
         row.declaredBodyBytes = attack.bodyBytes;
         row.bodyPrefixBytes = Buffer.byteLength(form.prefix);
       }
-      if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; } }, attack.everyMs);
+      if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; row.dripAtMs.push(now()); } }, attack.everyMs);
       const midpoint = now() + Math.max(0, releaseAtMs - now()) / 2;
       await wait(midpoint - now());
       const snapshotUnread = () => { const sample = unread(row.localPort, target.port); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
@@ -149,20 +151,17 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
 }
 
 export async function legitimate({ target, path, expected, timeoutMs, pool, now, emit, index, window, timers = globalThis }) {
-  const row = { type: "legitimate", index, window, path, startedAtMs: now(), ok: false };
+  const row = { type: "legitimate", index, window, path, startedAtMs: now(), ok: false, bodyComplete: false };
+  const chunks = []; let bytes = 0;
   await new Promise((resolve) => {
     const request = target.tls ? httpsRequest : httpRequest;
     const req = request({ host: target.host, port: target.port, path, method: "GET", agent: false,
       ca: target.caPem, headers: { host: target.authority, "accept-encoding": "identity", connection: "close" } }, (res) => {
-      const chunks = []; let bytes = 0;
-      res.on("data", (c) => { bytes += c.length; if (bytes > 2 ** 20) req.destroy(new Error("legitimate response exceeded recorder budget")); else chunks.push(c); });
+      row.status = res.statusCode;
+      res.on("data", (c) => { bytes += c.length; if (bytes > 2 ** 20) { pool.errors.push("legitimate response exceeded recorder budget"); req.destroy(new Error("legitimate response exceeded recorder budget")); } else chunks.push(c); });
       res.on("error", (e) => { row.error = e.code ?? e.message; });
       res.on("end", () => {
-        const body = Buffer.concat(chunks); row.status = res.statusCode; row.bodyBytes = bytes; row.bodySha256 = sha(body);
-        // Full numeric record, not merely an HTTP 200. Pages already pass the complete browser gate.
-        if (path.startsWith("/api/")) {
-          try { row.ok = res.statusCode === 200 && isDeepStrictEqual(JSON.parse(body), expected); } catch { row.ok = false; }
-        } else row.ok = res.statusCode === 200 && body.includes("marketplace__listings") && body.includes(expected.title) && body.includes("marketplace__offers");
+        row.bodyComplete = true;
       });
     });
     const timer = timers.setTimeout(() => { row.timedOut = true; req.destroy(); }, timeoutMs);
@@ -171,6 +170,9 @@ export async function legitimate({ target, path, expected, timeoutMs, pool, now,
     req.once("close", () => { timers.clearTimeout(timer); resolve(); });
     req.end();
   });
+  const body = Buffer.concat(chunks);
+  row.bodyBytes = bytes; row.bodySha256 = sha(body); row.bodyBase64 = body.toString("base64");
+  row.ok = responseOk(row, expected, body);
   row.endedAtMs = now(); row.latencyMs = row.endedAtMs - row.startedAtMs; emit(row); return row;
 }
 
@@ -229,7 +231,8 @@ export async function controls(phase, { receiveDelayMs = 0 } = {}) {
     }));
     assert.equal(pool.errors.length, 0);
     const good = await legitimate({ target, path: "/api/control", expected: { id: "control", value: 37 }, timeoutMs: 1000, pool, now, emit: () => {}, index: 0, window: "control" });
-    result = { phase, passed: true, observations: observed.filter((o) => !o.prefix.startsWith("GET /api/control ")), rows, legitimate: good };
+    result = { phase, passed: true, observations: observed.filter((o) => !o.prefix.startsWith("GET /api/control ")), rows, legitimate: good,
+      emissionPlan: rows.map((row) => emissionIdentity(payload(phase, row.index, target, attack, form), phase)) };
     validateControl(result);
   } finally {
     for (const timer of receiverTimers) clearTimeout(timer);
@@ -248,6 +251,7 @@ export function validateControl(result) {
     assert.equal(observed.length, count);
     for (let i = 0; i < count; i++) {
       const r = rows[i], receipt = observed.find((o) => o.sourcePort === r.localPort); assert.ok(receipt);
+      validateAttack(r, result.emissionPlan?.[i], budgets());
       assert.equal(receipt.bytes, r.bytesQueued, "control receiver did not receive the emitted attack bytes");
       if (["slow-headers", "slow-bodies"].includes(phase)) {
         assert.ok(r.drips >= 2, "trickle timer did not run");
@@ -260,6 +264,7 @@ export function validateControl(result) {
       if (r.variant === "body-size") assert.equal(r.bodyBytesQueued + r.bodyPrefixBytes, 4 * 2 ** 20);
     }
     assert.equal(good.ok, true, "legitimate recorder control failed");
+    validateLegitimate(good, { id: "control", value: 37 });
     assert.equal(good.bodySha256, sha('{"id":"control","value":37}')); assert.equal(good.status, 200);
 }
 

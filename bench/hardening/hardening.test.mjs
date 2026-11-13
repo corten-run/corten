@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { budgets, validateBudget, matrix, apps, phases, cases, sources, parseArgs, selected, groupReady } from "./plan.mjs";
 import { Connections, controls, validateControl, inject, legitimate, payload, tcpQueues } from "./probe.mjs";
 import { artifacts, verifyArtifacts, verifyParity, defensiveRejection } from "./evidence.mjs";
+import { validateLegitimate, validateAttack } from "./receipts.mjs";
 
 test("all selected native candidates, sources, deployments and phases remain visible", () => {
   const cells = matrix(); assert.equal(cells.length, apps.length * sources.length * cases.length * phases.length);
@@ -37,7 +38,10 @@ test("same native socket injectors pass independent receiver controls for all si
 test("control assertions reject corrupted receipts rather than trusting a passing flag", async () => {
   for (const phase of ["slow-headers", "slow-readers", "oversized-requests"]) {
     const measured = await controls(phase);
-    for (const corrupt of [(c) => c.observations[0].bytes++, (c) => c.rows.pop(), (c) => c.rows[0].phase = "substituted", (c) => c.rows[0].index++, (c) => c.legitimate.bodySha256 = "invented", (c) => c.legitimate.ok = false]) {
+    for (const corrupt of [(c) => c.observations[0].bytes++, (c) => c.rows.pop(), (c) => c.rows[0].phase = "substituted", (c) => c.rows[0].index++, (c) => c.legitimate.bodySha256 = "invented", (c) => c.legitimate.ok = false,
+      (c) => c.legitimate.status = 503, (c) => c.legitimate.error = "ECONNRESET", (c) => c.legitimate.timedOut = true,
+      (c) => c.legitimate.bodyComplete = false, (c) => c.legitimate.bodyBase64 = Buffer.from("{}").toString("base64"),
+      (c) => c.rows[0].writes = 0, (c) => c.rows[0].firstSha256 = "f".repeat(64), (c) => c.rows[0].bytesQueued = 0]) {
       const changed = structuredClone(measured); corrupt(changed); assert.throws(() => validateControl(changed));
     }
     const changed = structuredClone(measured);
@@ -45,6 +49,10 @@ test("control assertions reject corrupted receipts rather than trusting a passin
     if (phase === "slow-readers") changed.observations[0].responseBackpressure = false;
     if (phase === "oversized-requests") changed.rows[2].bodyBytesQueued = 0;
     assert.throws(() => validateControl(changed));
+    if (phase === "slow-headers") {
+      const row = structuredClone(measured.rows[0]); row.drips = 0; row.dripAtMs = []; row.writes = 1; row.bytesQueued = row.firstBytes;
+      assert.throws(() => validateAttack(row, measured.emissionPlan[0], { attack: { everyMs: 40 }, timing: { maxStartLagMs: 0 } }), /no trickles/);
+    }
     if (phase === "oversized-requests") { const wrong = structuredClone(measured); wrong.rows[2].variant = "header-count"; assert.throws(() => validateControl(wrong)); }
   }
 });
@@ -82,6 +90,7 @@ test("legitimate recorder rejects wrong, truncated and hung responses even with 
         expected: { id: "native", value: 7 }, timeoutMs: 600, pool, now: performance.now.bind(performance), emit: () => {}, index: 0, window: "test",
         timers: { setTimeout: (fn, ms) => { deadline = fn; deadlineMs = ms; return 1; }, clearTimeout: () => { deadlineCleared++; } } });
       assert.equal(row.ok, name === "good");
+      validateLegitimate(row, { id: "native", value: 7 });
       assert.equal(deadlineMs, 600); assert.equal(row.timedOut === true, name === "hang");
     }
     assert.equal(deadlineCleared, 4);

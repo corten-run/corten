@@ -6,6 +6,9 @@ import { hardeningCaptureSchema, hardeningContract, validateHardeningOutcome } f
 import { validateBudget } from "./plan.mjs";
 import { validateControl } from "./probe.mjs";
 import { assessTimedSource } from "./native.mjs";
+import { records } from "../marketplace/fixtures.mjs";
+import { validateLegitimate, validateAttack } from "./receipts.mjs";
+import { terminalRecovery } from "./lifecycle.mjs";
 
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function artifacts(folder) {
@@ -71,6 +74,8 @@ export function verifyNativeLimits(settings, lifecycle) {
 export function assemble({ settings, raw, parity, source, cleanup, provenance, lifecycle }) {
   const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
   verifyNativeLimits(settings, lifecycle);
+  const expected = records().item_1;
+  for (const row of raw.filter((r) => r.type === "legitimate")) validateLegitimate(row, expected);
   if (settings.nativeSource === "api") { assert.equal(source, "api"); assessTimedSource(raw); }
   const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
   for (const type of ["control-before", "control-after"]) {
@@ -88,6 +93,8 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   assert.ok(cleanupAtMs >= reaped.atMs, "cleanup clock preceded injector cleanup");
   const attack = raw.filter((r) => r.type === "attack").sort((a, c) => a.index - c.index);
   assert.deepEqual(attack.map((r) => r.index), b.attack.scheduledAtMs.map((_, i) => i), "attack attempt indices incomplete");
+  assert.ok(Array.isArray(settings.emissionPlan) && settings.emissionPlan.length === attack.length, "missing exact native emission plan; historical evidence cannot establish current semantic qualification");
+  for (const row of attack) validateAttack(row, settings.emissionPlan[row.index], b);
   assert.ok(attack.every((r) => r.phase === settings.phase && r.endedAtMs >= r.startedAtMs));
   assert.ok(attack.reduce((n, r) => n + r.bytesQueued, 0) <= b.attack.maxWireBytes, "injector wire budget exceeded");
   if (settings.phase === "oversized-requests") for (const variant of ["header-count", "header-size", "body-size"]) assert.ok(attack.some((r) => r.variant === variant));
@@ -97,6 +104,8 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     const startMs = boundary("startMs"), endMs = boundary("endMs");
     const rows = raw.filter((r) => r.type === "legitimate" && r.window === window).sort((a, c) => a.index - c.index);
     assert.deepEqual(rows.map((r) => r.index), w.scheduledAtMs.map((_, i) => i), "legitimate attempt indices incomplete");
+    const paths = ["/marketplace/en-US/item_1", "/marketplace/fr-FR/item_1", "/marketplace/de-DE/item_1", "/api/marketplace/item_1"];
+    for (const row of rows) assert.equal(row.path, paths[row.index % paths.length], "scheduled native request path was substituted");
     const times = rows.filter((r) => r.ok).map((r) => r.latencyMs).sort((a, c) => a - c);
     legitimate[window] = { startMs, endMs, counts: { sent: rows.length, ok: times.length, errors: rows.length - times.length },
       startedAtMs: rows.map((r) => r.startedAtMs), latency: times.length ? { p50Ms: percentile(times, 0.5), p99Ms: percentile(times, 0.99), maxMs: times.at(-1) } : unavailable("no successful legitimate requests"), evidence: `raw.jsonl#legitimate/${window}` };
@@ -131,7 +140,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   const established = attack.filter((r) => r.established), closed = established.filter((r) => r.targetClosedAtMs !== null);
   const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
   const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
-  const runningApps = resources.after.filter((s) => settings.deployment.processes.find((p) => p.id === s.id).role === "application").every((s) => s.running);
+  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle);
   const rejected = established.filter((r) => defensiveRejection(settings.phase, r));
   const missing = ["slow-headers", "slow-bodies", "idle-connections"].includes(settings.phase) && established.length > 0 && closed.length === 0;
   // Closing a slow reader is not proof it reached write backpressure. No generic cap/timeout attribution.
@@ -145,8 +154,8 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
         connections: 0, processes: 0, tasks: 0, evidence: "cleanup.json" } },
     attack: { attempted: attack.length, established: established.length, failed: attack.length - established.length, closed: closed.length, held: established.length - closed.length,
       startedAtMs: attack.map((r) => r.startedAtMs), evidence: "raw.jsonl#attack" }, legitimate, resources,
-    recovery: { attempted: true, startMs: recoveryStart, endMs: recovered ? recovered.endedAtMs : legitimate.after.endMs,
-      disposition: recovered && runningApps ? "recovered" : runningApps ? "not-recovered" : "stopped", evidence: "raw.jsonl#legitimate/after" },
+    recovery: { attempted: true, startMs: recoveryStart, endMs: terminal.disposition === "recovered" ? recovered.endedAtMs : legitimate.after.endMs,
+      ...terminal, evidence: "raw.jsonl#legitimate/after and native application lifecycle after snapshots" },
     defense: { protection, reason: rejected.length ? "native HTTP rejection observed; see exact statuses and incomplete sends" : missing ? "connections retained to the declared release; no closure protection observed within this profile" : "bounded observations do not identify a protection mechanism",
       attribution: [{ layer: "unknown", mechanism: "raw closure/rejection/unread-queue evidence only; no inferred server/proxy mechanism", evidence: "raw.jsonl#attack" }] } };
   return validateHardeningOutcome(capture, settings);
@@ -156,6 +165,7 @@ export function targetOutcome(capture, assessment, sourceObservation) {
   const service = Object.fromEntries(Object.entries(capture.legitimate).map(([key, value]) => [key, value.counts]));
   return { classification: Object.values(service).some((counts) => counts.errors > 0) || capture.recovery.disposition !== "recovered"
     ? "target-capacity-failure" : "service-preserved", service, recovery: capture.recovery.disposition,
-    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && assessment?.productionQualified === true
+    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && capture.recovery.disposition === "recovered"
+      && Object.values(service).every((counts) => counts.errors === 0) && assessment?.productionQualified === true
       && (!sourceObservation || sourceObservation.state === "observed") };
 }

@@ -1,7 +1,8 @@
 // TLS client probes only. The native application and existing nginx profile are unchanged.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { request } from "node:https";
 import { connect } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +12,7 @@ import { qualify } from "../marketplace/qualify.mjs";
 const kept = ["content-type", "content-encoding", "cache-control", "etag", "content-security-policy", "x-content-type-options", "referrer-policy", "x-frame-options", "cross-origin-opener-policy", "permissions-policy", "set-cookie", "serverfnerror"];
 const keep = (headers) => Object.fromEntries(kept.filter((key) => headers[key] !== undefined).map((key) => [key, headers[key]]));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export const elapsedMs = (started, ended = performance.now()) => Math.round(ended - started);
 const options = (r, ca) => ({ host: r.host, port: r.port, servername: "localhost", ca, rejectUnauthorized: true, ALPNProtocols: ["http/1.1"] });
 
 export function tlsRequest(r, ca) {
@@ -80,7 +82,7 @@ export async function tlsHold(r, ca) {
         socket.once("close", () => { clearTimeout(timer); resolve(true); });
         socket.write(`GET ${r.path} HTTP/1.1\r\nhost: localhost\r\n`);
       });
-      return { [closed ? "closedMs" : "timedOutMs"]: performance.now() - started };
+      return { [closed ? "closedMs" : "timedOutMs"]: elapsedMs(started) };
     }
     assert.equal(r.mode, "cap");
     const holding = async (count) => {
@@ -105,7 +107,7 @@ export async function tlsHold(r, ca) {
     const released = performance.now();
     if (whileHeld === null && !second.state.closed) await second.until(r.releaseMs ?? 10000);
     const afterRelease = whileHeld !== null ? null : second.status() ?? (!second.socket ? "refused" : second.state.closed ? "closed" : null);
-    const releaseMs = performance.now() - released; second.socket?.destroy();
+    const releaseMs = elapsedMs(released); second.socket?.destroy();
     await sleep(1000);
     const last = await holding(0), afterwards = last.status(); last.socket?.destroy();
     return { below: first.held.length, belowHeld, held: second.held.length, whileHeld, afterRelease, releaseMs, afterwards };
@@ -130,7 +132,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const [base, source, upstream, output] = process.argv.slice(2);
     assert.equal(new URL(base).protocol, "https:");
     const ca = readFileSync(process.env.BENCH_EDGE_CERT, "utf8");
-    const result = await qualify({ base, source, upstream, probe: (script, input) => tlsProbe(script, input, ca) });
+    const journal = output + ".probes.jsonl"; writeFileSync(journal, "");
+    const result = await qualify({ base, source, upstream, probe: (script, input) => {
+      const response = tlsProbe(script, input, ca);
+      appendFileSync(journal, JSON.stringify({ script, request: { ...input, headers: undefined, body: undefined },
+        requestSha256: createHash("sha256").update(JSON.stringify(input)).digest("hex"), response }) + "\n");
+      return response;
+    } });
     writeFileSync(output, JSON.stringify(result, null, 2));
     console.log(`${source} TLS deployment: ${result.eligible ? "qualified" : `missing: ${result.missing.join(", ")}`}`);
   }
