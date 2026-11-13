@@ -178,6 +178,9 @@ or change its readiness gates.
 
 ### Unreleased
 
+- Preserve received non-ASCII marketplace `traceparent` bytes at the HTTPX
+  boundary rather than failing page/POST and JSON reads during header encoding.
+
 - Forward incoming marketplace `traceparent` per native request on page, JSON and
   form reads, without shared client-header mutation or a current-operation store.
 
@@ -196,6 +199,8 @@ Marketplace page/POST and JSON handlers capture the incoming W3C `traceparent`
 as an immutable optional string and pass it through the request-owned read task
 to `MarketplaceSource.get`. The HTTPX request alone receives the header; the
 shared client defaults and the opt-in diagnostic trace machinery are unchanged.
+The source reverses ASGI's Latin-1 header decoding into byte-valued HTTPX headers,
+preserving received non-ASCII bytes instead of passing them to its ASCII string API.
 Fixture reads do no HTTP work. Existing one-argument source/read calls still work.
 
 This is transparent forwarding, not a trace participant or exporter: no child
@@ -207,7 +212,8 @@ Run `python -m unittest app.test_trace_context` in this directory, in both profi
 (matched: `PROFILE=matched HOSTS=127.0.0.1,localhost,testserver`). It runs real
 Uvicorn and upstream HTTP servers, overlaps two distinct valid contexts, delays
 the first fetch until a newer request completes, holds an upstream body, checks
-all locales and accepted POST readbacks, and verifies invalid/missing headers and
+all locales and accepted POST readbacks, sends malformed non-ASCII headers over
+native HTTP sockets, and verifies invalid/missing headers, untraced requests and
 fixture bypass. These are functional regressions, not performance or lifetime
 qualification. Existing lifetime failures and diagnostic evidence above remain
 unchanged. Changed source hashes require a new independent native source audit;

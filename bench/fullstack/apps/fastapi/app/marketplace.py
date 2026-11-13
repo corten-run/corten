@@ -115,7 +115,8 @@ class MarketplaceSource:
     async def get(self, record_id, traceparent=None):
         if self.fixture is not None:
             return self.fixture.get(record_id)
-        headers = {} if traceparent is None else {"traceparent": traceparent}
+        # Reverse ASGI's Latin-1 header decoding, avoiding HTTPX's ASCII str encoding.
+        headers = {} if traceparent is None else {b"traceparent": traceparent.encode("latin-1")}
         response = await self.client.get(f"/marketplace/records/{quote(record_id, safe='')}", headers=headers)
         if response.status_code == 404:
             return None
