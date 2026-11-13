@@ -333,10 +333,11 @@ Corten is pre-1.0, so any minor version may change the API.
   its other answer, and a proxy that passes `Upgrade` on over HTTP/1.0 gets that answer too.
   Corten needs hyper 1.12, the first that keeps a 426's `Connection: upgrade` when it adds
   `close`. **Breaking:** a handshake of a wrong or missing version gets a 426 where it got a 400,
-  and a request to an `Upgrade` route that does not ask to switch, and a handshake on a
+  a request to an `Upgrade` route that does not ask to switch, and a handshake on a
   connection that cannot switch (HTTP/2, `app.test()`), get a 400 where they got a 426 without
-  the `Upgrade` header a 426 must have, so a client, health check or app test that expects the
-  old status sees the new one
+  the `Upgrade` header a 426 must have, and an HTTP/1.0 request with `Upgrade` to an
+  `Option<Upgrade>` route gets that route's page where it got a 426 (RFC 9110, 7.8), so a client,
+  health check or app test that expects the old status sees the new one
   ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
 - A typed link no longer writes a path value that would open another page: `.` or `..`, which a
   browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
