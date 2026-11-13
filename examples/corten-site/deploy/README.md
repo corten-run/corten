@@ -11,9 +11,9 @@ what is in use of that limit instead, and each gauge says which it is.
 
 | File | What it is |
 |---|---|
-| `provision.sh` | sets up a fresh Ubuntu 24.04 machine, once |
+| `provision.sh` | sets up a fresh Ubuntu 24.04 machine, and leaves what is in place when run again |
 | `corten-site.service` | the systemd service: the binary as a user that owns nothing |
-| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, and the streams asked for as zstd or uncompressed |
+| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, the streams asked for as zstd or uncompressed, and other names sent on to the site's |
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
 | `hold.mjs` | measures what the site holds: memory idle and with streams open, uncompressed or as a browser asks for them, and pages a second meanwhile, with the CPU and memory the server says are in use |
 | [`site.yml`](../../../.github/workflows/site.yml) | the workflow that builds and ships each change on `main` |
@@ -40,8 +40,10 @@ until the site's name reaches it, and runs them itself.
 1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
    droplets, reserved addresses, firewalls, tags, and domains with their records; one with
    full access is the simple choice. A Spaces key with full access lets the workflow make the
-   bucket on its first run and keep each version of the state in it. A key limited to one
-   bucket has not been tried: the workflow sets versioning on the bucket in every run.
+   bucket on its first run and keep each version of the state in it. A key that may not make
+   a bucket ends that run at its first step (`AccessDenied` on `CreateBucket`, as the first
+   run for corten.run did). A key limited to one bucket made beforehand has not been tried:
+   the workflow sets versioning on the bucket in every run.
 2. From a clone of the repository, with `gh` signed in as someone who administers it:
 
    ```sh
@@ -68,9 +70,13 @@ until the site's name reaches it, and runs them itself.
    answers at once if the registrar already names DigitalOcean's servers: add its records to
    `infra/main.tf` first, or leave the zone where it is with `SITE_DNS_ELSEWHERE`.
 5. At the name's registrar, name `ns1.digitalocean.com`, `ns2.digitalocean.com` and
-   `ns3.digitalocean.com` as the zone's name servers. Records the zone had elsewhere do not
-   come along: add each to `infra/main.tf` first. The machine waits for the name to reach it,
-   however long that takes, then asks for its certificate and finishes setting itself up.
+   `ns3.digitalocean.com` as the zone's name servers. Where the registrar signs the zone
+   (DNSSEC), turn that off there first and wait until the zone's `DS` record is gone:
+   DigitalOcean's servers do not sign their answers, and a resolver that checks refuses them
+   while the record is there (`SERVFAIL`, as corten.run answered until its record was gone).
+   Records the zone had elsewhere do not come along: add each to `infra/main.tf` first. The
+   machine waits for the name to reach it, however long that takes, then asks for its
+   certificate and finishes setting itself up.
 6. When `https://<domain>/` answers (502, with no release yet), turn deploys on and ship:
 
    ```sh
@@ -82,8 +88,10 @@ From then on a change on `main` under `infra/`, or to `provision.sh`, `nginx.con
 file, is applied by the workflow. The Site workflow does not run for a change to those files
 and this guide alone. A merge that also changes the site starts both, and that Site run may
 ship to the machine being replaced or fail against the new one while it sets itself up: the
-run the `Site machine` workflow starts afterwards is the one that ships. A droplet is never
-changed in place. A change to anything it is handed, a comment in one
+run the `Site machine` workflow starts afterwards ships whatever became of the first (where
+the first reached the new machine, as on `cd3f67f43`, the second ships the same commit again
+and the service restarts once more). A droplet is never changed in place. A change to
+anything it is handed, a comment in one
 of those files included, makes a new droplet, moves the address to it once it exists, and
 removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
 the workflow asks the machine at the address for the site, and starts the Site workflow when a
@@ -92,12 +100,29 @@ and also while the service is down.
 
 The site is down from the move until that release is served. That is the time a machine takes
 to install its packages and get a certificate, and then a whole run of the Site workflow, which
-tests and builds before it ships; none of it has been timed yet. The old machine and its
-certificate are gone by then, and Let's Encrypt issues the same name five certificates a week:
-a sixth replacement inside a week leaves the site down until its limit allows another. So
-gather changes to those files into one merge. When an apply fails, run the workflow again
-(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
-to a machine that answers 502. With deploys on, a run fails when the machine does not answer.
+waits for a runner and tests and builds before it ships. For the first machine made for
+corten.run (one run, on `a7bbe4cc9`, with the name already at DigitalOcean's servers) the
+machine answered under its certificate 1 min 42 s after the apply ended, and the Site run
+started then had shipped and checked the release 1 min 53 s after that, 4 s of it waiting for
+a runner. For the first replacement (one run, on `cd3f67f43`) the machine answered 1 min 22 s
+after the apply ended, and the Site run started then was answered by its release 4 min 6 s
+after that, 6 min 7 s after the address began to move: it waited 14 s behind another Site run
+and 2 min 38 s for a runner, and was answered 1 min 14 s after it had one. The site was down
+for about two of those six minutes, and that by chance. The merge had changed the site too,
+so a Site run of its own had started; it waited 2 min 54 s for a runner, finished building 3 s
+before the workflow first saw the machine answer, and was answered by its release 2 min 7 s
+after the address began to move and 1 min 51 s after it had moved. With the 4 s wait of the
+first machine's run it would by reckoning have shipped to the old machine before the move.
+So reckon on what is left of the apply after the move (39 s here, from its beginning), the
+machine's minute and a half and a Site run, of which the wait for a runner is the part that
+moves. The old machine and its certificate are gone by then, and Let's Encrypt issues the
+same names five certificates a week: a sixth replacement inside a week leaves the site down
+until its limit allows another (with names that redirect, a machine asks for two, one for the
+site's name and one for all of them, and each set of names has its own five). So gather
+changes to those files into one merge. When an apply fails, run the workflow again
+(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
+site to a machine that answers 502. With deploys on, a run fails when the machine does not
+answer.
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
 when it moves it.
@@ -109,7 +134,7 @@ when it moves it.
 | environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC` (variables) | what a new machine is handed |
 | repository variables | `SITE_DOMAIN`, `SITE_STATE_BUCKET`, `SITE_STATE_ENDPOINT`, `SITE_REFUSES_MAIL` | set by `bootstrap.sh` |
 | repository variables | `SITE_HOST` | set last, by hand: the Site workflow ships once it is |
-| repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE` | below |
+| repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE`, `SITE_REDIRECTS` | below |
 
 `SITE_MACHINE` is what the page adds after the machine's own count of itself (without it, the
 droplet's size and region). `SITE_ADMIN_KEYS` is a JSON list of the fingerprints of SSH keys in
@@ -121,6 +146,29 @@ the zone where it is not the site's name itself (`example.com` for `www.example.
 `SITE_DNS_ELSEWHERE` set to `true` leaves the zone where it is: point an A record at the address
 the workflow's apply prints. Changing `SITE_MACHINE` or `SITE_ADMIN_KEYS` replaces the droplet
 on the next apply.
+
+`SITE_REDIRECTS` is a JSON list of other names in the zone that send their visitors to the
+site's, such as `["www.example.com"]` for a site at `example.com`. Each gets a record at the
+same address and a place on the site's certificate, and nginx answers it on both ports with a
+redirect (308) to the same path at the site's name; the app never sees it. With the zone
+elsewhere the records are yours to make, before the variable is set. A new machine serves the
+site under its own name first, with a certificate for that name alone, and then waits for
+each of the other names to reach it and asks for one certificate that holds them all: two
+certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
+back only itself. The machine says which name it waits for, or why a certificate was refused
+(`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
+Taking the names on runs `provision.sh` a second time, which writes the deploy key's file,
+the deploy's `sudo` rule and the service's environment file again: a deploy that reaches the
+machine in the instant of one of those writes can fail, and is run again. That has not been
+seen. Where the names are there already, the second run is over well before the Site run the
+workflow starts has built its release; a Site run the merge started itself can have built
+its own by then, as on `cd3f67f43`, where it shipped within half a minute of the machine
+taking `www` on, and passed. After an apply the workflow asks the machine for each name, for
+twenty minutes in all where it made the machine, and fails where one does not send its
+visitors to the site. Twenty minutes is by reckoning a little more than one new try takes,
+not a time that was waited out: a run can end red for a name the machine takes on minutes
+later, and the machine goes on trying either way. Changing the list replaces the droplet on
+the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
@@ -156,7 +204,12 @@ are kept apart on GitHub and not on the machine.
    quotes keep the shell from reading a price's `$`; the text itself takes no quotes or
    backslashes. Run again without it, the script keeps what it was given before, so the text can
    be changed but not removed that way; the page shows a change after the service next starts
-   (`systemctl restart corten-site`, or the next deploy).
+   (`systemctl restart corten-site`, or the next deploy). A fifth argument is the other names
+   that send their visitors to the site's, with spaces between them (`'www.<domain>'`): point
+   each at the machine first, as in step 2. It is given on every run, and the certificate
+   follows it: a run whose names are not the ones the certificate holds asks for a
+   certificate that holds the site's name and those given, so a run without a name stops
+   redirecting it and takes it off the certificate, and its record can then go.
 4. Make the `site` environment, which only `main` may deploy to, and give it the key. A
    repository secret could be read by a workflow on any pushed branch; an environment's is
    handed only to a job the environment's rule lets in.
@@ -322,8 +375,9 @@ machine's, and read low with the server at that limit. Of such a limit the page 
 the standard library counts: where that is fewer CPUs than the machine has, that the server is
 held to them (a quota's whole CPUs, rounded down and never fewer than one), and no limit of
 memory. Under the service file's sandbox, in the container with systemd described below, both
-gauges are there, so the unit does not keep the server from `/proc/stat` or `/proc/meminfo`; it
-has not run on a real machine.
+gauges are there, so the unit does not keep the server from `/proc/stat` or `/proc/meminfo`. On
+the droplets the unit runs and the Site workflow reads a patch from the live stream; whether
+both gauges are there was not looked at.
 
 The workflow's ship step was rehearsed against a container running sshd, with the `deploy` user
 made by `provision.sh`'s own lines and a stand-in for `systemctl`: a first deploy, a second of
@@ -389,12 +443,77 @@ new name; after a run that had stopped between the keys' halves it made the keys
 stopped, writing nothing more, when the host key could not be read back; and interrupted with
 the keys on disk it left nothing in its temporary directory.
 
-None of this has met DigitalOcean or GitHub. Not run: `tofu apply`, the Spaces bucket, the
-`Site machine` workflow's apply on GitHub, `bootstrap.sh` against GitHub, the address moving
-from one droplet to the next, and the metadata address itself: the two paths `boot.sh` reads
-there (`reserved_ip/ipv4/active` and `ip_address`) have not been asked of a droplet. Whether a
-droplet can reach its own reserved address from inside is not known either, which is why
-`boot.sh` has both ways. The first apply is their test.
+The names that redirect were checked at `a8335bcd7` in Ubuntu 24.04 containers with a stand-in
+for `systemctl` that starts and reloads nginx, and with certbot pointed at Pebble, Let's
+Encrypt's test server, in a container beside them, so the lines that ask for a certificate ran
+as they are. `provision.sh`, given one name that redirects, was issued one certificate for both
+names; nginx then answered the other name with 308 to the same path and query at the site's
+name on ports 80 and 443, the site's own name with 502 on 443 (no app behind it), and a name
+in neither list with 308 on port 80 and 502 on 443. Run again with the same names it asked for
+no certificate; with a name more, one fewer, and none, each time for one that holds the
+site's name and the names given and no other, and a name no longer given was no longer
+redirected on 443. It refused, before anything was installed, a URL, a name in capitals, one
+that starts with a hyphen, `*`, the site's own name among the others, and a site's name with
+a space in it.
 
-certbot's request for a certificate and the Site workflow on GitHub have not been run from this
-repository yet: the first deploy is their test.
+`boot.sh`, with two names that redirect and one of them pointing at an address that answers
+nothing, got the site's certificate and answered for the site (502), said which name it was
+waiting for each 30 seconds, and when that name reached the machine was issued the
+certificate for all three and redirected both. Run again as the unit would after a failure,
+it asked for no certificate. With a name the machine could reach and Pebble could not
+resolve, it ended in failure with the site still answering under its own certificate, and the
+same on the next try. With no names it asked for one certificate and finished. The step the
+workflow runs after an apply, trusting Pebble's root alone, said that each name sends its
+visitors to the site; failed for a list `jq` cannot read; failed after a minute for a name
+the machine does not redirect; and, told the machine was made in that run, waited and passed
+when the machine took the name on half a minute in (`914ad4c7f` had the list read inside the
+loop's own line, where a list that cannot be read passed). A plan with stand-in values adds
+one record for each name (none with the zone elsewhere), and is refused for a name outside
+the zone, the site's own name, a name given twice, and a URL. The site's smoke test was not
+run again through this nginx: the server that answers the site is as it was.
+
+At `279fdf3c0`, for what a second review changed, in the same containers: `provision.sh` took
+names with spaces around and between them as the same names, took only spaces as none, and
+refused a name with a dot at either end or two together and `-n`. `boot.sh`, started on a
+machine that held the site's certificate and nothing else of the site (as after a first step
+that ended early), set the site up without asking for a certificate, answered for it while it
+waited for a late name, and then went on as above; run again after it had finished, it asked
+for none. The workflow's step ended in failure 60 seconds in where the machine was not made
+in that run and lacked the name, and passed 61 seconds in where it was and `provision.sh` was
+started with the name 30 seconds in (it asks each 20 seconds); its twenty minutes were not
+waited out. By hand a name given twice is not refused: nginx warns and ignores the second
+(seen by a review), and the workflow's path refuses it. A renewal of a certificate that had
+replaced the
+site's (`certbot renew --dry-run`, against Pebble) passed for all three names.
+
+On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on
+`a7bbe4cc9` (one run): `bootstrap.sh` had set the repository up on GitHub, the state went to
+a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the
+droplet, handed its files by cloud-init, ran `boot.sh` and `provision.sh` and got its
+certificate from Let's Encrypt, answering 502 under the site's name 1 min 42 s after the
+apply. The workflow then started the Site workflow, which shipped the release and was
+answered by the page, its JSON and its live stream as that commit. An earlier run had stopped
+at the bucket, with a key that could not make one.
+
+The same day the merge of `cd3f67f43` replaced that droplet, with `SITE_REDIRECTS` naming
+`www.corten.run` (one run, read from the workflows' logs). The plan was two to add, one to
+change and one to destroy. By tofu's own count the new droplet was made in 33 seconds, the
+address moved to it in the 15 after, the record for `www` was made, and the old droplet was
+gone 22 seconds after the move; by the log's times, which keep the fractions tofu drops, the
+apply ended 39 seconds after the address began to move.
+The step saw the machine answer 502 under the site's name 1 min 22 s after the apply ended
+(it asks each 20 seconds, so the machine may have answered sooner). The Site run the merge
+itself had started was shipping then and was answered by the page as that commit 6 seconds
+later, and the step said `www` sends its visitors to the site on its second ask, 20 seconds
+after the first answer. The Site run the workflow started shipped the same commit again and
+was answered as it 4 min 6 s after the machine's first answer; the times above say where
+those minutes went.
+
+Among what has still not run on a real machine: an apply that fails once begun or a droplet
+that cannot be made, a first deploy that fails, a put-back of the release before, a machine
+that freezes during a ship or never answers the workflow, a name that reaches the machine
+late or is refused its certificate, a renewal, `hold.mjs` and nginx's limits, the optional
+variables other than `SITE_REDIRECTS`, and the steps by hand. Which of `boot.sh`'s two ways
+ended its wait on either droplet was not looked at, so whether a droplet can reach its own
+reserved address from inside is still not known, nor whether the two metadata paths
+(`reserved_ip/ipv4/active` and `ip_address`) answer as `boot.sh` reads them.

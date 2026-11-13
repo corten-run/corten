@@ -54,17 +54,27 @@ public class MarketplaceSource {
     }
 
     public MarketplaceRecord get(String id) {
-        return get(id, false);
+        return get(id, null);
+    }
+
+    public MarketplaceRecord get(String id, String traceparent) {
+        return get(id, false, traceparent);
     }
 
     public MarketplaceRecord getForWrite(String id) {
-        return get(id, true);
+        return getForWrite(id, null);
     }
 
-    private MarketplaceRecord get(String id, boolean write) {
+    public MarketplaceRecord getForWrite(String id, String traceparent) {
+        return get(id, true, traceparent);
+    }
+
+    private MarketplaceRecord get(String id, boolean write, String traceparent) {
         if (fixture != null) return fixture.get(id);
         URI uri = UriComponentsBuilder.fromUriString(base).path("/marketplace/records/{id}").encode().buildAndExpand(id).toUri();
-        return api.get().uri(uri).exchange((req, res) -> {
+        var read = api.get().uri(uri);
+        if (traceparent != null) read.header("traceparent", traceparent);
+        return read.exchange((req, res) -> {
             if (res.getStatusCode().value() == 404) return null;
             if (res.getStatusCode().value() != 200) throw new IllegalStateException("marketplace API returned " + res.getStatusCode());
             MarketplaceRecord record = write ? writeRecord.readValue(res.getBody())

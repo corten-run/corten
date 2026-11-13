@@ -1,12 +1,13 @@
 #!/bin/sh
 # What a machine made by main.tf runs as it first starts (corten-site-boot.service): it waits
-# until the site's name reaches this machine, then sets it up with ../provision.sh. The name may
-# not reach it for a while: its DNS may still be on its way, and the address belongs to the
-# machine before this one until OpenTofu moves it.
+# until the site's name reaches this machine, then sets it up with ../provision.sh, and then
+# does the same for the names that redirect to the site's. A name may not reach it for a
+# while: its DNS may still be on its way, and the address belongs to the machine before this
+# one until OpenTofu moves it.
 set -eu
 
-# Written by main.tf: the three it sets.
-domain='' email='' machine=''
+# Written by main.tf: the four it sets.
+domain='' email='' machine='' redirects=''
 . /root/deploy/site.conf
 
 export DEBIAN_FRONTEND=noninteractive
@@ -22,7 +23,7 @@ until apt-get update; do
 done
 apt-get install -y --no-install-recommends nginx curl
 
-# Two ways to know the name reaches this machine; either will do. A certificate asked for then
+# Two ways to know a name reaches this machine; either will do. A certificate asked for then
 # is asked for by the machine the name reaches.
 #
 # One: a word only this machine knows, served where certbot's challenge will be (nginx as
@@ -33,7 +34,7 @@ install -d /var/www/html/.well-known/acme-challenge
 printf '%s' "$word" > /var/www/html/.well-known/acme-challenge/corten-site-boot
 systemctl start nginx
 answers() {
-    [ "$(curl -fsS --max-time 5 "http://$domain/.well-known/acme-challenge/corten-site-boot" 2>/dev/null || true)" = "$word" ]
+    [ "$(curl -fsS --max-time 5 "http://$1/.well-known/acme-challenge/corten-site-boot" 2>/dev/null || true)" = "$word" ]
 }
 
 # Two: the name resolves to the reserved address that DigitalOcean's metadata says is on this
@@ -46,13 +47,35 @@ assigned() {
     [ "$(curl -fsS --max-time 5 "$metadata/active" 2>/dev/null || true)" = true ] || return 1
     address=$(curl -fsS --max-time 5 "$metadata/ip_address" 2>/dev/null || true)
     [ -n "$address" ] || return 1
-    getent ahostsv4 "$domain" | awk -v address="$address" '$1 == address { found = 1 } END { exit !found }'
+    getent ahostsv4 "$1" | awk -v address="$address" '$1 == address { found = 1 } END { exit !found }'
+}
+wait_for() {
+    until answers "$1" || assigned "$1"; do
+        echo "waiting for $1 to reach this machine"
+        sleep 30
+    done
 }
 
-until answers || assigned; do
-    sleep 30
-done
-rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
+# The site first, under its own name alone. A name that redirects to it and is late, or is
+# refused a certificate, then holds back only itself: the site is served meanwhile, and this
+# unit's journal says which name is waited for. A run after one that failed further on leaves
+# this step out, by the file that says it finished: asked for the site's name alone, a
+# certificate that holds the others already would be replaced by one without them, and again
+# below by one with them, at each new try.
+wait_for "$domain"
+if [ ! -e /var/lib/corten-site-boot.site ]; then
+    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine"
+    touch /var/lib/corten-site-boot.site
+fi
 
-sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine"
+# Then the names that redirect, once each reaches this machine: one certificate that holds
+# them and the site's name takes the place of the site's (provision.sh). The word is still
+# served meanwhile: the site's configuration answers that path on port 80 for any name.
+if [ -n "$redirects" ]; then
+    for name in $redirects; do
+        wait_for "$name"
+    done
+    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
+fi
+rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
 touch /var/lib/corten-site-boot.done

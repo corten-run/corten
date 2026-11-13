@@ -18,8 +18,9 @@ def show(request, locale, record_id):
         return HttpResponseForbidden("Forbidden")
     if locale not in LABELS:
         return HttpResponseBadRequest("Unsupported locale")
+    traceparent = request.headers.get("traceparent")
     try:
-        record = source.get(record_id)
+        record = source.get(record_id) if traceparent is None else source.get(record_id, traceparent)
     except Timeout:
         # The existing Requests inactivity timeout closes its upstream connection.
         # This is not a WSGI disconnect signal or a whole-operation deadline.
@@ -77,8 +78,9 @@ def alerts(request):
 def record_json(request, record_id):
     if request.method not in ("GET", "HEAD"):
         return JsonResponse({"error": "Method Not Allowed"}, status=405, headers={"Allow": "GET, HEAD"})
+    traceparent = request.headers.get("traceparent")
     try:
-        record = source.get(record_id)
+        record = source.get(record_id) if traceparent is None else source.get(record_id, traceparent)
         if record is None:
             return JsonResponse({"error": "Not Found"}, status=404)
         return JsonResponse(record)
