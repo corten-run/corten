@@ -8,8 +8,13 @@ Record JSON responses use `Cache-Control: no-store`.
 Both record sources use a request-context-aware Go HTTP client with redirects
 disabled and a ten-second whole-response timeout, including JSON body decoding.
 The same sources serve their existing native templ pages; templates, localization,
-forms and legacy item transport are not replaced. This does not add the production
-middleware required by the localized-marketplace or hardening groups.
+forms and legacy item transport are not replaced. Native timeout errors return
+504, cancellation errors 408, and other source failures 502. Record-page source
+errors use a generic native templ page without exposing upstream details. Caller
+disconnects cancel the source request through Go's request context; the same native
+client timeout closes an outstanding header or body read. Neither failure can
+reach the alert commit point. This does not add the production middleware required
+by the localized-marketplace or hardening groups.
 
 With the pinned Go and templ tools from the Dockerfile installed, generate native
 views and run the checks from this directory:

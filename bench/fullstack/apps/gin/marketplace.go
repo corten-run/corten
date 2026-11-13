@@ -359,7 +359,7 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 		}
 		record, err := s.load(c.Request.Context(), c.Param("id"), c.Request.Method == http.MethodPost)
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadGateway, err)
+			abortRecordPage(c, err)
 			return
 		}
 		if record == nil {
@@ -400,7 +400,7 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 		c.Header("Cache-Control", "no-store")
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": "marketplace source unavailable"})
+			c.AbortWithStatusJSON(recordSourceStatus(err), gin.H{"error": "marketplace source unavailable"})
 			return
 		}
 		if record == nil {

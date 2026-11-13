@@ -284,7 +284,7 @@ func TestNativeSourceDeadlineAndCallerAbort(t *testing.T) {
 						client := &http.Client{Timeout: bound + time.Second}
 						t.Cleanup(client.CloseIdleConnections)
 						res, body := nativeRequest(t, client, "GET", app.URL+path)
-						nativeJSON(t, res, body, 502, false)
+						nativeJSON(t, res, body, 504, false)
 						awaitNative(t, started, "upstream start")
 					}
 					awaitNative(t, canceled, "upstream request cancellation")
