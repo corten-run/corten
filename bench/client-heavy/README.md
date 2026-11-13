@@ -148,6 +148,10 @@ post-probe observation intervals come from the records, and bundle sizes come
 from saved bytes. Failed, unsupported and not-run outcomes stay explicit, with
 unavailable measurements `null`, never zero. A file ledger hashes every saved
 native output, including generated files not covered by v1's build receipt.
+An outer outcome must match the unavailable qualification, or the unavailable
+measurement after successful qualification. A failed capture cannot be relabeled
+unsupported or not-run. Qualification without a measurement remains a blocked
+failed cell, not a pass or a wholly unrun cell.
 Present native build/workload manifests are checked independently even when the
 summary has no builds. Missing manifests block verification; malformed or
 contradictory manifests invalidate it. Present summary build claims, failure-log
