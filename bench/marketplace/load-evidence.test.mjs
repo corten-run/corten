@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { retainLoadEvidence, validateLoadExecution } from "./load-evidence.mjs";
 import { containerReceipt, k6Image, nodeImage } from "./raw-contract.mjs";
+import { readLoadSummary, readOutcome } from "./run-contract.mjs";
 
 // Execute the producer's actual k6 callback, mocking only the k6 runtime imports
 // and Docker transport. Do not substitute the synthetic saved-folder generator.
@@ -77,18 +78,24 @@ test("pinned real k6 producer exports replayable elapsed against an isolated HTT
     created.push(id); return id;
   };
   const mock = await create(`${prefix}-http`, ["--network", "none", "--cpus", "1", "--memory", "128m", nodeImage, "node", "-e",
-    "require('http').createServer((q,r)=>setTimeout(()=>{r.setHeader('Content-Type','text/html');r.end('<html>mock</html>')},200)).listen(8080,'127.0.0.1')"]);
+    "require('http').createServer((q,r)=>setTimeout(()=>{r.statusCode=q.url.startsWith('/marketplace/fr-FR/')?503:200;r.setHeader('Content-Type','text/html');r.end('<html>mock</html>')},200)).listen(8080,'127.0.0.1')"]);
   await docker(["start", mock]);
   await docker(["exec", mock, "node", "-e", "fetch('http://127.0.0.1:8080').then(r=>{if(!r.ok)process.exit(1)})"]);
-  const start = Date.now();
-  const load = await create(`${prefix}-k6`, ["--network", `container:${mock}`, "--cpus", "4", "--memory", "2g", "-v", `${resolve("bench")}:/bench:ro`,
-    ...Object.entries({ TARGET: "page", MODE: "fixed", BASE: "http://127.0.0.1:8080", LOCALE: "en-US", RATE: "150", VUS: "64", DURATION: "15s" }).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-    k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
-  await docker(["start", "-a", load]);
-  const summary = await retainLoadEvidence(docker, load, folder, "fixed");
-  const clock = JSON.parse(readFileSync(join(folder, "fixed-clock.json")));
-  const receipt = containerReceipt(JSON.parse(await docker(["inspect", load]))[0]);
-  validateLoadExecution({ load: receipt, summary, clock, start, end: Date.now(), seconds: 15 });
-  assert.ok(clock.testRunDurationMs > 15000, "mock's in-flight requests should require real graceful completion");
-  t.diagnostic(`measured mock only: count=${summary.metrics.http_reqs.count}, rate=${summary.metrics.http_reqs.rate}, engineMs=${clock.testRunDurationMs}, dockerMs=${Date.parse(receipt.state.FinishedAt) - Date.parse(receipt.state.StartedAt)}`);
+  for (const [phase, locale] of [["served", "en-US"], ["failed", "fr-FR"]]) {
+    const start = Date.now();
+    const load = await create(`${prefix}-k6-${phase}`, ["--network", `container:${mock}`, "--cpus", "4", "--memory", "2g", "-v", `${resolve("bench")}:/bench:ro`,
+      ...Object.entries({ TARGET: "page", MODE: "fixed", BASE: "http://127.0.0.1:8080", LOCALE: locale, RATE: "150", VUS: "64", DURATION: "15s" }).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
+    await docker(["start", "-a", load]);
+    const summary = await retainLoadEvidence(docker, load, folder, phase);
+    const clock = JSON.parse(readFileSync(join(folder, `${phase}-clock.json`)));
+    const receipt = containerReceipt(JSON.parse(await docker(["inspect", load]))[0]);
+    validateLoadExecution({ load: receipt, summary, clock, start, end: Date.now(), seconds: 15 });
+    const traffic = readLoadSummary(summary);
+    assert.equal(traffic.failed, phase === "failed" ? traffic.requests : 0);
+    if (phase === "failed") assert.throws(() => readOutcome(summary), /no request succeeded/);
+    else assert.equal(readOutcome(summary).failed, 0);
+    assert.ok(clock.testRunDurationMs > 15000, "mock's in-flight requests should require real graceful completion");
+    t.diagnostic(`measured ${phase} mock only: count=${summary.metrics.http_reqs.count}, rate=${summary.metrics.http_reqs.rate}, engineMs=${clock.testRunDurationMs}, dockerMs=${Date.parse(receipt.state.FinishedAt) - Date.parse(receipt.state.StartedAt)}`);
+  }
 });

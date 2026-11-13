@@ -7,7 +7,7 @@ import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateSummary } from "./report.mjs";
-import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
@@ -61,6 +61,7 @@ function replay({ folder, round, commit }) {
   assert.equal(host.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim(), s.host.cpu, "host CPU differs from raw probe");
   assert.equal(host.at(-1).trim(), s.host.onlineCpus, "host CPU inventory differs from raw probe");
   const used = new Map(), configurations = new Map(), probeIds = new Set(), loadIds = new Set();
+  const cpuObservations = [];
   function runtime(c, expectedImage, role, memory, { running = false, quota = s.measurement.cpus[role].quota } = {}) {
     id(c.id); imageId(c.imageId); assert.equal(c.imageId, expectedImage, "raw runtime image differs");
     assert.match(c.name, new RegExp(`^${s.runId}-[a-z0-9-]+$`));
@@ -70,7 +71,10 @@ function replay({ folder, round, commit }) {
     assert.ok(c.nanoCpus === quota * 1e9 && c.cpuQuota === 0 || c.nanoCpus === 0 && Number.isSafeInteger(c.cpuPeriod) && c.cpuPeriod > 0 && Number.isSafeInteger(c.cpuQuota) && c.cpuQuota / c.cpuPeriod === quota, "raw runtime CPU quota differs");
     assert.equal(typeof c.state?.Running, "boolean"); assert.equal(typeof c.state.OOMKilled, "boolean");
     assert.ok(!c.state.Error, "Docker runtime error");
-    if (running) { assert.equal(c.state.Running, true); assert.equal(c.state.OOMKilled, false); time(c.state.StartedAt); }
+    if (running) {
+      assert.equal(c.state.Running, true); assert.equal(c.state.OOMKilled, false); assert.equal(c.state.ExitCode, 0);
+      assert.ok(c.state.Restarting === undefined || c.state.Restarting === false, "running container is restarting"); time(c.state.StartedAt);
+    }
     const identity = { kind: "container", id: c.id, name: c.name };
     if (used.has(c.id)) assert.deepEqual(used.get(c.id), identity, "container identity changed");
     used.set(c.id, identity);
@@ -146,6 +150,7 @@ function replay({ folder, round, commit }) {
     assert.deepEqual(c.cmd, ["node", `/repo/bench/marketplace/${script}.mjs`, "http://127.0.0.1:8080", source, `http://${upstream.name}:8080`, `/results/${output}.json`]);
     assert.equal(c.state.Running, false); assert.equal(c.state.OOMKilled, false); assert.equal(c.state.ExitCode, 0);
     assert.ok(time(c.state.StartedAt) >= time(s.startedAt) && time(c.state.FinishedAt) >= time(c.state.StartedAt) && time(c.state.FinishedAt) <= firstLoad, "gate did not finish before load");
+    assert.ok(time(appContainer.state.StartedAt) >= time(s.startedAt) && time(c.state.StartedAt) >= time(appContainer.state.StartedAt), "gate precedes the checked app's lifetime");
     const outputRoot = posix.join(benchMount, "marketplace/results", round, ...(s.options.part ? [`d${s.options.part.index}`] : []), source, appContainer.name.slice(s.runId.length + 1));
     mounts(c, [["/repo", repoMount], ["/results", outputRoot, false]]);
   }
@@ -215,11 +220,26 @@ function replay({ folder, round, commit }) {
         assert.deepEqual(k6.cmd, ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"]);
         const k6Summary = files.json(`${base}/${phase}.json`);
         validateLoadExecution({ load: k6, summary: k6Summary, clock: files.json(`${base}/${phase}-clock.json`), start, end, seconds: phase === "warmup" ? s.options.warmup : s.options.duration });
+        const traffic = readLoadSummary(k6Summary);
         const rawCounters = files.json(`${base}/${phase}-cpu.json`);
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
         assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
-        if (profile.source === "api") assert.equal(upstreamErrors(raw.upstreamReads.before, raw.upstreamReads.after), 0);
+        if (profile.source === "api") {
+          assert.equal(upstreamErrors(raw.upstreamReads.before, raw.upstreamReads.after), 0);
+          const reads = (raw.upstreamReads.after.answers[200] ?? 0) - (raw.upstreamReads.before.answers[200] ?? 0);
+          // A completed 200 requires its own record read. Failed/time-out requests
+          // may also have read upstream, so do not equate reads to successful traffic.
+          assert.ok(reads >= traffic.requests - traffic.failed, "API reads do not cover successful requests");
+        }
         else assert.equal(raw.upstreamReads, null);
+        const participants = phase === "warmup" ? [] : [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
+        const appStopped = !raw.app.state.Running || raw.app.state.OOMKilled;
+        exactKeys(raw.before, participants); exactKeys(raw.after, appStopped ? [] : participants);
+        for (const name of participants) {
+          assert.ok(Number.isSafeInteger(raw.before[name]) && raw.before[name] >= 0, "invalid CPU counter before load");
+          if (!appStopped) assert.ok(Number.isSafeInteger(raw.after[name]) && raw.after[name] > raw.before[name], "invalid CPU counter after load");
+          cpuObservations.push({ id: name === coldApp.name ? coldApp.id : upstream.id, start, end, before: raw.before[name], after: raw.after[name] });
+        }
         const stop = phaseEnd({ ...raw.seen, errors: raw.seen.errors.map((e) => ({ ...e, error: new Error(e.error) })), summary: k6Summary });
         if (stop) {
           assert.deepEqual(stop, run.stopped, "raw stop differs");
@@ -227,18 +247,12 @@ function replay({ folder, round, commit }) {
           if (!raw.app.state.Running) assert.ok(time(raw.app.state.FinishedAt) >= loadStart && time(raw.app.state.FinishedAt) <= loadEnd, "app stop is outside generator execution");
           else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
           assert.ok(raw.seen.events.every((e) => Number.isFinite(e.ms) && e.ms >= start && e.ms <= end), "Docker stop events are outside the phase window");
-          const sidecars = [cpu, ...(profile.source === "api" ? [upstream] : [])];
-          assert.deepEqual(raw.seen.sidecars.map((c) => [c.name, c.startedAt]), sidecars.map((c) => [c.name, c.state.StartedAt]), "stop sidecar identities differ");
+          const sidecars = [raw.cpu, ...(profile.source === "api" ? [raw.upstream] : [])];
+          assert.deepEqual(raw.seen.sidecars, sidecars.map((c) => ({ name: c.name, startedAt: c.state.StartedAt, state: c.state })), "stop sidecar identities/state differ from runtime receipts");
           break;
         }
         const metrics = readOutcome(k6Summary);
-        if (profile.source === "api") {
-          assert.ok((raw.upstreamReads.after.answers[200] ?? 0) > (raw.upstreamReads.before.answers[200] ?? 0), "API load performed no upstream reads");
-        }
-        if (phase === "warmup") { exactKeys(raw.before, []); exactKeys(raw.after, []); }
         if (phase !== "warmup") {
-          const participants = [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
-          exactKeys(raw.before, participants); exactKeys(raw.after, participants);
           const counters = rawCounters; exactKeys(counters, participants);
           const sampled = files.json(`${base}/${phase}-stats.log.json`); exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
           const history = Object.fromEntries(participants.map((n) => [n, []]));
@@ -259,7 +273,6 @@ function replay({ folder, round, commit }) {
             for (const p of samples) { assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && p.cpu >= 0 && p.mem > 0, "invalid stats clock/value"); last = p.t; }
             assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
             stats[name] = summarizeSamples(samples); assert.deepEqual(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
-            assert.ok(Number.isSafeInteger(raw.before[name]) && raw.before[name] >= 0 && Number.isSafeInteger(raw.after[name]) && raw.after[name] > raw.before[name], "invalid CPU counters");
             const usec = raw.after[name] - raw.before[name]; assert.deepEqual(counters[name], { usec }, "CPU delta differs from raw counters");
             stats[name].cpuUsec = usec;
           }
@@ -269,6 +282,13 @@ function replay({ folder, round, commit }) {
         assert.deepEqual(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
       }
     }
+  }
+  const lastCpu = new Map();
+  for (const observation of cpuObservations.sort((a, b) => a.start - b.start)) {
+    const prior = lastCpu.get(observation.id);
+    // A stopped phase has only its pre-load lower bound, never an invented after sample.
+    assert.ok(!prior || observation.start >= prior.end && observation.before >= (prior.after ?? prior.before), "cumulative CPU counter rewound across serial observations");
+    lastCpu.set(observation.id, observation);
   }
   const cleanup = files.json("cleanup.json");
   assert.equal(cleanup.evidenceVersion, evidenceVersion); assert.equal(cleanup.runId, s.runId);

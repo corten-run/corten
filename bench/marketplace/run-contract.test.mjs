@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readLoadSummary, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
   assert.doesNotMatch(inventory.phoenix.label, /LiveView/);
@@ -72,6 +72,20 @@ test("the load script has no thresholds, so a phase an app cannot serve does not
   assert.doesNotMatch(script, /^\s*thresholds\s*:/m);
   assert.match(script, /http\.setResponseCallback\(http\.expectedStatuses\(200\)\)/);
 });
+test("complete stopped traffic parses without successful requests, but never without the full k6 schema", () => {
+  const raw = k6({ http_req_failed: { value: 1 }, checks: { passes: 100, fails: 100 } }, { status: [0, 100] });
+  assert.equal(readLoadSummary(raw).failed, 100);
+  assert.throws(() => readOutcome(raw), /no request succeeded/);
+  for (const edit of [
+    (v) => { delete v.metrics.http_req_duration; },
+    (v) => { delete v.metrics.http_req_failed; },
+    (v) => { delete v.metrics.checks; },
+    (v) => { delete v.root_group; },
+    (v) => { delete v.root_group.checks["marketplace status 200"]; },
+    (v) => { delete v.root_group.checks["marketplace content type"]; },
+    (v) => { v.root_group.checks["marketplace content type"].fails = 1; },
+  ]) { const v = structuredClone(raw); edit(v); assert.throws(() => readLoadSummary(v)); }
+});
 test("an upstream error answer during a phase is counted, so the run fails on it", () => {
   assert.equal(upstreamErrors({ answers: { 200: 10 } }, { answers: { 200: 50 } }), 0);
   assert.equal(upstreamErrors({ answers: { 200: 10, 503: 1 } }, { answers: { 200: 50, 503: 3, 404: 1 } }), 3);
@@ -126,6 +140,10 @@ test("a phase ends in the app's stop only when nothing else the phase depends on
     [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: { Running: true, StartedAt: "2026-01-01T00:00:09Z" } }, alive("upstream")] }, /cpu stopped or restarted/],
     [{ sidecars: [alive("cpu"), { name: "upstream", startedAt: "2026-01-01T00:00:00Z", state: { Running: false, StartedAt: "2026-01-01T00:00:00Z" } }] }, /upstream stopped or restarted/],
     [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: null }] }, /cpu stopped or restarted/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, OOMKilled: true } }] }, /cpu unhealthy/],
+    [{ sidecars: [{ ...alive("upstream"), state: { ...alive("upstream").state, Error: "daemon error" } }] }, /upstream unhealthy/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, Restarting: true } }] }, /cpu unhealthy/],
+    [{ sidecars: [{ ...alive("cpu"), state: { ...alive("cpu").state, ExitCode: 137 } }] }, /cpu unhealthy/],
     [{ events: [{ action: "kill" }, { action: "die" }] }, /Docker kill on the app container/],
     [{ app: { ...exited, Error: "daemon shutdown" } }, /Docker reported an error/],
     // stopped before the phase began (after the cold start's first 200, or between phases): not

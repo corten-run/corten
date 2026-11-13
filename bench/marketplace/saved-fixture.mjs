@@ -90,6 +90,7 @@ export function writeSavedFixture(folder, commit, tree) {
     gateClock += 1000;
   }
   const cpu = runtime("cpu", "load", 128 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], cmd: ["node", "-e", "setInterval(() => {}, 1000)"], quota: 1, network: "none", state: state(true, new Date(gateClock).toISOString()), mounts: [mount("/bench"), mount("/sys/fs/cgroup")] }); write("cpu-container.json", cpu);
+  const cumulativeCpu = new Map();
   for (const { pass, profile, app } of passPlan(s.options.passes, s.options.apps, timedProfiles, () => [])) {
       const run = s.apps[app].runs[profile.key].find((r) => r.pass === pass);
       const base = `${profile.source}/${app}/p${run.pass}-${profile.locale ?? "neutral"}-${profile.target}`;
@@ -107,7 +108,12 @@ export function writeSavedFixture(folder, commit, tree) {
         const load = runtime("k6", "load", 2 ** 30, { image: k6Image, entrypoint: ["k6"], mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
           cmd: ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], state: state(false, new Date(start + 100).toISOString(), new Date(end - 100).toISOString()) });
         const names = phase === "warmup" ? [] : [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
-        const before = Object.fromEntries(names.map((n) => [n, 1000000])), after = Object.fromEntries(names.map((n) => [n, 2000000]));
+        const before = {}, after = {};
+        for (const name of names) {
+          const id = name === coldApp.name ? coldApp.id : upstream.id;
+          before[name] = (cumulativeCpu.get(id) ?? 999000) + 1000; after[name] = before[name] + 1000000;
+          cumulativeCpu.set(id, after[name]);
+        }
         const raw = { evidenceVersion, identity: { app, source: profile.source, locale: profile.locale, target: profile.target, pass: run.pass, phase }, app: coldApp, load, cpu, upstream: profile.source === "api" ? upstream : null,
           before, after, upstreamReads: profile.source === "api" ? { before: { answers: { 200: 1 } }, after: { answers: { 200: 1 + seconds * 100 } } } : null,
           finishedAt: new Date(end).toISOString(), seen: { pass: run.pass, phase, phaseStart: new Date(start).toISOString(), app: coldApp.state, errors: [] } };

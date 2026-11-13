@@ -116,6 +116,13 @@ export function parseArgs(args, inventory) {
 // missing or malformed, that sent nothing, in which no request succeeded, or in which a 200 had
 // the wrong content type (a parity failure) is not a measurement.
 export function readOutcome(summary) {
+  const outcome = readLoadSummary(summary);
+  assert.ok(outcome.failed < outcome.requests && summary.root_group.checks["marketplace status 200"].passes > 0, "no request succeeded: not a measurement");
+  return outcome;
+}
+// Parse complete k6 evidence even for an app that stopped with no successful
+// traffic. readOutcome adds the success requirement for numeric measurements.
+export function readLoadSummary(summary) {
   const m = summary?.metrics;
   const metric = (name) => m?.[name]?.values ?? m?.[name];
   const requests = metric("http_reqs");
@@ -129,7 +136,7 @@ export function readOutcome(summary) {
   assert.ok(Number.isSafeInteger(checks?.passes) && Number.isSafeInteger(checks?.fails) && checks.passes >= 0 && checks.fails >= 0 && checks.passes + checks.fails > 0, "load checks missing");
   const named = summary.root_group?.checks ?? {};
   const status = named["marketplace status 200"], kind = named["marketplace content type"];
-  assert.ok([status, kind].every((c) => Number.isSafeInteger(c?.passes) && Number.isSafeInteger(c?.fails)), "load checks missing by name");
+  assert.ok([status, kind].every((c) => Number.isSafeInteger(c?.passes) && c.passes >= 0 && Number.isSafeInteger(c?.fails) && c.fails >= 0), "load checks missing by name");
   assert.equal(kind.fails, 0, "a 200 had the wrong content type under load: a parity failure, not an outcome");
   const dropped = metric("dropped_iterations")?.count ?? 0;
   assert.ok(Number.isSafeInteger(dropped) && dropped >= 0, "load dropped iterations malformed");
@@ -137,7 +144,6 @@ export function readOutcome(summary) {
   // A request's metrics are recorded before its check, so one cut off at the phase's end can
   // have its failure and not its check; nothing else makes the two differ.
   assert.ok(status.fails <= failed && failed - status.fails <= Math.max(1, requests.count / 100), "status check and failed requests disagree");
-  assert.ok(failed < requests.count && status.passes > 0, "no request succeeded: not a measurement");
   return { requests: requests.count, rps: requests.rate, p50: duration["p(50)"], p95: duration["p(95)"], p99: duration["p(99)"],
     failed, failedRate, dropped, checksFailed: status.fails, appOutcome: failed > 0 || dropped > 0 || status.fails > 0 };
 }
@@ -221,6 +227,7 @@ export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars =
   const start = Date.parse(phaseStart);
   assert.ok(!Number.isNaN(start), "a stopped app needs its phase's start");
   for (const s of sidecars) assert.ok(s.state?.Running === true && s.state.StartedAt === s.startedAt, `${s.name} stopped or restarted ${harness}`);
+  for (const s of sidecars) assert.ok(s.state.OOMKilled !== true && s.state.Restarting !== true && !s.state.Error && (s.state.ExitCode === undefined || s.state.ExitCode === 0), `${s.name} unhealthy ${harness}`);
   assert.ok(!app.Error, `Docker reported an error for the app container (${app.Error}) ${harness}`);
   const outside = events.find((e) => outsideActions.has(e.action));
   assert.ok(!outside, `Docker ${outside?.action} on the app container ${harness}`);

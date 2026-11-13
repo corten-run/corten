@@ -301,6 +301,17 @@ must match the native invocation. Stopped profiles use the existing stop/event r
 measurements. Missing or malformed receipts (including deleted raw files) are invalid, not
 an absent-proof fallback. No capability requirement or nightly capacity policy is relaxed.
 
+API phases require at least one observed upstream record answer for each successful k6
+request (`http_reqs.count - failed`), rather than merely a nonzero read count. Failed or
+timed-out requests may also read upstream, so reads need not equal successful traffic.
+Stopped phases must retain the complete latency, failure, aggregate-check and named-check
+export even if every request failed; they never become numeric passing phases. Stop-sidecar
+states must be healthy and agree with their retained runtime snapshots. CPU observations
+are ordered by actual serial phase windows and must be cumulative per container ID, including
+the shared upstream across apps/profiles/passes. A stopped phase's pre-load counter remains
+a lower bound when its post-load counter is unavailable. Gates cannot start before the
+specific checked app's retained start time.
+
 Each phase also retains `<phase>-clock.json`, written by the real load script's
 `handleSummary` callback. Its `state.testRunDurationMs` is k6's counter-rate denominator,
 including graceful completion, not the configured duration or Docker lifetime. The legacy
@@ -313,8 +324,10 @@ clock consistency are required even when the app stops. The producer-path mock e
 the actual callback and copy helper with sub-ms and graceful-completion durations; it does
 not claim a real load measurement. Setting `MARKETPLACE_PRODUCER_MOCK=1` when running
 `node --test bench/marketplace/load-evidence.test.mjs` additionally exercises the pinned
-real k6 image against an isolated, delayed HTTP mock, then removes both containers and
-temporary receipts. It requires cached images, never pulls, publishes no ports, and has
+real k6 image against an isolated, delayed HTTP mock, then removes all test containers and
+temporary receipts. Both fully served and all-failed exports exercise the complete schema
+parser; the all-failed export still cannot qualify as a numeric measurement.
+It requires cached images, never pulls, publishes no ports, and has
 no external network. Saved replay itself never invokes this test or Docker.
 See [k6's summary clock and metric conversion](https://github.com/grafana/k6/blob/master/internal/js/summary.go).
 Earlier raw versions without this independent clock remain historical and fail saved replay;

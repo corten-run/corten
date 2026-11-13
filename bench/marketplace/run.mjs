@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
@@ -255,6 +255,7 @@ async function load(name, target, phase, seconds, raw, pass) {
       seen: { ...seen, summary: undefined, errors: seen.errors.map((e) => ({ ...e, error: String(e.error?.message ?? e.error) })) } });
     // Throws for a harness or parity failure, including one the app's stop does not explain (#1128).
     const stop = phaseEnd(seen);
+    readLoadSummary(seen.summary);
     if (stop) {
       // An upstream error answer may be what stopped the app: that stays the harness's failure.
       if (reads) {
