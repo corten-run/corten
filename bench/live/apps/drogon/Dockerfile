@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM debian:trixie-20261027 AS tools
+FROM debian:trixie-20261104@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS tools
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates g++ cmake make git \
         libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev libicu-dev \
@@ -22,7 +22,7 @@ COPY test/feed_test.cc test/feed_test.cc
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j2 && ctest --test-dir build --output-on-failure
 
-FROM debian:trixie-20261027-slim
+FROM debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libjsoncpp26 libssl3t64 libuuid1 zlib1g libicu76 \
     && rm -rf /var/lib/apt/lists/* \
