@@ -259,8 +259,13 @@ the reverse direction. Empty commit streams, orphan redirect continuations, miss
 native fields and declared assets without matching dispatch coverage remain unknown. These
 checks neither reconstruct deleted observations nor change the strict oracle or 240 profiles.
 Redirect links additionally retain the actual predecessor response's complete-URL hash, public
-path/scheme/status and native header timing. A reused request ID cannot bridge a deleted middle
-hop. Bounded native-clock samples and response header/terminal timing reject reversed or future
+path/scheme/status and native header timing. Independent native network-stack request-time
+receipts bind each dispatch in a reused-ID chain, including repeated identical URLs; missing
+receipts cannot bridge a deleted middle hop. A bounded read-only parser observation retains
+complete-URL hashes, not query strings, and binds declarations to their actual realm and scope.
+Query-distinct assets require distinct matching URL identities; only exact-URL duplicates can
+coalesce. Missing identities or changed observations remain unknown. Bounded native-clock
+samples and response header/terminal timing reject reversed or future
 native timestamps independently of host receipt order. Historical journals lacking these new
 receipts remain unknown without rewriting their saved captures.
 

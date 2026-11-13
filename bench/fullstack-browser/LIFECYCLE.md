@@ -95,13 +95,27 @@ Reconciliation is bidirectional: every completed HTTP document and parser invent
 needs its unique matching native commit. Empty commit streams cannot classify no-JS work.
 A redirect continuation requires its preceding dispatch under the same request/frame/loader/
 resource identity and the actual CDP `redirectResponse` URL hash, public path/scheme and status.
-The hash binds the complete URL without retaining its query or headers. Reused IDs and a
-continuation's status alone cannot identify an immediate predecessor: deleting a middle hop
-leaves unknown coverage and does not assign its redirect outcome to an earlier URL. Missing
+The hash binds the complete URL without retaining its query or headers. URL equality alone
+does not identify a dispatch when a chain revisits the exact same URL. The journal separately
+retains each native `Network.requestWillBeSentExtraInfo.connectTiming.requestTime`, but no
+cookies or headers from that event. Ordered, unique network-stack receipts must account for
+every dispatch in the request-ID chain; each redirect response's native `requestTime` must
+match its preceding dispatch's independent receipt, with native `redirectHasExtraInfo` true.
+It is not assumed equal to `requestWillBeSent.timestamp`. Missing, extra or ambiguous receipts
+make the link unknown and cannot assign a later hop's response to an earlier dispatch.
+Reused IDs and a continuation's status alone cannot identify an immediate predecessor. Missing
 new identity/timing receipts in historical journals stay unknown; no saved journal is upgraded.
 Mandatory dispatch, response, terminal and parser fields and their observation ordering are checked.
 Observed stylesheet/image/script-preload declarations require matching native dispatches;
-coalesced declarations may share an observed request, but deleted asset streams remain unknown.
+Only identical complete-URL hashes may share a coalesced request; path equality cannot merge
+query-distinct resources. `recordDocument` starts a bounded read-only parser URL observation
+using the actual realm's unique native context ID. It verifies the observer realm, scope,
+document path and full declaration lists against the captured DOM before retaining URL hashes
+and start/finish times. Complete URLs exist transiently in observer memory, not the journal.
+Terminal observation drains these pending reads. A replacement realm, changed declarations,
+failed read or missing identity remains unknown rather than borrowing another document's data.
+Parser ownership, preload matching and stylesheet initiators use query-sensitive hashes too.
+Deleted asset streams remain unknown.
 Unobserved or cross-origin asset coverage is not invented from a DOM declaration.
 
 Initial and terminal CDP `Performance.getMetrics` Timestamp samples retain their host round-trip
