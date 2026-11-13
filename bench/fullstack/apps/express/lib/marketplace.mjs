@@ -1,5 +1,6 @@
 // Numeric marketplace records and request-local CLDR presentation (Intl).
 import { readFileSync } from "node:fs";
+import { traceParent } from "./traceparent.mjs";
 
 export const labels = JSON.parse(readFileSync(new URL("./marketplace-labels.json", import.meta.url), "utf8"));
 
@@ -131,9 +132,12 @@ const fixture = process.env.MARKETPLACE_SOURCE === "fixture"
     .map(([id, value]) => [id, parseMarketplaceRecord(value)]))
   : null;
 
-export async function fetchMarketplaceRecord(id, { signal } = {}) {
+export async function fetchMarketplaceRecord(id, { signal, traceparent } = {}) {
   if (fixture) return fixture.get(id) ?? null;
-  const response = await fetch(`${base}/marketplace/records/${encodeURIComponent(id)}`, { redirect: "manual", signal });
+  const parent = traceParent(traceparent);
+  const response = await fetch(`${base}/marketplace/records/${encodeURIComponent(id)}`, {
+    redirect: "manual", signal, headers: parent ? { traceparent: parent } : undefined,
+  });
   if (!response.ok) {
     await response.body?.cancel();
     if (response.status === 404) return null;

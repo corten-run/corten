@@ -1,4 +1,5 @@
 #include "marketplace.h"
+#include <algorithm>
 #include <json/reader.h>
 #include <cassert>
 #include <fstream>
@@ -44,6 +45,20 @@ int main() {
   assert(f.alert("T", "x@y", locale == "en-US" ? "1,25" : "1.25", words) == words["invalid_price"].asString());
   auto result = f.alert("{email} $&", "x@y", locale == "en-US" ? "1234.50" : "1234,50", words);
   assert(result.find("{email} $&") != std::string::npos && result.find(f.money(Json::Value(123450))) != std::string::npos);
+  for (auto test : std::vector<std::pair<std::string, std::optional<int64_t>>>{{"12.34", 1234}, {"90071992547409.93", 9007199254740993LL}, {"92233720368547758.07", INT64_MAX}, {"92233720368547758.08", std::nullopt}, {"9223372036854775807", std::nullopt}}) {
+   if (locale != "en-US") std::replace(test.first.begin(), test.first.end(), '.', ',');
+   std::optional<int64_t> minor;
+   auto message = f.alert("T", "x@y", test.first, words, &minor);
+   assert(minor == test.second);
+   if (minor == 9007199254740993LL) {
+    const std::vector<std::string> expected = {"$90,071,992,547,409.93", "90 071 992 547 409,93 $US", "90.071.992.547.409,93 $"};
+    assert(spaces(message).find(expected[loc]) != std::string::npos);
+   }
+   if (minor == INT64_MAX) {
+    const std::vector<std::string> expected = {"$92,233,720,368,547,758.07", "92 233 720 368 547 758,07 $US", "92.233.720.368.547.758,07 $"};
+    assert(spaces(message).find(expected[loc]) != std::string::npos);
+   }
+  }
   ++loc;
  }
  auto record = marketplace::parseRecord(json(R"({

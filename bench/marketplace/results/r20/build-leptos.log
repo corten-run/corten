@@ -1,0 +1,574 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.28kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 DONE 0.3s
+
+#3 docker-image://docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+#3 resolve docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e done
+#3 CACHED
+
+#4 [internal] load metadata for docker.io/library/rust:1-bookworm
+#4 DONE 0.4s
+
+#5 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#5 DONE 0.4s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 47B done
+#6 DONE 0.0s
+
+#7 [stage-2 1/4] FROM docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+#7 resolve docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc 0.0s done
+#7 DONE 0.0s
+
+#8 [stage-2 2/4] WORKDIR /app
+#8 CACHED
+
+#9 [tools 1/3] FROM docker.io/library/rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c
+#9 resolve docker.io/library/rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c 0.0s done
+#9 CACHED
+
+#10 [internal] load build context
+#10 transferring context: 161.98kB 0.0s done
+#10 DONE 0.0s
+
+#11 [tools 2/3] RUN rustup target add wasm32-unknown-unknown
+#11 0.217 info: downloading component rust-std
+#11 DONE 2.4s
+
+#12 [tools 3/3] RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/leptos-rs/cargo-leptos/releases/download/v0.3.11/cargo-leptos-installer.sh | sh
+#12 0.513 downloading cargo-leptos 0.3.11 x86_64-unknown-linux-gnu
+#12 1.467 installing to /usr/local/cargo/bin
+#12 1.472   cargo-leptos
+#12 1.474 everything's installed!
+#12 DONE 1.5s
+
+#13 [build 1/3] WORKDIR /src
+#13 DONE 0.0s
+
+#14 [build 2/3] COPY . .
+#14 DONE 0.0s
+
+#15 [build 3/3] RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target,sharing=locked     find . -name target -prune -o -type f -exec touch {} +     && cargo leptos build --release --cargo-locked && mkdir -p /out && cp target/release/item-page-leptos /out/server && cp -r target/site /out/site
+#15 0.946 [38;5;214m    Metadata[0m keys ["env"] from metadata.leptos are not recognized and will be ignored
+#15 1.004     Blocking waiting for file lock on package cache
+#15 1.014     Blocking waiting for file lock on package cache
+#15 1.054     Blocking waiting for file lock on package cache
+#15 1.062     Blocking waiting for file lock on package cache
+#15 1.068     Blocking waiting for file lock on package cache
+#15 1.071  Downloading crates ...
+#15 1.132   Downloaded http-range-header v0.4.2
+#15 1.133   Downloaded core_detect v1.0.0
+#15 1.135   Downloaded axum-core v0.5.6
+#15 1.137   Downloaded leptos_integration_utils v0.8.9
+#15 1.138   Downloaded axum v0.8.9
+#15 1.146   Downloaded leptos_axum v0.8.10
+#15 1.147   Downloaded encoding_rs v0.8.44
+#15 1.160   Downloaded multer v3.1.0
+#15 1.162   Downloaded multiversion_no_op v1.0.0
+#15 1.163   Downloaded mime v0.3.18
+#15 1.164   Downloaded scopeguard v1.2.0
+#15 1.166   Downloaded simdutf8 v0.1.5
+#15 1.168   Downloaded spin v0.9.9
+#15 1.170   Downloaded unicase v2.10.0
+#15 1.178     Blocking waiting for file lock on package cache
+#15 1.180  Downloading crates ...
+#15 1.221   Downloaded console_error_panic_hook v0.1.7
+#15 1.287    Compiling proc-macro2 v1.0.107
+#15 1.287    Compiling quote v1.0.47
+#15 1.287    Compiling unicode-ident v1.0.27
+#15 1.287    Compiling version_check v0.9.5
+#15 1.287    Compiling either v1.19.0
+#15 1.287    Compiling memchr v2.8.3
+#15 1.292    Compiling semver v1.0.28
+#15 1.293    Compiling proc-macro2 v1.0.107
+#15 1.293    Compiling pin-project-lite v0.2.17
+#15 1.293    Compiling memchr v2.8.3
+#15 1.294    Compiling cfg-if v1.0.5
+#15 1.294    Compiling futures-core v0.3.34
+#15 1.306    Compiling either v1.19.0
+#15 1.306    Compiling futures-sink v0.3.34
+#15 1.310    Compiling libc v0.2.191
+#15 1.373    Compiling stable_deref_trait v1.2.1
+#15 1.392    Compiling wasm-bindgen-shared v0.2.130
+#15 1.427    Compiling rustversion v1.0.23
+#15 1.434    Compiling futures-task v0.3.34
+#15 1.443    Compiling stable_deref_trait v1.2.1
+#15 1.461    Compiling futures-channel v0.3.34
+#15 1.513    Compiling futures-io v0.3.34
+#15 1.555    Compiling pin-project-lite v0.2.17
+#15 1.620    Compiling rustversion v1.0.23
+#15 1.675    Compiling rustc_version v0.4.1
+#15 1.744    Compiling writeable v0.6.4
+#15 1.759    Compiling thiserror v2.0.21
+#15 1.787    Compiling slab v0.4.12
+#15 1.787    Compiling futures-core v0.3.34
+#15 1.810    Compiling semver v1.0.28
+#15 1.837    Compiling bytes v1.12.1
+#15 1.847    Compiling serde_core v1.0.229
+#15 1.933    Compiling serde_core v1.0.229
+#15 2.147    Compiling futures-sink v0.3.34
+#15 2.151    Compiling writeable v0.6.4
+#15 2.184    Compiling bumpalo v3.20.3
+#15 2.323    Compiling futures-channel v0.3.34
+#15 2.333    Compiling futures-io v0.3.34
+#15 2.350    Compiling futures-task v0.3.34
+#15 2.386    Compiling rustc_version v0.4.1
+#15 2.467    Compiling unicode-ident v1.0.27
+#15 2.571    Compiling wasm-bindgen-shared v0.2.130
+#15 2.615    Compiling slab v0.4.12
+#15 2.790    Compiling serde v1.0.229
+#15 2.800    Compiling litemap v0.8.3
+#15 2.878    Compiling cfg-if v1.0.5
+#15 2.921    Compiling itoa v1.0.18
+#15 2.939    Compiling wasm-bindgen v0.2.130
+#15 3.007    Compiling utf_types v1.0.0
+#15 3.027    Compiling quote v1.0.47
+#15 3.151    Compiling syn v3.0.9
+#15 3.200    Compiling syn v2.0.119
+#15 3.203    Compiling litemap v0.8.3
+#15 3.260    Compiling unicode-segmentation v1.13.3
+#15 3.273    Compiling icu_properties_data v2.4.0
+#15 3.388    Compiling utf8_iter v1.1.0
+#15 3.414    Compiling smallvec v1.16.5
+#15 3.464    Compiling syn v3.0.9
+#15 3.471    Compiling proc-macro2-diagnostics v0.11.0
+#15 3.542    Compiling icu_normalizer_data v2.4.0
+#15 3.598    Compiling syn v2.0.119
+#15 3.694    Compiling bumpalo v3.20.3
+#15 3.702    Compiling generic-array v0.14.7
+#15 3.755    Compiling wasm-bindgen v0.2.130
+#15 3.798    Compiling paste v1.0.15
+#15 3.897    Compiling zmij v1.0.23
+#15 3.909    Compiling or_poisoned v0.1.0
+#15 4.016    Compiling unicode-xid v0.2.6
+#15 4.122    Compiling convert_case v0.11.0
+#15 4.142    Compiling smallvec v1.16.5
+#15 4.152    Compiling http v1.5.0
+#15 4.163    Compiling utf_types v1.0.0
+#15 4.176    Compiling const_format_proc_macros v0.2.37
+#15 4.289    Compiling slotmap v1.1.1
+#15 4.330    Compiling event-listener v5.4.2
+#15 4.417    Compiling proc-macro-utils v0.10.0
+#15 4.515    Compiling throw_error v0.3.1
+#15 4.529    Compiling utf8_iter v1.1.0
+#15 4.656    Compiling unicode-segmentation v1.13.3
+#15 4.782    Compiling typenum v1.20.1
+#15 4.797    Compiling equivalent v1.0.3
+#15 4.824    Compiling socket2 v0.6.5
+#15 4.913    Compiling konst_macro_rules v0.2.19
+#15 4.925    Compiling serde_json v1.0.154
+#15 4.943    Compiling mio v1.2.4
+#15 5.114    Compiling rstml v0.13.1
+#15 5.369    Compiling hashbrown v0.17.1
+#15 5.449    Compiling log v0.4.35
+#15 5.484    Compiling anyhow v1.0.104
+#15 5.740    Compiling itoa v1.0.18
+#15 5.760    Compiling convert_case v0.11.0
+#15 5.906    Compiling camino v1.2.6
+#15 5.980    Compiling konst v0.2.20
+#15 6.084    Compiling event-listener-strategy v0.5.4
+#15 6.351    Compiling reactive_graph v0.2.16
+#15 6.481    Compiling icu_properties_data v2.4.0
+#15 6.549    Compiling percent-encoding v2.3.2
+#15 6.556    Compiling server_fn_macro v0.8.12
+#15 6.661    Compiling typenum v1.20.1
+#15 6.677    Compiling once_cell v1.21.4
+#15 6.802    Compiling send_wrapper v0.6.0
+#15 6.944    Compiling http-body v1.1.0
+#15 7.118    Compiling tracing-core v0.1.36
+#15 7.136    Compiling httparse v1.10.1
+#15 7.142    Compiling icu_normalizer_data v2.4.0
+#15 7.160    Compiling indexmap v2.14.2
+#15 7.244    Compiling proc-macro2-diagnostics v0.11.0
+#15 7.263    Compiling async-lock v3.5.0
+#15 7.454    Compiling zerocopy v0.8.63
+#15 8.223    Compiling tracing v0.1.44
+#15 8.233    Compiling const_format v0.2.37
+#15 8.357    Compiling aho-corasick v1.1.5
+#15 8.528    Compiling generic-array v0.14.7
+#15 8.570    Compiling rustc-hash v2.1.3
+#15 8.765    Compiling xxhash-rust v0.8.19
+#15 8.971    Compiling guardian v1.3.0
+#15 9.131    Compiling getrandom v0.3.4
+#15 9.209    Compiling thiserror v1.0.69
+#15 9.319    Compiling percent-encoding v2.3.2
+#15 9.327    Compiling zmij v1.0.23
+#15 9.398    Compiling libc v0.2.191
+#15 9.602    Compiling parking v2.2.1
+#15 9.706    Compiling regex-syntax v0.8.11
+#15 9.784    Compiling icu_locale_fallback_data v2.4.0
+#15 9.860    Compiling tower-service v0.3.3
+#15 10.01    Compiling unicode-xid v0.2.6
+#15 10.07    Compiling mime v0.3.18
+#15 10.20    Compiling paste v1.0.15
+#15 10.25    Compiling crypto-common v0.1.7
+#15 10.34    Compiling or_poisoned v0.1.0
+#15 10.44    Compiling block-buffer v0.10.4
+#15 10.45    Compiling block-buffer v0.10.4
+#15 10.47    Compiling crypto-common v0.1.7
+#15 10.50    Compiling manyhow-macros v0.14.1
+#15 10.63    Compiling serde_json v1.0.154
+#15 10.66    Compiling proc-macro-utils v0.10.0
+#15 10.71    Compiling const_format_proc_macros v0.2.37
+#15 10.73    Compiling event-listener v5.4.2
+#15 10.85    Compiling rand_core v0.9.5
+#15 10.87    Compiling tachys v0.2.19
+#15 11.13    Compiling itertools v0.14.0
+#15 11.15    Compiling prettyplease v0.3.0
+#15 11.30    Compiling form_urlencoded v1.2.2
+#15 11.37    Compiling getrandom v0.4.3
+#15 11.38    Compiling sync_wrapper v1.0.2
+#15 11.47    Compiling autocfg v1.5.1
+#15 11.50    Compiling throw_error v0.3.1
+#15 11.61    Compiling bytes v1.12.1
+#15 11.75    Compiling slotmap v1.1.1
+#15 11.77    Compiling rstml v0.13.1
+#15 11.78    Compiling anyhow v1.0.104
+#15 11.96    Compiling hashbrown v0.17.1
+#15 12.06    Compiling tower-layer v0.3.3
+#15 12.24    Compiling httpdate v1.0.3
+#15 12.50    Compiling try-lock v0.2.5
+#15 12.57    Compiling winnow v1.0.5
+#15 12.63    Compiling konst_macro_rules v0.2.19
+#15 12.87    Compiling equivalent v1.0.3
+#15 12.94    Compiling synstructure v0.14.0
+#15 12.97    Compiling camino v1.2.6
+#15 13.02    Compiling konst v0.2.20
+#15 13.12    Compiling wasm-bindgen-macro-support v0.2.130
+#15 13.37    Compiling want v0.3.2
+#15 13.55    Compiling synstructure v0.14.0
+#15 13.61    Compiling wasm-bindgen-macro-support v0.2.130
+#15 13.81    Compiling indexmap v2.14.2
+#15 15.00    Compiling event-listener-strategy v0.5.4
+#15 15.10    Compiling regex-automata v0.4.18
+#15 15.18    Compiling digest v0.10.7
+#15 15.63    Compiling http-body-util v0.1.5
+#15 15.68    Compiling encoding_rs v0.8.44
+#15 15.75    Compiling toml_parser v1.1.5+spec-1.1.0
+#15 15.76    Compiling reactive_stores_macro v0.4.4
+#15 15.87    Compiling server_fn_macro v0.8.12
+#15 16.03    Compiling reactive_graph v0.2.16
+#15 16.14    Compiling send_wrapper v0.6.0
+#15 16.18    Compiling pin-project-internal v1.1.13
+#15 16.28    Compiling cpufeatures v0.2.17
+#15 16.31    Compiling atomic-waker v1.1.2
+#15 16.38    Compiling sha1 v0.10.7
+#15 16.45    Compiling async-lock v3.5.0
+#15 16.61    Compiling thiserror-impl v1.0.69
+#15 17.19    Compiling manyhow v0.14.1
+#15 17.27    Compiling zerofrom-derive v0.1.8
+#15 17.31    Compiling const_format v0.2.37
+#15 17.66    Compiling aho-corasick v1.1.5
+#15 17.74    Compiling yoke-derive v0.8.4
+#15 18.02    Compiling multer v3.1.0
+#15 18.08    Compiling zerovec-derive v0.11.7
+#15 18.18    Compiling ipnet v2.12.2
+#15 18.19    Compiling rustc-hash v2.1.3
+#15 18.35    Compiling guardian v1.3.0
+#15 18.37    Compiling xxhash-rust v0.8.19
+#15 18.52    Compiling regex-syntax v0.8.11
+#15 18.53    Compiling zerofrom-derive v0.1.8
+#15 18.58    Compiling yoke-derive v0.8.4
+#15 18.71    Compiling displaydoc v0.2.7
+#15 19.41    Compiling thiserror-impl v2.0.21
+#15 19.43    Compiling futures-macro v0.3.34
+#15 20.03    Compiling serde_derive v1.0.229
+#15 20.17    Compiling zerofrom v0.1.8
+#15 20.20    Compiling futures-macro v0.3.34
+#15 20.39    Compiling yoke v0.8.4
+#15 20.85    Compiling zerotrie v0.2.5
+#15 20.90    Compiling displaydoc v0.2.7
+#15 20.93    Compiling zerovec v0.11.9
+#15 21.15    Compiling zerovec-derive v0.11.7
+#15 21.31    Compiling futures-util v0.3.34
+#15 21.34    Compiling derive-where v1.7.0
+#15 21.48    Compiling zerofrom v0.1.8
+#15 21.68    Compiling yoke v0.8.4
+#15 21.95    Compiling futures-util v0.3.34
+#15 22.07    Compiling serde_derive v1.0.229
+#15 22.07    Compiling thiserror-impl v2.0.21
+#15 22.09    Compiling zerotrie v0.2.5
+#15 22.46    Compiling quote-use-macros v0.9.0
+#15 23.16    Compiling tinystr v0.8.5
+#15 23.28    Compiling potential_utf v0.1.6
+#15 23.53    Compiling icu_locale_core v2.4.0
+#15 23.56    Compiling icu_collections v2.4.0
+#15 23.57    Compiling quote-use v0.9.0
+#15 23.75    Compiling zerovec v0.11.9
+#15 23.89    Compiling pin-project v1.1.13
+#15 23.96    Compiling async-trait v0.1.92
+#15 24.40    Compiling http v1.5.0
+#15 25.28    Compiling tokio-macros v2.7.2
+#15 26.08    Compiling num-traits v0.2.19
+#15 26.36    Compiling icu_provider v2.4.0
+#15 26.56    Compiling thiserror v2.0.21
+#15 26.68    Compiling tokio v1.54.1
+#15 26.71    Compiling ppv-lite86 v0.2.21
+#15 27.11    Compiling tinystr v0.8.5
+#15 27.38    Compiling icu_properties v2.4.0
+#15 27.57    Compiling icu_locale_core v2.4.0
+#15 27.70    Compiling potential_utf v0.1.6
+#15 27.78    Compiling icu_normalizer v2.4.0
+#15 28.00    Compiling icu_collections v2.4.0
+#15 28.06    Compiling wasm-bindgen-macro v0.2.130
+#15 28.68    Compiling wasm-bindgen-macro v0.2.130
+#15 29.19    Compiling futures-executor v0.3.34
+#15 29.52    Compiling serde v1.0.229
+#15 30.04    Compiling futures-executor v0.3.34
+#15 30.14    Compiling futures v0.3.34
+#15 30.19    Compiling oco_ref v0.2.1
+#15 30.24    Compiling digest v0.10.7
+#15 30.64    Compiling rand_chacha v0.9.0
+#15 30.69    Compiling form_urlencoded v1.2.2
+#15 30.73    Compiling either_of v0.1.9
+#15 30.92    Compiling icu_provider v2.4.0
+#15 31.05    Compiling server_fn v0.8.13
+#15 31.29    Compiling idna_adapter v1.2.2
+#15 31.47    Compiling idna v1.1.0
+#15 32.07    Compiling icu_properties v2.4.0
+#15 33.26    Compiling js-sys v0.3.107
+#15 33.30    Compiling same-file v1.0.6
+#15 33.44    Compiling js-sys v0.3.107
+#15 33.54    Compiling next_tuple v0.1.0
+#15 33.64    Compiling icu_normalizer v2.4.0
+#15 33.72    Compiling futures v0.3.34
+#15 33.74    Compiling const_str_slice_concat v0.1.0
+#15 33.75    Compiling rand v0.9.5
+#15 33.81    Compiling derive-where v1.7.0
+#15 33.93    Compiling erased v0.1.2
+#15 34.26    Compiling multiversion_no_op v1.0.0
+#15 34.41    Compiling toml_datetime v1.1.3+spec-1.1.0
+#15 34.55    Compiling data-encoding v2.11.1
+#15 35.16    Compiling interpolator v0.5.0
+#15 35.68    Compiling collection_literals v1.0.3
+#15 35.76    Compiling drain_filter_polyfill v0.1.3
+#15 35.88    Compiling core_detect v1.0.0
+#15 35.99    Compiling cpufeatures v0.2.17
+#15 36.06    Compiling serde_spanned v1.1.3
+#15 36.07    Compiling html-escape v0.2.15
+#15 36.21    Compiling toml v1.2.1+spec-1.1.0
+#15 36.28    Compiling idna_adapter v1.2.2
+#15 36.37    Compiling attribute-derive-macro v0.11.0
+#15 36.49    Compiling idna v1.1.0
+#15 36.88    Compiling sha2 v0.10.9
+#15 37.25    Compiling base64 v0.23.1
+#15 37.32    Compiling ryu v1.0.23
+#15 37.53    Compiling convert_case v0.6.0
+#15 37.92    Compiling thiserror v1.0.69
+#15 37.92    Compiling walkdir v2.5.0
+#15 38.42    Compiling simdutf8 v0.1.5
+#15 38.50    Compiling url v2.5.8
+#15 38.91    Compiling scopeguard v1.2.0
+#15 39.10    Compiling serde_urlencoded v0.7.1
+#15 39.18    Compiling icu_locale_fallback v2.4.0
+#15 39.27    Compiling serde_qs v0.15.0
+#15 39.57    Compiling url v2.5.8
+#15 39.74    Compiling server_fn_macro_default v0.8.6
+#15 40.03    Compiling typed-builder-macro v0.23.2
+#15 40.38    Compiling hyper v1.12.0
+#15 40.41    Compiling leptos_macro v0.8.20
+#15 40.71    Compiling const-str v1.1.0
+#15 41.08    Compiling base16 v0.2.1
+#15 41.12    Compiling icu_plurals_data v2.4.0
+#15 41.28    Compiling base64 v0.22.1
+#15 41.30    Compiling pathdiff v0.2.3
+#15 41.38    Compiling wasm_split_macros v0.2.2
+#15 41.43    Compiling config v0.15.27
+#15 42.28    Compiling leptos_hot_reload v0.8.7
+#15 42.38    Compiling tower v0.5.3
+#15 42.97    Compiling typed-builder v0.23.2
+#15 43.16    Compiling tungstenite v0.29.0
+#15 43.62    Compiling hyper-util v0.1.21
+#15 44.40    Compiling uuid v1.29.1
+#15 44.49    Compiling attribute-derive v0.11.0
+#15 45.07    Compiling codee v0.3.5
+#15 45.54    Compiling regex v1.13.1
+#15 45.56    Compiling regex-automata v0.4.18
+#15 45.96    Compiling quote-use-macros v0.9.0
+#15 46.11    Compiling convert_case_extras v0.2.0
+#15 46.18    Compiling leptos v0.8.23
+#15 46.30    Compiling icu_locale_data v2.4.0
+#15 46.51    Compiling icu_decimal_data v2.4.0
+#15 46.54    Compiling icu_casemap_data v2.4.0
+#15 46.72    Compiling icu_list_data v2.4.0
+#15 46.75    Compiling async-once-cell v0.5.4
+#15 47.02    Compiling leptos_config v0.8.10
+#15 47.12    Compiling wasm_split_helpers v0.2.3
+#15 47.29    Compiling num-integer v0.1.47
+#15 47.59    Compiling fixed_decimal v0.7.3
+#15 47.71    Compiling icu_experimental_data v0.7.0
+#15 47.93    Compiling num-bigint v0.4.8
+#15 48.50    Compiling reactive_stores_macro v0.4.4
+#15 48.56    Compiling icu_plurals v2.4.0
+#15 49.45    Compiling pin-project-internal v1.1.13
+#15 49.68    Compiling icu_pattern v0.5.1
+#15 49.72    Compiling thiserror-impl v1.0.69
+#15 49.78    Compiling leptos_router v0.8.17
+#15 50.12    Compiling icu_list v2.4.0
+#15 50.47    Compiling manyhow-macros v0.14.1
+#15 50.48    Compiling icu_decimal v2.4.0
+#15 50.61    Compiling tachys v0.2.19
+#15 50.78    Compiling num-rational v0.4.2
+#15 50.83    Compiling itertools v0.14.0
+#15 51.23    Compiling winnow v1.0.5
+#15 51.29    Compiling icu_casemap v2.4.0
+#15 51.68    Compiling icu_locale v2.4.0
+#15 52.33    Compiling base64 v0.22.1
+#15 52.49    Compiling prettyplease v0.3.0
+#15 52.66    Compiling spin v0.9.9
+#15 52.80    Compiling leptos_router_macro v0.8.7
+#15 53.10    Compiling console_error_panic_hook v0.1.7
+#15 53.60    Compiling pin-project v1.1.13
+#15 53.70    Compiling manyhow v0.14.1
+#15 54.49    Compiling toml_parser v1.1.5+spec-1.1.0
+#15 54.63    Compiling icu_experimental v0.7.0
+#15 54.71    Compiling quote-use v0.9.0
+#15 54.79    Compiling tokio-tungstenite v0.29.0
+#15 55.31    Compiling oco_ref v0.2.1
+#15 55.31    Compiling async-trait v0.1.92
+#15 55.51    Compiling getrandom v0.4.3
+#15 55.53    Compiling axum-core v0.5.6
+#15 56.42    Compiling either_of v0.1.9
+#15 56.55    Compiling wasm-bindgen-futures v0.4.80
+#15 56.55    Compiling web-sys v0.3.107
+#15 56.55    Compiling hydration_context v0.3.2
+#15 56.62    Compiling any_spawner v0.3.0
+#15 56.64    Compiling wasm-bindgen-futures v0.4.80
+#15 56.74    Compiling web-sys v0.3.107
+#15 56.88    Compiling any_spawner v0.3.0
+#15 58.21    Compiling hydration_context v0.3.2
+#15 59.00    Compiling serde_path_to_error v0.1.20
+#15 59.84    Compiling server_fn v0.8.13
+#15 59.94    Compiling collection_literals v1.0.3
+#15 60.00    Compiling same-file v1.0.6
+#15 60.02    Compiling html-escape v0.2.15
+#15 60.03    Compiling matchit v0.8.4
+#15 60.10    Compiling const_str_slice_concat v0.1.0
+#15 60.18    Compiling toml_datetime v1.1.3+spec-1.1.0
+#15 60.28    Compiling interpolator v0.5.0
+#15 60.89    Compiling serde_spanned v1.1.3
+#15 61.01    Compiling drain_filter_polyfill v0.1.3
+#15 61.04    Compiling next_tuple v0.1.0
+#15 61.14    Compiling alloc-no-stdlib v3.0.0
+#15 61.20    Compiling erased v0.1.2
+#15 61.30    Compiling alloc-stdlib v0.3.0
+#15 61.33    Compiling convert_case v0.6.0
+#15 61.40    Compiling attribute-derive-macro v0.11.0
+#15 61.66    Compiling toml v1.2.1+spec-1.1.0
+#15 61.76    Compiling axum v0.8.9
+#15 62.70    Compiling reactive_stores v0.4.4
+#15 62.76    Compiling sha2 v0.10.9
+#15 63.12    Compiling walkdir v2.5.0
+#15 65.45    Compiling server_fn_macro_default v0.8.6
+#15 65.79    Compiling serde_qs v0.15.0
+#15 65.82    Compiling typed-builder-macro v0.23.2
+#15 65.98    Compiling leptos_macro v0.8.20
+#15 66.24    Compiling inventory v0.3.25
+#15 66.32    Compiling const-str v1.1.0
+#15 66.50    Compiling base16 v0.2.1
+#15 66.68    Compiling simd-adler32 v0.3.10
+#15 67.36    Compiling pathdiff v0.2.3
+#15 67.85    Compiling adler2 v2.0.1
+#15 67.99    Compiling miniz_oxide v0.9.1
+#15 68.24    Compiling typed-builder v0.23.2
+#15 68.32    Compiling config v0.15.27
+#15 68.46    Compiling wasm_split_macros v0.2.2
+#15 68.65    Compiling leptos_hot_reload v0.8.7
+#15 70.57    Compiling uuid v1.29.1
+#15 70.76    Compiling icu_locale_fallback_data v2.4.0
+#15 70.84    Compiling attribute-derive v0.11.0
+#15 71.27    Compiling crc32fast v1.5.4
+#15 71.32    Compiling brotli-decompressor v6.3.0
+#15 71.94    Compiling regex v1.13.1
+#15 73.70    Compiling codee v0.3.5
+#15 73.81    Compiling convert_case_extras v0.2.0
+#15 73.97    Compiling leptos v0.8.23
+#15 74.11    Compiling async-once-cell v0.5.4
+#15 74.20    Compiling unicase v2.10.0
+#15 74.51    Compiling mime_guess v2.0.5
+#15 74.52    Compiling wasm_split_helpers v0.2.3
+#15 74.69    Compiling brotli v9.1.1
+#15 74.71    Compiling leptos_config v0.8.10
+#15 74.89    Compiling flate2 v1.1.11
+#15 76.29    Compiling icu_locale_fallback v2.4.0
+#15 77.19    Compiling compression-core v0.4.34
+#15 77.24    Compiling num-traits v0.2.19
+#15 77.33    Compiling leptos_router v0.8.17
+#15 78.47    Compiling num-integer v0.1.47
+#15 78.57    Compiling icu_plurals_data v2.4.0
+#15 78.65    Compiling tokio-util v0.7.20
+#15 79.06    Compiling fixed_decimal v0.7.3
+#15 79.72    Compiling leptos_router_macro v0.8.7
+#15 79.72    Compiling bitflags v2.13.2
+#15 80.12    Compiling http-range-header v0.4.2
+#15 80.14    Compiling icu_plurals v2.4.0
+#15 80.20    Compiling compression-codecs v0.4.47
+#15 80.52    Compiling num-bigint v0.4.8
+#15 80.76    Compiling async-compression v0.4.52
+#15 80.77    Compiling icu_decimal_data v2.4.0
+#15 80.84    Compiling icu_list_data v2.4.0
+#15 80.96    Compiling icu_casemap_data v2.4.0
+#15 81.04    Compiling icu_locale_data v2.4.0
+#15 81.24    Compiling gloo-utils v0.2.0
+#15 81.40    Compiling tower-http v0.6.11
+#15 81.42    Compiling gloo-net v0.6.0
+#15 81.48    Compiling icu_pattern v0.5.1
+#15 81.72    Compiling icu_locale v2.4.0
+#15 81.91    Compiling icu_decimal v2.4.0
+#15 82.29    Compiling icu_casemap v2.4.0
+#15 83.55    Compiling gloo-utils v0.2.0
+#15 83.85    Compiling gloo-net v0.6.0
+#15 83.94    Compiling num-rational v0.4.2
+#15 84.37    Compiling reactive_stores v0.4.4
+#15 84.71    Compiling icu_list v2.4.0
+#15 85.42    Compiling icu_experimental_data v0.7.0
+#15 85.72    Compiling wasm-streams v0.5.0
+#15 86.25    Compiling reqwest v0.12.28
+#15 86.60    Compiling icu_experimental v0.7.0
+#15 87.29    Compiling wasm-streams v0.5.0
+#15 98.16    Compiling leptos_dom v0.8.8
+#15 98.16    Compiling leptos_server v0.8.8
+#15 98.91    Compiling leptos_server v0.8.8
+#15 98.91    Compiling leptos_dom v0.8.8
+#15 99.72    Compiling leptos_meta v0.8.7
+#15 100.7    Compiling leptos_meta v0.8.7
+#15 104.3    Compiling item-page-leptos v0.1.0 (/src)
+#15 104.7    Compiling leptos_integration_utils v0.8.9
+#15 104.8    Compiling leptos_axum v0.8.10
+#15 108.3    Compiling item-page-leptos v0.1.0 (/src)
+#15 120.8     Finished `wasm-release` profile [optimized] target(s) in 1m 59s
+#15 120.9 [38;5;77m       Cargo[0m finished [38;5;241mcargo build --package=item-page-leptos --lib --target-dir=/src/target/front --target=wasm32-unknown-unknown --no-default-features --features=hydrate --locked --profile=wasm-release[0m
+#15 120.9 [38;5;77m       Front[0m generating JS/WASM with wasm-bindgen
+#15 120.9 [38;5;77m       Using[0m wasm-bindgen version 0.2.130 detected in project
+#15 120.9 [38;5;77m     Command[0m installing wasm-bindgen-0.2.130 ...
+#15 121.3 [38;5;77m     Command[0m wasm-bindgen-0.2.130 installed.
+#15 122.3 [38;5;77m     Command[0m [wasm-opt] requested version version_123, but a newer version version_133 is available, you can try it out by setting the LEPTOS_WASM_OPT_VERSION=version_133 env var and re-running the command
+#15 122.3 [38;5;77m     Command[0m installing wasm-opt-version_123 ...
+#15 124.0 [38;5;77m     Command[0m wasm-opt-version_123 installed.
+#15 128.3 [38;5;77m    Finished[0m generating JS/WASM for front in 7.470145289s
+#15 279.0     Finished `release` profile [optimized] target(s) in 4m 38s
+#15 279.0 [38;5;77m       Cargo[0m finished [38;5;241mcargo build --package=item-page-leptos --bin=item-page-leptos --no-default-features --features=ssr --locked --release[0m
+#15 DONE 279.0s
+
+#16 [stage-2 3/4] COPY --from=build /out/server /app/server
+#16 DONE 0.0s
+
+#17 [stage-2 4/4] COPY --from=build /out/site /app/site
+#17 DONE 0.0s
+
+#18 exporting to image
+#18 exporting layers
+#18 exporting layers 0.6s done
+#18 exporting manifest sha256:0736243714351e03cda9d9c6681925c1417f07fdef66112ac0068096f90eac52
+#18 exporting manifest sha256:0736243714351e03cda9d9c6681925c1417f07fdef66112ac0068096f90eac52 done
+#18 exporting config sha256:3d9fa89d03b46f673e6858ea5f8504a24ee089975b8f6c768f54b9eedd40e5b6 done
+#18 exporting attestation manifest sha256:f3cfda611eb7629a7af192a613fc97a71ad4d4701617974e527a4a6a21148226 done
+#18 exporting manifest list sha256:d4488711f5ad0f5ef033e2850a0dda2142a0e8c3404c10f16008933b979f9626 done
+#18 naming to docker.io/library/cb-marketplace-production-leptos:latest done
+#18 unpacking to docker.io/library/cb-marketplace-production-leptos:latest 0.1s done
+#18 DONE 0.7s

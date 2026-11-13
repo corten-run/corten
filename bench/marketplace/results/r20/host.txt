@@ -1,0 +1,3 @@
+Linux 37ef2011f781 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 GNU/Linux
+model name	: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+0-7

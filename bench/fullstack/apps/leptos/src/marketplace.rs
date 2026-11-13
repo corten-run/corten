@@ -91,6 +91,11 @@ impl Query {
     }
 }
 impl Record {
+    pub fn valid_for_alert(&self, id: &str) -> bool {
+        !id.is_empty()
+            && self.id == id
+            && self.listings.iter().all(|row| row.rating_hundredths.is_none_or(|rating| rating <= 500))
+    }
     pub fn listings(&self, query: &Query) -> Vec<&Listing> {
         let mut rows: Vec<_> = self.listings.iter().filter(|row| row.seller.starts_with(&query.seller)).collect();
         rows.sort_by(|a, b| match (a.price_minor, b.price_minor) {
@@ -208,11 +213,29 @@ impl Locale {
         input.replace(decimal, ".").parse().ok()
     }
     pub fn alert(self, record: &Record, form: &AlertForm) -> String {
+        self.alert_result(record, form).0
+    }
+    pub fn alert_result(self, record: &Record, form: &AlertForm) -> (String, Option<i64>) {
         if !form.email.contains('@') {
-            return self.text("invalid_email").into();
+            return (self.text("invalid_email").into(), None);
         }
         let Some(value) = self.target(&form.target_price) else {
-            return self.text("invalid_price").into();
+            return (self.text("invalid_price").into(), None);
+        };
+        let mut cents = value.clone();
+        cents.trim_start();
+        if cents.nonzero_magnitude_start() > 16 {
+            return (self.text("invalid_price").into(), None);
+        }
+        cents.multiply_pow10(2);
+        // Positive currency amounts round ties away from zero, once, in decimal.
+        if cents.digit_at(-1) >= 5 {
+            cents.ceil(0);
+        } else {
+            cents.trunc(0);
+        }
+        let Ok(minor) = cents.to_string().parse::<i64>() else {
+            return (self.text("invalid_price").into(), None);
         };
         // Substitute once, so data resembling another placeholder stays data.
         let mut out = String::new();
@@ -226,13 +249,13 @@ impl Locale {
             match key {
                 "email" => out.push_str(&form.email),
                 "title" => out.push_str(&record.title),
-                "price" => out.push_str(&self.currency(&value)),
+                "price" => out.push_str(&self.money(Some(minor))),
                 _ => unreachable!("static alert label"),
             }
             remaining = &remaining[start + end + 1..];
         }
         out.push_str(remaining);
-        out
+        (out, Some(minor))
     }
 }
 
@@ -410,6 +433,40 @@ mod tests {
             assert!(message.contains(&locale.money(Some(123450))));
             let wrong = AlertForm { target_price: if tag == "en-US" { "12,50" } else { "12.50" }.into(), ..form };
             assert_eq!(locale.alert(&record, &wrong), locale.text("invalid_price"));
+        }
+    }
+
+    #[test]
+    fn accepted_alert_bounds_are_exact_and_records_are_checked_before_writes() {
+        let mut record = record();
+        assert!(record.valid_for_alert(&record.id));
+        assert!(!record.valid_for_alert("wrong"));
+        record.listings[0].rating_hundredths = Some(65535);
+        assert!(!record.valid_for_alert(&record.id));
+        for tag in TAGS {
+            let locale = Locale::parse(tag).unwrap();
+            for (input, expected) in [
+                ("12.34", Some(1234)),
+                ("1.005", Some(101)),
+                ("1.015", Some(102)),
+                ("1.0049", Some(100)),
+                ("0.005", Some(1)),
+                ("90071992547409.93", Some(9007199254740993)),
+                ("92233720368547758.07", Some(i64::MAX)),
+                ("92233720368547758.08", None),
+                ("9223372036854775807", None),
+            ] {
+                let target_price = if tag == "en-US" { input.to_string() } else { input.replace('.', ",") };
+                let (message, minor) = locale.alert_result(&record, &AlertForm { email: "x@y".into(), target_price });
+                assert_eq!(minor, expected);
+                if let Some(minor) = minor {
+                    assert!(message.contains(&locale.money(Some(minor))), "{tag}: {input}: {message}");
+                }
+            }
+            let form = AlertForm { email: "x@y".into(), target_price: format!("1{}", "0".repeat(32767)) };
+            assert_eq!(locale.alert_result(&record, &form).1, None, "decimal scaling must not clear overflow to zero");
+            let target_price = format!("{}12{}34", "0".repeat(32760), if tag == "en-US" { '.' } else { ',' });
+            assert_eq!(locale.alert_result(&record, &AlertForm { target_price, ..form }).1, Some(1234));
         }
     }
 }
