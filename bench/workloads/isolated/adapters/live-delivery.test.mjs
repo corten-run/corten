@@ -15,18 +15,23 @@ import { verifyRound } from "../../../live/verify.mjs";
 export const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const paths = { runner: "bench/live/parity.mjs", verifier: "bench/live/verify.mjs", oracle: "bench/workloads/live.mjs",
   native: "bench/live/native.mjs", wire: "bench/live/wire.mjs", fanout: "bench/live/fanout.mjs",
-  resources: "bench/live/resources.mjs", admission: "bench/live/admission.mjs", measurement: "bench/live/measurement.mjs" };
+  resources: "bench/live/resources.mjs", admission: "bench/live/admission.mjs", measurement: "bench/live/measurement.mjs",
+  nativeHttp: "bench/live/native-http.mjs" };
 
 // Synthetic retained FAILURE apparatus, never a native positive qualification.
 // Every test uses the real statically imported verifier; no validator is mocked.
-export async function syntheticFixture(t, group = "live-delivery") {
+export async function syntheticFixture(t, group = "live-delivery", { allRegistered = false } = {}) {
   const folder = await mkdtemp(join(tmpdir(), "isolated-live-adapter-test-"));
   t.after(async () => {
     const rel = relative(resolve(tmpdir()), resolve(folder)); assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`));
     await rm(folder, { recursive: true, force: true });
   });
   const apps = selectedApps(group), profile = "native-feed", round = "synthetic-adapter", commit = "a".repeat(40);
-  const entries = inventory(group, profile);
+  // Preserve a historical missing-port control independently of today's registrations.
+  const entries = inventory(group, profile).map((entry, index, rows) => !allRegistered && index === rows.length - 1
+    ? { app: entry.app, implementation: "not-implemented",
+      reason: `Missing ${entry.app} native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity` }
+    : entry);
   const sourceFiles = Object.entries(paths).map(([key, path]) => ({ path, mode: "100644", sha256: hash(`synthetic code ${key}`) }));
   for (const entry of entries.filter((r) => r.implementation === "implemented")) {
     sourceFiles.push({ path: `bench/live/apps/${entry.directory}/synthetic-input.txt`, mode: "100644", sha256: hash(`synthetic app ${entry.app}`) });
@@ -81,6 +86,44 @@ export async function rewriteArtifact(f, app, index, change) {
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   const { inspectSaved } = await import("./live-delivery.mjs");
+  for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: current registered matrix binds native HTTP code without qualifying failed targets`, async (t) => {
+    const f = await syntheticFixture(t, group, { allRegistered: true });
+    const { inspectLiveSaved } = await import("./live-delivery.mjs");
+    const r = await inspectLiveSaved(f.binding, f.folder, group);
+    assert.ok(f.plan.inventory.every((entry) => entry.implementation === "implemented"));
+    assert.equal(r.status, "failed"); assert.equal(r.attemptComplete, true);
+    assert.ok(r.outcomes.every((row) => row.outcome === "failed"));
+    assert.equal(r.resources, "blocked"); assert.equal(r.cleanupComplete, false);
+  });
+  for (const mutation of ["missing", "mismatched", "rehashed-provenance"]) test(`native HTTP ${mutation} cannot escape the committed code closure`, async (t) => {
+    const f = await syntheticFixture(t);
+    if (mutation === "missing") delete f.plan.code.nativeHttp;
+    else f.plan.code.nativeHttp = "b".repeat(64);
+    await f.json("plan.json", f.plan);
+    if (["missing", "rehashed-provenance"].includes(mutation)) for (const entry of f.plan.inventory.filter((e) => e.implementation === "implemented")) {
+      for (let i = 0; i < f.plan.scenarios.length; i++) await rewriteArtifact(f, entry.app, i, (a) => { a.provenance.code = f.plan.code; });
+    }
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.status, mutation === "missing" ? "blocked" : "invalid");
+    assert.equal(r.attemptComplete, false); assert.equal(r.cleanupComplete, false);
+  });
+  test("native app source closure excludes only direct test receipts, not other test or nested inputs", async (t) => {
+    const f = await syntheticFixture(t);
+    for (const path of ["test/receipts/private.txt", "test/receipts-final/retained.txt", "test/receipts-extra/input.txt", "nested/test/receipts/input.txt"]) {
+      f.binding.sources.files.push({ path: `bench/live/apps/aspnet/${path}`, mode: "100644", sha256: hash(path) });
+    }
+    for (let i = 0; i < f.plan.scenarios.length; i++) await rewriteArtifact(f, "aspnet", i, (a) => {
+      for (const path of ["test/receipts-extra/input.txt", "nested/test/receipts/input.txt"]) a.provenance.sourceHashes[path] = hash(path);
+      a.provenance.sourceSha256 = a.provenance.imageSourceSha256 = hash(JSON.stringify(a.provenance.sourceHashes));
+    });
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.status, "failed"); assert.equal(r.attemptComplete, true);
+    await rewriteArtifact(f, "aspnet", 0, (a) => {
+      delete a.provenance.sourceHashes["test/receipts-extra/input.txt"];
+      a.provenance.sourceSha256 = a.provenance.imageSourceSha256 = hash(JSON.stringify(a.provenance.sourceHashes));
+    });
+    assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+  });
   test("real verifier replays synthetic failed native attempt, retaining failures and unsupported contenders", async (t) => {
     const f = await syntheticFixture(t), native = await verifyRound(f.folder), r = await inspectSaved(f.binding, f.folder);
     assert.deepEqual(native.passed, []); assert.deepEqual(native.unqualified, []);

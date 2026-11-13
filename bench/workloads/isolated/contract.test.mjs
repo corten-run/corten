@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { bindExecution, captureSources, recipes, reviewSubject, validateArtifactPaths, validateBinding } from "./contract.mjs";
@@ -30,7 +31,8 @@ test("real committed sources include native implementations, locks, registry and
   const sources = captureSources(commit);
   assert.ok(Object.isFrozen(sources.files));
   for (const path of ["bench/workloads/registry.mjs", "bench/workloads/isolated/contract.mjs", "bench/workloads/isolated/contract.test.mjs",
-    "bench/client-heavy/run.mjs", "bench/live/parity.mjs", "crates/corten/src/lib.rs", "package-lock.json", "bench/browser/package-lock.json"]) {
+    "bench/client-heavy/run.mjs", "bench/live/parity.mjs", "bench/live/native-http.mjs", "bench/live/apps/laravel/wire.mjs",
+    "bench/live/apps/rails/wire.mjs", "bench/live/apps/phoenix/wire.mjs", "crates/corten/src/lib.rs", "package-lock.json", "bench/browser/package-lock.json"]) {
     const actual = execFileSync("git", ["show", `${commit}:${path}`], { cwd: root });
     assert.equal(sources.files.find((f) => f.path === path)?.sha256, createHash("sha256").update(actual).digest("hex"), path);
   }
@@ -117,20 +119,56 @@ test("client-heavy keeps bounded sizes, fresh native generation and no --build/c
   assert.deepEqual(b.validation.required, ["result.json", "native/build.json"]);
 });
 
-test("live preserves historical-mode guard, incompatible defaults, missing ports and explicit equal native-feed profile", () => {
+test("live preserves historical-mode guard, unchanged defaults, registered ports and explicit equal native-feed profile", () => {
   for (const group of ["live-delivery", "recoverable-live"]) {
     const ordinary = bind(group), measured = bind(group, "native-feed-measure");
     assert.equal(ordinary.execution.effectiveOptions.profile, "bounded");
     assert.equal(ordinary.execution.effectiveOptions.measure, false);
     assert.ok(ordinary.status.blockers.includes("native port incompatible with selected profile: corten"));
     assert.equal(measured.execution.nativeDefaults.profile, "bounded");
+    assert.deepEqual(measured.execution.nativeDefaults, { apps: selectedApps(group), build: false, profile: "bounded", measure: false });
+    assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true });
+    assert.deepEqual(measured.execution.invocation.argv, [group === "live-delivery" ? "bench/live/run.mjs" : "bench/recoverable-live/run.mjs", "w1",
+      ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--profile", "native-feed", "--measure"]);
+    assert.equal(measured.execution.settings.workload.seed, 17);
+    assert.equal(measured.execution.settings.workload.initial.length, 5);
     assert.equal(measured.execution.settings.workload.eventCount, 1044);
     assert.ok(measured.execution.settings.settings.every((s) => s.queueLimit === 1024 && s.historyLimit === 1025 && s.maxRecoveryMs === 10000));
     assert.deepEqual(measured.execution.settings.measurement.clients, [1, 2, 4]);
     assert.equal(measured.execution.settings.scenarios.length, group === "live-delivery" ? 2 : 6);
-    assert.ok(measured.status.blockers.some((s) => s.includes("missing native registration: phoenix")));
+    assert.deepEqual(measured.execution.settings.inventory.map((entry) => entry.app), selectedApps(group));
+    assert.ok(measured.execution.settings.inventory.every((entry) => entry.implementation === "implemented"));
+    assert.ok(!measured.status.blockers.some((s) => s.startsWith("missing native registration:") || s.startsWith("native port incompatible")));
+    if (group === "recoverable-live") assert.equal(measured.execution.settings.inventory.find((entry) => entry.app === "laravel").topology,
+      "FrankenPHP Octane two workers and Reverb; file cache and native broker HTTP; no shared renderer");
     if (group === "live-delivery") assert.ok(measured.execution.invocation.argv.includes("--group"));
     assert.equal(measured.status.ready, false);
+  }
+});
+
+test("reviewed live CLI parser bytes and explicit rejection semantics remain unchanged", async () => {
+  const source = readFileSync(join(root, "bench/live/parity.mjs"), "utf8").replaceAll("\r\n", "\n");
+  const parser = source.slice(source.indexOf("export async function main("));
+  assert.equal(createHash("sha256").update(parser).digest("hex"), "634281d26c75390cade87f7046ee04db5999b1b360bfeeaca8c36f9424ee02de");
+  assert.ok(source.includes('export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false })'));
+  const { runRound } = await import("../../live/parity.mjs");
+  for (const group of ["live-delivery", "recoverable-live"]) {
+    await assert.rejects(runRound(group, ["w1", "--duration", "1"]), /unknown argument/);
+    await assert.rejects(runRound(group, ["w1", "--profile"]), /needs a value/);
+    await assert.rejects(runRound(group, ["../escape"]), /safe round/);
+  }
+});
+
+test("live rebinding rejects rehashed HTTP source, profile and registered topology substitutions", () => {
+  const binding = bind("recoverable-live", "native-feed-measure");
+  for (const mutate of [
+    (b) => { b.sources.files.find((file) => file.path === "bench/live/native-http.mjs").sha256 = "b".repeat(64); b.sources.sha256 = deploymentSha256(b.sources.files); },
+    (b) => { b.execution.effectiveOptions.profile = "bounded"; },
+    (b) => { b.execution.settings.inventory.find((entry) => entry.app === "laravel").topology = "one process"; },
+    (b) => { b.execution.settings.settings[0].queueLimit = 2; },
+  ]) {
+    const changed = structuredClone(binding); mutate(changed);
+    assert.throws(() => validateBinding(reseal(changed)), /binding differs/);
   }
 });
 

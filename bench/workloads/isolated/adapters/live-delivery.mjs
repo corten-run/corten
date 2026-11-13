@@ -10,6 +10,7 @@ const codePaths = Object.freeze({
   runner: "bench/live/parity.mjs", verifier: "bench/live/verify.mjs", oracle: "bench/workloads/live.mjs",
   native: "bench/live/native.mjs", wire: "bench/live/wire.mjs", fanout: "bench/live/fanout.mjs",
   resources: "bench/live/resources.mjs", admission: "bench/live/admission.mjs", measurement: "bench/live/measurement.mjs",
+  nativeHttp: "bench/live/native-http.mjs",
 });
 const sha = (value) => assert.match(value ?? "", /^[a-f0-9]{64}$/);
 const clock = (value) => { const n = Date.parse(value); assert.ok(Number.isFinite(n)); return n; };
@@ -29,7 +30,8 @@ const present = (value, blocker) => { if (value === undefined) throw new Missing
 
 function sourceHashes(files, entry) {
   const under = (prefix) => Object.fromEntries(files.filter((f) => f.path.startsWith(prefix)
-    && !f.path.slice(prefix.length).split("/").some((p) => ["node_modules", "bin", "obj", "target"].includes(p)))
+    && !f.path.slice(prefix.length).split("/").some((p) => ["node_modules", "bin", "obj", "target"].includes(p))
+    && !/^test\/(?:receipts|receipts-final)\//.test(f.path.slice(prefix.length)))
     .map((f) => [f.path.slice(prefix.length), f.sha256]));
   const app = under(`bench/live/apps/${entry.directory}/`);
   assert.ok(Object.keys(app).length, "bound native sources absent");

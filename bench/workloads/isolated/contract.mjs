@@ -46,7 +46,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  "bench/live/parity.mjs": "86f400cf14cc566e61b0ce900993b800b3ba2c564e01a21a206b0f98ea84687d",
+  // Native HTTP/wire capture and registered ports changed; CLI/defaults did not.
+  "bench/live/parity.mjs": "b50bf096ae7a310a88c2a4cc226f60dbad812721bce28636511214caf2f23b74",
 });
 const sourceRoots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
   "rust-toolchain.toml", "rust-toolchain", "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "bench", "crates", "scripts", "examples/card-market"];
