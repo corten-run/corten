@@ -20,13 +20,13 @@ const paths = { runner: "bench/live/parity.mjs", verifier: "bench/live/verify.mj
 
 // Synthetic retained FAILURE apparatus, never a native positive qualification.
 // Every test uses the real statically imported verifier; no validator is mocked.
-export async function syntheticFixture(t, group = "live-delivery", { allRegistered = false } = {}) {
+export async function syntheticFixture(t, group = "live-delivery", { allRegistered = false, round = "synthetic-adapter" } = {}) {
   const folder = await mkdtemp(join(tmpdir(), "isolated-live-adapter-test-"));
   t.after(async () => {
     const rel = relative(resolve(tmpdir()), resolve(folder)); assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`));
     await rm(folder, { recursive: true, force: true });
   });
-  const apps = selectedApps(group), profile = "native-feed", round = "synthetic-adapter", commit = "a".repeat(40);
+  const apps = selectedApps(group), profile = "native-feed", commit = "a".repeat(40);
   // Preserve a historical missing-port control independently of today's registrations.
   const entries = inventory(group, profile).map((entry, index, rows) => !allRegistered && index === rows.length - 1
     ? { app: entry.app, implementation: "not-implemented",

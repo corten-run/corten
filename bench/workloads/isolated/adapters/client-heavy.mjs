@@ -5,9 +5,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 import { validateSaved } from "../../../client-heavy/verify.mjs";
+import { sourceRoots } from "../../../client-heavy/contract.mjs";
 
-const sourceRoots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".cargo", "rust-toolchain", "rust-toolchain.toml",
-  "crates", "bench/client-heavy", "bench/browser", "bench/workloads", "bench/fullstack/inventory.mjs", "bench/marketplace/contract.mjs"];
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const keys = (value, names) => {

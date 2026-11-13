@@ -15,6 +15,8 @@ import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import { parseOptions as browserOptions } from "../../fullstack-browser/contract.mjs";
 import { parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { sourceRoots as clientSourceRoots } from "../../client-heavy/contract.mjs";
+import { committed as nativeClientSources } from "../../client-heavy/verify.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
@@ -37,7 +39,23 @@ test("real committed sources include native implementations, locks, registry and
     assert.equal(sources.files.find((f) => f.path === path)?.sha256, createHash("sha256").update(actual).digest("hex"), path);
   }
   assert.equal(sources.sha256, deploymentSha256(sources.files));
-  assert.ok(sources.files.every((f) => !f.path.split("/").some((part) => ["results", "evidence", "work", "node_modules", "target"].includes(part))));
+  const clientInputs = nativeClientSources(commit, clientSourceRoots);
+  assert.ok(sources.files.every((f) => clientInputs.has(f.path)
+    || !f.path.split("/").some((part) => ["results", "evidence", "work", "node_modules", "target"].includes(part))));
+});
+
+test("client source binding includes the actual complete native committed inventory, including historical browser inputs", () => {
+  const sources = captureSources(commit), expected = nativeClientSources(commit, clientSourceRoots);
+  const bound = sources.files.filter((f) => clientSourceRoots.some((root) => f.path === root || f.path.startsWith(`${root}/`)));
+  assert.deepEqual(bound.map((f) => f.path), [...expected.keys()]);
+  assert.ok(bound.some((f) => f.path.startsWith("bench/browser/results/")));
+  for (const file of bound) assert.equal(file.sha256, createHash("sha256").update(expected.get(file.path)).digest("hex"), file.path);
+  const binding = bind("client-heavy"), historical = binding.sources.files.findIndex((f) => f.path.startsWith("bench/browser/results/"));
+  assert.ok(historical >= 0);
+  for (const mutate of [(b) => { b.sources.files.splice(historical, 1); }, (b) => { b.sources.files[historical].sha256 = "0".repeat(64); }]) {
+    const bad = structuredClone(binding); mutate(bad); bad.sources.sha256 = deploymentSha256(bad.sources.files);
+    assert.throws(() => validateBinding(reseal(bad)), /binding differs/);
+  }
 });
 
 for (const group of groupNames) test(`${group}: binds complete registry, fixed native invocation and unknown evidence`, () => {

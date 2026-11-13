@@ -70,6 +70,15 @@ test("synthetic v2 intrinsic validity is supported without pretending external a
   assert.deepEqual(readFileSync(join(f.folder, "result.json")), before);
 });
 
+test("tracked historical browser inputs are native source bytes, not optional result summaries", async (t) => {
+  const f = fixture(t); f.source("bench/browser/results/browser-1/summary.json", '{"historical":"input"}\n'); f.save();
+  assert.equal((await inspectSaved(f.binding, f.folder)).attemptComplete, true);
+  const saved = f.binding.sources.files.pop();
+  assert.equal((await inspectSaved(f.binding, f.folder)).attemptComplete, false);
+  f.binding.sources.files.push({ ...saved, sha256: "f".repeat(64) });
+  assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+});
+
 test("valid complete failed/unsupported/unrun cells are retained, not forced successful or dropped", async (t) => {
   const f = fixture(t);
   for (const [i, outcome] of ["failed", "unsupported", "not-run"].entries()) {

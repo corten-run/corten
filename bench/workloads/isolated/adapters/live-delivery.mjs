@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { verifyRound } from "../../../live/verify.mjs";
+import { groupNames } from "../../registry.mjs";
+import { readRegular, tree } from "../evidence.mjs";
+import { inspectLifetime } from "../host-lifetime.mjs";
+import { verifyHostBoundary } from "../host-observation.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const codePaths = Object.freeze({
@@ -21,12 +25,9 @@ const present = (value, blocker) => { if (value === undefined) throw new Missing
 
 // The caller verifies the binding and whole physical tree. This adapter replays
 // the native API that actually exists, not a proposed receipt format.
-// Native-owner seams in parity.mjs: save the effective invocation/fresh build;
-// source-bind startup failures; retain actual browser/driver/app OS inventories,
-// limits/cpusets and positive browser.close()/docker rm -f -v terminal observations.
-// verifyRound currently returns none of that OS/terminal proof. Application-level
-// detach/zero counters are replayed there, but cannot prove process/container exit.
-// The core owner composes those future native and host observations separately.
+// Native replay establishes functional truth and image/source/container limits.
+// A standalone native tree cannot prove OS exit. Only the fixed adjacent campaign
+// phase can add the core collector's independently replayed lifetime and boundary.
 
 function sourceHashes(files, entry) {
   const under = (prefix) => Object.fromEntries(files.filter((f) => f.path.startsWith(prefix)
@@ -39,6 +40,35 @@ function sourceHashes(files, entry) {
   const crates = under("crates/"); assert.ok(Object.keys(crates).length);
   const cargo = files.find((f) => f.path === "Cargo.toml")?.sha256, lock = files.find((f) => f.path === "Cargo.lock")?.sha256;
   sha(cargo); sha(lock); return { app, crates, cargo, lock };
+}
+
+function phaseProof(binding, folder, startedAt) {
+  if (basename(folder) !== "native") return null;
+  const phase = dirname(folder), campaign = basename(dirname(phase)), { group, round } = binding.request;
+  assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
+  assert.equal(basename(phase), `${String(groupNames.indexOf(group)).padStart(2, "0")}-${group}-timing`);
+  const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
+  assert.deepEqual(read("native-manifest.json"), tree(folder));
+  const before = read("host-before.json"), after = read("host-after.json");
+  verifyHostBoundary(before, after);
+  // The single fresh host has no participant containers outside the native run.
+  assert.deepEqual(before.containers, []); assert.deepEqual(after.containers, []);
+  const names = beforeTree.entries.filter((e) => e.type === "directory" && /^command-\d+-host$/.test(e.path));
+  assert.equal(names.length, 1, "live phase requires its one exact native command");
+  const directory = join(phase, names[0].path), context = JSON.parse(readRegular(join(directory, "binding.json")));
+  const terminal = JSON.parse(readRegular(join(directory, "terminal.json"))), command = Number(/^command-(\d+)-host$/.exec(names[0].path)[1]);
+  assert.equal(context.bootId, before.bootId);
+  const observation = inspectLifetime(binding, binding.execution.invocation, directory,
+    { campaign, command, pid: context.leaderPid, result: terminal.command });
+  assert.equal(binding.execution.effectiveOptions.build, true);
+  const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
+  assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));
+  const result = terminal.command;
+  assert.equal(result.error, null); assert.equal(result.signal, null);
+  assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
+  const browser = observation.identities.some((p) => p.type === "--type=renderer");
+  assert.deepEqual(tree(phase), beforeTree, "external phase evidence mutated");
+  return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
 
 // status/attemptComplete describe intrinsic replay of requested native work,
@@ -202,6 +232,15 @@ export async function inspectLiveSaved(binding, folder, group) {
     result.status = result.attemptComplete ? failed ? "failed" : passed ? "verified" : "blocked" : "blocked";
     result.blockers = [...missing, "native-effective-invocation-build-proof-not-produced",
       "native-actual-browser-driver-os-resource-proof-not-produced", "native-positive-os-terminal-cleanup-proof-not-produced"];
+    if (result.attemptComplete) {
+      let proof;
+      try { proof = phaseProof(binding, folder, plan.startedAt); }
+      catch (error) { if (error?.code !== "ENOENT") throw error; }
+      if (proof?.complete) {
+        assert.equal(proof.code, failed ? 1 : 0, "observed exit contradicts native outcomes");
+        result.cleanupComplete = true; result.resources = "verified"; result.blockers = [...missing];
+      } else if (proof) result.status = "blocked";
+    }
     return result;
   } catch (error) {
     // No assertion text, artifact value, subprocess stderr or arbitrary saved error escapes.

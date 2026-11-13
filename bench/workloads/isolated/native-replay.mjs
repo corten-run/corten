@@ -35,6 +35,11 @@ export function validateNativeResult(binding, result) {
     assert.ok(result.outcomes.every((r) => r.outcome !== "not-run"));
   }
   if (result.status === "verified") assert.ok(result.outcomes.every((r) => ["passed", "unsupported"].includes(r.outcome)));
+  if (result.comparisonEligibleApps !== undefined) {
+    assert.ok(Array.isArray(result.comparisonEligibleApps));
+    assert.equal(new Set(result.comparisonEligibleApps).size, result.comparisonEligibleApps.length);
+    assert.ok(result.comparisonEligibleApps.every((app) => result.outcomes.some((r) => r.app === app && r.outcome === "passed")));
+  }
   return result;
 }
 
