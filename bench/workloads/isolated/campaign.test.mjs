@@ -107,6 +107,7 @@ mock.module("./json-staging.mjs", { namedExports: {
 mock.method(os, "platform", () => "linux"); mock.method(os, "availableParallelism", () => 8);
 mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(binary, process.execPath); assert.equal(options.shell, false);
+  assert.equal(options.env.PATH, "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
   assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1"); assert.equal(options.env.GIT_NO_LAZY_FETCH, "1");
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");

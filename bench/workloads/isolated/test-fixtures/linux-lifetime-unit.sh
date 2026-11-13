@@ -3,10 +3,15 @@
 set -eu
 test "$#" = 2
 unit_path=$(sed -n 's/^0:://p' /proc/self/cgroup)
-case "$unit_path" in */corten-bench-groups-r999999999-????????????????.service) ;; *) exit 2 ;; esac
-parent="/sys/fs/cgroup$unit_path"
-while IFS= read -r pid; do test "$pid" = "$$"; done < "$parent/cgroup.procs"
-mkdir "$parent/supervisor"
-printf '%s' "$$" > "$parent/supervisor/cgroup.procs"
-printf '%s' '+cpu +cpuset +memory +pids' > "$parent/cgroup.subtree_control"
-exec "$1" --test --test-concurrency=1 "$2/bench/workloads/isolated/host-lifetime-linux.test.mjs"
+case "$unit_path" in
+  */corten-bench-groups-r999999999-????????????????.service/supervisor) unit_path="${unit_path%/supervisor}" ;;
+  */corten-bench-groups-r999999999-????????????????.service) ;;
+  *) exit 2 ;;
+esac
+# Execute the actual production layout code, not a fixture-specific replica.
+cd "$2"
+exec /bin/bash -ec "$("$1" --input-type=module -e '
+import { supervisorBootstrap } from "./bench/workloads/cloud-contract.mjs";
+console.log(supervisorBootstrap(process.argv[1]));
+console.log(`exec "$1" --test --test-concurrency=1 "$2/bench/workloads/isolated/host-lifetime-linux.test.mjs"`);
+' "${unit_path##*/}")" fixture "$1" "$2"

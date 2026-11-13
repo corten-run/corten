@@ -240,11 +240,11 @@ function resources(group, recipe) {
 function preparation(group) {
   const fixtures = ["catalog-page", "json-api", "localized-marketplace"].includes(group)
     ? (group === "json-api" ? ["catalog", "marketplace"] : [group === "catalog-page" ? "catalog" : "marketplace"]) : [];
-  return { dependencies: ["Node 24", "Docker with cgroup v2", "root npm ci", "native Dockerfile toolchains and sufficient disk",
+  return { dependencies: ["Node 26", "Docker with cgroup v2", "root npm ci", "native Dockerfile toolchains and sufficient disk",
     ...(["fullstack-browser", "client-heavy", "live-delivery", "recoverable-live"].includes(group)
       ? ["matching Playwright Chromium and its host system dependencies"] : []),
     ...(group === "client-heavy" ? ["bench/browser npm ci", "Cargo-compatible Rust toolchain and native linker"] : []),
-    ...(group === "fullstack-browser" ? ["local node:24-bookworm-slim image; free loopback port 8080 for native SvelteKit origin"] : [])],
+    ...(group === "fullstack-browser" ? ["local digest-pinned Node 26 image from bench/fullstack-browser/run.mjs; free loopback port 8080 for native SvelteKit origin"] : [])],
     fixtures: fixtures.map((name) => ({ executable: "node", argv: [`bench/${name}/fixtures.mjs`] })),
     environment: { refuseNonempty: ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"],
       toolIdentity: "record resolved native/tool image IDs, dependency locks and browser executable/version; tags alone are insufficient" } };

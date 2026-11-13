@@ -25,6 +25,7 @@ mock.method(os, "platform", () => "linux"); mock.method(os, "availableParallelis
 let current, mode = "valid", calls = [];
 const start = mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(binary, process.execPath); assert.equal(options.shell, false);
+  assert.equal(options.env.PATH, "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
   assert.equal(resolve(options.cwd), resolve(repo));
   assert.deepEqual(Object.keys(options.env).sort(), ["HOME", "LANG", "PATH", "TZ", "GIT_NO_REPLACE_OBJECTS", "GIT_NO_LAZY_FETCH", "GIT_TERMINAL_PROMPT",
     ...Object.keys(current.resources.requestedCpuEnv)].sort());

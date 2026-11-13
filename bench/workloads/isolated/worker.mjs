@@ -93,7 +93,7 @@ export function createWorker({ authorize }) {
       record(attempt, "intent", { invocation, at: new Date().toISOString() });
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         // Do not forward NODE_OPTIONS, credentials, legacy selectors or environment tuning.
-        env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
+        env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0",
           ...attempt.binding.resources.requestedCpuEnv }, signal,
         log(bytes) {

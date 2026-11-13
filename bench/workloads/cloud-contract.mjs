@@ -135,6 +135,36 @@ export function safeArchive(entries, verbose) {
   for (const name of ["run.log", "host.txt", "exit-code"]) assert.ok(seen.has(name), `missing ${name}`);
 }
 
+// Shared with the local kernel fixture. Older systemd ignores DelegateSubgroup;
+// only this unit's sole wrapper PID may establish the equivalent leaf layout.
+export function supervisorBootstrap(unit) {
+  full(unit, /corten-bench-groups-r[1-9]\d{0,8}-[a-f0-9]{16}\.service/, "owned unit");
+  return `IFS= read -r scope < /proc/self/cgroup
+case "$scope" in
+  0::*/${unit}/supervisor) parent="/sys/fs/cgroup\${scope#0::}"; parent="\${parent%/supervisor}" ;;
+  0::*/${unit})
+    parent="/sys/fs/cgroup\${scope#0::}"
+    while IFS= read -r member; do test "$member" = "$$"; done < "$parent/cgroup.procs"
+    mkdir "$parent/supervisor"
+    printf '%s' "$$" > "$parent/supervisor/cgroup.procs"
+    ;;
+  *) exit 2 ;;
+esac
+test -d "$parent" && test ! -L "$parent" && test ! -L "$parent/supervisor"
+while IFS= read -r member; do test -z "$member"; done < "$parent/cgroup.procs"
+IFS= read -r controllers < "$parent/cgroup.controllers"
+for controller in cpu cpuset memory pids; do
+  case " $controllers " in *" $controller "*) ;; *) exit 2 ;; esac
+done
+printf '%s' '+cpu +cpuset +memory +pids' > "$parent/cgroup.subtree_control"
+IFS= read -r controllers < "$parent/cgroup.subtree_control"
+for controller in cpu cpuset memory pids; do
+  case " $controllers " in *" $controller "*) ;; *) exit 2 ;; esac
+done
+while IFS= read -r member; do test "$member" = "$$"; done < "$parent/supervisor/cgroup.procs"
+`;
+}
+
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
 export function remoteFiles(s) {
   validateState(s, s.round);
@@ -153,6 +183,7 @@ exec >>/bench/run.log 2>&1
 { date -u --iso-8601=seconds; uname -a; lscpu; free -m; df -h /; } > /bench/host.txt
 finish() { code=$?; trap - EXIT; printf '%s\\n' "$code" > /bench/exit-code; timeout 600 /bin/bash /bench/pack.sh || true; exit "$code"; }
 trap finish EXIT
+${supervisorBootstrap(s.unit)}
 timeout 900 cloud-init status --wait
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
 timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
@@ -160,8 +191,9 @@ export DEBIAN_FRONTEND=noninteractive
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq git curl ca-certificates build-essential
 timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
-timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_24.x | bash -'
+timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash -'
 timeout 900 apt-get install -y -qq nodejs
+node -e 'if (process.versions.node.split(".")[0] !== "26") process.exit(1)'
 systemctl enable --now docker
 export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
 timeout 600 git clone --quiet https://github.com/corten-run/corten.git /bench/repo
@@ -171,13 +203,15 @@ test "$(git rev-parse HEAD)" = ${s.commit}
 test -z "$(git status --porcelain --untracked-files=all)"
 test "$(nproc)" -ge 8
 timeout 900 npm ci --no-audit --no-fund
+timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
 timeout 900 npx --no-install playwright install --with-deps chromium
+timeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 export PATH=/root/.cargo/bin:$PATH
 { docker --version; node --version; npm --version; rustc --version; cargo --version; } >> /bench/host.txt
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
-unset BENCH_APPS BENCH_TIER PROFILE
+unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
@@ -188,6 +222,8 @@ Wants=network-online.target
 Type=exec
 ExecStart=/bin/bash /bench/job.sh
 WorkingDirectory=/bench
+Delegate=cpu cpuset memory pids
+DelegateSubgroup=supervisor
 Restart=no
 RuntimeMaxSec=48h
 TimeoutStopSec=120

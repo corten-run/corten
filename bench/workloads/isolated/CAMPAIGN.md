@@ -137,6 +137,18 @@ cpusets or memory budgets and never moves the wrapper or an unrelated process. I
 closed when delegation/accounting is absent. This is not an approved new finite client
 budget or mandatory isolated CPU partition.
 
+The fixed cloud bootstrap prepares Node 26, both root and bench/browser npm lockfile
+installations, Playwright Chromium, the native runner's digest-pinned Node tool image,
+and the ordinary Rust generator toolchain. Native commands keep a sanitized fixed PATH
+including /root/.cargo/bin; inherited PATH, NODE_OPTIONS and credentials are not forwarded.
+No native build, fixture size, load schedule or CPU/memory budget is changed by preparation.
+
+The unit delegates cpu/cpuset/memory/pids and requests DelegateSubgroup=supervisor.
+Its wrapper verifies the actual leaf, empty service root and enabled controllers before
+provisioning. On older systemd without DelegateSubgroup, the same source-bound bootstrap
+may exclusively create that leaf and move only its sole wrapper PID. Existing foreign
+members, a pre-existing leaf in that fallback, wrong unit or missing controllers fail closed.
+
 Before each bootstrap receives its IPC start message, core exclusively creates a fresh
 command child cgroup, moves only that newly spawned PID into it, and records actual boot,
 inherited ancestor controls and empty recursive membership. Kernel inheritance/accounting
@@ -190,7 +202,7 @@ The opt-in local OS fixture is `host-lifetime-linux.test.mjs`. In an already own
 delegated unit it launches real Node processes only, verifies actual accounting/empty
 terminal state, and exercises SIGTERM, native finally and descendant exit. Cancellation
 remains blocked even when positive cleanup is observed. It never runs benchmark timing.
-`test-fixtures/linux-lifetime-unit.sh` supplies the same supervisor-leaf layout for an
+`test-fixtures/linux-lifetime-unit.sh` executes cloud-contract.mjs::supervisorBootstrap for an
 explicitly created local test unit on older systemd without DelegateSubgroup. It moves
 only its own shell PID and enables delegated accounting, without changing any budgets.
 The caller must use a fresh `corten-bench-groups-r999999999-<16hex>.service`, Delegate
