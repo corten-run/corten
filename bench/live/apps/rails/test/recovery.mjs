@@ -123,4 +123,3 @@ try {
   });
 } finally { await browser.close(); }
 assert.deepEqual(failures, []);
-
