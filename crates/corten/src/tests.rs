@@ -4343,6 +4343,64 @@ paths! {
 #[cfg(feature = "json")]
 paths! { ApiQuote = "/api/quote" }
 
+/// The patch [`what_a_patch_in_an_area_costs`] answers with.
+#[derive(crate::view::Id)]
+struct CostNoteId;
+
+#[crate::component]
+fn CostNote() -> impl crate::view::Patch {
+    html! { <p id={CostNoteId}>"Saved"</p> }
+}
+
+/// A component with a stylesheet, which the area lists, so the area has a section stylesheet.
+const COST_STYLED: crate::Component = crate::Component {
+    name: "CostStyled",
+    script: None,
+    style: Some(crate::style::Style {
+        name: "cost-styled",
+        file: "cost_styled.css",
+        css: ".cost-styled__a{color:red}",
+        classes: &["a"],
+        media: &[],
+        breakpoints: &[],
+    }),
+    event: None,
+    view: None,
+    anchor: &0,
+};
+
+/// What a patch costs where its handler is: `PATCH_REQUESTS` (200) action requests in process,
+/// one at a time, to a handler in an area that lists a styled component (`PATCH_AREA=1`), so its
+/// patch links the area's stylesheet, or to the same handler at the same path in an app whose
+/// area lists none. Counting it under callgrind at two numbers of requests gives the instructions
+/// per request. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_in_an_area_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_in_an_area_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let styled = std::env::var("PATCH_AREA").is_ok_and(|v| v == "1");
+    async fn cost_patch(req: Req) -> HtmlResult {
+        req.patch(CostNote {})
+    }
+    // The styled component in the area, or in the app's one stylesheet, which no patch links.
+    let (shared, listed): (&'static [crate::Component], &'static [crate::Component]) =
+        if styled { (&[], &[COST_STYLED]) } else { (&[COST_STYLED], &[]) };
+    let router = App::new(Routes::new())
+        .components(shared)
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(cost_patch))).components(listed))
+        .router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = call_with(router.clone(), "GET", "/shop/item", Some("action"), None).await;
+            assert!(status == StatusCode::OK && body.starts_with(r#"<p id="cost-note">Saved</p>"#), "{status}: {body}");
+        }
+    });
+}
+
 /// A JSON answer for [`what_a_request_in_an_area_costs`].
 #[cfg(feature = "json")]
 #[derive(crate::ToJson)]
