@@ -28,6 +28,10 @@ Every measured level uses 60 individual native publications at 20/s, at 1/2/4 br
 
 ## Observed results
 
+This section records the original capture sessions. It is not current measurement
+qualification: the second review below withdraws all v1 native-cost admissions
+because their required instance/interval/reader/host-response receipts are absent.
+
 Corten uses the existing Feed, subscribe(), generated keyed views and native
 EventSource recovery, not a replacement runtime. Actual source-bound Corten and
 ASP.NET recovery rounds each passed six faults and all three measured levels.
@@ -60,7 +64,8 @@ code hashes and image identity:
 | 2 | 120 | 55.5 | 182068 | 11665408 | 15953920 |
 | 4 | 240 | 54.3 | 169937 | 10809344 | 15953920 |
 
-These numbers are measured, rounded only for display. All raw browser frame/time
+These are historical recorded numbers, rounded only for display, not currently
+qualified native costs. All raw browser frame/time
 origins, schedules, kernel CPU/memory counters and aggregates are retained.
 There are no Corten wins or comparative throughput claims from this concurrently
 loaded workstation. One repeat at three small levels does not establish saturation
@@ -135,7 +140,7 @@ acknowledgement in every reader's aligned browser clock. No capture bytes or
 historic qualification identities were changed. Retained rounds revalidated
 under these stronger checks; the regression tests mutate temporary copies only.
 
-Repair checks: 133 tests passed with
+At the first repair checkpoint, 133 tests passed with
 `node --test bench/live/review.test.mjs bench/live/parity.test.mjs bench/workloads/live.test.mjs`;
 all 241 workload tests, `node scripts/design-refs.mjs` and `git diff --check`
 also passed. Exhaustive artifact reopening revalidated
@@ -152,6 +157,48 @@ repairs; the original captures contain the required observations.
 Repair files are `PORTS.md`, this record, `verify.mjs`, `parity.mjs`, `fanout.mjs`,
 `wire.mjs`, and new `resources.mjs` and `review.test.mjs`, all under `bench/live/`.
 The changed-file inventory below records the earlier delivery, not this repair.
+
+## Second review
+
+The next independent read-only review found ten further admission gaps. Repairs
+require exact distinct negative-control requests; nonempty source/container/process
+identity; exact disconnected write counts and raw native cursor status; cleanup
+of contexts/deadlines even when page/CDP allocation rejects; distinct CDP
+context/target/native-transport reader identities; kernel receipts bound to source
+instance and measured interval; raw host resource-response binding; actual browser
+publication starts within host RPC intervals; the 5-second detach cleanup deadline;
+and reopening retained/requested artifacts regardless of coverage flags or current
+port availability. Raw evidence is not rewritten to fill missing observations.
+
+All historical v1 measurements are now unqualified. The original coverage files
+and displayed numbers remain historical records only. `verifyRound` reports the
+effective `passed`/`measured` sets, `unqualified` reasons and `inspected` files;
+the verifier CLI exits 1 on unqualified success-schema captures. Invalid manifest
+hashes, hidden files or inconsistent retained coverage fail verification outright.
+
+Fresh `evidence/review-v2-express/` contains two actual native correctness journeys
+and source-instance-bound v2 measurements at 1/2/4 browsers, 60 publications at
+20/s, under the existing 1 CPU / 1 GiB limit. Reopening reports Express measured,
+no qualification errors, and full-group readiness false. No application port was
+edited. Fresh Corten/ASP.NET/Gin and recovery v2 measurements remain necessary;
+there are no current Corten wins or workstation throughput rankings.
+
+Second-review checks: 166 focused tests passed, all 241 workload tests passed,
+and the root JavaScript check passed 203 tests with one platform skip. Reopening
+all 11 retained round directories inspected their artifact manifests and reports
+16 unqualified historical journeys (missing identity or negative-control proof)
+and 24 unqualified v1 measured levels, without changing any historical bytes.
+The fresh Express round has no qualification errors. No Rust/app source changed,
+so ordinary Rust checks and the full example-browser matrix were not rerun.
+Fresh independent review is still required; no child agents were started.
+
+New code/tests are `admission.mjs`, `admission.test.mjs`, and `measurement.mjs`.
+Other repair files are `parity.mjs`, `fanout.mjs`, `verify.mjs`, `wire.mjs`,
+`parity.test.mjs`, `review.test.mjs`, `PORTS.md`, `README.md`, this record, plus
+`bench/recoverable-live/README.md`. New evidence files are the fresh directory's
+`coverage.json`, `plan.json`, `source.diff.gz`, `express-artifacts.json`,
+`express-normal.json.gz`, `express-slow-reader.json.gz`,
+`express-measurements.json`, and `express-fanout-{1,2,4}.json.gz`.
 
 ## Changed files
 

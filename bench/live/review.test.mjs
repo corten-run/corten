@@ -13,8 +13,9 @@ const retained = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name, base = retained) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
 async function measured() {
-  const a = await artifact("express-fanout-4"), normal = await artifact("express-normal");
-  const qualification = JSON.parse(await readFile(new URL("express-artifacts.json", retained), "utf8")).files;
+  const base = new URL("./evidence/review-v2-express/", import.meta.url);
+  const a = await artifact("express-fanout-4", base), normal = await artifact("express-normal", base);
+  const qualification = JSON.parse(await readFile(new URL("express-artifacts.json", base), "utf8")).files;
   return { a, expected: { app: "express", group: "live-delivery", provenance: normal.provenance, qualification, settings: normal.settings } };
 }
 
@@ -55,7 +56,8 @@ test("review: reject a qualification scenario borrowed from another retained bui
 });
 
 for (const field of ["containerId", "topology", "processInventory"]) test(`review: qualification binds full ${field} provenance`, async () => {
-  await rejectMixedProvenance((p) => { p[field] = "another native instance"; });
+  await rejectMixedProvenance((p) => { p[field] = field === "containerId" ? "f".repeat(64)
+    : field === "processInventory" ? "PID PPID COMMAND\n999 1 native" : "another native instance"; });
 });
 
 test("review: raw HTTP baseline and released resource leaks cannot borrow the trace's zero counters", async () => {
