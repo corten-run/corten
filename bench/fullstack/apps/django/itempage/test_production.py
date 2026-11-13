@@ -7,14 +7,14 @@ from unittest import skipIf, skipUnless
 from unittest.mock import Mock, patch
 
 from django.conf import settings
-from django.test import Client, SimpleTestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 
 
 RECORDS = json.loads(Path(__file__).with_name("marketplace_test_fixture.json").read_text())
 
 
 @skipUnless(os.environ.get("PROFILE") == "matched", "production profile only")
-class ProductionTests(SimpleTestCase):
+class ProductionTests(TestCase):
     def setUp(self):
         self.source = Mock()
         self.source.get.side_effect = deepcopy(RECORDS).get
@@ -92,7 +92,7 @@ class ProductionTests(SimpleTestCase):
 
 @skipIf(os.environ.get("PROFILE") == "matched", "default profile only")
 class DefaultProfileTests(SimpleTestCase):
-    def test_baseline_middleware_and_limits_are_unchanged(self):
+    def test_baseline_security_and_limits_remain_with_native_sessions(self):
         from . import settings as configured
 
         # Django's test runner appends testserver to the runtime host list.
@@ -102,6 +102,7 @@ class DefaultProfileTests(SimpleTestCase):
             'django.middleware.security.SecurityMiddleware',
             'whitenoise.middleware.WhiteNoiseMiddleware',
             'django.middleware.common.CommonMiddleware',
+            'django.contrib.sessions.middleware.SessionMiddleware',
             'django.middleware.csrf.CsrfViewMiddleware',
             'django.middleware.clickjacking.XFrameOptionsMiddleware',
         ])

@@ -4,6 +4,7 @@ from django.urls import path
 from . import catalog_views, live, marketplace_views, views
 
 urlpatterns = [
+    path("api/alerts", marketplace_views.alerts),
     path("marketplace/<str:locale>/<str:record_id>", marketplace_views.show, name="marketplace"),
     path("api/marketplace/<str:record_id>", marketplace_views.record_json),
     path("", views.home),

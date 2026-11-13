@@ -83,6 +83,23 @@ class MarketplaceRecord(Record):
     contents: list[Line]
     included_in: list[Line]
 
+    def validate_for_write(self, requested_id):
+        """The remaining marketplace record invariants, on the already parsed model."""
+        if self.id != requested_id:
+            raise ValueError("Marketplace record ID mismatch")
+        if self.summary is not None:
+            values = [(self.summary.lowest_minor, -10**9), (self.summary.count, 0), (self.summary.quantity, 0)]
+        else:
+            values = []
+        for rows in (self.listings, self.offers, self.contents, self.included_in):
+            if len({row.id for row in rows}) != len(rows):
+                raise ValueError("Duplicate marketplace row ID")
+            values.extend((row.quantity, 0) for row in rows)
+        values.extend((row.reviews, 0) for row in self.listings)
+        values.extend((row.price_minor, -10**9) for row in [*self.listings, *self.offers])
+        if any(value is not None and not minimum <= value <= 10**9 for value, minimum in values):
+            raise ValueError("Marketplace integer outside record contract")
+
 
 class MarketplaceSource:
     def __init__(self):
@@ -131,18 +148,22 @@ class MarketplaceFormat:
         return f"{self.number(value)} {self.labels['listing_' + self.locale.plural_form(value)]}"
 
     def alert(self, email, target, title):
+        return self.validate_alert(email, target, title)[0]
+
+    def validate_alert(self, email, target, title):
         if "@" not in email:
-            return self.labels["invalid_email"]
+            return self.labels["invalid_email"], None
         try:
             if not self.target.fullmatch(target):
                 raise ValueError("not a decimal in this locale")
             amount = parse_decimal(target, locale=self.locale, strict=True)
-            if not amount.is_finite() or amount <= 0:
+            if not amount.is_finite() or amount <= 0 or amount > Decimal("92233720368547758.07"):
                 raise ValueError("non-positive target")
         except (NumberFormatError, ValueError):
-            return self.labels["invalid_price"]
+            return self.labels["invalid_price"], None
         values = {"{email}": email, "{title}": title, "{price}": self.amount(amount)}
-        return re.sub(r"\{email\}|\{title\}|\{price\}", lambda match: values[match.group()], self.labels["alert_set"])
+        message = re.sub(r"\{email\}|\{title\}|\{price\}", lambda match: values[match.group()], self.labels["alert_set"])
+        return message, int(amount.quantize(Decimal(".01"), rounding=ROUND_HALF_UP) * 100)
 
 
 source = MarketplaceSource()

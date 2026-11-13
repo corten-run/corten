@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from django.test import Client, SimpleTestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 import requests
 
 from .marketplace import LABELS, MarketplaceFormat, MarketplaceSource
@@ -16,7 +16,7 @@ RECORDS = json.loads(Path(__file__).with_name("marketplace_test_fixture.json").r
 
 
 @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
-class MarketplaceTests(SimpleTestCase):
+class MarketplaceTests(TestCase):
     def setUp(self):
         self.records = deepcopy(RECORDS)
         self.source = Mock()
