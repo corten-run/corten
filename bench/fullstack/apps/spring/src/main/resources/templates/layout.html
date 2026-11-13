@@ -11,7 +11,7 @@
 <script th:src="@{/htmx.min.js}" defer></script>
 <script th:src="@{/item.js}" defer></script>
 </head>
-<body hx-boost="true" th:attr="hx-boost=${marketplacePage == true ? 'false' : 'true'}">
+<body hx-boost:inherited="true" th:attr="hx-boost:inherited=${marketplacePage == true ? 'false' : 'true'}">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main th:replace="${main}"></main>
 </body>

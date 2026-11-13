@@ -10,7 +10,7 @@
 <script src="{% static 'htmx.min.js' %}" defer></script>
 <script src="{% static 'item.js' %}" defer></script>
 </head>
-<body hx-boost="true">
+<body hx-boost:inherited="true">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main>{% block main %}{% endblock %}</main>
 </body>
