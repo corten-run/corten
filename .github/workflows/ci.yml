@@ -160,6 +160,7 @@ jobs:
         run: |
           npm run check
           npm run check:workloads
+          npm run check:marketplace
           node --test bench/client-heavy/verify.test.mjs
           echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system

@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
+
 - A read-only saved client-heavy evidence validator checks source identities,
   native bundles, observations, outcomes and resource/timing consistency without
   executing archived code or contacting a network. Historical v1 captures remain
