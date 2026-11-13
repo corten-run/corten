@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
+  every archive's provenance before publishing to crates.io or creating the GitHub release, and
+  the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`
+  still checks its download only by HTTPS.
+
 - A read-only saved client-heavy evidence validator checks source identities,
   native bundles, observations, outcomes and resource/timing consistency without
   executing archived code or contacting a network. Historical v1 captures remain
@@ -309,6 +314,18 @@ Corten is pre-1.0, so any minor version may change the API.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+- A request reads what its area or API sets (deadline, body limit, CSP and shell key,
+  middleware, its API) from the route it matched: `App::router` resolves each area's and API's
+  once, with those of the areas and APIs around it, and gives it to each of their routes, where
+  each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
+  is its prefix's, and a route that can match a path under another prefix, counted segment by
+  segment (a page's `/{*rest}`, or `/{slug}` beside an area at `/shop`), look it up by path, so
+  what a request meets is unchanged. Measured at `f7d33ce2` against main `31de4268` (callgrind,
+  release, jemalloc, five runs each), a page in an inner area costs 328 instructions fewer and an
+  API's JSON 223 fewer, and in an app with no areas or APIs each costs 138 fewer; and later,
+  counting segments, a page at `/{slug}` in an app with no areas costs 114 fewer than
+  when it was looked up by path (at `084db982` against `416882fa`, three runs each)
+  ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 - `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
   only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
