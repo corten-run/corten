@@ -117,6 +117,11 @@ node bench/client-heavy/verify.mjs bench/client-heavy/work/local --round local -
 node --test bench/client-heavy/verify.test.mjs
 ```
 
+Offline inventory imports do not evaluate unrelated legacy benchmark execution
+settings such as `BENCH_APPS`, `BENCH_TIER` or `BENCH_EDGE`. Those settings still
+retain their validation in the legacy execution module; they cannot filter this
+verifier's required inventory or prevent it from returning a diagnostic report.
+
 Its fixed API is `await validateSaved({ folder, round, commit })`, exported from
 `verify.mjs`. No validator, command, contender, plan, output or policy override is
 accepted. The matching CLI accepts exactly the arguments above, in that order.

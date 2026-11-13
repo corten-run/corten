@@ -641,3 +641,25 @@ test("fixed API/CLI refuses overrides, unsafe identities and command injection",
   const bad = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder, "--round", "../x", "--commit", commit], { encoding: "utf8" });
   assert.equal(bad.status, 1); assert.equal(JSON.parse(bad.stdout).status, "invalid");
 });
+
+test("offline API and CLI ignore unrelated inherited benchmark execution settings", async (t) => {
+  const f = await fixture(t);
+  const input = { folder: f.folder, round: "test-round", commit };
+  const script = `import { validateSaved } from ${JSON.stringify(new URL("./verify.mjs", import.meta.url).href)};
+    console.log(JSON.stringify(await validateSaved(${JSON.stringify(input)})));`;
+  for (const settings of [{ BENCH_APPS: "react" }, { BENCH_TIER: "client-only" }, { BENCH_EDGE: "unrelated" }]) {
+    const options = { encoding: "utf8", timeout: 30000, env: { ...process.env, ...settings } };
+    const api = spawnSync(process.execPath, ["--input-type=module", "-e", script], options);
+    assert.equal(api.status, 0, api.stderr);
+    assert.equal(JSON.parse(api.stdout).status, "blocked");
+    const cli = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder,
+      "--round", "test-round", "--commit", commit], options);
+    assert.equal(cli.status, 2, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).status, "blocked");
+  }
+  const legacy = spawnSync(process.execPath, ["--input-type=module", "-e",
+    `await import(${JSON.stringify(new URL("../fullstack/apps.mjs", import.meta.url).href)});`],
+  { encoding: "utf8", timeout: 30000, env: { ...process.env, BENCH_APPS: "react" } });
+  assert.equal(legacy.status, 1);
+  assert.match(legacy.stderr, /BENCH_APPS names react, which is not an app/);
+});
