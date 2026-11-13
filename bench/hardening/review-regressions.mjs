@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { assemble, verifyArtifacts, targetOutcome, digest } from "./evidence.mjs";
-import { terminalHealthPaths } from "./lifecycle.mjs";
+import { terminalHealthPaths, terminalHealthEndpoints } from "./lifecycle.mjs";
 
 assert.ok(process.argv[2], "retained native cell directory required");
 const folder = resolve(process.argv[2]);
@@ -15,6 +15,25 @@ const input = { settings, raw: readFileSync(join(folder, "raw.jsonl"), "utf8").t
   provenance: deployment.provenance, lifecycle: Object.fromEntries(deployment.processes.map((p) => [p.id, read(`${p.id}-lifecycle.json`)])) };
 const tests = []; let total = 0;
 const check = (name, fn) => { total++; try { fn(); console.log(`PASS ${name}`); } catch (error) { tests.push(name); console.error(`FAIL ${name}: ${error.message}`); } };
+const hypotheticalTerminals = () => {
+  const changed = structuredClone(input), clock = changed.raw.find((r) => r.type === "clock");
+  const atMs = Math.max(changed.raw.find((r) => r.type === "probe-cleanup").atMs, JSON.parse(settings.effectiveBudgets).legitimate.after.endMs) + 1;
+  changed.raw.push({ type: "probe-complete", atMs });
+  const start = { bootId: clock.bootId, monotonicNs: String(BigInt(clock.monotonicNs) + BigInt(Math.ceil(atMs * 1e6)) + 1_000_000n) };
+  const end = changed.cleanup.nativeClock;
+  changed.settings.terminalHealthPaths = terminalHealthPaths(read("qualification.json"), read("edge-qualification.json"));
+  const endpoints = terminalHealthEndpoints(changed.settings.terminalHealthPaths);
+  // Explicit hypothetical metadata, never saved or promoted as native evidence.
+  for (const p of deployment.processes) {
+    const body = "hypothetical terminal", url = endpoints[p.role];
+    changed.lifecycle[p.id].observation = structuredClone({ start, end });
+    changed.lifecycle[p.id].health = { path: changed.settings.terminalHealthPaths[p.role], bootId: clock.bootId,
+      response: { url, method: "GET", host: new URL(url).host, startedNs: String(BigInt(start.monotonicNs) + 1_000_000n),
+        endedNs: String(BigInt(start.monotonicNs) + 2_000_000n), status: 200, complete: true, body, bytes: Buffer.byteLength(body), sha256: digest(body), ms: 1 } };
+  }
+  assert.equal(assemble(changed).recovery.disposition, "recovered");
+  return changed;
+};
 check("unmodified native raw evidence replays without rewriting qualification", () => {
   const capture = assemble(input);
   assert.equal(capture.recovery.disposition, "not-recovered", "historical bytes cannot invent terminal liveness");
@@ -54,22 +73,42 @@ check("late establishment cannot erase mandatory trickles", () => {
   assert.throws(() => assemble(changed), /connect deadline/);
 });
 for (const role of ["application", "proxy", "upstream"]) for (const fault of ["Docker unhealthy", "HTTP 503", "both"]) check(`running ${role} with terminal ${fault} is not recovered`, () => {
-  const changed = structuredClone(input), process = deployment.processes.find((p) => p.role === role);
+  const changed = hypotheticalTerminals(), process = deployment.processes.find((p) => p.role === role);
   assert.ok(process, `real replay needs ${role}`);
-  changed.settings.terminalHealthPaths = terminalHealthPaths(read("qualification.json"), read("edge-qualification.json"));
-  // Hypothetical terminal metadata only, never saved or promoted as native evidence.
-  // Start from otherwise healthy terminals so unavailable sibling receipts cannot mask a fault.
-  for (const p of deployment.processes) {
-    const body = "hypothetical terminal";
-    changed.lifecycle[p.id].health = { path: changed.settings.terminalHealthPaths[p.role],
-      response: { status: 200, complete: true, body, bytes: Buffer.byteLength(body), sha256: digest(body), ms: 1 } };
-  }
-  assert.equal(assemble(changed).recovery.disposition, "recovered");
   if (fault !== "HTTP 503") changed.lifecycle[process.id].after.State.Health = { Status: "unhealthy" };
   if (fault !== "Docker unhealthy") changed.lifecycle[process.id].health.response.status = 503;
   const capture = assemble(changed), outcome = targetOutcome(capture, { productionQualified: true }, { state: "observed" });
   assert.equal(capture.recovery.disposition, "not-recovered");
   assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
+});
+for (const role of ["application", "proxy", "upstream"]) for (const fault of ["old preflight", "stale time", "wrong URL", "wrong Host", "wrong method"]) check(`${role} terminal rejects ${fault}`, () => {
+  const changed = hypotheticalTerminals(), p = deployment.processes.find((p) => p.role === role), health = changed.lifecycle[p.id].health;
+  if (fault === "old preflight") health.response = read("native-controls.json").host.allowed;
+  if (fault === "stale time") { health.response.startedNs = changed.raw.find((r) => r.type === "clock").monotonicNs; health.response.endedNs = health.response.startedNs; }
+  if (fault === "wrong URL") health.response.url = new URL("/marketplace/en-US/item_1", health.response.url).href;
+  if (fault === "wrong Host") health.response.host = "unrecognized.invalid";
+  if (fault === "wrong method") health.response.method = "POST";
+  assert.throws(() => assemble(changed), /terminal/);
+});
+for (const role of ["application", "proxy", "upstream"]) check(`${role} verified exit during failed observation remains a target outcome; external kill does not`, () => {
+  const changed = hypotheticalTerminals(), p = deployment.processes.find((p) => p.role === role), life = changed.lifecycle[p.id];
+  Object.assign(life.after.State, { Running: false, ExitCode: 0, FinishedAt: new Date(Date.parse(changed.raw.find((r) => r.type === "clock").wallAtStart) + 13700).toISOString() });
+  life.health = { path: changed.settings.terminalHealthPaths[role], response: null, unavailable: "not-running", observerError: "cannot join network namespace of a non running container" };
+  const outcome = targetOutcome(assemble(changed), { productionQualified: true }, { state: "observed" });
+  assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
+  life.events.push({ Action: "kill" });
+  assert.throws(() => assemble(changed), /external lifecycle intervention/);
+});
+for (const fault of ["pre-probe window", "post-cleanup window", "inverted window", "different boot", "missing window", "missing completion", "early completion"]) check(`terminal interval rejects ${fault}`, () => {
+  const changed = hypotheticalTerminals(), life = changed.lifecycle.application, complete = changed.raw.find((r) => r.type === "probe-complete");
+  if (fault === "pre-probe window") life.observation.start.monotonicNs = changed.raw.find((r) => r.type === "clock").monotonicNs;
+  if (fault === "post-cleanup window") life.observation.end.monotonicNs = String(BigInt(changed.cleanup.nativeClock.monotonicNs) + 1n);
+  if (fault === "inverted window") life.observation.end.monotonicNs = String(BigInt(life.observation.start.monotonicNs) - 1n);
+  if (fault === "different boot") life.observation.start.bootId = "another-boot";
+  if (fault === "missing window") delete life.observation;
+  if (fault === "missing completion") changed.raw.splice(changed.raw.indexOf(complete), 1);
+  if (fault === "early completion") { changed.raw.splice(changed.raw.indexOf(complete), 1); changed.raw.unshift(complete); }
+  assert.throws(() => assemble(changed));
 });
 for (const role of ["proxy", "upstream"]) check(`late ${role} OOM is target-capacity-failure`, () => {
   const changed = structuredClone(input), process = deployment.processes.find((p) => p.role === role);

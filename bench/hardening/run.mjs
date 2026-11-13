@@ -11,7 +11,7 @@ import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits,
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { payload } from "./probe.mjs";
 import { emissionIdentity } from "./receipts.mjs";
-import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalHealthPaths } from "./lifecycle.mjs";
+import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalHealthPaths, collectTerminalHealth } from "./lifecycle.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -32,7 +32,7 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) if (!settling.has(child)) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 3, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 4, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false } = {}) {
@@ -212,19 +212,30 @@ export async function run(args) {
       const clock = raw.find((r) => r.type === "clock"); assert.ok(clock);
       lifecycle = {};
       stage = "native-lifecycle";
+      const terminalClock = async () => {
+        const name = `${prefix}-terminal-clock`;
+        await owned(name, ["create", "--network", "none", ...limits(budget.resources.apparatus), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
+        try { return JSON.parse(await docker(["start", "-a", name])); }
+        finally { await remove(name); }
+      };
+      const start = await terminalClock();
       for (const t of targets) {
-        const path = settings.terminalHealthPaths[t.role], running = (await inspect(t.name)).State.Running;
+        const path = settings.terminalHealthPaths[t.role];
         const base = t.role === "proxy" ? "https://localhost:8080" : "http://127.0.0.1:8080";
-        const health = !running ? { path, response: null, unavailable: "not-running" } : path === null ? { path, response: null }
-          : JSON.parse(await sidecar(`${prefix}-${t.id}-health`, t.name,
-            ["/repo/bench/hardening/lifecycle.mjs", base, path, String(budget.recovery.requestTimeoutMs)], out, `${t.id}-terminal-health.json`, 15000));
-        const after = await inspect(t.name);
+        const { after, health } = await collectTerminalHealth({ role: t.role, source: cell.source, path, inspect: () => inspect(t.name),
+          observe: async () => JSON.parse(await sidecar(`${prefix}-${t.id}-health`, t.name,
+            ["/repo/bench/hardening/lifecycle.mjs", base, path, String(budget.recovery.requestTimeoutMs)], out, `${t.id}-terminal-health.json`, 15000)) });
         const until = new Date().toISOString();
         const eventsText = await docker(["events", "--since", clock.wallAtStart, "--until", until, "--filter", `container=${t.info.Id}`, "--format", "{{json .}}"]);
         const events = eventsText ? eventsText.split("\n").map((line) => JSON.parse(line)) : [];
         const top = after.State.Running ? await docker(["top", t.name, "-eo", "pid,ppid,comm,args"]) : null;
-        lifecycle[t.id] = { ...snapshot[t.id], after, events, top, health }; json(join(out, `${t.id}-lifecycle.json`), lifecycle[t.id]);
+        lifecycle[t.id] = { ...snapshot[t.id], after, events, top, health };
         if (t.role === "upstream" && cell.source === "fixture") assert.ok(after.State.Running && after.State.StartedAt === t.info.State.StartedAt, "idle fixture upstream apparatus stopped/restarted");
+      }
+      const end = await terminalClock();
+      for (const t of targets) {
+        lifecycle[t.id].observation = { start, end };
+        json(join(out, `${t.id}-lifecycle.json`), lifecycle[t.id]);
       }
     } catch (e) { error = e; }
     finally {
