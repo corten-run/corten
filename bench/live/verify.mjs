@@ -45,6 +45,8 @@ export async function verifyRound(directory) {
         assert.equal(artifact.provenance.commit, plan.commit);
         assert.deepEqual(artifact.provenance.code, plan.code);
         assert.equal(artifact.provenance.diffSha256, plan.diffSha256);
+        if (qualified.length) assert.deepEqual(artifact.provenance, qualified[0].provenance,
+          "qualification scenario provenance differs from the measured native instance");
         verifyArtifact(artifact, { app: entry.app, group: plan.group, scenario: scenarios(plan.group)[i] });
         qualified.push(artifact);
       }

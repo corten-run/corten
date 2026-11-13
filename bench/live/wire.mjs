@@ -9,6 +9,20 @@ for (const port of Object.values(nativePorts)) if (port.wireModule) {
   bindings.set(port.wire, binding);
 }
 
+export function wireResources(network, wire = "event-sse") {
+  if (bindings.has(wire)) {
+    assert.equal(typeof bindings.get(wire).wireResources, "function", "native resource wire binding required");
+    return bindings.get(wire).wireResources(network);
+  }
+  assert.ok(["event-sse", "corten-feed"].includes(wire), "unregistered native resource wire binding");
+  const names = wire === "corten-feed" ? ["parity-ready"] : ["ready", "overflow"];
+  return network.filter((r) => r.kind === "native-sse" && names.includes(r.eventName)).map((r) => {
+    const data = JSON.parse(r.data);
+    assert.ok(data.resources && typeof data.resources === "object", "native resource envelope missing");
+    return data.resources;
+  });
+}
+
 // Raw native bindings only. These never produce application state/effects.
 export function wireEvents(network, wire = "event-sse") {
   if (bindings.has(wire)) return bindings.get(wire).wireEvents(network);

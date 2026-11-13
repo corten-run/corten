@@ -2,8 +2,9 @@
 
 ## Scope and entry points
 
-This lane extends the previously delivered `13e9ce3a11d61e238cca936e43bf8ea17bb77378`
-runners. The requested base was `921cd8422d4293863981546ced30da5c2e256cf6`;
+This lane extends the previously delivered live runners, whose original source
+identity is retained in the [initial delivery plan](evidence/native-delivery/plan.json).
+The requested base was `921cd8422d4293863981546ced30da5c2e256cf6`;
 upstream was fetched and read without moving this feature branch.
 Only live/recoverable-live files were changed. Reserved native app sources were not edited.
 
@@ -49,8 +50,9 @@ measurement is native-live-fanout/v1, with hashed gzip manifests and source diff
 Old v1 captures retain their original three-port inventory; adding a registration
 does not upgrade missing historic rows. Existing v2 missing rows also remain missing.
 
-Measured Corten delivery at `ab03033821ca8e96865fdf59de375190cc5cfb2b`, source bound
-by its retained plan/diff and image identity:
+Measured Corten delivery uses the original captured source commit in its
+[retained plan](evidence/native-feed-corten/plan.json), bound by that plan's diff,
+code hashes and image identity:
 
 | Browsers | Effects | Visible-frame p95 ms | Server CPU microseconds | Current memory bytes | Peak since container start bytes |
 |---|---|---|---|---|---|
@@ -83,7 +85,7 @@ finished image, never a fallback image.
 
 ## Checks
 
-Observed this session:
+Observed during the original native implementation and capture session:
 - `node --test bench/live/parity.test.mjs bench/workloads/live.test.mjs`: 111 passed.
 - `npm run check:workloads`: 241 passed.
 - `npm run check`: 203 passed, one Windows platform skip.
@@ -105,12 +107,47 @@ automation, pushes, pull requests or merges were changed.
 
 ## Remaining ports
 
-Phoenix, Laravel, Drogon, Leptos and Topcoat native ports are not delivered in this
-lane. Rails has a separate owner-delivered native application, but parent import,
-native registration and shared-runner qualification are still required. These are
+Laravel, Drogon, Leptos and Topcoat native ports are not delivered in this
+lane. Rails and Phoenix have separate owner-delivered native applications, but
+parent import/review, raw-wire resource extraction, native registration and
+shared-runner qualification are still required at this checkpoint. These are
 pending work, not unsupported frameworks or qualifying transport promises.
 The port contract and app-local raw-wire binding interface are in `PORTS.md`.
 No other group registry membership or default was changed.
+
+## Review repairs
+
+The original captured Git commit IDs remain verbatim in the retained plans and
+provenance; cherry-picking reviewed implementation/evidence into an integration
+branch does not turn its new commit IDs into captured source identities. The
+Markdown plan links above identify capture metadata, not claims that the original
+side-branch commits are ancestors of the integrating branch. Reproduction still
+requires the original plan's sources/diff, code hashes and source-bound image.
+An imported commit identifies reviewed content, not a new measurement.
+
+Independent review found three admission gaps: scenarios from different native
+instances could qualify one measurement, raw resource responses were not bound
+to the application trace, and fan-out cleanup was timed from detach rather than
+the probe acknowledgement. Repairs require full provenance equality across every
+scenario and measured level; exact raw HTTP/native-wire resource payload binding;
+and a zero-resource plus final-state observation at least 150 ms after the probe
+acknowledgement in every reader's aligned browser clock. No capture bytes or
+historic qualification identities were changed. Retained rounds revalidated
+under these stronger checks; the regression tests mutate temporary copies only.
+
+Repair checks: 129 tests passed with
+`node --test bench/live/review.test.mjs bench/live/parity.test.mjs bench/workloads/live.test.mjs`;
+all 241 workload tests, `node scripts/design-refs.mjs` and `git diff --check`
+also passed. The retained set has
+42 successful native journeys and 24 successful measured levels. Its shortest
+final raw-bound zero-resource observation is 181.3 ms after acknowledgement;
+Corten's shortest is 193.9 ms across delivery and recovery. No fresh capture,
+native build, browser service or container was needed for these verifier-only
+repairs; the original captures contain the required observations.
+
+Repair files are `PORTS.md`, this record, `verify.mjs`, `parity.mjs`, `fanout.mjs`,
+`wire.mjs`, and new `resources.mjs` and `review.test.mjs`, all under `bench/live/`.
+The changed-file inventory below records the earlier delivery, not this repair.
 
 ## Changed files
 
