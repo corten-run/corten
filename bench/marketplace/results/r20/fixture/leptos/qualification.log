@@ -1,0 +1,1 @@
+fixture: excluded: crossSite, json404, json405, host, bigHead, live, unfinishedHead, connectionCap

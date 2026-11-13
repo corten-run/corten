@@ -7,7 +7,7 @@ before timing; every admitted app must then pass both Docker/browser gates befor
 No framework, including axum or Corten, gets unconditional admission. See
 [framework groups](nightly.md#framework-groups) for requirements, candidate pools and limits.
 An omitted adapter was not tested; an excluded candidate has capability evidence, not timing.
-No v2 performance baseline is published here. Passing the formatting-capture checker alone
+The first validated v2 production baseline is [historical r20](#results). Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 
 Keep both workloads' history. [Catalog](../catalog/README.md) isolates a strings-only page and JSON;
@@ -17,6 +17,42 @@ their recorded implementation and caveats. V2 starts a new baseline, not an r16 
 Nightly execution moves to v2 starting at official r17; catalog remains a separate optional
 diagnostic, not a duplicate nightly run. Old marketplace tables have non-equivalent
 localization work and cannot establish general framework speed rankings.
+
+## Results
+
+Historical round r20 is the **first validated v2 production baseline**, measured on 2026-11-12 (UTC)
+at `43550265076e378d2159a9ebc254cf9412a2355a` on one dedicated c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz).
+It is a saved measurement of that commit, not today's code or a baseline for the newer
+workload-group campaign. There is no speed delta from r16, catalog c1/c2 or another workload.
+
+Group `production`, feature profile `marketplace-production/v1`, native
+`PROFILE=matched`, connection cap 1000. Corten and ASP.NET Core qualified in both sources
+and passed every browser/content gate. Next.js, FastAPI, Express, Topcoat, Leptos were
+probed and excluded, not timed. The report preserves each missing requirement and lists all
+omitted adapters, which were not tested. These are measured adapter configurations, not claims
+about what their frameworks could implement. Conditional GET/ETag and downstream readiness
+are disclosed exceptions; logging remains native, not normalized.
+
+See the [generated report](results/r20/report.md), [saved summary](results/r20/summary.json),
+[exact measured commit](results/r20/commit.txt) and [archive checksum receipt](results/r20/archive-sha256.txt).
+The original hash-verified archive remains outside Git; raw qualifications, browser checks,
+build logs, counted CPU, load summaries and sample streams are retained with these results.
+
+Each admitted adapter completed 8 profiles in 3 rotated passes: pages in
+en-US, fr-FR, de-DE and locale-neutral JSON once per source/pass, using memory and uncached HTTP
+sources. Warmup 10s, phases 15s, fixed load 150 req/s, then 64 and 256 users; identity
+encoding, one app core/1 GiB on CPU 1, upstream CPUs 2-3, generator CPUs 4-7.
+The saved runner interval was 73.34 minutes (2026-11-12T15:39:48.785Z to 2026-11-12T16:53:08.923Z),
+not launch-to-deletion time. No request failures, dropped iterations or app stops were recorded.
+
+All numbers are medians [min-max], not confidence intervals. Corten's memory-source app CPU is below 95%
+in some closed-loop passes. No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core.
+The report identifies every affected profile/phase/pass; observed throughput is not proven
+maximum capacity. These short windows do not establish small speed differences. Conditional
+reads, downstream readiness, build cost, bytes, instructions and browser interactivity are not
+measured by this load suite. Existing build/browser/byte/instruction tables remain historical
+in [Performance](../../docs/performance.md#historical-measurements) and [fullstack](../fullstack/README.md).
+This baseline is not the newer nine-group campaign and does not establish its readiness.
 
 ## Shared work
 

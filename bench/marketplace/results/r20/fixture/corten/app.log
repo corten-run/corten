@@ -1,0 +1,2 @@
+corten: listening on http://localhost:8080
+2026-11-12T15:50:40.864651Z  WARN corten: refused a request for host "unrecognized.invalid" (421): if the app is served under that name, list it with Policy::host
