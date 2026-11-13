@@ -4,6 +4,17 @@ import { join } from "node:path";
 import { sourceSnapshot } from "./source-audit.mjs";
 import { sha256 } from "./capture.mjs";
 
+// Commit archives already use immutable commit metadata. Tree archives otherwise
+// use the wall clock, which cannot bind an independent prebuild audit to Docker.
+export function nativeBuildArchiveArgs(commit, app, { output } = {}) {
+  assert.match(commit, /^[a-f0-9]{40}$/);
+  assert.match(app, /^[a-z][a-z0-9-]*$/);
+  if (output !== undefined) assert.ok(typeof output === "string" && output.length > 0 && !output.includes("\0"));
+  return ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar",
+    ...(app === "corten" ? [] : ["--mtime=1970-01-01T00:00:00Z"]), ...(output === undefined ? [] : ["--output", output]),
+    app === "corten" ? commit : `${commit}:bench/fullstack/apps/${app}`];
+}
+
 // Docker receives only these retained bytes, never the mutable working directory.
 export async function nativeBuildContext(io, folder, commit, app, expected) {
   assert.match(commit, /^[a-f0-9]{40}$/);
@@ -11,7 +22,7 @@ export async function nativeBuildContext(io, folder, commit, app, expected) {
   const prefix = app === "corten" ? "" : `bench/fullstack/apps/${app}/`;
   assert.ok(expected.length > 0 && expected.every((f) => f.path.startsWith(prefix)));
   const archive = join(folder, `${app}-build-context.tar`), root = join(folder, `${app}-build-context`);
-  await io.command("git", ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", "--output", archive, `${commit}${prefix ? `:${prefix.slice(0, -1)}` : ""}`], { timeout: 60000 });
+  await io.command("git", nativeBuildArchiveArgs(commit, app, { output: archive }), { timeout: 60000 });
   const input = readFileSync(archive);
   mkdirSync(root);
   await io.command("tar", ["-xf", archive, "-C", root], { timeout: 60000 });

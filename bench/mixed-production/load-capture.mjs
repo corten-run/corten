@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { bindNativeForm } from "../workloads/mixed.mjs";
 import { emptyCapture, expectedOutcome, oracle, responseOutcome, sleep, unsent, upstreamEvidence } from "./capture.mjs";
+import { parsePublicRecord } from "./response-evidence.mjs";
 
 export function loadPaths(plan, source) {
   const rows = plan.requests.filter((r) => r.source === source), paths = new Set();
@@ -40,7 +41,7 @@ export async function loadCycle({ plan, records, app, source, transport, injecto
           row = { request, outcome, status: response.status, error: response.error, contentType: response.contentType, contentEncoding: response.contentEncoding,
             upstream: null, page: null, record: null, form: binding?.evidence ?? null, state: null };
           if (["completed", "rejected"].includes(outcome)) try {
-            if (request.category === "json") row.record = JSON.parse(response.body.toString("utf8"));
+            if (request.category === "json") row.record = parsePublicRecord(response.body);
             else row.page = await transport.snapshot(response, request, evidence);
           } catch { evidence.gaps.push("native-body-extraction-failed"); }
           const until = Date.now() + settings.cleanupMs;

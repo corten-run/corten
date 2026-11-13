@@ -4,6 +4,124 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { bindNativeForm } from "../workloads/mixed.mjs";
 import { localURL, nativeForm, nativeTransport, redactedDocument } from "./native.mjs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative } from "node:path";
+import { records as fixture } from "../marketplace/fixtures.mjs";
+import { createPlan } from "../workloads/mixed.mjs";
+import { captureSource } from "./capture.mjs";
+import { loadCycle } from "./load-capture.mjs";
+import { responseSourceWriter, replayResponseEvidence } from "./response-evidence.mjs";
+import { referenceHtml } from "../marketplace/reference.mjs";
+
+test("actual HTTP unknown JSON never reaches functional or load saved normalized records", { skip: !process.env.MIXED_BROWSER_TESTS }, async () => {
+  const { chromium } = await import("@playwright/test"), records = fixture(), root = tmpdir();
+  const folder = mkdtempSync(join(root, "mixed-json-filter-"));
+  let body = '{"credential":"synthetic-private-canary"}';
+  const server = createServer((_req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(body); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  let browser;
+  try {
+    browser = await chromium.launch();
+    const settings = { requestTimeoutMs: 30000, cleanupMs: 1 }, base = `http://127.0.0.1:${server.address().port}`;
+    const plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
+    const request = plan.requests.find((r) => r.category === "json" && r.source === "fixture");
+    plan.requests = [request, { ...request, id: `${request.id}_second`, itemId: "item_2", path: "/public-record-second" }]
+      .map((r, index) => ({ ...r, index, client: index }));
+    const injector = { async begin() {}, async read() { return { requests: 0, completed: 0, cancelled: 0, pending: 0, mode: "normal", events: [] }; } };
+    const validBody = JSON.stringify(records.item_1), nested = structuredClone(records.item_1);
+    nested.title = { credential: "synthetic-private-canary" };
+    const image = structuredClone(records.item_1); image.images = ["https://synthetic-private-canary:synthetic-private-canary@example.test/image"];
+    const queryImages = ["seller", "sort", "offers", "s%65ller"].map((key) => {
+      const image = structuredClone(records.item_1); image.images = [`https://example.test/image?${key}=synthetic-private-canary`]; return JSON.stringify(image);
+    });
+    let sequence = 0;
+    for (const execute of [captureSource, loadCycle]) for (const payload of ['{"credential":"synthetic-private-canary"}', '{"broken":', JSON.stringify(nested), JSON.stringify(image), ...queryImages, validBody]) {
+      body = payload;
+      const transport = await nativeTransport({ browser, base, settings });
+      const saved = [];
+      try {
+        await execute({ plan, records, app: "corten", source: "fixture", transport, injector, settings, save: async (_r, value) => {
+          assert.equal(JSON.stringify(value).includes("synthetic-private-canary"), false, "unsafe normalized value must never reach persistence");
+          for (const stage of value.evidence.stages) if (stage.sourceBody)
+            assert.equal(Buffer.from(stage.sourceBody.base64, "base64").toString().includes("synthetic-private-canary"), false, "unsafe source body must never reach persistence");
+          const path = join(folder, `${sequence++}.json`); writeFileSync(path, JSON.stringify(value));
+          if (value.row.status === 200) saved.push(JSON.parse(readFileSync(path)));
+        } });
+      } finally { await transport.close(); }
+      assert.equal(saved.length, 2);
+      for (const value of saved) {
+        assert.equal(value.row.outcome, "completed");
+        const primary = value.evidence.stages.find((s) => s.stage === "primary");
+        assert.ok(primary.decodedBodySha256); assert.equal(primary.decodedBodyBytes, Buffer.byteLength(payload));
+        if (payload === validBody) {
+          assert.deepEqual(value.row.record, records.item_1); assert.equal(primary.sourceBody.kind, "record");
+          assert.equal(Buffer.from(primary.sourceBody.base64, "base64").toString(), validBody);
+        } else {
+          assert.equal(value.row.record, null); assert.equal(primary.sourceBody, undefined);
+          assert.ok(value.evidence.gaps.includes("native-body-extraction-failed"));
+          assert.equal(replayResponseEvidence(value, request), false);
+        }
+      }
+    }
+    for (const path of readdirSync(folder)) assert.doesNotMatch(readFileSync(join(folder, path), "utf8"), /synthetic-private-canary/);
+  } finally {
+    await browser?.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    const rel = relative(root, folder); assert.ok(rel && !isAbsolute(rel) && !rel.startsWith("..")); rmSync(folder, { recursive: true });
+  }
+});
+
+test("native DOM URL filter blocks canaries before row or source persistence and keeps public URLs replayable", { skip: !process.env.MIXED_BROWSER_TESTS }, async () => {
+  const { chromium } = await import("@playwright/test"), root = tmpdir(), folder = mkdtempSync(join(root, "mixed-dom-url-filter-"));
+  const record = fixture().item_1; let html = referenceHtml(record, "en-US");
+  const server = createServer((_req, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end(html); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  let browser;
+  try {
+    browser = await chromium.launch();
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const request = { source: "fixture", client: 0, category: "read", method: "GET", path: "/marketplace/en-US/item_1", accept: "text/html", acceptEncoding: "identity" };
+    let unsafeSourceSeen = false;
+    const writeSource = responseSourceWriter(folder), transport = await nativeTransport({ browser, base: `http://127.0.0.1:${server.address().port}`,
+      settings: { requestTimeoutMs: 30000 }, saveSource: (value) => {
+        const unsafe = /(?:username|password|credential)-canary/.test(JSON.stringify(value)); unsafeSourceSeen ||= unsafe;
+        assert.equal(unsafe, false, "unsafe DOM source refused before persistence"); return writeSource(value);
+      } });
+    try {
+      for (const [attribute, url] of [[null, null], ["href", "/marketplace/en-US/item_2?seller=A&sort=desc&offers=all"],
+        ...["seller", "sort", "offers"].map((key) => ["action", `/marketplace/en-US/item_1?${key}=credential-canary`]),
+        ...["seller", "sort", "offers", "s%65ller"].map((key) => ["href", `/marketplace/en-US/item_2?${key}=credential-canary`]),
+        ["href", "/marketplace/en-US/item_2?seller=A&seller=credential-canary"],
+        ["data-src", "/cards/dragon.webp?seller=credential-canary"], ["href", "https://username-canary:password-canary@example.test/item"],
+        ["data-src", "//username-canary:password-canary@example.test/image"], ["href", "/item?token=credential-canary"],
+        ["href", "/item#credential-canary"], ["data-src", "data:text/plain,credential-canary"]]) {
+        html = referenceHtml(record, "en-US").replaceAll("http://localhost", base);
+        if (attribute === "href") html = html.replace(/href="[^"]+"(?=>[^<]*Ember dragon)/, `href="${url}"`);
+        if (attribute === "data-src") html = html.replace(/data-src="[^"]+"/, `data-src="${url}"`);
+        if (attribute === "action") html = html.replace(/action="[^"]+" method="post"/, `action="${url}" method="post"`);
+        if (attribute === "href") assert.ok(html.includes(url), "native link fixture must contain the hostile URL");
+        const evidence = { stages: [] }, response = await transport.send(request, null, evidence);
+        let page = null; try { page = await transport.snapshot(response, request, evidence); } catch { /* Retain the actual failed extraction. */ }
+        assert.equal(unsafeSourceSeen, false);
+        const value = { row: { outcome: "completed", status: 200, page, record: null, form: null, state: null }, evidence };
+        assert.equal(/(?:username|password|credential)-canary/.test(JSON.stringify(value)), false, "unsafe row refused before persistence");
+        if (attribute === null || attribute === "action" || url === "/marketplace/en-US/item_2?seller=A&sort=desc&offers=all") {
+          assert.ok(page); assert.equal(replayResponseEvidence(value, request, (ref) => JSON.parse(readFileSync(join(folder, ref.path)))), true);
+          if (attribute === "href") assert.equal(page.contents[0].href, url);
+        } else {
+          assert.equal(page, null); assert.equal(evidence.redactedNativeDOM, undefined);
+          const source = JSON.parse(readFileSync(join(folder, evidence.domReads.path)));
+          assert.equal(source.failure, "credential-filter-blocked");
+          assert.equal(replayResponseEvidence(value, request, (ref) => JSON.parse(readFileSync(join(folder, ref.path)))), false);
+        }
+        writeFileSync(join(folder, attribute === null ? "positive.json" : "filtered.json"), JSON.stringify(value));
+      }
+    } finally { await transport.close(); }
+  } finally {
+    await browser?.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    const rel = relative(root, folder); assert.ok(rel && !isAbsolute(rel) && !rel.startsWith("..")); rmSync(folder, { recursive: true });
+  }
+});
 
 test("native URL binding refuses credentials, fragments and foreign origins", () => {
   assert.equal(localURL("/submit?native=opaque", "http://127.0.0.1:8080/page").pathname, "/submit");

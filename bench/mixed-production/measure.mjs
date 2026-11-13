@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { cpuSettings } from "../catalog/contract.mjs";
-import { sampleStats } from "../catalog/stats.mjs";
+import { sampleStats } from "./stats.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { afterFunctionalGate, sha256, sleep } from "./capture.mjs";
@@ -11,6 +11,13 @@ import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.m
 import { resourceBoundary, resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { sourceAuditIdentity, sourceSnapshot, verifySourceAudit } from "./source-audit.mjs";
+import { cpuBoundary, participantEvidence } from "./producer-evidence.mjs";
+
+export function savedRelative(root, path) {
+  const value = relative(root, path).replaceAll("\\", "/");
+  assert.ok(value && !value.startsWith("../") && value !== ".." && !/^[A-Za-z]:|^\//.test(value));
+  return value;
+}
 
 export async function measureNativeGroup(context) {
   const { summary, options, folder, repo, nativeBuildRoot, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
@@ -28,11 +35,17 @@ export async function measureNativeGroup(context) {
       qualification: null, calibration: null, passes: Array.from({ length: options.passes }, (_, i) => ({ pass: i + 1, outcome: "not-run", metrics: null })),
     }]))])), sourceAudits: {}, failures: [] };
   summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "source-audit.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
-  const mount = ["-v", `${repo}:/src:ro`, "-v", `${realpathSync(join(repo, "node_modules"))}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
-  const outputPath = (path) => `/out/${relative(folder, path).replaceAll("\\", "/")}`;
+  const mount = ["-v", `${nativeBuildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
+  const outputPath = (path) => `/out/${savedRelative(folder, path)}`;
   const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
   const failure = (app, source, stage) => { result.failures.push({ app, source, stage }); save(); };
-  const record = (path, value) => { writeFileSync(path, JSON.stringify(value, null, 2)); return { path: relative(folder, path).replaceAll("\\", "/"), sha256: sha256(readFileSync(path)) }; };
+  const record = (path, value) => { writeFileSync(path, JSON.stringify(value, null, 2)); return { path: savedRelative(folder, path), sha256: sha256(readFileSync(path)) }; };
+  record(join(root, "producer-provenance.json"), { schema: "mixed-native-producer-evidence/v1",
+    commit: summary.provenance.commit,
+    files: Object.fromEntries(["bench/mixed-production/producer-evidence.mjs", "bench/mixed-production/qualification-evidence.mjs",
+      "bench/catalog/cgroup.mjs", "bench/marketplace/qualify.mjs", "bench/marketplace/feature-contract.mjs",
+      "bench/fullstack/conformance.mjs", "bench/fullstack/conform-probe.mjs", "bench/fullstack/conform-hold.mjs"].map((file) =>
+      [file, sha256(readFileSync(join(repo, file)))])) });
   let receipts = [], invalidBundle = false;
   if (options.nativeAudits) try {
     const bundle = JSON.parse(readFileSync(resolve(repo, options.nativeAudits), "utf8"));
@@ -68,15 +81,8 @@ export async function measureNativeGroup(context) {
       throw new Error("owned native participant cleanup failed");
     }
   };
-  const participant = async (name, imageId, role, paused = false) => {
-    const info = await inspect(name);
-    assert.equal(info.Image, imageId, "native participant image changed");
-    assert.ok(info.State.Running && !info.State.OOMKilled && info.RestartCount === 0, "native participant stopped/restarted/OOM");
-    assert.equal(info.State.Paused, paused, "native participant pause state changed");
-    return { role, id: info.Id, imageId: info.Image, startedAt: info.State.StartedAt, state: info.State,
-      config: { env: info.Config.Env.filter((value) => !value.startsWith("MIXED_CONTROL_TOKEN=")), memory: info.HostConfig.Memory,
-        nanoCpus: info.HostConfig.NanoCpus, cpuset: info.HostConfig.CpusetCpus, networkMode: info.HostConfig.NetworkMode } };
-  };
+  const participant = (dir, phase, name, imageId, role, paused = false) => participantEvidence({ inspect, name, imageId, role, paused,
+    onReceipt: (receipt) => record(join(dir, `participant-${phase}-${role}.json`), receipt) });
   const appArgs = (name, source, up, imageId) => ["run", "-d", "--network", network, ...cpus.app.args, "--memory", "1g", "--ulimit", "nofile=65536:65536", "-p", "127.0.0.1::8080",
     "-v", `${folder}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json", "-e", `API_BASE=http://${up}:8080`,
     "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, ...env, imageId];
@@ -99,7 +105,7 @@ export async function measureNativeGroup(context) {
       const raw = JSON.parse(readFileSync(join(dir, "qualification.json"), "utf8"));
       assert.deepEqual([raw.schema, raw.app, raw.source, raw.imageId, raw.nativeProfile], ["mixed-native-qualification/v1", app, source, imageId, options.profile]);
       raw.eligible = !failed && raw.eligible === true && raw.failure === null;
-      const participants = { app: await participant(appName, imageId, "app"), upstream: await participant(up, nodeImage.Id, "upstream") };
+      const participants = { app: await participant(dir, "qualification", appName, imageId, "app"), upstream: await participant(dir, "qualification", up, nodeImage.Id, "upstream") };
       return { eligible: raw.eligible, missing: raw.missing ?? [], failure: raw.failure, artifact: record(join(dir, "qualification.json"), raw),
         participants, readiness: probes };
     } catch (error) {
@@ -109,11 +115,9 @@ export async function measureNativeGroup(context) {
     } finally { await cleanup([worker, appName, up]); }
   }
   const cpuReader = `${runId}-measurement-cpu`;
-  async function counters(names) {
-    const ids = await Promise.all(Object.values(names).map(async (name) => (await inspect(name)).Id));
-    const values = JSON.parse(await docker(["exec", cpuReader, "node", "/src/bench/catalog/cgroup.mjs", ...ids]));
-    return Object.fromEntries(Object.keys(names).map((role, i) => [role, values[ids[i]]]));
-  }
+  let cpuReaderCreated = false;
+  const counters = (dir, phase, participants) => cpuBoundary({ docker, reader: cpuReader, participants, phase,
+    onReceipt: (receipt) => record(join(dir, `cpu-${phase}.json`), receipt) });
   async function runWindow(app, source, stage, pass) {
     assert.equal(summary.cleanupFailures.length, 0, "unclean native participants block native windows");
     const dir = join(root, app, source, `${stage}-${pass}`); mkdirSync(dir, { recursive: true });
@@ -141,11 +145,12 @@ export async function measureNativeGroup(context) {
         if (existsSync(join(dir, "window.json"))) assert.ok(!JSON.parse(readFileSync(join(dir, "window.json"), "utf8")).finishedAt, "native warmup failed");
         assert.ok(Date.now() < untilReady && !io.interrupted, "load worker readiness failed"); await sleep(50);
       }
-      const participantsBefore = { app: await participant(name, imageId, "app"), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
+      const participantsBefore = { app: await participant(dir, "before", name, imageId, "app"), upstream: await participant(dir, "before", up, nodeImage.Id, "upstream"), load: await participant(dir, "before", worker, browserImage.Id, "load") };
       sampler = sampleStats(Object.values(names), join(dir, "stats.log"), seconds + options.tailSeconds + 15);
+      await sampler.ready;
       const beforeBoundary = await resourceBoundary(docker, Object.values(names),
         (receipt) => record(join(dir, "resource-before.json"), receipt));
-      const before = await counters(names), hostStart = performance.now();
+      const before = await counters(dir, "before", participantsBefore), hostStart = performance.now();
       record(join(dir, "go.json"), { go: true });
       const until = Date.now() + (seconds + options.tailSeconds + 10) * 1000;
       let window;
@@ -162,20 +167,20 @@ export async function measureNativeGroup(context) {
       await sleep(options.cleanupMs);
       const finalUpstreamLedger = await control(`http://127.0.0.1:${port}`, token, "ledger");
       record(join(dir, "final-upstream-ledger.json"), { admission, ledger: finalUpstreamLedger });
-      const after = await counters(names), afterBoundary = await resourceBoundary(docker, Object.values(names),
+      const after = await counters(dir, "after", participantsBefore), afterBoundary = await resourceBoundary(docker, Object.values(names),
         (receipt) => record(join(dir, "resource-after.json"), receipt));
       record(join(dir, "resource-boundaries.json"), { before: beforeBoundary, after: afterBoundary });
       stats = await sampler.stop(); sampler = null;
       const hostElapsedMs = performance.now() - hostStart;
       const sampled = JSON.parse(readFileSync(join(dir, "stats.log.json"), "utf8")).samples;
-      const participantsAfter = { app: await participant(name, imageId, "app", true), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
+      const participantsAfter = { app: await participant(dir, "after", name, imageId, "app", true), upstream: await participant(dir, "after", up, nodeImage.Id, "upstream"), load: await participant(dir, "after", worker, browserImage.Id, "load") };
       for (const role of Object.keys(names)) assert.deepEqual([participantsAfter[role].id, participantsAfter[role].startedAt], [participantsBefore[role].id, participantsBefore[role].startedAt]);
       const requestArtifacts = [];
       const captures = window.cycles.map((cycle) => {
         const rawDir = join(dir, `cycle_${cycle.cycle}`), capture = JSON.parse(readFileSync(join(rawDir, "capture.json"), "utf8"));
         capture.observations = plan.requests.filter((r) => r.source === source).map((r) => {
           const path = join(rawDir, `${r.id}.json`), body = readFileSync(path);
-          requestArtifacts.push({ path: relative(folder, path), sha256: sha256(body) }); return JSON.parse(body);
+          requestArtifacts.push({ path: savedRelative(folder, path), sha256: sha256(body) }); return JSON.parse(body);
         });
         return capture;
       });
@@ -187,8 +192,8 @@ export async function measureNativeGroup(context) {
         startupObservation, finalUpstreamLedger, admission, resourceBoundaries: { before: beforeBoundary, after: afterBoundary },
         upstreamReconciliation: reconcileLedger(finalUpstreamLedger, upstreamManifest(plan, source, startupObservation,
           [...warmups.map((c, i) => upstreamPhase("warmup", i, c.capture, source)), ...captures.map((c, i) => upstreamPhase("cycle", i, c.capture, source))])),
-        requestArtifacts, warmupCaptures: warmups.map((_, i) => { const path = join(dir, `warmup_${i}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }),
-        cycleCaptures: window.cycles.map((cycle) => { const path = join(dir, `cycle_${cycle.cycle}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }) };
+        requestArtifacts, warmupCaptures: warmups.map((_, i) => { const path = join(dir, `warmup_${i}`, "capture.json"); return { path: savedRelative(folder, path), sha256: sha256(readFileSync(path)) }; }),
+        cycleCaptures: window.cycles.map((cycle) => { const path = join(dir, `cycle_${cycle.cycle}`, "capture.json"); return { path: savedRelative(folder, path), sha256: sha256(readFileSync(path)) }; }) };
       const artifact = record(join(dir, "receipt.json"), raw);
       const metrics = deriveWindow({ ...raw, captures, warmups, plan, records, quotas: Object.fromEntries(Object.entries(cpus).map(([role, value]) => [role === "api" ? "upstream" : role, observedCpuCeiling(value)])), stage });
       return { outcome: metrics.eligible ? "measured" : "calibration-or-window-rejected", artifact, metrics, stats };
@@ -211,6 +216,8 @@ export async function measureNativeGroup(context) {
     if (!result.qualified) return result;
     await own(["run", "-d", "--network", "none", "--cpus", "1", "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage.Id, "node", "-e", "setInterval(() => {}, 1000)"], cpuReader);
+    // own resolves only after the original create acknowledgement and inspection.
+    cpuReaderCreated = true;
     for (const app of summary.inventory) for (const source of ["fixture", "api"]) {
       try { result.cells[app][source].calibration = await runWindow(app, source, "calibration", 0); }
       catch { result.cells[app][source].calibration = { outcome: "failed", metrics: null }; failure(app, source, "calibration"); }
@@ -237,5 +244,5 @@ export async function measureNativeGroup(context) {
       peakMemoryMiB: spread(c.passes.map((p) => p.metrics.resources.app.memMaxMiB)),
     };
     return result;
-  } finally { await cleanup([cpuReader]); save(); }
+  } finally { if (cpuReaderCreated) await cleanup([cpuReader]); save(); }
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { bindNativeForm, resultSchema, validateResults, workload } from "../workloads/mixed.mjs";
+import { parsePublicRecord } from "./response-evidence.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,7 +81,7 @@ export async function captureSource({ plan, records, app, source, transport, inj
           upstream: null, page: null, record: null, form: binding?.evidence ?? null, state: null };
         if (["completed", "rejected"].includes(outcome)) {
           try {
-            if (request.category === "json") row.record = JSON.parse(response.body.toString("utf8"));
+            if (request.category === "json") row.record = parsePublicRecord(response.body);
             else row.page = await transport.snapshot(response, request, evidence);
           } catch { evidence.gaps.push("native-body-extraction-failed"); }
         }

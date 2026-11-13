@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, createServer } from "node:http";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
@@ -17,7 +17,10 @@ import { cpuSettings } from "../catalog/contract.mjs";
 import { measureNativeGroup } from "./measure.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { coveredSamples, resourceBoundary, resourceCoveragePolicy } from "./resources.mjs";
-import { sourceSnapshot } from "./source-audit.mjs";
+import { sourceAuditIdentity, sourceSnapshot } from "./source-audit.mjs";
+import { runQualificationWorker } from "./qualify-worker.mjs";
+import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
+import { replayQualificationEvidence } from "./qualification-evidence.mjs";
 
 const records = fixture(), plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
 const settings = { completeDelayMs: 1, slowDelayMs: 50, cleanupMs: 1 };
@@ -95,6 +98,84 @@ test("measurement rejects missing native inventory before any qualification, con
   await assert.rejects(measureNativeGroup({ summary: { inventory: ["corten", "express"] }, options: { apps: ["corten"] }, plan, records, captures: {},
     own: () => { touched = true; }, io: { command: () => { touched = true; } } }));
   assert.equal(touched, false);
+});
+
+// Complete orchestration test vectors, not independent audits, real Docker receipts or framework parity.
+test("completed negative qualification never cleans up an uncreated CPU reader or loses failures", async () => {
+  const parts = await Promise.all([vector("fixture"), vector("api")]);
+  const capture = { ...parts[0].captured.capture, results: plan.requests.map((r) => parts[r.source === "fixture" ? 0 : 1].captured.capture.results[r.index]) };
+  const repo = fileURLToPath(new URL("../../", import.meta.url)), base = tmpdir(), folder = mkdtempSync(join(base, "mixed-negative-measure-"));
+  const runId = "mixed-w999-abcdef01", imageId = `sha256:${"a".repeat(64)}`, active = new Map(), removed = [], rejected = [];
+  const options = { apps: ["corten"], profile: "defaults", passes: 3, nativeAudits: join(folder, "unit-only-audits.json") };
+  const sourceFiles = sourceSnapshot(repo, ["bench/marketplace/corten/src/main.rs"]).sourceFiles;
+  const summary = { inventory: ["corten"], cleanupFailures: [], options, contractSha256: "b".repeat(64),
+    provenance: { commit: "c".repeat(40), nativeSource: { commit: "c".repeat(40), dirty: false } },
+    apps: { corten: { buildInputs: sourceFiles, contextArchiveSha256: "d".repeat(64), image: { id: imageId, buildCommit: "c".repeat(40),
+      buildDirty: "false", profile: "defaults", contextArchiveSha256: "d".repeat(64) } } } };
+  const audit = { schema: "json-api-native-audit/v1", identity: sourceAuditIdentity(summary, "corten"), auditor: "independent-unit-vector",
+    auditedAt: "2026-11-13T00:00:00Z", sourceFiles, findings: [], traceContext: { requestScoped: true, delayedWorkRetainsTrace: true, noAmbientCurrentOperation: true },
+    verified: { typedCompleteRecord: true, nativeSerialization: true, noOutputCache: true, noJsonPassthrough: true,
+      fixtureParsedAtStartup: true, requestTimeFetchParse: true, upstreamErrors: true } };
+  writeFileSync(options.nativeAudits, JSON.stringify({ schema: "mixed-native-source-audits/v1", receipts: [audit] }));
+  let upstreamMode = {};
+  const upstream = createServer(async (req, res) => {
+    let body = ""; for await (const part of req) body += part;
+    upstreamMode = JSON.parse(body); res.writeHead(200); res.end();
+  });
+  upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
+  try {
+    const result = await measureNativeGroup({ summary, options, folder, repo, nativeBuildRoot: repo, runId, network: `${runId}-net`,
+      nodeImage: { Id: imageId }, browserImage: { Id: imageId }, plan, records, captures: { corten: capture }, save() {},
+      io: { command: async () => "" }, ready: async () => {},
+      own: async (_args, name) => {
+        assert.ok(!name.endsWith("measurement-cpu"), "qualification must reject before CPU reader creation");
+        active.set(name, { Id: String(active.size + removed.length + 1).padStart(64, "0"), Image: imageId, RestartCount: 0,
+          Config: { Env: ["PROFILE="] }, HostConfig: { Memory: 2 ** 30, NanoCpus: 1e9, CpusetCpus: "", NetworkMode: `${runId}-net` },
+          State: { Running: true, Paused: false, OOMKilled: false, StartedAt: "2026-11-13T00:00:00Z" } });
+      },
+      inspect: async (name) => { assert.ok(active.has(name)); return active.get(name); },
+      remove: async (name) => { assert.ok(active.has(name), "cleanup requires an actual creation receipt"); active.delete(name); removed.push(name); },
+      docker: async (args) => {
+        assert.deepEqual(args.slice(0, 2), ["start", "-a"]);
+        const source = args[2].includes("-fixture-") ? "fixture" : "api", dir = join(folder, "measurement/corten", source, "qualification");
+        const config = JSON.parse(readFileSync(join(dir, "settings.json"))); config.output = join(dir, "qualification.json");
+        config.upstream = `http://127.0.0.1:${upstream.address().port}`;
+        const p = qualificationProbes(); p.crossSite.status = 200;
+        const q = await runQualificationWorker(config, (script, input) => {
+          if (script === "conform-hold") return input.mode === "head" ? p.unfinishedHead : p.cap;
+          const { path, headers, method } = input;
+          if (path.startsWith("/health")) return p.live;
+          if (path.endsWith("/missing")) return path.startsWith("/api") ? p.json404 : p.page404;
+          if (headers.host === "unrecognized.invalid") return p.badHost;
+          if (headers["x-qualification"]) return p.bigHead;
+          if (method === "POST") return headers.origin !== config.base ? p.crossSite : input.body.length > 2 ** 20 ? p.bigBody : p.ownPost;
+          if (method === "DELETE") return p.json405;
+          if (method === "HEAD") return p.head;
+          if (headers["accept-encoding"] !== "identity") return path.startsWith("/api") ? p.jsonGzip : p.pageBr;
+          if (upstreamMode.hang) return p.slow;
+          if (upstreamMode.status) return path.startsWith("/api") ? p.json500 : p.page500;
+          return path.startsWith("/api") ? p.json : p.page;
+        });
+        rejected.push(q); assert.equal(q.eligible, false);
+        assert.equal(q.failure, null); assert.deepEqual(q.missing, ["crossSite"]);
+        const evidence = JSON.parse(readFileSync(join(dir, "qualification-evidence.json")));
+        assert.equal(replayQualificationEvidence(evidence, q, config).eligible, false);
+        throw Error("unit worker correctly exits nonzero on rejected qualification");
+      } });
+    assert.equal(rejected.length, 2); assert.equal(result.qualified, false); assert.equal(result.calibrated, false);
+    assert.equal(result.timingBlocked, true); assert.equal(result.comparisonEligible, false);
+    assert.deepEqual(summary.cleanupFailures, []); assert.equal(active.size, 0); assert.equal(removed.length, 6);
+    for (const source of ["fixture", "api"]) {
+      assert.equal(result.cells.corten[source].qualification.eligible, false);
+      assert.deepEqual(result.cells.corten[source].qualification.missing, ["crossSite"]);
+      assert.equal(result.cells.corten[source].calibration, null);
+      assert.ok(result.cells.corten[source].passes.every((pass) => pass.outcome === "not-run" && pass.metrics === null));
+    }
+  } finally {
+    upstream.closeAllConnections(); await new Promise((resolve) => upstream.close(resolve));
+    const rel = relative(realpathSync(base), realpathSync(folder)); assert.ok(rel.startsWith("mixed-negative-measure-") && !/[\\/]/.test(rel));
+    rmSync(folder, { recursive: true });
+  }
 });
 
 test("prior failed native cleanup blocks measurement even when unit oracle vectors are valid", async () => {

@@ -5,6 +5,7 @@ import { chromium } from "@playwright/test";
 import { control, sleep } from "./capture.mjs";
 import { loadCycle } from "./load-capture.mjs";
 import { nativeTransport } from "./native.mjs";
+import { responseSourceWriter } from "./response-evidence.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 
 const config = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -17,7 +18,7 @@ try {
   browser = await chromium.launch({ headless: true });
   async function cycleCapture(cycle, phase, now) {
     const dir = join(folder, `${phase}_${cycle}`); mkdirSync(dir);
-    const transport = await nativeTransport({ browser, base: config.base, readbackPath: config.readbackPath, settings });
+    const transport = await nativeTransport({ browser, base: config.base, readbackPath: config.readbackPath, settings, saveSource: responseSourceWriter("/out") });
     const idFor = (id) => `${phase}_${cycle}_${id}`;
     try {
       const captured = await loadCycle({ ...config, transport, now,

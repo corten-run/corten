@@ -10,6 +10,167 @@ with easier requests.
 
 ## Run
 
+### Read-only saved verification
+
+The bounded [execution-evidence extension](PRODUCER-EVIDENCE.md#execution-lifecycle)
+records and replays actual process limits and terminal OS cleanup observations.
+Its additive `proof` requires mounted input snapshots, native response/probe replay,
+independent audits and actual terminal OS observations. It is not a readiness flag.
+
+`verify.mjs` exports `async validateSaved({ folder, round, commit })`. `folder` is an
+existing local saved round, `round` is its explicit `wN` identity, and `commit` is the
+full lowercase 40-digit native **and harness** commit available in the local Git
+repository. Different harness/build commits are not silently treated as equivalent.
+The fixed CLI, for an isolated collector to call after collection, is:
+
+```sh
+node bench/mixed-production/verify.mjs --folder <saved-round-folder> --round w91 --commit <full-commit>
+```
+
+It prints one JSON `mixed-native-saved-verification/v1` verdict to stdout: `verified`
+(exit 0), `failed` (exit 1), or `blocked` (exit 2). Invalid CLI arguments exit 1.
+There is no write, fix, collect, execute, publish or ranking option. The API returns
+the same object, including `issues` (`kind`, `code`, `at`), every candidate's raw
+functional cells/outcomes/reasons and replayed oracle, and any replayed measurement
+cells/aggregates. `comparisonEligible` is always false for partial or blocked proof.
+Diagnostics do not include arbitrary saved values or exception messages. Invalid
+round/commit arguments are not copied into the verdict; both identities remain null
+until their bounded syntax has been validated.
+
+Verification binds the current complete registry inventory, fixture, effective plan,
+configuration, clean source/harness identity, every tracked build input, exact Git
+archives and image build labels. It replays the unchanged mixed oracle from each
+individual request artifact, compares source/merged captures and cells, verifies the
+existing independent native source-audit receipts when measurement is present, and
+rederives saved calibration/steady metrics with `deriveWindow`. Resource streams and
+their original Docker rows/boundaries, participant identities, final sealed ledgers,
+pass counts and complete-group aggregates are checked rather than accepting summary
+`passed`/`eligible` flags. Unexecuted/failed cells remain visible and cannot rank.
+Every local executable dependency imported for replay, including transitive catalog
+statistics, fixtures, registry and conformance helpers, is checked against the requested
+commit. A loader-based regression checks that validation reads cover the complete
+imported dependency set, excluding the trusted verifier entry point itself.
+
+The verifier reads only saved files and fixed local Git objects. Git replacement
+refs are disabled, blob bytes are checked against their actual object IDs, lazy
+fetch is disabled, every transport protocol is denied and prompting is disabled.
+Inherited Git config/repository/trace environment overrides are discarded; missing
+local objects fail instead of fetching or modifying the object store. It never resolves
+the saved external `nativeAudits`, image/readback mapping paths, launches a browser,
+executes saved settings, runs Docker or calls a network service. It rejects links
+(including linked ancestors and hard-linked files), path escapes/ambiguous Windows
+paths (including mixed-slash UNC/device forms before any filesystem access),
+duplicate JSON keys/references and case-colliding filenames. It hashes the
+whole folder before and after replay; stable saved artifacts are a prerequisite,
+not permission to modify them concurrently. Limits are 100,000 entries, 1 GiB total,
+256 MiB per file/Git command output, 32 MiB per JSON and depth 64; Git calls time out
+after 60 seconds. Exceeding a bound fails closed. No saved artifact is written.
+
+**Historical v1 limit:** original functional and measurement captures without the
+additive producer evidence cannot receive a positive complete saved-proof verdict.
+Their native response bytes are represented by
+hashes/lengths, a redacted DOM and normalized rows, but v1 does not retain enough
+credential-safe original response evidence to independently reconstruct and bind
+all normalized page, JSON and state facts. The normalized unchanged oracle is still
+replayed and reported, but that alone cannot set the verifier's `functionalPassed`
+or the affected cell's `passed`. Missing proof is blocked; contradictory facts
+(such as a normalized nonempty page from an empty response or executed image/state
+differing from the bound build) are invalid. Functional executed-container image,
+running state, exit/OOM state and start time are checked separately from build labels.
+Missing executed-container proof stays blocked instead of inheriting image labels.
+
+The original v1 `qualify-worker.mjs` saves sanitized hashes/capability cells,
+not the original headers/page/form probes required by `validateProbes` and
+`qualification`. Hashes cannot rederive production qualification. The host also
+does not bind the original ID-keyed cgroup reader responses or inspected
+`RestartCount` into the v1 window receipt. The additive producer extension now
+replays those original ID-bound sidecars. Missing sidecars yield explicit blocked reasons even when all available
+metrics replay. Known hash-only qualification shapes remain blocked, but malformed
+probe containers, hashes or unrecognized capability keys are invalid, not an excuse
+to downgrade contradictions to unsupported proof. Window HTTP response counts must
+equal the actual positive-status stage receipts, including redirects and independent
+state reads. Host elapsed time, when retained, must be finite, nonnegative and cover
+the window; its absence is blocked proof. Functional-only runs remain non-performance evidence. A blocked
+verdict is not a native parity, CPU or source-audit success declaration.
+
+The additive extension retains exact lock-integrity-checked tool archives and their
+complete extracted file inventory, mounts them read-only beside the retained Git
+archive, and binds actual inspected mount sources/modes. There is no dependency
+download fallback. `MIXED_PRODUCTION_NPM_CACHE` can name an existing local npm cache.
+Every archived file and every executable host input is checked against the commit;
+a final host-input observation detects changes during collection.
+
+Actual DOM query results replay the unchanged native snapshot; exact public JSON
+response bytes replay record/state normalization. No expected markup or audit is
+generated. Qualification replays the filtered actual probe journal through the
+unchanged current contract. Original cgroup stdout, participant restart counts,
+all raw resource samples and the stats client's actual OS close event are required
+for extended measurement proof. Unknown credential/filter shapes remain blocked.
+
+`attemptComplete` and `dispositions` distinguish complete evidence from target success.
+A fully recorded rejecting gate may have `verdict: "verified"`, issue kind
+`target-failed`, and the appropriate `recorded-failed` / `gated-not-run` dispositions.
+Only downstream stages that the replayed rejecting gate forbids are gated not-run.
+Missing raw observations, independent audits, interrupted captures and failed apparatus
+are not waived. `functionalPassed` and `comparisonEligible` remain false for a
+functional rejection; no failed or partial attempt can rank. A successful comparison
+still requires every original functional, qualification, calibration, resource,
+ledger and repeated-window gate, plus disjoint CPU placement. See
+[producer evidence](PRODUCER-EVIDENCE.md) for the trust boundary and focused checks.
+
+Present qualification slots must be either an artifact-backed outcome or the known
+execution-failure variant; malformed slots are invalid, not `not-run`. Retained
+hash-only probe facts must still obey exclusive response/failure variants and integer
+body lengths. Window participants must have started before observation, and a retained
+running state cannot have a nonzero exit code. Missing exit proof remains blocked.
+Primary latency must fit its monotonic primary-start/finish span even when every saved
+copy agrees. All retained HTTP step durations, including discovery, redirects and
+readbacks, must fit the operation's real monotonic lifetime. Serial preparation work
+must fit before primary start, and primary/redirect/readback work must fit after it;
+these checks apply to warmup and measured cycles alike. Missing individual step
+timestamps are not reconstructed from durations. Genuine unsent `dropped` rows retain
+the unchanged oracle's failed outcome without requiring a primary receipt or becoming
+invalid evidence.
+Within each warmup or measured phase, complete cycles must be serial and each client's
+requests must retain native plan order without overlapping. The two phases use separate
+monotonic epochs. Retained qualification participants must agree with bound role/image,
+running/exit/OOM state and resource/source configuration; missing participant proof is
+blocked rather than supplied by a reported eligibility flag. Window slots are closed
+variants: `not-run` and `failed` carry null metrics and no measurement artifact, while
+measured/rejected outcomes require an artifact and matching metrics/statistics. Unknown
+outcomes or artifact-less measured claims are invalid, not missing proof.
+Derived qualification and its reconciled outcome are published together only after
+the original probes, receipt and summary slot agree. A failed qualification gate
+leaves null qualification and an invalid outcome, never a derived positive claim.
+
+Run the complete saved-verifier regression suite independently of native collection:
+
+```sh
+node --test bench/mixed-production/verify.test.mjs
+```
+
+These tests use temporary saved files, coherent synthetic participant/window clocks,
+and hostile mutations through the public API. They cover malformed qualification slots
+and probe variants, participant lifetime/exit contradictions, physically impossible
+latencies with matching dependent receipts/metrics, and recorded dropped outcomes.
+They also cover changed replay executables, overlapping serial/client clocks,
+qualification execution contradictions and malformed artifact-less window variants.
+Qualification publication regressions cover all candidate/source gates, and HTTP
+lifetime regressions cover each non-primary step, serial totals and warmup windows.
+They are not native parity or performance measurements and do not remove v1 blockers.
+
+Minimal collector/runner follow-up, outside this verifier repair: agree on a
+credential-safe, replayable production-probe representation with the existing
+qualification contract; retain original cgroup responses bound to participant IDs
+at both boundaries, and full restart observations. Also retain credential-safe native
+response/extraction evidence that independently binds normalized page/JSON/state
+facts, without generating expected markup or trusting supplied success flags.
+Producer checkpoint `77c3fe982` adds preliminary sidecars but is not consumed or
+admitted by this v1 verifier; schema/acceptance extensions require separate review.
+Do not persist session cookies
+or CSRF values, manufacture missing observations, or relabel old v1 summaries as
+fully verified. The existing native source audits remain independently required.
+
 Install the root tooling dependencies first (`npm ci`). Docker runs the browser in the pinned
 Playwright image from the root manifest. Tool images are resolved/pulled and their IDs saved.
 

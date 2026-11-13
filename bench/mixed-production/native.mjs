@@ -3,6 +3,7 @@
 import { performance } from "node:perf_hooks";
 import { snapshotMixedPage } from "./snapshot.mjs";
 import { sha256, sleep } from "./capture.mjs";
+import { collectDOMReads, retainJSONResponse } from "./response-evidence.mjs";
 
 const publicHeaders = ["content-type", "content-encoding", "cache-control", "vary", "content-security-policy", "x-content-type-options"];
 export function localURL(value, base) {
@@ -48,7 +49,7 @@ export function redactedDocument() {
     if (["action", "formaction", "href", "src"].includes(attr.name)) {
       try {
         const url = new URL(attr.value, location.href);
-        for (const key of [...url.searchParams.keys()]) if (!["seller", "sort", "offers"].includes(key)) {
+        for (const key of [...url.searchParams.keys()]) if (["action", "formaction"].includes(attr.name) || !["seller", "sort", "offers"].includes(key)) {
           for (const value of url.searchParams.getAll(key)) if (value.length >= 8) secrets.add(value);
           url.searchParams.set(key, "[redacted]");
         }
@@ -61,7 +62,7 @@ export function redactedDocument() {
   return html;
 }
 
-export async function nativeTransport({ browser, base, readbackPath, settings }) {
+export async function nativeTransport({ browser, base, readbackPath, settings, saveSource }) {
   const contexts = new Map();
   const contextFor = async (request) => {
     const key = `${request.source}:${request.client}`;
@@ -106,15 +107,20 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
   }
   return {
     async discover(request, evidence, wire) {
+      evidence.responseSchema = "mixed-native-response-source/v1";
       const context = await contextFor(request);
       const response = await fetchNative(context, request.formPage, { headers: { accept: "text/html", "accept-encoding": request.acceptEncoding, ...(wire ? { traceparent: wire.traceparent } : {}) } });
       evidence.stages.push(receipt(response, "form-discovery"));
+      evidence.nativeFormDiscovery = { responseSha256: sha256(response.body), found: false };
       if (response.status !== 200 || response.contentType !== "text/html") return null;
       const form = await parse(context, response, request, (page) => page.evaluate(nativeForm));
+      evidence.nativeFormDiscovery = { responseSha256: sha256(response.body), found: form !== null && form.method === "post" };
       if (!form || form.method !== "post") return null;
       const action = localURL(form.action, base);
-      return { client: request.client, source: request.source, locale: request.locale, itemId: request.itemId, method: "POST", action: action.pathname,
-        contentType: form.contentType, fields: form.data.map(([name]) => name), transport: { context, url: action.href, data: form.data } };
+      const descriptor = { client: request.client, source: request.source, locale: request.locale, itemId: request.itemId, method: "POST", action: action.pathname,
+        contentType: form.contentType, fields: form.data.map(([name]) => name) };
+      evidence.nativeForm = descriptor;
+      return { ...descriptor, transport: { context, url: action.href, data: form.data } };
     },
     async readState(request, evidence, stage, wire) {
       if (!readbackPath) return null;
@@ -126,10 +132,11 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
         const alerts = JSON.parse(response.body.toString("utf8"));
         if (!Array.isArray(alerts) || alerts.some((a) => !a || Object.keys(a).sort().join(",") !== "email,item_id,target_minor"
           || typeof a.email !== "string" || typeof a.item_id !== "string" || !Number.isSafeInteger(a.target_minor) || a.target_minor <= 0)) return null;
-        return alerts;
+        evidence.stages.at(-1).sourceBody = retainJSONResponse(response.body, "state"); return alerts;
       } catch { return null; }
     },
     async send(request, binding, evidence, injector, wire) {
+      evidence.responseSchema = "mixed-native-response-source/v1";
       const context = await contextFor(request);
       const headers = { accept: request.accept, "accept-encoding": request.acceptEncoding, ...(wire ? { traceparent: wire.traceparent } : {}) };
       let url = request.path, options = { method: request.method, headers };
@@ -177,6 +184,9 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
         } finally { clearTimeout(timer); }
       } else response = await fetchNative(context, url, options);
       evidence.stages.push(receipt(response, "primary"));
+      if (request.category === "json" && response.contentType === "application/json" && response.status === 200) {
+        try { evidence.stages.at(-1).sourceBody = retainJSONResponse(response.body, "record"); } catch { /* Unsupported public response shape cannot prove a normalized record. */ }
+      }
       if (binding && [302, 303].includes(response.status)) {
         let visible = response;
         for (let redirects = 0; redirects < 5 && [302, 303].includes(visible.status); redirects++) {
@@ -192,8 +202,12 @@ export async function nativeTransport({ browser, base, readbackPath, settings })
       const visible = response.visible ?? response;
       if (visible.contentType !== "text/html" || ![200, 400, 422].includes(visible.status)) throw new Error("no visible native page");
       return parse(await contextFor(request), visible, request, async (page) => {
-        evidence.redactedNativeDOM = await page.evaluate(redactedDocument);
-        return page.evaluate(snapshotMixedPage, { readPath: localURL(request.formPage ?? request.path, base).pathname });
+        const reads = await page.evaluate(collectDOMReads, { source: snapshotMixedPage.toString(), readPath: localURL(request.formPage ?? request.path, base).pathname });
+        if (reads.failure !== "credential-filter-blocked") evidence.redactedNativeDOM = await page.evaluate(redactedDocument);
+        evidence.domReads = saveSource ? saveSource(reads) : reads;
+        evidence.domResponseSha256 = sha256(visible.body);
+        if (reads.failure !== null) throw new Error("native DOM snapshot failed");
+        return reads.page;
       });
     },
     async close() { for (const context of contexts.values()) await context.close(); contexts.clear(); },

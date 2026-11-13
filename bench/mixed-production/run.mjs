@@ -1,7 +1,7 @@
 // Local native mixed-production execution. Never imports a cloud or nightly entry point.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,8 +9,11 @@ import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
-import { buildInputPaths, sourceSnapshot, sourceAuditIdentity } from "./source-audit.mjs";
+import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
 import { nativeBuildContext } from "./build-context.mjs";
+import { createExecutionEvidence, executionContext } from "./execution-evidence.mjs";
+import { withImmutableGit } from "./immutable-git.mjs";
+import { prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
 
 export function parseArgs(args) {
   const options = { round: args[0], apps: null, images: null, readbacks: null, nativeAudits: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
@@ -64,7 +67,7 @@ export async function run(args) {
   const folder = join(here, "results", options.round);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   const runId = `mixed-${options.round}-${randomBytes(4).toString("hex")}`, network = `${runId}-net`;
-  const io = commands(repo), docker = (args, opts) => io.command("docker", args, opts);
+  const io = withImmutableGit(commands(repo), repo), docker = (args, opts) => io.command("docker", args, opts);
   const active = new Set(), builtImages = new Set(); let networkCreated = false;
   const label = "run.corten.mixed-production", token = randomBytes(32).toString("hex");
   const records = fixtureRecords(), plan = createPlan({ seed: options.seed, clients: options.clients, repetitions: options.repetitions, records });
@@ -78,7 +81,9 @@ export async function run(args) {
     apps: Object.fromEntries(inventory.map((app) => [app, { selected: options.apps.includes(app), sources: {}, cells: plan.requests.map((request) => ({ requestId: request.id,
       category: request.category, source: request.source, locale: request.locale, variant: request.variant, outcome: "not-run", status: 0, passed: false,
       error: null, gaps: [options.apps.includes(app) ? "execution-not-reached" : "development-subset-not-selected"] })) }])) };
+  summary.sourceAudits = {};
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
+  const execution = createExecutionEvidence({ folder, summary, docker });
   writeFileSync(join(folder, "plan.json"), JSON.stringify(plan, null, 2));
   writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
@@ -86,12 +91,14 @@ export async function run(args) {
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const own = async (args, name) => {
     active.add(name);
-    await docker([args[0], "--name", name, "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...args.slice(1)]);
+    await execution.create(name, () => docker([args[0], "--name", name, "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...args.slice(1)]));
   };
   const remove = async (name) => {
-    if (await docker(["ps", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"], { cleanup: true })) {
-      const info = await inspect(name); assert.equal(info.Config.Labels?.[label], runId, "refusing unowned cleanup");
-      await docker(["rm", "-f", "-v", info.Id], { cleanup: true });
+    const observed = await execution.remove(name), context = executionContext(name, summary);
+    if (observed && context.stage === "functional" && context.role === "app") {
+      const entry = summary.apps[context.app].sources[context.source];
+      entry.container = { imageId: observed.imageId, startedAt: observed.state.StartedAt, running: observed.state.Running,
+        exitCode: observed.state.ExitCode, oomKilled: observed.state.OOMKilled, restartCount: observed.restartCount };
     }
     active.delete(name);
   };
@@ -139,13 +146,17 @@ export async function run(args) {
       nativeSource.archiveSha256 = sha256(readFileSync(archive));
       await io.command("tar", ["-xf", archive, "-C", buildRoot], { timeout: 60000 });
     }
+    const harnessPaths = (await io.command("git", ["ls-tree", "-r", "--name-only", nativeSource.commit])).split(/\r?\n/).filter((p) => /\.(?:mjs|cjs|js|json)$/.test(p));
+    summary.executionInputs = prepareExecutionInputs({ folder, buildRoot, repo, commit: nativeSource.commit, harnessPaths });
+    summary.executionMounts = JSON.parse(readFileSync(join(folder, "execution/inputs.json"))).mounts;
     summary.tools.docker = await io.command("docker", ["version", "--format", "{{.Server.Version}}"]);
     const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
     const nodeImage = await toolImage("node:24-bookworm-slim");
     const browserImage = await toolImage(`mcr.microsoft.com/playwright:v${version}-noble`);
     summary.tools.nodeImage = nodeImage.Id; summary.tools.browserImage = browserImage.Id; summary.tools.playwright = version;
     assert.ok(existsSync(join(repo, "node_modules", "@playwright", "test")), "install tooling dependencies or link main checkout dependencies");
-    await docker(["network", "create", "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, network]); networkCreated = true;
+    const networkId = await docker(["network", "create", "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, network]); networkCreated = true;
+    await execution.networkCreated(network, networkId);
     const parts = Object.fromEntries(inventory.map((app) => [app, []]));
     for (const app of options.apps) {
       if (io.interrupted) throw new Error("run interrupted");
@@ -180,11 +191,22 @@ export async function run(args) {
         writeFileSync(join(folder, `${app}-source-audit-request.json`), JSON.stringify({ schema: "mixed-native-source-audit-request/v1",
           identity: sourceAuditIdentity(summary, app), sourceFiles: entry.buildInputs }, null, 2));
       } catch { fail(app, null, "native-image-unavailable"); entry.cells.forEach((cell) => cell.gaps = ["native-image-unavailable"]); continue; }
+      try {
+        assert.ok(options.nativeAudits, "independent native audit bundle required");
+        const bundle = JSON.parse(readFileSync(resolve(repo, options.nativeAudits), "utf8"));
+        assert.equal(bundle.schema, "mixed-native-source-audits/v1"); assert.ok(Array.isArray(bundle.receipts));
+        assert.ok(bundle.receipts.every((r) => inventory.includes(r.identity?.app)));
+        const receipts = bundle.receipts.filter((r) => r.identity?.app === app); assert.equal(receipts.length, 1);
+        const receipt = receipts[0], verified = verifySourceAudit(receipt, sourceAuditIdentity(summary, app), sourceSnapshot(buildRoot, entry.buildInputs.map((f) => f.path)), entry.image);
+        const path = `source-audits/${app}.json`; mkdirSync(join(folder, "source-audits"), { recursive: true });
+        const body = JSON.stringify({ ...verified, receipt }); writeFileSync(join(folder, path), body);
+        summary.sourceAudits[app] = { eligible: true, artifact: { path, sha256: sha256(body) }, failure: null };
+      } catch { summary.sourceAudits[app] = { eligible: false, failure: "missing-or-invalid-independent-native-source-audit" }; }
       for (const source of ["fixture", "api"]) {
         if (io.interrupted) throw new Error("run interrupted");
         const appName = `${runId}-${app}-${source}`, upstreamName = `${appName}-upstream`, workerName = `${appName}-capture`;
         const raw = join(folder, app, source); mkdirSync(raw, { recursive: true });
-        const mount = ["-v", `${repo}:/src:ro`, "-v", `${realpathSync(join(repo, "node_modules"))}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
+        const mount = ["-v", `${buildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
         const sourceEntry = entry.sources[source] = { complete: false, readiness: [] };
         let stage = "upstream-create";
         console.log(`${app} ${source}: capturing ${plan.requests.filter((r) => r.source === source).length} planned native operations`);
@@ -238,7 +260,7 @@ export async function run(args) {
           try {
             const info = await inspect(appName);
             entry.sources[source] ??= { complete: false };
-            entry.sources[source].container = { imageId: info.Image, startedAt: info.State.StartedAt, running: info.State.Running, exitCode: info.State.ExitCode, oomKilled: info.State.OOMKilled };
+            entry.sources[source].container = { imageId: info.Image, startedAt: info.State.StartedAt, running: info.State.Running, exitCode: info.State.ExitCode, oomKilled: info.State.OOMKilled, restartCount: info.RestartCount };
           } catch { /* Failed creates have no container state. */ }
           for (const name of [workerName, appName, upstreamName]) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
           save();
@@ -253,6 +275,10 @@ export async function run(args) {
     }
     try {
       await afterFunctionalGate({ apps: options.apps, inventory, plan, captures, records }, async () => {
+        assert.ok(inventory.every((app) => ["fixture", "api"].every((source) => {
+          const container = summary.apps[app].sources[source]?.container;
+          return container?.running && container.exitCode === 0 && !container.oomKilled && container.restartCount === 0;
+        })), "native functional participant health failed");
         summary.functionalPassed = true;
         if (!options.measure) {
           summary.timingBlockReason = "functional-only run: request --measure for real production qualification/calibration/windows";
@@ -274,16 +300,13 @@ export async function run(args) {
   finally {
     for (const name of [...active]) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
     if (networkCreated) try {
-      const info = JSON.parse(await docker(["network", "inspect", network], { cleanup: true }))[0];
-      assert.equal(info.Labels?.[label], runId); await docker(["network", "rm", network], { cleanup: true });
+      await execution.removeNetwork(network);
     } catch { summary.cleanupFailures.push({ network }); }
     for (const tag of builtImages) try {
-      const existing = await docker(["image", "ls", "--filter", `reference=${tag}`, "--format", "{{.ID}}"], { cleanup: true });
-      if (!existing) continue;
-      const info = JSON.parse(await docker(["image", "inspect", tag], { cleanup: true }))[0];
-      assert.equal(info.Config.Labels?.["agent.task"], runId, "refusing unowned image cleanup");
-      await docker(["image", "rm", tag], { cleanup: true });
+      await execution.removeImage(tag);
     } catch { summary.cleanupFailures.push({ image: tag }); }
+    if (summary.executionInputs) try { finalizeExecutionInputs({ folder, repo }); } catch { summary.cleanupFailures.push({ stage: "execution-inputs-final" }); }
+    try { await execution.seal(); } catch { summary.cleanupFailures.push({ stage: "execution-evidence-seal" }); }
     summary.finishedAt = new Date().toISOString(); save(); io.dispose();
   }
   console.log(`saved ${folder}; functionalPassed=${summary.functionalPassed}; timingBlocked=${summary.timingBlocked}`);
