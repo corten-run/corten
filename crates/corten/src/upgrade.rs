@@ -86,8 +86,8 @@ impl std::fmt::Display for WrongVersion {
 impl std::error::Error for WrongVersion {}
 
 impl WrongVersion {
-    /// The headers its refusal at `status` carries: the version this server speaks, whatever
-    /// the status (RFC 6455, 4.2.2 and 4.4), and on a 426 the `Upgrade` it must have, with its
+    /// The headers its refusal at `status` (a 400 or a 426) carries: the version this server
+    /// speaks (RFC 6455, 4.2.2 and 4.4), and on a 426 the `Upgrade` it must have, with its
     /// `Connection` option (RFC 9110, 15.5.22 and 7.8). Only `websocket` knows which protocol
     /// to name.
     pub(crate) fn headers(status: StatusCode, headers: &mut HeaderMap) {
@@ -183,7 +183,8 @@ impl Upgrade {
     /// `run` on the connection once it has switched. A handshake that is not a WebSocket's is a
     /// 400; one not version 13, or with no version, is a 426 with `Sec-WebSocket-Version: 13`,
     /// `Upgrade: websocket` and `Connection: upgrade`, including on the app's error page. Given
-    /// another 4xx with [`Error::with_status`], it keeps only `Sec-WebSocket-Version: 13`.
+    /// a 400 with [`Error::with_status`], it keeps only `Sec-WebSocket-Version: 13`; any other
+    /// status (a 404 that hides the socket) carries none of them.
     pub fn websocket<F, Fut>(self, run: F) -> crate::Result<Switch>
     where
         F: FnOnce(Stream, Signal) -> Fut + Send + 'static,

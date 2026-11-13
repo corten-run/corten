@@ -114,6 +114,10 @@ nginx's page. A prefix that also serves downloads keeps
 the map gives a request that is not a WebSocket. Leave `proxy_ignore_headers` without `Vary`
 and `Cache-Control`.
 
+A WebSocket needs `proxy_http_version 1.1` too: a proxy that passes `Upgrade` on over HTTP/1.0
+gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since
+a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
+
 [`examples/corten-site/deploy`](../../examples/corten-site/deploy/README.md) is a whole deploy
 written out: this configuration with a certificate, a limit on the live streams one reader
 and all readers may hold and, for a machine with 512 MB, the streams asked for as zstd or not

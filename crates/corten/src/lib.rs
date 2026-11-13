@@ -1372,8 +1372,10 @@ impl IntoResponse for Error {
             }
             Err(source) => {
                 // A second error that carries headers should share one mechanism with `Refused`
-                // and `WrongVersion`, not add another downcast here.
-                let wrong_version = self.status.is_client_error() && source.is::<upgrade::WrongVersion>();
+                // and `WrongVersion`, not add another downcast here. Another status (a 404 that
+                // hides the socket, a 500) drops them, as a re-statused `Refused` drops its own.
+                let wrong_version = matches!(self.status, StatusCode::BAD_REQUEST | StatusCode::UPGRADE_REQUIRED)
+                    && source.is::<upgrade::WrongVersion>();
                 let mut res = Error { status: self.status, source }.answer();
                 if wrong_version {
                     upgrade::WrongVersion::headers(self.status, res.headers_mut());

@@ -1885,13 +1885,14 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    7.8). A WebSocket handshake with a version other than 13 gets a 426 with
    `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade`, kept on the
    error page and JSON failures; one with no version is taken as one of another version, which
-   tells the client which to send. A handler that gives that error another 4xx
-   (`with_status`) keeps only `Sec-WebSocket-Version: 13`. A route that does not take `Upgrade`
-   never switches: only an `Upgrade` makes the 101, so a socket opens only where a route
-   declared one. A URL that is a socket and also something else (a page, or a gateway's relayed
-   answer) takes `Option<Upgrade>`, `None` when the request does not ask, and returns
-   `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or `SwitchOr::Answer(page)`. Its failures
-   are answered as `A`'s are, and a switch it asks for is checked as above.
+   tells the client which to send. A handler that gives that error a 400 (`with_status`) keeps
+   only `Sec-WebSocket-Version: 13`; any other status (a 404 that hides the socket) carries none
+   of the three. A route that does not take `Upgrade` never switches: only an `Upgrade` makes
+   the 101, so a socket opens only where a route declared one. A URL that is a socket and also
+   something else (a page, or a gateway's relayed answer) takes `Option<Upgrade>`, `None` when
+   the request does not ask, and returns `SwitchOr<A>`: `upgrade.websocket(run)?.into()` or
+   `SwitchOr::Answer(page)`. Its failures are answered as `A`'s are, and a switch it asks for is
+   checked as above.
 3. The request's own `Signal` ends with the 101, so the work gets its own, which aborts with
    `Abort::Shutdown` when the app begins to shut down; the work is not waited for.
    `App::send_timeout` still holds on the switched connection: a write the client has made no

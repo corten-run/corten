@@ -10161,6 +10161,12 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
             get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::BAD_REQUEST)) }),
         )
         .route(
+            "/ws-404",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::NOT_FOUND)) }),
+        )
+        // `Error::new` on a `corten::Error` keeps its source, here a wrong version, at 500.
+        .route("/ws-500", get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(crate::Error::new) }))
+        .route(
             "/tunnel",
             get(|upgrade: Upgrade| async move {
                 let mut headers = http::HeaderMap::new();
@@ -10264,6 +10270,19 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     assert!(head.starts_with("http/1.1 400"), "{refused}");
     assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
     assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    // Any other status says nothing of the socket: a 404 that hides it, or a 500.
+    for (path, status) in [("/ws-404", "404"), ("/ws-500", "500")] {
+        let refused = raw_get(
+            addr,
+            path,
+            "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+        )
+        .await;
+        let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+        assert!(head.starts_with(&format!("http/1.1 {status}")), "{refused}");
+        assert!(!head.contains("\r\nsec-websocket-version:"), "{refused}");
+        assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    }
 
     // The connection a 426 went out on (with `Connection: upgrade`) serves the next request.
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
