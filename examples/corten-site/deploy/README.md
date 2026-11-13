@@ -34,8 +34,9 @@ nobody signs in to it. Anywhere else, the same scripts are run by hand.
 `s-1vcpu-512mb-10gb`, with Ubuntu 24.04), an address that stays when the droplet is replaced, a
 firewall, and the DNS zone with the name's record. The `Site machine` workflow checks it on a
 pull request and applies it on `main`, keeping its state in a Spaces bucket. A droplet made this
-way is handed `provision.sh`, `nginx.conf` and the service file as it starts (cloud-init), waits
-until the site's name reaches it, and runs them itself.
+way is handed `provision.sh`, `nginx.conf` and the service file as it starts (cloud-init), and
+runs them itself: the first one once the site's name reaches it, and one that replaces another
+with that one's certificate and release, before the address moves to it.
 
 1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
    droplets, reserved addresses, firewalls, tags, and domains with their records; one with
@@ -51,10 +52,11 @@ until the site's name reaches it, and runs them itself.
    ```
 
    It makes the environments `site` and `site-machine`, which only `main` may use; makes the
-   deploy key and the machine's SSH host key, and stores each half with the workflow that uses
-   it; and sets the variables both workflows read. A fifth argument, `refuse-mail`, adds
-   records that say the zone sends no mail (`v=spf1 -all`, and DMARC's `p=reject`): only for a
-   zone that has none. Run again, it keeps the keys.
+   deploy key, the machine's SSH host key and the handover key, and stores each half with the
+   workflow that uses it; and sets the variables both workflows read. A fifth argument,
+   `refuse-mail`, adds records that say the zone sends no mail (`v=spf1 -all`, and DMARC's
+   `p=reject`): only for a zone that has none. Run again, it keeps the keys, and makes the
+   handover key for a repository set up before there was one.
 3. Type the three secrets that are yours alone, each at `gh`'s prompt:
 
    ```sh
@@ -91,16 +93,37 @@ ship to the machine being replaced or fail against the new one while it sets its
 run the `Site machine` workflow starts afterwards ships whatever became of the first (where
 the first reached the new machine, as on `cd3f67f43`, the second ships the same commit again
 and the service restarts once more). A droplet is never changed in place. A change to
-anything it is handed, a comment in one
-of those files included, makes a new droplet, moves the address to it once it exists, and
-removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
-the workflow asks the machine at the address for the site, and starts the Site workflow when a
-machine it made answers or the one there answers 502, as nginx does with no release behind it
-and also while the service is down.
+anything it is handed, a comment in one of those files included, makes a new droplet, and the
+address moves to it once it answers as the site; the old one is removed after that. A droplet
+that cannot be made, or that does not come to serve, leaves the old one serving. After every
+apply the workflow asks the machine at the address for the site, and starts the Site workflow
+when a machine it made answers or the one there answers 502, as nginx does with no release
+behind it and also while the service is down.
 
-The site is down from the move until that release is served. That is the time a machine takes
-to install its packages and get a certificate, and then a whole run of the Site workflow, which
-waits for a runner and tests and builds before it ships. For the first machine made for
+A new droplet serves before the address moves because it is handed what the old one serves
+with. Every droplet lets one key, the handover key, run one command as root
+(`infra/handover.sh`), which gives certbot's directory and the release being served, or takes
+them on a machine that is not set up yet. The key's private half is the `Site machine`
+workflow's alone (`SITE_HANDOVER_KEY`), and is not among what a droplet is handed. Between
+making the new droplet and moving the address, the apply runs `infra/relay.sh` on the runner:
+it asks the machine at the site's name to give and the new one, at its own address, to take,
+one into the other and never to a file, and then asks the new one for the page at the site's
+name until it answers, with the certificate checked. The new droplet sets itself up with the
+names the certificate holds, so it asks Let's Encrypt for nothing, and serves the same
+release. Then the address moves, and the Site workflow the apply starts ships `main` to it.
+The relay gives the new droplet ten minutes to take the key and fifteen to serve; when either
+runs out the apply fails with the address where it was, the new droplet is left as it is,
+and the next run (`gh workflow run site-machine.yml`) asks it again. What the address's own
+move costs is in each run's log: the site is asked once a second while the apply runs, and
+the run says how many of those went unanswered.
+
+The address moves first, and the site is away until the new droplet has a certificate and a
+release of its own, where nothing can be handed over: there is no handover key, the droplet
+serving was made before there was one or with another, or the site does not answer when the
+apply reaches that step. The run says which. That is also every replacement made before
+there was a handover, and that time is a machine's to install its packages and get a
+certificate, and then a whole run of the Site workflow, which waits for a runner and tests
+and builds before it ships. For the first machine made for
 corten.run (one run, on `a7bbe4cc9`, with the name already at DigitalOcean's servers) the
 machine answered under its certificate 1 min 42 s after the apply ended, and the Site run
 started then had shipped and checked the release 1 min 53 s after that, 4 s of it waiting for
@@ -113,16 +136,21 @@ so a Site run of its own had started; it waited 2 min 54 s for a runner, finishe
 before the workflow first saw the machine answer, and was answered by its release 2 min 7 s
 after the address began to move and 1 min 51 s after it had moved. With the 4 s wait of the
 first machine's run it would by reckoning have shipped to the old machine before the move.
-So reckon on what is left of the apply after the move (39 s here, from its beginning), the
-machine's minute and a half and a Site run, of which the wait for a runner is the part that
-moves. The old machine and its certificate are gone by then, and Let's Encrypt issues the
-same names five certificates a week: a sixth replacement inside a week leaves the site down
-until its limit allows another (with names that redirect, a machine asks for two, one for the
-site's name and one for all of them, and each set of names has its own five). So gather
-changes to those files into one merge. When an apply fails, run the workflow again
-(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
-site to a machine that answers 502. With deploys on, a run fails when the machine does not
-answer.
+For the replacement on `00d1a09c8` (one run) the machine answered 2 min 2 s after the apply
+ended, and the Site run started then was answered by its release 1 min 25 s after that. So
+without a handover reckon on what is left of the apply after the move (39 s on `cd3f67f43`,
+from its beginning), the machine's minute and a half to two and a Site run, of which the
+wait for a runner is the part that moves. The old machine and its certificate are gone by
+then, and Let's Encrypt issues the same names five certificates a week: a sixth such
+replacement inside a week leaves the site down until its limit allows another (with names
+that redirect, a machine asks for two, one for the site's name and one for all of them, and
+each set of names has its own five). A machine that is handed a certificate asks for none,
+unless the names given are no longer the ones it holds, and then for one, once the address
+is there. When an apply fails, run the workflow again (`gh workflow run site-machine.yml`):
+what it made is in the state, and the run ships the site to a machine that answers 502. With
+deploys on, a run fails when the machine does not answer. To make a new machine where
+nothing it is made from has changed, run the workflow with its one input
+(`gh workflow run site-machine.yml -f replace=true`).
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
 when it moves it.
@@ -131,7 +159,8 @@ when it moves it.
 |---|---|---|
 | environment `site` | `SITE_SSH_KEY`, `SITE_KNOWN_HOSTS` (secrets) | the deploy key, and the machine's host key under the site's name |
 | environment `site-machine` | `DIGITALOCEAN_TOKEN`, `SPACES_ACCESS_KEY_ID`, `SPACES_SECRET_ACCESS_KEY` (secrets) | what makes the machine and keeps the state |
-| environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC` (variables) | what a new machine is handed |
+| environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC`, `SITE_HANDOVER_KEY_PUBLIC` (variables) | what a new machine is handed |
+| environment `site-machine` | `SITE_HANDOVER_KEY` (secret) | the key one machine's certificate and release are carried to the next with |
 | repository variables | `SITE_DOMAIN`, `SITE_STATE_BUCKET`, `SITE_STATE_ENDPOINT`, `SITE_REFUSES_MAIL` | set by `bootstrap.sh` |
 | repository variables | `SITE_HOST` | set last, by hand: the Site workflow ships once it is |
 | repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE`, `SITE_REDIRECTS` | below |
@@ -151,10 +180,13 @@ on the next apply.
 site's, such as `["www.example.com"]` for a site at `example.com`. Each gets a record at the
 same address and a place on the site's certificate, and nginx answers it on both ports with a
 redirect (308) to the same path at the site's name; the app never sees it. With the zone
-elsewhere the records are yours to make, before the variable is set. A new machine serves the
+elsewhere the records are yours to make, before the variable is set. A machine that is
+handed a certificate serves the names that certificate holds, and takes on the names given
+once the address is there: where they are the same it asks for no certificate, and where
+the list has changed, for one. A machine that is handed nothing serves the
 site under its own name first, with a certificate for that name alone, and then waits for
 each of the other names to reach it and asks for one certificate that holds them all: two
-certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
+certificates for such a machine, and a name that is late, or that Let's Encrypt refuses, holds
 back only itself. The machine says which name it waits for, or why a certificate was refused
 (`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
 Taking the names on runs `provision.sh` a second time, which writes the deploy key's file,
@@ -179,6 +211,17 @@ the metadata address by any process there. The site's service cannot reach that 
 other but the machine's own (`IPAddressDeny=` in the service file). nginx's workers and whoever
 signs in as `deploy` can: the holder of the deploy key can read the host key, so the two keys
 are kept apart on GitHub and not on the machine.
+
+The handover key is not among what a droplet is handed: a droplet has its public half, and
+the private half is a secret of the `site-machine` environment, given to the apply's step
+alone. Its holder can run one command as root on a droplet, and so read certbot's directory
+there, the certificate's private key and the Let's Encrypt account's among it, and the
+release; on a droplet that is not set up yet it can also put those in place. The same
+environment holds the DigitalOcean token, whose holder can read a droplet's disk without
+it. The deploy key cannot run the command, and nothing on the machine holds the private
+half. A new handover key (the secret and the variable removed, and `bootstrap.sh` run again)
+replaces the droplet on the next apply, and the droplet serving then does not know it: that
+one replacement moves the address first.
 
 ### By hand, on any machine
 

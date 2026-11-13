@@ -25,6 +25,11 @@ on:
       - examples/corten-site/deploy/corten-site.service
       - .github/workflows/site-machine.yml
   workflow_dispatch:
+    inputs:
+      replace:
+        description: Make a new machine in place of the one there, though nothing it is made from has changed
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,7 +60,7 @@ jobs:
       - run: tofu validate
       # A script that parses but does not mean what it says is found here, not on the machine.
       - name: The scripts the machine, a deploy and an operator run
-        run: shellcheck --severity=warning boot.sh bootstrap.sh ../provision.sh ../release.sh
+        run: shellcheck --severity=warning boot.sh bootstrap.sh handover.sh relay.sh ../provision.sh ../release.sh
 
   apply:
     needs: check
@@ -93,6 +98,7 @@ jobs:
       TF_VAR_admin_keys: ${{ vars.SITE_ADMIN_KEYS || '[]' }}
       TF_VAR_deploy_key: ${{ vars.SITE_DEPLOY_KEY }}
       TF_VAR_host_key_public: ${{ vars.SITE_HOST_KEY_PUBLIC }}
+      TF_VAR_handover_key: ${{ vars.SITE_HANDOVER_KEY_PUBLIC }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -112,7 +118,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
         run: tofu init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET"
       # Planned and applied in one step, so the plan, which holds the values a machine is
-      # handed, is on the runner for that step alone.
+      # handed, is on the runner for that step alone. The apply runs infra/relay.sh between
+      # making a machine and moving the address to it, with the handover key, which only this
+      # step holds. The site is asked once a second while the apply runs, so the run says for
+      # how long it was away: the address's move is in there, and for a machine that could be
+      # handed nothing, only the beginning of the time it takes to set itself up.
       - name: Plan and apply
         id: apply
         env:
@@ -121,11 +131,27 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
           TF_VAR_email: ${{ secrets.SITE_EMAIL }}
           TF_VAR_host_key: ${{ secrets.SITE_HOST_KEY }}
+          HANDOVER_KEY: ${{ secrets.SITE_HANDOVER_KEY }}
+          REPLACE: ${{ inputs.replace && '-replace=digitalocean_droplet.site' || '' }}
         run: |
-          trap 'rm -f "$RUNNER_TEMP/plan"' EXIT
-          tofu plan -input=false -out="$RUNNER_TEMP/plan"
+          asking=
+          ended() {
+            rm -f "$RUNNER_TEMP/plan"
+            [ -n "$asking" ] || return 0
+            kill "$asking" 2>/dev/null || true
+            echo "While the apply ran, https://$SITE_DOMAIN/ was asked $(wc -l < "$RUNNER_TEMP/asked") times, a second apart, and did not answer as the site $(grep -c lost "$RUNNER_TEMP/asked" || true) of them."
+          }
+          trap ended EXIT
+          # shellcheck disable=SC2086 # the one option, or none
+          tofu plan -input=false $REPLACE -out="$RUNNER_TEMP/plan"
           made=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select(.address == "digitalocean_droplet.site") | .change.actions[]] | index("create") != null')
           echo "made=$made" >> "$GITHUB_OUTPUT"
+          # The page names the commit it was built from; read whole, then searched.
+          while :; do
+            if page=$(curl -fsS --max-time 2 "https://$SITE_DOMAIN/" 2>/dev/null) && grep -q 'built from' <<< "$page"; then echo answered; else echo lost; fi
+            sleep 1
+          done > "$RUNNER_TEMP/asked" &
+          asking=$!
           tofu apply -input=false "$RUNNER_TEMP/plan"
           # Read first, so a read that fails fails the step: echo's status would hide it.
           address=$(tofu output -raw address)

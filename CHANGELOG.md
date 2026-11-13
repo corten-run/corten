@@ -278,6 +278,19 @@ Corten is pre-1.0, so any minor version may change the API.
   few. No limit keeps a request under it waiting, and one request in a hundred opens a
   connection; readers who share an address share its limits, and someone with many addresses
   is not slowed by them. The deploy guide has what was measured (What one address can do).
+- `examples/corten-site`'s machine is replaced by one that already serves. A new droplet is
+  handed the old one's certificate and the release it serves, and the address moves to it
+  once it answers as the site; before, the address moved to a droplet that then took minutes
+  to get a certificate and a release, and the site was away meanwhile. Every droplet lets one
+  key, which the `Site machine` workflow alone holds, run one command as root that gives or
+  takes those (`infra/handover.sh`), and the apply runs `infra/relay.sh` between making a
+  droplet and moving the address: when the new droplet does not come to serve, the apply
+  fails with the address where it was. A droplet that is handed a certificate asks Let's
+  Encrypt for none. `bootstrap.sh` makes the key, and run again adds it to a repository set
+  up before. Where nothing can be handed over (no key, or a droplet made before this) the
+  address moves first, as it did. The workflow asks the site once a second while it applies
+  and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
+  makes a new machine where nothing has changed.
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
