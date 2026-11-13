@@ -12,6 +12,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native Drogon, Gin, Topcoat and Leptos marketplace forms persist accepted alerts
+  in isolated cookie sessions, with independent readback and no append after
+  invalid input, incomplete records or failed native rendering. Confirmations use
+  the exact stored minor amount. Leptos retains its enhanced server action and
+  plain form fallback; the other adapters retain their native renderers and forms.
+  Gin's opt-in production profile adds native security headers, host checks,
+  compression, body/connection bounds and upstream-independent liveness. Native
+  browser and HTTP checks remain separate from comparative load qualification.
+
 - Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
   marketplace forms persist accepted alerts with session-isolated readback,
   preserve their framework's enhanced and plain-form paths, and reject writes
