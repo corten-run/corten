@@ -298,8 +298,79 @@ test("replayed captures without saved native manifests remain blocked, never rea
   const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
   assert.equal(r.diagnosticsPassed, true);
   assert.ok(r.blockers.includes("missing-native-build-file")); assert.ok(r.blockers.includes("missing-native-workload-file"));
-  assert.ok(apps.every((app) => r.cells[app].replayPassed === true && r.cells[app].build === null));
+  assert.ok(apps.every((app) => r.cells[app].replayPassed === true && r.cells[app].build?.integrity === "matched-not-authenticated"));
   for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+});
+
+for (const [name, reason, mutate] of [
+  ["malformed summary entry", "missing-native-build", async (f) => { f.result.builds.react = false; }],
+  ["failed receipt contradicting a passing cell", "passing-cell-without-native-build", async (f) => {
+    f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
+    await f.write("native/react/failure.log", "fixture");
+  }],
+  ["modified bundle bytes", "native-artifact-hash-mismatch", async (f) => { await f.write("native/react/app.js", "// tampered unit bundle\n"); }],
+  ["failed receipt with a contradictory log", "missing-or-mismatched-native-failure-log", async (f) => {
+    f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
+    await f.write("native/react/failure.log", "different fixture");
+    f.result.cells.react = { outcome: "failed", reason: "native-build-failed", qualification: null, measurement: null, readyForMeasurement: false };
+    f.result.passed = false;
+  }],
+]) test(`missing native build manifest cannot hide ${name}`, async (t) => {
+  const f = await fixture(t); await mutate(f); await f.save(); await rm(join(f.folder, "native/build.json"));
+  invalid(await f.validate(), reason);
+});
+
+test("missing native build manifest retains a valid failed summary without qualifying performance", async (t) => {
+  const f = await fixture(t);
+  f.result.builds.react = { outcome: "failed", reason: "native-build-failed", diagnosticSha256: hash("fixture") };
+  await f.write("native/react/failure.log", "fixture");
+  f.result.cells.react = { outcome: "failed", reason: "native-build-failed", qualification: null, measurement: null, readyForMeasurement: false };
+  f.result.passed = false; await f.save(); await rm(join(f.folder, "native/build.json"));
+  const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+  assert.equal(r.diagnosticsPassed, true); assert.equal(r.cells.react.build.outcome, "failed");
+  assert.equal(r.cells.react.measurement, null); assert.ok(r.blockers.includes("missing-native-build-file"));
+  for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+});
+
+for (const outcome of ["failed", "unsupported", "not-run"]) test(`unavailable ${outcome} pass validates present optional resource details`, async (t) => {
+  const f = await fixture(t), c = { schema: "client-capture/v1", app: "react", effectiveWorkload: workload, outcome,
+    reason: "native-load-unavailable", records: null };
+  const qualification = { capture: c, oracle: validateClientCapture(workload, c, settings), readyMs: null, actions: null,
+    failure: outcome === "failed" ? { phase: "load", diagnostic: "Error", diagnosticSha256: hash("fixture"), records: [], errors: [] } : null,
+    resourceDetails: false };
+  f.result.cells.react = { outcome, qualification, measurement: null, readyForMeasurement: false };
+  f.result.passed = false; await f.save(); invalid(await f.validate(), "missing-native-resource-details");
+  qualification.resourceDetails = [{ type: "click", target: "Window", connected: null, pageOwned: "yes", property: false }];
+  await f.save(); invalid(await f.validate(), "invalid-native-resource-detail");
+  qualification.resourceDetails = []; await f.save();
+  const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+  assert.equal(r.cells.react.outcome, outcome); assert.equal(r.cells.react.measurement, null);
+});
+
+test("Git replacement refs cannot substitute exact source bytes even when inherited replacements are enabled", async (t) => {
+  const f = await fixture(t), scratch = await mkdtemp(join(tmpdir(), "client-heavy-git-"));
+  t.after(async () => {
+    const rel = relative(tmpdir(), scratch); assert.ok(rel && !rel.startsWith("..") && !isAbsolute(rel));
+    await rm(scratch, { recursive: true, force: true });
+  });
+  const repository = join(scratch, "repository"), path = "bench/client-heavy/apps/react.jsx", replacement = "// Replaced Git unit source, never native evidence\n";
+  git(["init", "--quiet", repository]);
+  const objects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]).toString().trim().replaceAll("\\", "/");
+  await writeFile(join(repository, ".git/objects/info/alternates"), objects + "\n");
+  const original = git(["rev-parse", `${commit}:${path}`]).toString().trim();
+  const substituted = git(["-C", repository, "hash-object", "-w", "--stdin"], replacement).toString().trim();
+  git(["-C", repository, "replace", original, substituted]);
+  f.result.builds.react.inputs.find((entry) => entry.path === path).sha256 = hash(replacement); await f.save();
+  const invoke = (enabled) => {
+    const env = { ...process.env, GIT_DIR: join(repository, ".git"), GIT_WORK_TREE: root };
+    delete env.GIT_NO_REPLACE_OBJECTS;
+    if (!enabled) env.GIT_NO_REPLACE_OBJECTS = "1";
+    const result = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder, "--round", "test-round", "--commit", commit],
+      { encoding: "utf8", timeout: 30000, env });
+    assert.equal(result.error, undefined); return JSON.parse(result.stdout);
+  };
+  invalid(invoke(false), "build-input-differs-from-exact-source");
+  invalid(invoke(true), "build-input-differs-from-exact-source");
 });
 
 for (const failure of [false, 0, "", null]) test(`present falsy failure ${JSON.stringify(failure)} is malformed, not absent`, async (t) => {
