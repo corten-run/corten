@@ -35,7 +35,9 @@ public class MarketplaceController {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN);
             response.setHeader("Cache-Control", "private, no-store");
         }
-        var record = post ? source.getForWrite(id) : source.get(id);
+        String traceparent = request.getHeader("traceparent");
+        var record = traceparent == null ? (post ? source.getForWrite(id) : source.get(id))
+                : (post ? source.getForWrite(id, traceparent) : source.get(id, traceparent));
         if (record == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         if (post) record.validateForWrite(id);
         var format = new MarketplaceFormat(locale);
@@ -76,8 +78,9 @@ public class MarketplaceController {
 
     @GetMapping("/api/marketplace/{id}")
     @ResponseBody
-    public ResponseEntity<MarketplaceRecord> json(@PathVariable String id) {
-        var record = source.get(id);
+    public ResponseEntity<MarketplaceRecord> json(@PathVariable String id,
+            @RequestHeader(value = "traceparent", required = false) String traceparent) {
+        var record = traceparent == null ? source.get(id) : source.get(id, traceparent);
         if (record == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         return ResponseEntity.ok(record);
     }
