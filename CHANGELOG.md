@@ -15,8 +15,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
   marketplace forms persist accepted alerts with session-isolated readback,
   preserve their framework's enhanced and plain-form paths, and reject writes
-  whose source or rendering input failed. Pending native JS submissions retain
-  one session; these correctness changes are not a completed group baseline.
+  whose source or rendering input failed. Next.js, Nuxt, SvelteKit and TanStack
+  Start guard pending same-form JS submissions to retain one session; these
+  correctness changes are not a completed group baseline.
 
 - Native FastAPI, Django and Spring marketplace alerts persist accepted writes
   in isolated sessions with independent readback and no append after rejected,
