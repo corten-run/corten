@@ -61,6 +61,12 @@ startup deadline. An unavailable/failed/incomplete qualification exits nonzero w
 the raw observations. The importable interface is `await run(args)` from `run.mjs`, where
 `args` is the CLI argument array including the round. It returns the saved summary.
 
+Group `qualificationPassed` is recomputed after cleanup and strict capture export: all ten
+candidates and all 24 profiles must have qualified native evidence and matching passing
+unchanged-oracle results, with clean matching image provenance and no run/cleanup failures.
+Completing a selected subset, exporting unsupported captures or closing a browser context
+does not qualify the group. `readyForLoad` remains false even if journey qualification passes.
+
 SvelteKit's existing marketplace build fixes its request/CSRF origin to `127.0.0.1:8080`.
 Its cases therefore publish on that loopback port, while other apps use random loopback ports.
 A port collision is a failed start, not a reason to disable native CSRF checks or rewrite Origin.
