@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native Corten, ASP.NET Razor Pages and Express marketplace forms persist each
+  accepted alert, with independent session-scoped JSON readback. Rejected forms,
+  failed source reads and render failures do not append. This is process-local
+  benchmark state, not durable storage or load qualification.
+
 - Catalog runners preserve full native application stdout and stderr in raw evidence,
   rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
   longer repeatedly copy growing log strings. Log-collection errors still fail the run;

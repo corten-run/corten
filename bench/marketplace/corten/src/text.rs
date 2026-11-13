@@ -12,14 +12,18 @@ pub fn money(t: Msg, minor: Option<i64>) -> String {
 }
 pub fn rating(t: Msg, hundredths: u16) -> Formatted {
     let tenths = (hundredths + 5) / 10;
-    t.number(if tenths % 10 == 0 { Decimal::new(i128::from(tenths / 10), 0) } else { Decimal::new(i128::from(tenths), 1) })
+    t.number(if tenths.is_multiple_of(10) {
+        Decimal::new(i128::from(tenths / 10), 0)
+    } else {
+        Decimal::new(i128::from(tenths), 1)
+    })
 }
-pub fn alert(t: Msg, record: &crate::model::Record, form: &crate::AlertForm) -> String {
+pub fn alert(t: Msg, record: &crate::model::Record, form: &crate::AlertForm) -> Result<(String, u64), String> {
     if !form.email.contains('@') {
-        return t.invalid_email().into();
+        return Err(t.invalid_email().into());
     }
     let Some(price) = t.parse_money(&form.target_price, USD).filter(|price| price.0 > 0) else {
-        return t.invalid_price().into();
+        return Err(t.invalid_price().into());
     };
-    t.alert_set(msg::AlertSet { email: &form.email, title: &record.title, price: t.money(price, USD) }).to_string()
+    Ok((t.alert_set(msg::AlertSet { email: &form.email, title: &record.title, price: t.money(price, USD) }).to_string(), price.0))
 }

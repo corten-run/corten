@@ -35,8 +35,11 @@ public sealed class MarketplaceFormat
         return Count(count) + " " + Text["listing_" + category];
     }
 
-    public string Alert(string email, string target, string title)
+    public string Alert(string email, string target, string title) => Alert(email, target, title, out _);
+
+    public string Alert(string email, string target, string title, out Int128? targetMinor)
     {
+        targetMinor = null;
         if (!email.Contains('@')) return Text["invalid_email"];
         // A decimal mark from a different locale is not silently read as grouping.
         var separator = culture.NumberFormat.NumberDecimalSeparator;
@@ -44,6 +47,11 @@ public sealed class MarketplaceFormat
             || !decimal.TryParse(target, NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite |
                 NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, culture, out var amount) || amount <= 0)
             return Text["invalid_price"];
+        var rounded = Math.Round(amount, 2, MidpointRounding.AwayFromZero);
+        // Scaling decimal.MaxValue by 100 overflows decimal. Split first so every price the
+        // native parser already accepts remains representable as integer minor units.
+        var whole = decimal.Truncate(rounded);
+        targetMinor = (Int128)whole * 100 + (Int128)((rounded - whole) * 100);
         return plurals.FormatMessage(Text["alert_set"], new { email, title, price = Amount(amount) }, culture);
     }
 
