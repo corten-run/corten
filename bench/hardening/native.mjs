@@ -9,12 +9,13 @@ import { isDeepStrictEqual } from "node:util";
 import { validateQualification } from "../marketplace/feature-contract.mjs";
 
 const hash = (body) => createHash("sha256").update(body).digest("hex");
-export function observe(url, { host, method = "GET", body, timeoutMs = 5000 } = {}) {
+export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca } = {}) {
   return new Promise((resolve) => {
-    const started = performance.now(), chunks = [];
-    const row = { url: String(url), method, host: host ?? new URL(url).host };
+    const started = performance.now(), chunks = [], address = new URL(url);
+    const row = { url: String(url), method, host: host ?? address.host };
     let size = 0, complete = false;
-    const req = (new URL(url).protocol === "https:" ? https : http)(url, { method, agent: false,
+    const req = (address.protocol === "https:" ? https : http)(address, { method, agent: false, ca,
+      ...(address.protocol === "https:" ? { servername: address.hostname } : {}),
       headers: { host: row.host, connection: "close", "accept-encoding": "identity", ...(body === undefined ? {} : { "content-type": "application/json" }) } }, (res) => {
       row.status = res.statusCode;
       row.headers = Object.fromEntries(["content-type", "location"].filter((key) => res.headers[key] !== undefined).map((key) => [key, res.headers[key]]));
