@@ -46,7 +46,7 @@ function capture(app) {
   };
   add("resources", { owned: zero() });
   add("initial", { data: workload.initial, dom: dom(), errors: [] });
-  add("resources", { owned: { ...zero(), subscriptions: 1 } });
+  add("resources", { owned: { ...zero(), subscriptions: 1, listeners: 1 } });
   for (const op of workload.operations) {
     if (op.kind === "update-tenth") rows.forEach((r, i) => { if (!(i % 10)) r.label += " !!!"; });
     if (op.kind === "select") selected = op.key;
@@ -210,6 +210,53 @@ test("self-consistent forged bundle remains blocked, never source/build-qualifie
 test("plausible altered timing scalars cannot become recomputed measurements", async (t) => {
   const f = await fixture(t); f.result.cells.react.measurement.readyMs = 0; f.result.cells.react.measurement.actions[0].elapsedMs = 0;
   await f.save(); const r = await f.validate(); assert.equal(r.status, "blocked"); assert.equal(r.cells.react.measurement.timings, null);
+});
+
+for (const phase of ["qualification", "measurement"]) test(`readiness ${phase} cannot exceed its saved observation interval`, async (t) => {
+  const f = await fixture(t), p = f.result.cells.react[phase];
+  assert.equal(p.capture.records[0].at, 1); assert.equal(p.capture.records[2].at, 3);
+  p.readyMs = 29999; await f.save(); invalid(await f.validate(), "readiness-longer-than-observation-interval");
+});
+
+for (const phase of ["qualification", "measurement"]) test(`subscription counts cannot exceed listener counts in ${phase}`, async (t) => {
+  const f = await fixture(t), p = f.result.cells.react[phase];
+  Object.assign(p.capture.records[2].owned, { subscriptions: 2, listeners: 1 });
+  p.oracle = validateClientCapture(workload, p.capture, settings); await f.save();
+  invalid(await f.validate(), "subscriptions-exceed-listeners");
+  for (const listeners of [2, 3]) {
+    p.capture.records[2].owned.listeners = listeners;
+    p.oracle = validateClientCapture(workload, p.capture, settings); await f.save();
+    const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+    assert.equal(r.diagnosticsPassed, true); assert.equal(r.rankingEligible, false); assert.equal(r.isolation, "unknown");
+  }
+});
+
+test("readiness interval permits only the fixed rounding tolerance and stays unverified", async (t) => {
+  const f = await fixture(t);
+  for (const p of [f.result.cells.react.qualification, f.result.cells.react.measurement]) {
+    for (const record of p.capture.records) record.at += 1000;
+    p.oracle = validateClientCapture(workload, p.capture, settings);
+  }
+  for (const readyMs of [0, 2, 2.01]) {
+    for (const phase of ["qualification", "measurement"]) f.result.cells.react[phase].readyMs = readyMs;
+    await f.save(); const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+    assert.equal(r.diagnosticsPassed, true);
+    for (const phase of ["qualification", "measurement"]) assert.equal(r.cells.react[phase].timings, null);
+    for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+    assert.equal(r.isolation, "unknown");
+  }
+  for (const phase of ["qualification", "measurement"]) f.result.cells.react[phase].readyMs = 2.011;
+  await f.save(); const r = await f.validate(); invalid(r, "readiness-longer-than-observation-interval");
+  assert.ok(["react:qualification", "react:measurement"].every((at) => r.errors.some((e) => e.at === at)));
+});
+
+test("subscription/listener accounting also applies to every present failed partial sample", async (t) => {
+  const f = await fixture(t), records = capture("react").records;
+  for (const index of records.flatMap((record, i) => Object.hasOwn(record, "owned") ? [i] : [])) {
+    const partial = structuredClone(records); Object.assign(partial[index].owned, { subscriptions: 2, listeners: 1 });
+    f.result.cells.react = { outcome: "failed", qualification: failedPass("oracle", partial), measurement: null, readyForMeasurement: false };
+    f.result.passed = false; await f.save(); invalid(await f.validate(), "subscriptions-exceed-listeners");
+  }
 });
 
 for (const outcome of ["failed", "unsupported", "not-run"]) test(`retains ${outcome} without fabricated timings or promotion`, async (t) => {

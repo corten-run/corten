@@ -165,6 +165,11 @@ partial-record and sanitized-error unions, including nested DOM, data, resource,
 network and error fields, source-bound operation inputs and matching failure
 phase/reason. Well-formed incomplete or functionally failing observations remain
 failed and blocked; they are not required to be complete successful journeys.
+Native owned samples must have no more subscriptions than listeners, including
+partial failed samples. A saved readiness duration must fit between the baseline
+and subsequent active-resource observations, with a fixed 0.01 ms clock-rounding
+tolerance (also used for action intervals). This is a consistency bound, not
+recomputation or authentication of the missing timing endpoints.
 
 The verifier refuses traversal, absolute paths inside receipts, links/junctions,
 linked ancestors, hardlinks, duplicate/case-colliding files and build inputs,

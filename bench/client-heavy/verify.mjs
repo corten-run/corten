@@ -27,6 +27,7 @@ const sourcePaths = ["bench/client-heavy/run.mjs", "bench/client-heavy/build.mjs
   "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json",
   "bench/browser/gen/Cargo.toml", "bench/browser/gen/src/bin/client.rs"];
 const limits = { files: 4096, fileBytes: 64 * 1024 ** 2, totalBytes: 512 * 1024 ** 2, depth: 20 };
+const clockToleranceMs = 0.01;
 const blockersV1 = [
   "v1-no-saved-source-bound-invocation-plan-or-cargo-tool-identity",
   "v1-no-complete-saved-source-dependency-and-generator-byte-snapshot",
@@ -158,15 +159,19 @@ function sanitizedErrors(errors) {
   }
 }
 
+function nativeResources(owned) {
+  const names = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
+  keys(owned, names);
+  need(names.every((name) => bounded(owned[name], 0, Number.MAX_SAFE_INTEGER)), "invalid-partial-resources");
+  // The native source is a non-Node EventTarget. Every live source subscription
+  // is also a lasting listener, including when a journey fails partway through.
+  need(owned.subscriptions <= owned.listeners, "subscriptions-exceed-listeners");
+}
+
 // Failed journeys may stop at any prefix and contain genuine functional errors.
 // Check the producer's record union, not the successful-journey oracle semantics.
 function partialRecords(records, errors, workload, phase) {
   need(Array.isArray(records), "invalid-partial-records");
-  const resource = (owned) => {
-    const names = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
-    keys(owned, names);
-    need(names.every((name) => bounded(owned[name], 0, Number.MAX_SAFE_INTEGER)), "invalid-partial-resources");
-  };
   const rows = (values, card, observed) => {
     need(Array.isArray(values), "invalid-partial-rows");
     for (const value of values) {
@@ -203,7 +208,7 @@ function partialRecords(records, errors, workload, phase) {
     keys(record, ["kind", "at", ...variants[record.kind]]);
     need(record.kind === sequence[i] && Number.isFinite(record.at) && record.at >= 0 && record.at > at,
       "invalid-partial-record-order-or-clock"); at = record.at;
-    if (Object.hasOwn(record, "owned")) resource(record.owned);
+    if (Object.hasOwn(record, "owned")) nativeResources(record.owned);
     if (Object.hasOwn(record, "dom")) dom(record.dom);
     if (Object.hasOwn(record, "network")) network(record.network);
     if (Object.hasOwn(record, "errors")) {
@@ -256,8 +261,10 @@ function replay(pass, app, phase, workload, settings, timeoutMs) {
   const records = pass.capture.records, operations = records.filter((r) => r.kind === "operation");
   need(same(records.map((r) => r.kind), ["resources", "initial", "resources", ...workload.operations.map(() => "operation"),
     "detach", "resources", "cleanup-probe", "resources", "state"]), "wrong-native-observation-sequence");
+  for (const record of records) if (Object.hasOwn(record, "owned")) nativeResources(record.owned);
   const initial = records.findIndex((r) => r.kind === "initial"), active = records[initial + 1];
   need(active?.kind === "resources" && active.owned.subscriptions > 0, "missing-real-active-subscription");
+  need(pass.readyMs <= active.at - records[0].at + clockToleranceMs, "readiness-longer-than-observation-interval");
   if (phase === "qualification") need(pass.actions === null, "qualification-has-action-timings");
   else {
     need(Array.isArray(pass.actions) && pass.actions.length === operations.length, "incomplete-measured-actions");
@@ -265,7 +272,7 @@ function replay(pass, app, phase, workload, settings, timeoutMs) {
       keys(action, ["operation", "kind", "elapsedMs"]);
       need(action.operation === workload.operations[i].id && action.kind === workload.operations[i].kind
         && Number.isFinite(action.elapsedMs) && action.elapsedMs >= 0 && action.elapsedMs <= timeoutMs, "invalid-measured-action");
-      need(action.elapsedMs <= operations[i].at - records[records.indexOf(operations[i]) - 1].at + 0.01,
+      need(action.elapsedMs <= operations[i].at - records[records.indexOf(operations[i]) - 1].at + clockToleranceMs,
         "action-longer-than-observation-interval");
     }
   }
