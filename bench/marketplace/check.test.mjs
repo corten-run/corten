@@ -104,7 +104,8 @@ test("alert failure retains the exact form case, response and original timeout",
     await page.route("http://localhost/**", (route) => route.fulfill({ status: route.request().method() === "POST" ? 500 : 200,
       contentType: "text/html", body: html + "server failure fixture" }));
     await page.goto("http://localhost/marketplace/en-US/item_1");
-    page.setDefaultTimeout(500);
+    // Exercise the missing-message deadline after the fixture POST, not click/navigation scheduling.
+    page.on("response", (response) => { if (response.request().method() === "POST") page.setDefaultTimeout(500); });
     await assert.rejects(submitAlert(page, page.locator("form"), false), (error) => {
       assert.match(error.message, /Alert POST 500 .*JS=false; fields=.*invalid.*target_price.*1/);
       assert.match(error.message, /server failure fixture/);
@@ -127,7 +128,7 @@ test("unfinished alert response cannot hang failure diagnostics", { timeout: 100
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/en-US/item_1`);
     await page.evaluate(() => document.querySelector("form").addEventListener("submit", (event) => { event.preventDefault(); fetch(location.href, { method: "POST" }); }));
-    page.setDefaultTimeout(500);
+    page.on("response", (response) => { if (response.request().method() === "POST") page.setDefaultTimeout(500); });
     await assert.rejects(submitAlert(page, page.locator("form"), true), (error) => {
       assert.match(error.message, /Alert POST 500 .*unavailable: diagnostic timeout/);
       assert.match(error.cause.message, /Timeout 500ms exceeded/);
