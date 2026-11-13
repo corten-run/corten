@@ -16,6 +16,10 @@ leptos_router = "0.8"
 leptos_meta = "0.8"
 leptos_axum = { version = "0.8", optional = true }
 axum = { version = "0.8", optional = true }
+# Axum has no cookie parser or session entropy API. These provide the standard
+# cookie grammar and OS-backed credentials, only in the server build.
+cookie = { version = "0.18", optional = true }
+getrandom = { version = "0.4", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"], optional = true }
 futures = { version = "0.3", optional = true }
 # The matched tier's layers (PROFILE=matched) are tower-http's own, as axum-maud's: headers, a
@@ -38,6 +42,8 @@ js-sys = { version = "0.3", optional = true }
 [features]
 hydrate = ["leptos/hydrate", "dep:wasm-bindgen", "dep:console_error_panic_hook", "dep:web-sys", "dep:js-sys"]
 ssr = [
+  "dep:cookie",
+  "dep:getrandom",
   "dep:axum",
   "dep:tokio",
   "dep:futures",

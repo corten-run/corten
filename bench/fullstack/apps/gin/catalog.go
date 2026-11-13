@@ -111,7 +111,7 @@ func (s *catalogSource) routes(r *gin.Engine) {
 	r.GET("/catalog/:id", func(c *gin.Context) {
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadGateway, err)
+			abortRecordPage(c, err)
 			return
 		}
 		if record == nil {
@@ -125,7 +125,7 @@ func (s *catalogSource) routes(r *gin.Engine) {
 		c.Header("Cache-Control", "no-store")
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": "catalog source unavailable"})
+			c.AbortWithStatusJSON(recordSourceStatus(err), gin.H{"error": "catalog source unavailable"})
 			return
 		}
 		if record == nil {
