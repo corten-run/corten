@@ -8,7 +8,7 @@ test("browser CI keeps its pinned Playwright base and prepares immutable-source 
   const workflow = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
   const step = workflow.jobs.smoke.steps.find((entry) => entry.name === "Playwright's image");
   assert.ok(step);
-  assert.match(step.run, /require\('@playwright\/test\/package\.json'\)\.version/);
+  assert.match(step.run, /require\("@playwright\/test\/package\.json"\)\.version/);
   const build = 'docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-playwright-tools .';
   const select = 'image="corten-playwright-tools"';
   assert.ok(step.run.indexOf('docker pull "$image"') < step.run.indexOf(build));
