@@ -4,11 +4,13 @@ require_relative "../application"
 class NativeStoreTest < Minitest::Test
   class Reader
     attr_reader :events, :overflows
-    def initialize
+    def initialize(client = "client")
+      @client = client
       @events, @overflows = [], []
     end
     def deliver(event)
       @events << event
+      NativeStore.apply(@client, event)
     end
     def overflow(resources)
       @overflows << resources
@@ -27,7 +29,16 @@ class NativeStoreTest < Minitest::Test
     NativeStore.configure("initial" => [row], "queueLimit" => 2, "historyLimit" => 4)
     @reader = Reader.new
     NativeStore.subscribe(@reader, "client", 0, true)
-    NativeStore.replace_client("client", NativeStore.snapshot)
+    NativeStore.snapshot_client(@reader, "client")
+    ack(0, 0)
+  end
+
+  def observed(through, count)
+    { "through" => through, "effectCount" => count, "rowCount" => 1 }
+  end
+
+  def ack(through, count, reader = @reader)
+    NativeStore.acknowledge(reader, observed(through, count))
   end
 
   def teardown
@@ -70,7 +81,7 @@ class NativeStoreTest < Minitest::Test
     assert_equal [1, 2], acks.map { |ack| ack["resources"]["historyEvents"] }
     assert_equal 2, NativeStore.snapshot[:through]
     assert_equal [event(1)], @reader.events
-    NativeStore.acknowledge(@reader)
+    ack(1, 1)
     assert_equal [event(1), event(2)], @reader.events
   end
 
@@ -87,11 +98,11 @@ class NativeStoreTest < Minitest::Test
   end
 
   def test_four_independent_native_readers_receive_the_same_publication
-    others = Array.new(3) { Reader.new }
+    others = Array.new(3) { |index| Reader.new("client_#{index}") }
     others.each_with_index do |reader, index|
       NativeStore.subscribe(reader, "client_#{index}", 0, true)
       NativeStore.snapshot_client(reader, "client_#{index}")
-      NativeStore.acknowledge(reader)
+      ack(0, 0, reader)
     end
     NativeStore.publish(event(1))
     ([@reader] + others).each { |reader| assert_equal [event(1)], reader.events }
@@ -101,7 +112,10 @@ class NativeStoreTest < Minitest::Test
 
   def test_duplicate_and_gap_do_not_apply_effects
     assert_equal "gap", NativeStore.apply("client", event(2)).first
+    ack(0, 0)
     assert_equal "applied", NativeStore.apply("client", event(1)).first
+    assert_equal 0, NativeStore.client("client")[:count]
+    ack(1, 1)
     disposition, state = NativeStore.apply("client", event(1))
     assert_equal "duplicate", disposition
     assert_equal 1, state[:count]
@@ -110,19 +124,49 @@ class NativeStoreTest < Minitest::Test
 
   def test_history_is_bounded_and_cursor_expiry_is_real
     NativeStore.unsubscribe(@reader)
-    1.upto(8) { |seq| NativeStore.publish(event(seq)) }
-    result = NativeStore.subscribe(@reader, "client", 1, false)
+    NativeStore.publish(event(1))
+    NativeStore.subscribe(@reader, "client", 0, true)
+    NativeStore.snapshot_client(@reader, "client")
+    ack(1, 0)
+    NativeStore.unsubscribe(@reader)
+    2.upto(6) { |seq| NativeStore.publish(event(seq)) }
+    result = NativeStore.subscribe(@reader, "client", 1, false, observed(1, 0))
     assert_equal "expired", result[:status]
     assert_equal 4, result[:resources][:historyEvents]
     assert_equal 4, result[:resources][:historyPeak]
+    NativeStore.snapshot_client(@reader, "client")
+    ack(6, 0)
     NativeStore.unsubscribe(@reader)
-    result = NativeStore.subscribe(@reader, "client", 6, false)
+    7.upto(8) { |seq| NativeStore.publish(event(seq)) }
+    result = NativeStore.subscribe(@reader, "client", 6, false, observed(6, 0))
     assert_equal "accepted", result[:status]
     NativeStore.pump(@reader)
     assert_equal [6], @reader.events.map { |e| e["seq"] }
-    NativeStore.acknowledge(@reader)
+    ack(6, 0)
     assert_equal [6, 7], @reader.events.map { |e| e["seq"] }
-    NativeStore.acknowledge(@reader)
+    ack(7, 1)
     assert_equal [6, 7, 8], @reader.events.map { |e| e["seq"] }
+  end
+
+  def test_lost_delivery_replays_without_suppressing_the_unobserved_effect
+    NativeStore.publish(event(1))
+    assert_equal 0, NativeStore.client("client")[:through]
+    assert_raises(ArgumentError) { ack(1, 0) }
+    assert_equal 0, NativeStore.client("client")[:count]
+    NativeStore.unsubscribe(@reader)
+    NativeStore.subscribe(@reader, "client", 0, false, observed(0, 0))
+    NativeStore.pump(@reader)
+    assert_equal 1, NativeStore.client("client")[:pending][:count]
+    ack(1, 1)
+    assert_equal 1, NativeStore.client("client")[:count]
+  end
+
+  def test_lost_acknowledgement_reconciles_actual_browser_state
+    NativeStore.publish(event(1))
+    NativeStore.unsubscribe(@reader)
+    NativeStore.subscribe(@reader, "client", 1, false, observed(1, 1))
+    assert_equal 1, NativeStore.client("client")[:count]
+    NativeStore.pump(@reader)
+    assert_equal 1, NativeStore.client("client")[:pending][:count]
   end
 end

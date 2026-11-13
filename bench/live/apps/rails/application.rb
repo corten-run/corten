@@ -36,13 +36,18 @@ end
 
 class NativeChannel < ActionCable::Channel::Base
   def subscribed
-    @client = connection.client_id
+    identity = Rails.application.message_verifier(:native_consumer).verified(params["consumer"], purpose: "native-live-consumer")
+    unless identity && identity["session"] == connection.client_id
+      reject
+      return
+    end
+    @client = identity.fetch("consumer")
   end
 
   def start(data)
-    ready = NativeStore.subscribe(self, @client, data["from"], data["initial"])
+    ready = NativeStore.subscribe(self, @client, data["from"], data["initial"], data["observed"])
     transmit({ kind: "ready", **ready })
-    if data["initial"]
+    if data["initial"] || ready[:needs_snapshot]
       snapshot({})
     else
       # Materialize the actual last-applied client state, not the latest source.
@@ -55,12 +60,12 @@ class NativeChannel < ActionCable::Channel::Base
   end
 
   def snapshot(_data)
-    state = NativeStore.snapshot_client(self, @client)
-    transmit({ kind: "snapshot", snapshot: state, html: screen(NativeStore.client(@client)) })
+    snapshot, state = NativeStore.snapshot_client(self, @client)
+    transmit({ kind: "snapshot", snapshot: snapshot, html: screen(state) })
   end
 
-  def acknowledge(_data)
-    NativeStore.acknowledge(self)
+  def acknowledge(data)
+    NativeStore.acknowledge(self, data)
   end
 
   def finish(_data)
@@ -103,6 +108,8 @@ class ApplicationController < ActionController::Base
   protect_from_forgery with: :exception
   def index
     session[:client_id] ||= SecureRandom.hex(32)
+    @consumer_token = Rails.application.message_verifier(:native_consumer).generate(
+      { "session" => session[:client_id], "consumer" => SecureRandom.hex(32) }, purpose: "native-live-consumer")
     render template: "index", formats: [:html], layout: false
   end
 end

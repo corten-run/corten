@@ -36,15 +36,17 @@ async function render(html) {
   renderStreamMessage(html);
   await applied;
 }
-function acknowledge() { subscription.perform('acknowledge', {}); }
+const observed = () => ({ through: +document.querySelector('#effects').dataset.through,
+  effectCount: +document.querySelector('#effects').value, rowCount: rows().length });
+function acknowledge() { subscription.perform('acknowledge', observed()); }
 function snapshot() { record('snapshot-request'); subscription.perform('snapshot', {}); }
 async function connect(resume) {
   record('attach');
   if (!resume) record('snapshot-request');
   const ready = new Promise(resolve => { resolveReady = resolve; });
   consumer = createConsumer('/cable');
-  subscription = consumer.subscriptions.create({ channel: 'NativeChannel' }, {
-    connected() { this.perform('start', { from: through, initial: !resume }); },
+  subscription = consumer.subscriptions.create({ channel: 'NativeChannel', consumer: document.querySelector('meta[name="native-consumer"]').content }, {
+    connected() { this.perform('start', { from: through, initial: !resume, observed: observed() }); },
     received(message) {
       const receivedAt = performance.now(), barrier = publication;
       chain = chain.then(async () => {

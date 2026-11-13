@@ -22,8 +22,13 @@ an authoritative resnapshot. Disconnect removes its reader; the native connectio
 close is separately counted. Up to 16 readers/retained client states are supported;
 final detach explicitly clears its native client state, while forced disconnect
 retains it for replay. Configuration clears inactive retained sessions.
-Duplicate/gap detection happens against last-applied native client state, not the
-workload oracle.
+Duplicate/gap detection uses acknowledged client state, not a sent message or the
+workload oracle. One separately inventoried candidate is staged until the browser
+acknowledges its actual DOM cursor, effect counter and row count. Reconnect checks
+those observed values against the acknowledged or staged state: a dropped frame
+must replay its effect, while a dropped acknowledgement must not apply it twice.
+Each rendered page receives a fresh signed consumer token bound to its native
+cookie session, so tabs sharing the cookie jar retain independent cursors.
 
 Supported explicit bounds: queue 2/history 4, or queue 1024/history 1025. Peaks are
 updated at mutation time. Inventory includes retained client rows, replay copies,
@@ -38,7 +43,8 @@ Build from this directory using the Dockerfile. Run native unit checks with
 with transport `Rails Action Cable / native Turbo Stream keyed updates`, image
 `cb-parity-live-rails`, wire `rails-turbo`, and `wireModule: './apps/rails/wire.mjs'`.
 `wire.mjs` only extracts original event/snapshot objects from captured native
-Action Cable frames; it never produces application state or effects.
+Action Cable frames, including every native resource object in arrival order;
+it never produces application state or effects or reads publisher HTTP responses.
 
 With the native container running, the independent app-local correctness check is
 `node bench/live/apps/rails/test/browser.mjs http://localhost:8080` from the root.
@@ -48,6 +54,9 @@ source-bound shared runner, does not qualify the larger native-feed profile or
 fan-out measurements, and does not claim group readiness. The unit suite includes
 four independent readers, real Turbo template rendering, native HTTP control
 dispatch, expiry, duplicate/gap effects and real bounded queue saturation.
+`node bench/live/apps/rails/test/adversarial.mjs http://localhost:8080` intercepts
+the actual WebSocket to drop the first native event or its browser acknowledgement,
+requires recovery within two seconds, and checks two tabs sharing one cookie jar.
 
 The publisher also accepts `{events:[...]}` as an ordinary bulk input, mutually
 exclusive with `event`. It prevalidates every event (at most 1,044) and sequence

@@ -41,16 +41,27 @@ module NativeStore
       @mutex.synchronize { @connections.delete(connection) }
     end
 
-    def subscribe(channel, client, from, initial)
+    def subscribe(channel, client, from, initial, observed = nil)
       @mutex.synchronize do
         raise ArgumentError, "invalid cursor" unless from.is_a?(Integer) && from.between?(0, @through)
         raise ArgumentError, "reader limit reached" if @readers.size >= 16
         raise ArgumentError, "retained client limit reached" unless @clients.key?(client) || @clients.size < 16
+        @clients[client] ||= { through: 0, rows: {}, count: 0, initialized: false, pending: nil }
+        state = @clients.fetch(client)
+        unless initial
+          raise ArgumentError, "browser cursor differs" unless observed.is_a?(Hash) && observed["through"] == from
+          if observed_state?(state, observed)
+            state[:pending] = nil
+          elsif state[:pending] && observed_state?(state[:pending], observed)
+            @clients[client] = state[:pending].merge(pending: nil)
+          else
+            raise ArgumentError, "browser state is not acknowledged or pending"
+          end
+        end
         expired = from < @through && (@history.empty? || from < @history.first["seq"] - 1)
         replay = initial || expired ? [] : @history.select { |event| event["seq"] >= from }
-        @readers[channel] = { queue: [], replay: replay, inflight: false, overflowed: false }
-        @clients[client] ||= { through: 0, rows: {}, count: 0 }
-        { from: from, status: expired ? "expired" : "accepted", resources: resources_locked }
+        @readers[channel] = { client: client, queue: [], replay: replay, inflight: false, overflowed: false }
+        { from: from, status: expired ? "expired" : "accepted", needs_snapshot: !@clients[client][:initialized], resources: resources_locked }
       end
     end
 
@@ -76,31 +87,26 @@ module NativeStore
       end
     end
 
-    def replace_client(client, snapshot)
-      @mutex.synchronize do
-        state = @clients.fetch(client)
-        state[:rows] = snapshot[:rows].to_h { |row| [row["id"], row] }
-        state[:through] = snapshot[:through]
-      end
-    end
-
     def snapshot_client(channel, client)
       @mutex.synchronize do
         @reads += 1
         snapshot = { through: @through, rows: @rows.values, work: { reads: 1, rows: @rows.size } }
-        @clients.fetch(client).merge!(through: @through, rows: @rows.dup)
+        current = @clients.fetch(client)
+        state = current.except(:pending).merge(through: @through, rows: @rows.dup, initialized: true)
+        current[:pending] = state
         reader = @readers.fetch(channel)
         reader[:queue].clear
         reader[:replay].clear
         reader[:inflight] = true
         reader[:overflowed] = false
-        snapshot
+        [snapshot, state]
       end
     end
 
     def apply(client, event)
       @mutex.synchronize do
-        state = @clients.fetch(client)
+        current = @clients.fetch(client)
+        state = current.except(:pending).merge(rows: current[:rows].dup)
         disposition = if event["seq"] <= state[:through]
           "duplicate"
         elsif event["seq"] != state[:through] + 1
@@ -113,6 +119,7 @@ module NativeStore
           state[:inserted] = inserted
           "applied"
         end
+        current[:pending] = state
         [disposition, state.merge(rows: state[:rows].dup)]
       end
     end
@@ -188,8 +195,22 @@ module NativeStore
       channel.deliver(event) if event
     end
 
-    def acknowledge(channel)
-      @mutex.synchronize { @readers[channel][:inflight] = false if @readers[channel] }
+    def observed_state?(state, observed)
+      observed.is_a?(Hash) && observed["through"].is_a?(Integer) && observed["effectCount"].is_a?(Integer) &&
+        observed["rowCount"].is_a?(Integer) && observed["through"] == state[:through] &&
+        observed["effectCount"] == state[:count] && observed["rowCount"] == state[:rows].size
+    end
+
+    def acknowledge(channel, observed)
+      @mutex.synchronize do
+        reader = @readers[channel]
+        next unless reader
+        client = @clients.fetch(reader[:client])
+        candidate = client[:pending] || client
+        raise ArgumentError, "browser acknowledgement differs" unless observed_state?(candidate, observed)
+        @clients[reader[:client]] = candidate.merge(pending: nil)
+        reader[:inflight] = false
+      end
       pump(channel)
     end
 
@@ -218,6 +239,7 @@ module NativeStore
           inflightLimitPerReader: 1, overflowSlotsLimit: 1, replayCopyEvents: @readers.values.sum { |r| r[:replay].size },
           replayCopyLimitEvents: @history_limit, snapshotReads: @reads, sourceRows: @rows.size,
           retainedClientRows: @clients.values.sum { |c| c[:rows].size }, retainedClients: @clients.size, retainedClientLimit: 16,
+          stagedClientRows: @clients.values.sum { |c| c[:pending] ? c[:pending][:rows].size : 0 }, stagedStatesLimitPerClient: 1,
           nativeActionCableWorkerPool: ActionCable.server.config.worker_pool_size,
           nativeSocketBufferBytes: "not-observable-through-ActionCable-public-API" } }
     end
