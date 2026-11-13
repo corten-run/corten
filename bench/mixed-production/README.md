@@ -23,6 +23,10 @@ node bench/mixed-production/run.mjs w2
 # Build an immutable local native-port commit, without editing any application checkout.
 node bench/mixed-production/run.mjs w4 --apps fastapi,django,spring --build --build-ref e8c23cf
 
+# Full inventory only: native functional parity, production qualification, calibration,
+# then three real equal-mix steady windows per source/candidate. No cloud action.
+node bench/mixed-production/run.mjs w5 --build --measure --profile matched --passes 3 --duration 120 --warmup 15 --calibration 30
+
 # Bounded diagnostic, not a deadline qualification or a throughput measurement.
 node bench/mixed-production/run.mjs w3 --apps corten,express --build --request-timeout-ms 1200 --complete-delay-ms 30 --slow-delay-ms 2500 --cancel-after-ms 30 --cleanup-ms 150 --startup-timeout-ms 15000
 
@@ -126,11 +130,80 @@ Results are atomically reserved under `results/<round>/`, never overwritten:
 real preceding state transitions, with other cells explicitly unsupported, to expose independent
 read results even when a different write lacks state evidence. `afterFunctionalGate` blocks
 any measurement callback unless every selected registry candidate passes the complete oracle.
-The CLI additionally leaves `readyForLoad: false`, `timingBlocked: true` and `timing: null`:
-production HTTP qualification/native-work audit and calibrated load are not supplied here.
-Raw operation clocks are diagnostic wall times only. Exit status is nonzero for failed native
+Without `--measure`, the CLI leaves `readyForLoad: false`, `timingBlocked: true` and
+`timing: null`: functional parity alone cannot authorize measurement. With `--measure`, the
+additional observed gates and real windows below decide those fields, not a positive receipt
+or image declaration. Functional operation clocks are diagnostic wall times only.
+Exit status is nonzero for failed native
 parity, infrastructure failures or cleanup failures. `complete` means all source capture loops
 finished, not that the apps passed.
+
+## Actual Mixed Load
+
+The load implementation is separate from the functional-only runner foundation. `--measure`
+requires fresh automatic builds, clean committed source/harness state, the entire retained
+inventory, and at least two clients. `--profile defaults|matched` explicitly selects the native
+configuration variant: its Docker build argument, actual `PROFILE` environment, image ID and
+runtime budgets are recorded. Matched uses the existing native production connection budget,
+not a replacement server. Neither variant is assumed feature-qualified; failed defaults are
+not relabeled as a passing variant. There is no external positive qualification input.
+
+Every candidate/source first runs the unchanged `bench/marketplace/qualify.mjs` production
+HTTP probes on its real image/configuration, including errors, methods, compression, security,
+CSRF/origin, body/header/connection bounds and recovery. Original probes are validated in
+memory. Saved capability cells and native probe/body hashes omit cookies and hidden secrets.
+Every candidate/source must pass; no successful subset is measured.
+
+Calibration and steady windows execute the shared plan, not k6's older item-page mix. Each
+cycle has exactly the original source subplan (22 fixture or 31 API primary operations for the
+default plan), all locales, listings, numeric JSON, accepted/rejected writes/readbacks and all
+API slow variants. Clients run concurrently; each client's request order stays unchanged.
+Every cycle uses fresh native cookie contexts, without a reset endpoint or reconstructed
+state. Repeated source cycles are independent equal-plan cohorts. App/source containers are
+fresh for each calibration or pass; the warmup runs on that same live app before its counters
+and measured window begin.
+
+The path-scoped injector observes actual native upstream work concurrently. It never forwards
+benchmark IDs through an app. If a plan assigns two operations the same native record path,
+the load phase refuses ambiguous attribution rather than changing the seed/plan or filling
+expected counters. A prior pending read cannot be reassigned to another operation. Orphan
+fetches, cached work, failed cancellation and any loaded semantic failure reject the window.
+Every complete cycle is checked by the unchanged mixed oracle. Expensive oracle checks are
+outside individual primary HTTP latency observations, never a substitute for real responses.
+
+Defaults are three passes, a 15-second native warmup, a 30-second calibration and 120-second
+steady admission window, with at most 16 complete cycles and 120 seconds to drain the last
+cycle. `--passes`, `--duration`, `--warmup`, `--calibration`, `--tail-seconds` and `--max-cycles`
+are explicitly bounded. A cycle budget exhausted before the window ends is a failure, not an
+invented offered rate. All attempted operations and draining work remain in raw evidence.
+Rates count actual complete-cycle operations over actual elapsed time including drain, so the
+reported mix stays exact. Primary HTTP latency and full client journey latency are separate;
+the latter includes native discovery, CSRF, readbacks, parsing and observation overhead.
+
+The existing cgroup v2 reader supplies CPU before/after deltas for app, injector and generator;
+the existing Docker stats sampler supplies timestamped CPU/memory samples. Missing or
+backwards counters, stopped/restarted/OOM participants and missing memory samples fail closed.
+The shared sampler timestamps receipt, not the daemon's sampling clock. Buffered samples can
+share a timestamp; the metrics preserve and count collisions, require an observed clock span
+and reject backwards clocks rather than inventing sample spacing.
+Generator and upstream CPU must stay below 70% of their quotas, with generator event-loop
+p99 delay at most 20 ms. A steady window needs three complete equal-mix cycles and at most
+25% drain. These declared calibration checks expose generator/upstream limitations; they do
+not prove saturation or turn observed throughput into capacity.
+
+`MIXED_PRODUCTION_APP_CPUS`, `MIXED_PRODUCTION_LOAD_CPUS` and
+`MIXED_PRODUCTION_API_CPUS` reuse existing disjoint CPU-set validation (quotas 1/4/2). Without
+explicit placement, observations stay diagnostic and `comparisonEligible` stays false. Three
+or more complete passes and every observed gate are required for comparison eligibility.
+Explicit placement still does not establish an otherwise quiet or dedicated host. Do not
+publish comparative throughput claims from a concurrently loaded workstation.
+
+`measurement/` retains qualification, calibration, warmup, every raw request/cycle, window
+clock, source/image/runtime identities, cgroup counters, Docker samples and failure cells.
+Schemas are `mixed-native-measurement/v1`, `mixed-native-window/v1`,
+`mixed-native-window-receipt/v1` and `mixed-native-metrics/v1`. Aggregates are measured pass
+medians/ranges, not oracle rates. Native failed cells keep timing blocked; the implementation
+does not set readiness merely because the functional oracle accepted a capture.
 
 ## Native Ports Needed
 
@@ -182,3 +255,13 @@ cancelled and no pending work. They still fail the existing deadline response co
 `bench/marketplace/corten/src/source.rs:record` currently propagates the upstream timeout as
 an ordinary error; native deadline status mapping needs an app-local fix, not a runner-side
 reclassification. No capture authorizes load or supplies throughput evidence.
+
+Immutable native-port builds subsequently exercised both sources from `e8c23cf` (FastAPI,
+Django, Spring) and `7e4bbfe` (ASP.NET, Express). Each completed candidate passed 47/53
+cells, including all 18 real accepted/rejected POSTs and their independent native store
+reads. Their remaining cells were cancellation/deadline failures, not missing readback.
+FastAPI returned 502 and Django 500 on native deadline; Spring, ASP.NET and Express still
+reached the shorter diagnostic client deadline. The Corten build from `7e4bbfe` exceeded
+the bounded native build window and stayed image-unavailable, not unsupported. These are
+functional observations of those exact commits, not production qualification or proof of
+all storage invariants. Later native fixes must be rebuilt and rechecked.

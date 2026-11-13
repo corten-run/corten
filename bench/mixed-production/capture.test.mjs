@@ -158,14 +158,17 @@ test("upstream facts are not rewritten to the requested path or mode", () => {
   assert.equal(result.path, "multiple-paths"); assert.equal(result.pending, 1);
 });
 
-test("CLI accepts bounded explicit wN only; no cloud, nightly or timing options", () => {
+test("CLI accepts explicit bounded native windows but no cloud/nightly or qualification override", () => {
   assert.equal(parseArgs(["w1"]).round, "w1");
   assert.equal(parseArgs(["w1"]).slowDelayMs, 40000);
   assert.ok(parseArgs(["w1"]).requestTimeoutMs > parseArgs(["w1"]).slowDelayMs);
   assert.equal(parseArgs(["w1", "--build", "--apps", "corten,express"]).build, true);
   assert.equal(parseArgs(["w1", "--build", "--build-ref", "e8c23cf"]).buildRef, "e8c23cf");
-  for (const args of [["r17"], ["w01"], ["w1", "--cloud", "yes"], ["w1", "--duration", "1"], ["w1", "--clients", "0"],
+  assert.equal(parseArgs(["w1", "--build", "--measure", "--profile", "matched", "--duration", "60"]).duration, 60);
+  for (const args of [["r17"], ["w01"], ["w1", "--cloud", "yes"], ["w1", "--duration", "0"], ["w1", "--clients", "0"],
     ["w1", "--request-timeout-ms", "NaN"], ["w1", "--apps", "corten,corten"], ["w1", "--seed", "1", "--seed", "2"],
     ["w1", "--build", "--images", "images.json"], ["w1", "--build", "--build"], ["w1", "--build-ref", "e8c23cf"],
-    ["w1", "--build", "--build-ref", "main"], ["w1", "--build", "--build-ref", "--upload"]]) assert.throws(() => parseArgs(args));
+    ["w1", "--build", "--build-ref", "main"], ["w1", "--build", "--build-ref", "--upload"], ["w1", "--measure"],
+    ["w1", "--build", "--measure", "--clients", "1"], ["w1", "--profile", "qualified"], ["w1", "--max-cycles", "129"],
+    ["w1", "--qualified", "true"], ["w1", "--passes", "6"]]) assert.throws(() => parseArgs(args));
 });

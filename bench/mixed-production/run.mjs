@@ -7,21 +7,23 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
+import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 
 export function parseArgs(args) {
   const options = { round: args[0], apps: null, images: null, readbacks: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
+    measure: false, profile: "defaults", passes: 3, duration: 120, warmup: 15, calibration: 30, tailSeconds: 120, maxCycles: 16,
     requestTimeoutMs: 60000, completeDelayMs: 100, slowDelayMs: slowMs, cancelAfterMs: 50, cleanupMs: 500, startupTimeoutMs: 120000 };
   assert.match(options.round ?? "", /^w[1-9]\d*$/, "use a fresh local development identity wN");
   const names = { "request-timeout-ms": "requestTimeoutMs", "complete-delay-ms": "completeDelayMs", "slow-delay-ms": "slowDelayMs",
-    "cancel-after-ms": "cancelAfterMs", "cleanup-ms": "cleanupMs", "startup-timeout-ms": "startupTimeoutMs" };
+    "cancel-after-ms": "cancelAfterMs", "cleanup-ms": "cleanupMs", "startup-timeout-ms": "startupTimeoutMs", "tail-seconds": "tailSeconds", "max-cycles": "maxCycles" };
   const seen = new Set();
   for (let i = 1; i < args.length;) {
     const flag = args[i++]; assert.ok(flag?.startsWith("--") && !seen.has(flag), "missing/duplicate option"); seen.add(flag);
-    if (flag === "--build") { options.build = true; continue; }
+    if (["--build", "--measure"].includes(flag)) { options[flag.slice(2)] = true; continue; }
     assert.ok(args[i] && !args[i].startsWith("--"), "option value required");
     const key = flag === "--build-ref" ? "buildRef" : names[flag.slice(2)] ?? flag.slice(2); assert.ok(key !== "round" && Object.hasOwn(options, key), "unknown option");
-    options[key] = ["apps", "images", "readbacks", "buildRef"].includes(key) ? args[i++] : Number(args[i++]);
+    options[key] = ["apps", "images", "readbacks", "buildRef", "profile"].includes(key) ? args[i++] : Number(args[i++]);
   }
   if (options.apps) { options.apps = options.apps.split(","); assert.equal(new Set(options.apps).size, options.apps.length, "duplicate app"); }
   for (const key of ["seed", "clients", "repetitions", ...Object.values(names)]) assert.ok(Number.isSafeInteger(options[key]) && options[key] >= (key === "seed" ? 0 : 1), "positive integer settings required");
@@ -30,6 +32,11 @@ export function parseArgs(args) {
   assert.ok(options.slowDelayMs <= 120000 && options.requestTimeoutMs <= 120000 && options.startupTimeoutMs <= 120000 && options.cleanupMs <= 10000, "bounded timeouts required");
   assert.ok(!options.build || !options.images, "--build cannot use arbitrary image overrides");
   assert.ok(!options.buildRef || options.build && /^[a-f0-9]{7,40}$/i.test(options.buildRef), "--build-ref requires --build and a local commit hash");
+  assert.ok(["defaults", "matched"].includes(options.profile), "unknown native configuration variant");
+  for (const [key, min, max] of [["passes", 1, 5], ["duration", 1, 300], ["warmup", 1, 120], ["calibration", 1, 120], ["tailSeconds", 1, 120], ["maxCycles", 1, 128]]) {
+    assert.ok(Number.isSafeInteger(options[key]) && options[key] >= min && options[key] <= max, "bounded load settings required");
+  }
+  assert.ok(!options.measure || options.build && options.clients >= 2, "measurement requires fresh native builds and at least two clients");
   return options;
 }
 
@@ -46,6 +53,7 @@ export async function run(args) {
   const { afterFunctionalGate, combine, emptyCapture, oracle, sha256, sleep } = capturesAPI;
   options.apps ??= [...inventory];
   assert.ok(options.apps.every((app) => inventory.includes(app)), "app outside selected mixed-production inventory");
+  assert.ok(!options.measure || options.apps.length === inventory.length && inventory.every((app) => options.apps.includes(app)), "measurement requires the full retained inventory");
   const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
   const images = options.images ? JSON.parse(readFileSync(resolve(options.images), "utf8")) : {};
   const readbacks = options.readbacks ? JSON.parse(readFileSync(resolve(options.readbacks), "utf8")) : {};
@@ -61,7 +69,9 @@ export async function run(args) {
   const summary = { schema: "mixed-native-run/v1", group: "mixed-production", inventory, definition: registry.definition("mixed-production"),
     contractSha256: registry.contractSha256("mixed-production"), retainedFamilies: registry.retainedFamilies, round: options.round, runId, options,
     startedAt: new Date().toISOString(), complete: false, functionalPassed: false, readyForLoad: false, timing: null, timingBlocked: true,
-    scope: "Native deterministic functional captures, not production qualification, saturation, CPU, browser readiness or a performance baseline.",
+    scope: options.measure
+      ? "Native full-inventory functional/production gates followed by real calibrated equal-plan windows when eligible; no saturation/capacity or concurrent-workstation comparison claim."
+      : "Native deterministic functional captures only; no production qualification, load, CPU, browser readiness or performance baseline claim.",
     host: { hostname: hostname(), platform: platform(), release: release(), node: process.version }, provenance: {}, tools: {}, failures: [], cleanupFailures: [],
     apps: Object.fromEntries(inventory.map((app) => [app, { selected: options.apps.includes(app), sources: {}, cells: plan.requests.map((request) => ({ requestId: request.id,
       category: request.category, source: request.source, locale: request.locale, variant: request.variant, outcome: "not-run", status: 0, passed: false,
@@ -148,6 +158,7 @@ export async function run(args) {
           // ecosystem Dockerfiles, not a replacement Cargo build or ad hoc target volume.
           await docker(["build", "--label", "agent.owner=codex", "--label", `agent.task=${runId}`,
             "--label", `run.corten.marketplace.commit=${nativeSource.commit}`, "--label", `run.corten.marketplace.dirty=${nativeSource.dirty}`,
+            "--label", `run.corten.marketplace.profile=${options.profile}`, "--build-arg", `PROFILE=${options.profile}`,
             "-t", tag, "-f", dockerfile, context], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`) });
           if (!options.buildRef) {
             assert.equal(await io.command("git", ["rev-parse", "HEAD"]), summary.provenance.commit, "checkout changed during build");
@@ -181,7 +192,8 @@ export async function run(args) {
           stage = "app-create";
           await own(["run", "-d", "--network", network, "--cpus", "1", "--memory", "1g", "-p", "127.0.0.1::8080", "-v", `${folder}:/fixtures:ro`,
             "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json", "-e", `API_BASE=http://${upstreamName}:8080`,
-            "-e", "PORT=8080", "-e", `HOSTS=${appName},localhost,127.0.0.1`, entry.image.id], appName);
+            "-e", "PORT=8080", "-e", `HOSTS=${appName},localhost,127.0.0.1`,
+            ...(options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${maxConnections}`] : ["-e", "PROFILE="]), entry.image.id], appName);
           stage = "app-readiness";
           await ready(appName, "/marketplace/en-US/item_1", sourceEntry.readiness, "app");
           const config = { plan, records, app, source, base: `http://${appName}:8080`, upstream: `http://${upstreamName}:8080`, settings: options,
@@ -233,11 +245,21 @@ export async function run(args) {
     try {
       await afterFunctionalGate({ apps: options.apps, inventory, plan, captures, records }, async () => {
         summary.functionalPassed = true;
-        // The shared contract explicitly does not certify readiness for load. Do not turn a
-        // functional pass into a timed production baseline without independent qualification.
-        summary.timingBlockReason = "production-http/native-work qualification and load calibration not supplied";
+        if (!options.measure) {
+          summary.timingBlockReason = "functional-only run: request --measure for real production qualification/calibration/windows";
+          return;
+        }
+        const { measureNativeGroup } = await import("./measure.mjs");
+        summary.timing = await measureNativeGroup({ summary, options, folder, repo, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
+          docker, io, own, remove, inspect, ready, save, captures });
+        summary.readyForLoad = summary.timing.qualified && summary.timing.calibrated;
+        summary.timingBlocked = summary.timing.timingBlocked;
+        summary.timingBlockReason = summary.timing.complete ? null : "native production qualification, calibration or steady window failed; retain all cells";
       });
-    } catch { summary.timingBlockReason = "complete selected inventory must pass the existing mixed oracle on real native captures"; }
+    } catch {
+      summary.timingBlockReason = summary.functionalPassed ? "native measurement setup/execution failed" : "complete selected inventory must pass the existing mixed oracle on real native captures";
+      if (summary.functionalPassed && options.measure) fail(null, null, "native-measurement-setup-or-execution-failed");
+    }
     summary.complete = inventory.every((app) => summary.apps[app].sources.fixture?.complete && summary.apps[app].sources.api?.complete);
   } catch { fail(null, null, "suite-setup-or-execution-failed"); }
   finally {
@@ -260,6 +282,6 @@ export async function run(args) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { const result = await run(process.argv.slice(2)); if (!result.functionalPassed || result.failures.length || result.cleanupFailures.length) process.exitCode = 1; }
+  try { const result = await run(process.argv.slice(2)); if (!result.functionalPassed || result.options.measure && result.timingBlocked || result.failures.length || result.cleanupFailures.length) process.exitCode = 1; }
   catch { console.error("mixed native runner: invalid configuration or unavailable local output"); process.exitCode = 1; }
 }
