@@ -21,7 +21,9 @@ export function installObserver() {
   };
   const releaseListener = (record) => {
     listeners.delete(record);
-    index(record.target, record.type, record.capture).delete(record.callback);
+    const registrations = index(record.target, record.type, record.capture);
+    if (registrations.get(record.callback) === record) registrations.delete(record.callback);
+    if (record.signal) original.remove.call(record.signal, "abort", record.abortListener);
   };
   EventTarget.prototype.addEventListener = function(type, callback, options) {
     if (!callback || options?.signal?.aborted) return original.add.call(this, type, callback, options);
@@ -42,7 +44,11 @@ export function installObserver() {
       return callback.handleEvent(e);
     };
     listeners.add(record); registrations.set(callback, record);
-    if (options?.signal) original.add.call(options.signal, "abort", () => releaseListener(record), { once: true });
+    if (options?.signal) {
+      record.signal = options.signal;
+      record.abortListener = () => releaseListener(record);
+      original.add.call(record.signal, "abort", record.abortListener, { once: true });
+    }
     return original.add.call(this, type, record.wrapped, options);
   };
   EventTarget.prototype.removeEventListener = function(type, callback, options) {
