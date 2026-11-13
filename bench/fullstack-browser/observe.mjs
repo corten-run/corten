@@ -7,6 +7,7 @@ import { inspectScopedBinding } from "./scopes.mjs";
 import { singleFetchData } from "./navigation.mjs";
 import { NativeNetworkAudit } from "./cancellations.mjs";
 import { performance } from "node:perf_hooks";
+import { installResourceObserver } from "./resources.mjs";
 
 export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
   const document = rows.find((r) => r.resource === "document");
@@ -173,7 +174,7 @@ export function architecture(app, native) {
 export async function visibleDOM(page) {
   const native = sanitizeNative(await page.evaluate(nativeDOM));
   const present = await page.locator("article.marketplace").count();
-  return { observer: randomUUID(), url: publicURL(page.url()), native,
+  return { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit?.checkpoint()?.scope ?? null), url: publicURL(page.url()), native,
     page: present ? await page.evaluate(snapshotPage) : null,
     error: present ? null : (await page.locator("body").innerText()).trim() };
 }
@@ -189,7 +190,9 @@ export async function responseDocument(browser, response, url) {
       else await route.abort();
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
-    return { observer: randomUUID(), responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
-      scope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
+    await page.evaluate(installResourceObserver);
+    return { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope), url: publicURL(url), error: null,
+      responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
+      parserScope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
   } finally { await context.close(); }
 }

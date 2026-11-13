@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { readRetiredDOM } from "./retired.mjs";
 
 // Installed before native scripts. It observes browser primitives, never removes
 // a native listener, clears a native timer, or supplies framework cleanup.
@@ -160,7 +161,7 @@ export function installResourceObserver() {
   Object.defineProperty(globalThis, "__fullstackBrowserAudit", { value: {
     checkpoint() {
       const root = document.querySelector("article.marketplace") ?? document.body; const scope = root ? register(root) : null;
-      return { realm, scope, scopes: [...roots].map(([id, ref]) => ({ scope: id, connected: ref.deref()?.isConnected ?? false, owned: counts(id) })),
+      return { realm, scope, document: { path: location.pathname, locale: document.documentElement.lang }, scopes: [...roots].map(([id, ref]) => ({ scope: id, connected: ref.deref()?.isConnected ?? false, owned: counts(id) })),
         tooling: { basis: "Observed Playwright InjectedScript setup call stacks", owned: counts(null, true) },
         unattributed: counts(null), unattributedDetails: entries.filter((e) => e.active && !e.scope && !e.tooling).map((e) => ({ kind: e.kind, source: e.source })),
         unsupported: entries.filter((e) => e.active && e.unobservable).map((e) => e.unobservable) };
@@ -181,8 +182,9 @@ export function installResourceObserver() {
 }
 
 export class ResourceAudit {
-  constructor(page, cdp, javaScriptEnabled) {
+  constructor(page, cdp, javaScriptEnabled, lifecycle = null) {
     this.page = page; this.cdp = cdp; this.javaScriptEnabled = javaScriptEnabled; this.events = [];
+    this.lifecycle = lifecycle;
     cdp.on("Runtime.executionContextDestroyed", (event) => this.events.push({ kind: "execution-context-destroyed", id: event.executionContextId }));
     cdp.on("Runtime.executionContextsCleared", () => this.events.push({ kind: "execution-contexts-cleared" }));
   }
@@ -193,6 +195,7 @@ export class ResourceAudit {
       observed = await this.page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint());
     }
     if (!observed) throw new Error("Document-start resource instrumentation absent");
+    if (this.lifecycle) await this.lifecycle.bindRealm(observed.realm);
     return { observer: randomUUID(), at: performance.now(), scriptExecutionEnabled: this.javaScriptEnabled, nativeContextEvents: [...this.events], ...observed };
   }
   async retain(observation) {
@@ -229,9 +232,11 @@ export class ResourceAudit {
       evidence.after = after;
       evidence.retired = this.retired(evidence.before, after);
       if (!evidence.retired?.probeAvailable) {
+        if (this.lifecycle && evidence.before.realm !== after?.realm) evidence.platformProbe = await this.lifecycle.probeRealm(evidence.before.realm);
         evidence.outcome = "unsupported";
         throw new Error(evidence.retired?.reason ?? "Native navigation did not retire the marketplace scope");
       }
+      evidence.detachedAt = performance.now();
       await this.page.waitForLoadState("networkidle"); await network.drain();
       evidence.released = await this.checkpoint();
       evidence.retired = this.retired(evidence.before, evidence.released);
@@ -241,6 +246,9 @@ export class ResourceAudit {
         beforeSha256: hash(probe.before), immediateSha256: hash(probe.after), dispatched: probe.dispatched, owned: probe.owned };
       await new Promise((r) => setTimeout(r, observationMs)); await network.drain();
       const html = await handle.evaluate((root) => root.outerHTML);
+      try {
+        evidence.dom = { observer: randomUUID(), scope: evidence.before.scope, ...await handle.evaluate(readRetiredDOM, evidence.before.document) };
+      } catch (error) { evidence.domError = error.message; }
       evidence.probe.afterSha256 = hash(html); evidence.probe.afterAt = performance.now();
       evidence.probe.afterResources = (await this.checkpoint()).scopes.find((s) => s.scope === evidence.before.scope)?.owned ?? null;
       evidence.probe.requests = structuredClone(network.rows.slice(offset)); evidence.probe.errors = runtimeErrors.slice(errorsAt);

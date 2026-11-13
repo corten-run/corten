@@ -12,6 +12,7 @@ import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
+import { exportBrowserCaptures } from "./capture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -216,6 +217,12 @@ export async function run(args) {
   finally {
     if (browser) try { await browser.close(); } catch (e) { summary.cleanupFailures.push(e.message); }
     summary.cleanupFailures.push(...await owned.cleanup());
+    try {
+      const exported = exportBrowserCaptures(summary, records), captureDir = join(folder, "captures"); mkdirSync(captureDir);
+      for (const [app, capture] of Object.entries(exported.captures)) writeFileSync(join(captureDir, `${app}.json`), JSON.stringify(capture, null, 2) + "\n");
+      writeFileSync(join(captureDir, "manifest.json"), JSON.stringify(exported.manifest, null, 2) + "\n");
+      summary.strictCaptureExport = { manifest: "captures/manifest.json", functionalPassed: Object.values(exported.manifest.reports).every((report) => report.validation.functionalPassed), readyForLoad: false };
+    } catch (error) { summary.failures.push(`Strict capture export: ${error.message}`); }
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
     summary.finishedAt = new Date().toISOString(); save();
   }
