@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { bindingFunctionText, bindingHash, indexBindingArtifact } from "./binding-artifact.mjs";
 import { effectFreeNames } from "./binding-effects.mjs";
 import { bindingRealm } from "./binding-intrinsics.mjs";
+import { emittedModules, reactContract } from "./binding-modules.mjs";
+import ts from "typescript";
 const observers = new WeakMap();
 export async function observeBindingLinks(cdp, selector, base) {
   return observers.get(cdp)?.capture(selector, base) ?? { outcome: "unknown", reason: "Immutable emitted binding artifact/native observer unavailable" };
@@ -11,10 +13,15 @@ export async function observeBindingLinks(cdp, selector, base) {
 // Installed by the harness before application scripts, not supplied by the page.
 // Retain identities/descriptors, not just names or Function#toString spellings.
 export function installBindingIntrinsics() {
-  const descriptor = Object.getOwnPropertyDescriptor, values = {
+  const descriptor = Object.getOwnPropertyDescriptor, arrayIterator = Object.getPrototypeOf([][Symbol.iterator]()), iterator = Object.getPrototypeOf(arrayIterator), values = {
     Map, Array, URLSearchParams, FormData, String, encodeURIComponent, Intl, fetch,
     "Array.species": descriptor(Array, Symbol.species).get,
     OwnDescriptor: descriptor, SpeciesKey: Symbol.species,
+    IteratorKey: Symbol.iterator, "Array.iterator": descriptor(Array.prototype, Symbol.iterator).value,
+    ArrayIteratorPrototype: arrayIterator, IteratorPrototype: iterator, "ArrayIterator.next": descriptor(arrayIterator, "next").value,
+    ArrayIteratorKeys: JSON.stringify(Object.getOwnPropertyNames(arrayIterator).sort()),
+    IteratorKeys: JSON.stringify(Object.getOwnPropertyNames(iterator).sort()),
+    ReactFragment: Symbol.for("react.fragment"), ReactElement: Symbol.for("react.transitional.element"),
     NumberFormat: Intl.NumberFormat, PluralRules: Intl.PluralRules,
     StringPrototype: String.prototype, SearchPrototype: URLSearchParams.prototype,
     ObjectPrototypeKeys: JSON.stringify(Object.getOwnPropertyNames(Object.prototype).sort()),
@@ -52,6 +59,7 @@ export class BindingLinkObserver {
     const group = `binding-links-${randomUUID()}`, cdp = this.cdp;
     try {
       const index = indexBindingArtifact(this.artifact), functions = new Map(), checkedScripts = new Map(), pending = [], identities = [];
+      const modules = emittedModules(index), callableInstances = new Map();
       let nodes = 0;
       const properties = async (objectId) => {
         assert.ok(objectId && ++nodes <= 12000, "Native binding descriptor bound exceeded");
@@ -92,6 +100,17 @@ export class BindingLinkObserver {
       const speciesFields = (await properties(species.result.objectId)).result;
       assert.ok(speciesFields.find((p) => p.name === "set")?.value?.type === "undefined"
         && await same(speciesFields.find((p) => p.name === "get")?.value, intrinsic.get("Array.species"), "Array.species"), "Changed array allocation species");
+      const iteratorDescriptor = await cdp.send("Runtime.callFunctionOn", { objectId: intrinsic.get("OwnDescriptor").objectId,
+        functionDeclaration: "function(target,key){return this(target,key)}", arguments: [{ objectId: intrinsic.get("ArrayPrototype").objectId }, { objectId: intrinsic.get("IteratorKey").objectId }], silent: true, objectGroup: group });
+      assert.ok(!iteratorDescriptor.exceptionDetails && iteratorDescriptor.result?.objectId, "Array iterator descriptor unavailable");
+      assert.ok(await same(await data(iteratorDescriptor.result.objectId, "value"), intrinsic.get("Array.iterator"), "Array.iterator"), "Changed native array iterator");
+      for (const [name, keys] of [["ArrayIteratorPrototype", "ArrayIteratorKeys"], ["IteratorPrototype", "IteratorKeys"]]) {
+        const props = await properties(intrinsic.get(name).objectId);
+        assert.equal(JSON.stringify(props.result.filter((p) => !p.symbol).map((p) => p.name).sort()), snapshot.result.find((p) => p.name === keys)?.value?.value, "Changed native iterator completion properties");
+        const parent = props.internalProperties?.find((p) => p.name === "[[Prototype]]")?.value;
+        assert.ok(await same(parent, intrinsic.get(name === "ArrayIteratorPrototype" ? "IteratorPrototype" : "ObjectPrototype"), name), "Changed native iterator prototype chain");
+      }
+      await method(intrinsic.get("ArrayIteratorPrototype"), "next", "ArrayIterator.next");
       for (const name of ["NumberFormat", "PluralRules"])
         assert.ok(await same(await data(intrinsic.get("Intl").objectId, name), intrinsic.get(name), name), `Changed Intl constructor ${name}`);
       const objectKeys = (await properties(intrinsic.get("ObjectPrototype").objectId)).result.map((p) => p.name).sort();
@@ -102,7 +121,7 @@ export class BindingLinkObserver {
       await method(intrinsic.get("PluralRulesPrototype"), "select", "PluralRules.select");
       await method(intrinsic.get("StringPrototype"), "startsWith", "String.startsWith");
       await method(intrinsic.get("SearchPrototype"), "toString", "Search.toString");
-      const locate = async (remote) => {
+      const locate = async (remote, capture = true) => {
         assert.equal(remote.type, "function");
         const props = await properties(remote.objectId);
         assert.ok(!props.internalProperties?.some((p) => /BoundTarget|ProxyTarget/.test(p.name)), "Bound/proxied callable unsupported");
@@ -119,18 +138,24 @@ export class BindingLinkObserver {
           script = { ...native, path: url.pathname, sha256: emitted.sha256 }; checkedScripts.set(location.scriptId, script);
         }
         const entry = index.locate(script.path, location.lineNumber, location.columnNumber);
-        if (!functions.has(entry.id)) {
+        if (capture && functions.has(entry.id)) assert.ok(await same(remote, callableInstances.get(entry.id), "callable-instance"), "Different callable instances share an unsupported source location");
+        if (capture && !functions.has(entry.id)) {
           const frame = { function: entry.id, location, bindings: {} };
           functions.set(entry.id, frame); pending.push({ remote, entry, props, frame });
+          callableInstances.set(entry.id, remote);
           assert.ok(functions.size <= 48, "Binding callable graph exceeds supported bound");
         }
-        return { kind: "function", function: entry.id };
+        return { kind: "function", function: entry.id, ...(!capture ? { location } : {}) };
       };
       const active = new Set();
-      const encode = async (remote, borrowed = false, depth = 0) => {
+      const encode = async (remote, borrowed = false, depth = 0, selected = null) => {
         assert.ok(remote && depth <= 12, "Unsupported/deep native binding value");
         if (remote.subtype === "null" || remote.type === "undefined") return { kind: "null" };
-        if (["string", "number", "boolean"].includes(remote.type)) return { kind: "scalar", type: remote.type };
+        if (["string", "number", "boolean"].includes(remote.type)) return { kind: "scalar", type: remote.type, ...(remote.type === "boolean" ? { value: remote.value } : {}) };
+        if (remote.type === "symbol") {
+          for (const key of ["ReactFragment", "ReactElement"]) if (await same(remote, intrinsic.get(key), key)) return { kind: "symbol", name: key };
+          throw new Error("Unproved native symbol");
+        }
         if (remote.type === "function") {
           for (const key of ["Map", "URLSearchParams", "FormData", "String", "encodeURIComponent", "fetch"])
             if (await same(remote, intrinsic.get(key), key)) return { kind: "intrinsic", name: key, identity: identities.length - 1 };
@@ -141,6 +166,28 @@ export class BindingLinkObserver {
         assert.ok(!active.has(remote.objectId), "Cyclic/aliased native data graph unsupported"); active.add(remote.objectId);
         try {
           const result = await properties(remote.objectId), prototype = result.internalProperties?.find((p) => p.name === "[[Prototype]]")?.value;
+          if (selected?.length && remote.subtype !== "map") {
+            assert.ok(!borrowed, "Selective reads cannot attest borrowed props");
+            const fields = {};
+            for (const key of selected) {
+              const p = result.result.find((p) => p.name === key);
+              assert.ok(p?.isOwn && (!p.set || p.set.type === "undefined"), "Unresolved native namespace field");
+              if (p.value) fields[key] = await encode(p.value, false, depth + 1);
+              else {
+                assert.ok(p.get, "Missing namespace descriptor"); const getter = await locate(p.get, false), entry = index.functions.get(getter.function);
+                const body = entry.node.body;
+                assert.ok(body && ts.isElementAccessExpression(body) && ts.isIdentifier(body.expression) && ts.isIdentifier(body.argumentExpression), "Effectful native export getter");
+                const native = await properties(p.get.objectId), scopes = native.internalProperties?.find((p) => p.name === "[[Scopes]]")?.value;
+                assert.ok(scopes?.objectId, "Export getter scope unavailable");
+                const slots = (await properties(scopes.objectId)).result.filter((p) => /^\d+$/.test(p.name) && p.value?.objectId), scope = [];
+                for (const slot of slots) scope.push(...(await properties(slot.value.objectId)).result);
+                const receiver = scope.find((p) => p.name === body.expression.text)?.value, slotKey = scope.find((p) => p.name === body.argumentExpression.text)?.value;
+                assert.ok(receiver?.objectId && slotKey?.type === "string", "Unresolved export getter lexical edge");
+                fields[key] = { kind: "getterRead", function: getter.function, location: getter.location, key: slotKey.value, receiver: await encode(receiver, false, depth + 1, [slotKey.value]) };
+              }
+            }
+            return { kind: "object", fields };
+          }
           if (remote.subtype === "map") {
             assert.ok(!borrowed && await same(prototype, intrinsic.get("MapPrototype"), "MapPrototype"), "Borrowed/foreign cache");
             assert.ok(!result.result.some((p) => p.isOwn && !/^\d+$/.test(p.name)), "Overridden native cache");
@@ -185,7 +232,7 @@ export class BindingLinkObserver {
       let fiber = formProps.result.find((p) => p.name.startsWith("__reactFiber$") && p.value?.objectId && !p.get && !p.set)?.value;
       assert.ok(reactProps && fiber, "Native React mount descriptors unavailable");
       const handlerRemote = await data(reactProps.objectId, "onSubmit"), handler = await locate(handlerRemote);
-      const seen = new Set(); let owner, props, id, locale;
+      const seen = new Set(); let owner, props, id, locale, ownerFiber;
       while (fiber?.objectId && !seen.has(fiber.objectId) && seen.size < 100) {
         seen.add(fiber.objectId);
         const values = await properties(fiber.objectId), get = (name) => values.result.find((p) => p.name === name && p.value && !p.get && !p.set)?.value;
@@ -195,12 +242,43 @@ export class BindingLinkObserver {
           const lang = fields.result.find((p) => p.name === "locale" && p.value && !p.get && !p.set)?.value;
           if (record?.objectId && lang?.type === "string") {
             const recordId = await data(record.objectId, "id");
-            if (recordId.type === "string") { owner = await locate(type); props = await encode(memoized, true); id = recordId.value; locale = lang.value; break; }
+            if (recordId.type === "string") { owner = await locate(type); props = await encode(memoized, true); id = recordId.value; locale = lang.value; ownerFiber = fiber; break; }
           }
         }
         fiber = get("return");
       }
       assert.ok(owner, "Owning component/props unavailable");
+      const hooks = [], hookValues = [];
+      const optional = async (remote, key) => (await properties(remote.objectId)).result.find((p) => p.name === key && p.value && !p.get && !p.set)?.value;
+      let slot = await optional(ownerFiber, "memoizedState");
+      while (slot?.objectId && hooks.length < 16) {
+        const value = await data(slot.objectId, "memoizedState"), queue = await data(slot.objectId, "queue");
+        if (queue.subtype === "null") {
+          const descriptor = value.objectId ? (await properties(value.objectId)).result.find((p) => p.name === "current") : null;
+          const current = descriptor?.value;
+          assert.ok(descriptor?.isOwn && descriptor.writable && !descriptor.get && !descriptor.set && current?.type === "boolean", "Unsupported native ref hook state");
+          hooks.push({ kind: "ref", current: current.value }); hookValues.push({ ref: value });
+        } else {
+          assert.ok(["boolean", "string", "number", "undefined"].includes(value.type) || value.subtype === "null", "Unsupported native scalar hook state");
+          const dispatch = await data(queue.objectId, "dispatch"), reducer = await data(queue.objectId, "lastRenderedReducer");
+          const internals = (await properties(dispatch.objectId)).internalProperties;
+          const target = internals?.find((p) => p.name === "[[TargetFunction]]")?.value;
+          const args = internals?.find((p) => p.name === "[[BoundArgs]]")?.value;
+          assert.ok(target && args, "Unsupported native state dispatcher");
+          const boundFiber = await data(args.objectId, "0"), boundQueue = await data(args.objectId, "1");
+          assert.equal((await data(args.objectId, "length")).value, 2, "Native dispatcher has unsupported bound arguments");
+          const alternate = await optional(ownerFiber, "alternate");
+          assert.ok(await same(boundFiber, ownerFiber, "hook-fiber") || alternate?.objectId && await same(boundFiber, alternate, "hook-fiber"), "Native hook dispatcher belongs to another component");
+          const fiberIdentity = identities.length - 1;
+          assert.ok(await same(boundQueue, queue, "hook-queue"), "Native dispatcher queue differs");
+          const queueIdentity = identities.length - 1;
+          hooks.push({ kind: "state", value: value.subtype === "null" || value.type === "undefined" ? { kind: "null" }
+            : { kind: "scalar", type: value.type, ...(value.type === "boolean" ? { value: value.value } : {}) },
+            fiberIdentity, queueIdentity, target: await locate(target, false), reducer: await locate(reducer, false) }); hookValues.push({ dispatch });
+        }
+        slot = await optional(slot, "next");
+      }
+      assert.ok(!slot?.objectId, "Native hook inventory exceeds supported bound");
       const root = index.functions.get(owner.function), submit = index.functions.get(handler.function);
       const attributes = (await cdp.send("DOM.getAttributes", { nodeId: found.nodeId })).attributes;
       const actionAt = attributes.indexOf("action"), action = new URL(actionAt >= 0 ? attributes[actionAt + 1] : base, base).href;
@@ -210,24 +288,33 @@ export class BindingLinkObserver {
       // source is evaluated, and accessors are never called to resolve an edge.
       while (pending.length) {
         const { remote, entry, props: native, frame } = pending.shift();
+        if (reactContract(entry, modules)) continue;
         const scopes = native.internalProperties?.find((p) => p.name === "[[Scopes]]")?.value;
         assert.ok(scopes?.objectId, "Callable native scopes unavailable");
         const slots = (await properties(scopes.objectId)).result.filter((p) => /^\d+$/.test(p.name) && p.value?.objectId).slice(0, 12);
         const values = [];
         for (const slot of slots) values.push((await properties(slot.value.objectId)).result);
-        const needed = effectFreeNames(entry.node, candidate.handlerSource).filter((name) => entry.id !== submit.id
-          || ["FormData", "URLSearchParams", "String", "encodeURIComponent", "fetch"].includes(name));
+        const references = [];
+        const needed = effectFreeNames(entry.node, entry.id === submit.id ? null : candidate.handlerSource, (node) => references.push(node));
         for (const name of needed) {
           const d = values.flat().find((p) => p.name === name);
+          if (entry.id === submit.id && !["FormData", "URLSearchParams", "String", "encodeURIComponent", "fetch"].includes(name)) {
+            if (d?.value && !d.get && !d.set) for (let slot = 0; slot < hookValues.length; slot++) {
+              for (const [key, kind] of [["ref", "hookRef"], ["dispatch", "hookSetter"]]) if (await same(d.value, hookValues[slot][key], `hook:${slot}:${kind}`))
+                frame.bindings[name] = { kind, slot, identity: identities.length - 1 };
+            }
+            continue;
+          }
           assert.ok(d?.value && !d.get && !d.set, `Native lexical edge unavailable: ${name}`);
-          try { frame.bindings[name] = await encode(d.value); }
+          const fields = new Set(references.filter((n) => n.text === name && ts.isPropertyAccessExpression(n.parent) && n.parent.expression === n).map((n) => n.parent.name.text));
+          try { frame.bindings[name] = await encode(d.value, false, 0, [...fields]); }
           catch (error) { frame.bindings[name] = { kind: "unknown", reason: error.message }; }
         }
         void remote;
       }
       const receipt = { schema: "native-binding-links/v1", artifactSha256: this.artifact.sha256, component: owner.function, handler: handler.function,
         recordId: id, locale, props, realmObjectId: global.result.objectId, executionContextId: realm.context,
-        frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
+        hooks, frames: [...functions.values()], scripts: [...checkedScripts.values()], intrinsicIdentities: identities };
       return { candidate, receipt, linked: { artifact: this.artifact, receipt }, outcome: "observed" };
     } catch (error) { return { outcome: "unknown", reason: error.message }; }
     finally { await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }); }

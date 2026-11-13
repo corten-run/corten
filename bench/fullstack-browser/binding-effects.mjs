@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import ts from "typescript";
 import { bindingFunctionText, bindingHash, indexBindingArtifact, bindingFunctionLocation } from "./binding-artifact.mjs";
 import { handlerIntrinsics, validateBindingIdentities } from "./binding-intrinsics.mjs";
+import { emittedModules, reactContract, frameworkInitializers, validateFrameworkClosure } from "./binding-modules.mjs";
 
 const scalar = (type = "unknown", value) => ({ kind: "scalar", type, ...(value === undefined ? {} : { value }) });
 const nil = { kind: "null" };
@@ -30,26 +31,52 @@ function join(a, b) {
 // Free names are resolved from the mounted function's native scope descriptors.
 // This collector deliberately over-collects; an unavailable binding is unknown,
 // never permission to use an import's spelling as a purity contract.
-export function effectFreeNames(node, handlerSource = null) {
-  const declared = new Set(node.parameters?.flatMap((p) => names(p.name)) ?? []), used = new Set();
+export function effectFreeNames(node, handlerSource = null, onReference = null) {
+  const used = new Set();
+  const declarations = (scope, name) => {
+    let found = false;
+    const scan = (n) => {
+      if (n !== scope && ts.isFunctionLike(n)) {
+        if (ts.isFunctionDeclaration(n) && n.name?.text === name) found = true;
+        return;
+      }
+      if (n !== scope && ts.isBlock(n)) return;
+      if (ts.isVariableDeclaration(n) && names(n.name).includes(name)) found = true;
+      ts.forEachChild(n, scan);
+    };
+    scan(scope); return found;
+  };
+  const local = (reference) => {
+    for (let scope = reference.parent; scope; scope = scope.parent) {
+      if (ts.isFunctionLike(scope) && (scope.parameters.some((p) => names(p.name).includes(reference.text)) || scope.name?.text === reference.text)) return true;
+      if (ts.isBlock(scope) && declarations(scope, reference.text)) return true;
+      if (scope === node) break;
+    }
+    return false;
+  };
   const walk = (n) => {
     if (n !== node && ts.isFunctionLike(n) && text(n) === handlerSource) return;
-    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n)) && n.name)
-      names(n.name).forEach((name) => declared.add(name));
     if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)
       && !(ts.isPropertyAssignment(n.parent) && n.parent.name === n)
-      && !(ts.isBindingElement(n.parent) && n.parent.propertyName === n)) used.add(n.text);
+      && !(ts.isBindingElement(n.parent) && (n.parent.propertyName === n || n.parent.name === n))
+      && !((ts.isVariableDeclaration(n.parent) || ts.isParameter(n.parent) || ts.isFunctionLike(n.parent)) && n.parent.name === n)
+      && !local(n)) { used.add(n.text); onReference?.(n); }
     ts.forEachChild(n, walk);
   };
-  walk(node); if (node.name) declared.add(node.name.text);
-  return [...used].filter((name) => !declared.has(name) && name !== "undefined");
+  walk(node); return [...used].filter((name) => name !== "undefined");
 }
 
 export function checkBindingEffects(candidate, artifact, receipt) {
-  const renderCalls = new Set(), derivation = [], stack = new Set(); let operations = 0;
+  const renderCalls = new Set(), derivation = [], stack = new Set(); let operations = 0, hookIndex = 0;
   const fail = (message) => { throw new Error(message); };
   try {
     const index = indexBindingArtifact(artifact);
+    const nativeModules = emittedModules(index);
+    const checkedContracts = new Set();
+    const contractClosure = (entry) => {
+      const key = nativeModules.owner(entry)?.id;
+      if (!checkedContracts.has(key)) { validateFrameworkClosure(entry, nativeModules); checkedContracts.add(key); }
+    };
     assert.equal(receipt?.schema, "native-binding-links/v1");
     assert.equal(receipt.artifactSha256, artifact.sha256);
     const root = index.functions.get(receipt.component), mounted = index.functions.get(receipt.handler);
@@ -114,6 +141,14 @@ export function checkBindingEffects(candidate, artifact, receipt) {
     };
     const decode = (value) => {
       if (!value) return { kind: "unknown" };
+      if (value.kind === "getterRead") {
+        const entry = index.functions.get(value.function), body = entry?.node.body;
+        assert.ok(entry?.node.parameters.length === 0 && body && ts.isElementAccessExpression(body)
+          && ts.isIdentifier(body.expression) && ts.isIdentifier(body.argumentExpression) && typeof value.key === "string", "Unproved native export getter read");
+        assert.deepEqual(value.location, { scriptId: value.location?.scriptId, ...bindingFunctionLocation(entry) }, "Native export getter location differs");
+        assert.equal(scripts.get(value.location.scriptId)?.sha256, entry.script.sha256, "Native export getter script differs");
+        return property(decode(value.receiver), value.key);
+      }
       if (value.kind === "function") {
         const entry = index.functions.get(value.function); assert.ok(entry, "Callable is outside the emitted artifact");
         return { kind: "function", node: entry.node, entry, environment: null };
@@ -121,7 +156,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       if (value.kind === "object" || value.kind === "borrowed") return { ...value, fields: Object.fromEntries(Object.entries(value.fields).map(([k, v]) => [k, decode(v)])) };
       if (value.kind === "array") return { ...value, items: value.items.map(decode) };
       if (value.kind === "intrinsic") intrinsicBinding(value, value.name);
-      if (["scalar", "null", "intrinsic", "cache", "intl"].includes(value.kind)) return { ...value };
+      if (["scalar", "null", "intrinsic", "cache", "intl", "symbol"].includes(value.kind)) return { ...value };
       return { kind: "unknown" };
     };
     const property = (object, key) => {
@@ -151,12 +186,37 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       fail("Unsupported binding pattern");
     };
     const moduleEnvironment = (entry) => {
-      if (modules.has(entry.script.path)) return modules.get(entry.script.path);
-      const env = new Map(); modules.set(entry.script.path, env);
+      const factory = nativeModules.owner(entry), key = factory?.id ?? entry.script.path;
+      if (modules.has(key)) return modules.get(key);
+      const env = new Map(); modules.set(key, env);
       // Module-level code has its own effect boundary. Bundler registration,
       // arbitrary initializers, exports with getters and dynamic imports are not
       // silently reduced to a list of function declarations.
-      for (const s of entry.script.file.statements) {
+      const loader = factory?.node.parameters[0]?.name;
+      const loaderCall = (node, method) => factory && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+        && ts.isIdentifier(loader) && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === loader.text && node.expression.name.text === method;
+      const closeImport = (call) => {
+        assert.ok(call.arguments.length === 1 && ts.isNumericLiteral(call.arguments[0]), "Unresolved static native module edge");
+        const targets = nativeModules.modules.get(call.arguments[0].text); assert.ok(targets?.length, "Native dependency is outside emitted artifact");
+        for (const target of targets) moduleEnvironment(target);
+      };
+      if (factory && frameworkInitializers.has(factory.hash)) {
+        const scan = (node) => {
+          if (loaderCall(node, "i") || loaderCall(node, "r")) closeImport(node);
+          ts.forEachChild(node, scan);
+        };
+        scan(factory.node.body);
+        return env;
+      }
+      for (const s of factory?.node.body.statements ?? entry.script.file.statements) {
+        if (factory && ts.isExpressionStatement(s) && ts.isStringLiteral(s.expression) && s.expression.text === "use strict") continue;
+        if (factory && ts.isExpressionStatement(s) && loaderCall(s.expression, "s")) {
+          assert.ok(s.expression.arguments.length <= 2 && ts.isArrayLiteralExpression(s.expression.arguments[0]), "Unsupported native export registration");
+          // Export registration installs descriptors; it never invokes exported
+          // bodies. Each subsequently read native edge is resolved independently.
+          for (const value of s.expression.arguments[0].elements) expression(value, env, entry);
+          continue;
+        }
         if (ts.isImportDeclaration(s) || ts.isExportDeclaration(s)) {
           if (ts.isImportDeclaration(s) && !s.importClause) fail("Unproved side-effect import");
           if (s.moduleSpecifier) {
@@ -169,10 +229,16 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         }
         if (ts.isEmptyStatement(s)) continue;
         if (ts.isFunctionDeclaration(s)) { if (s.name) env.set(s.name.text, { kind: "function", node: s, entry: entry.script.functions.find((f) => f.node === s), environment: env }); }
-        else if (ts.isVariableStatement(s) && ordinary(s.declarationList)) {
-          for (const d of s.declarationList.declarations) { if (!d.initializer) fail("Uninitialized module binding"); bind(d.name, expression(d.initializer, env, entry), env); }
+        else if (ts.isVariableStatement(s) && (ordinary(s.declarationList) || factory && (s.declarationList.flags & ts.NodeFlags.BlockScoped) === 0)) {
+          for (const d of s.declarationList.declarations) {
+            if (!d.initializer) fail("Uninitialized module binding");
+            if (loaderCall(d.initializer, "i") || loaderCall(d.initializer, "r")) {
+              closeImport(d.initializer);
+              bind(d.name, { kind: "module", id: d.initializer.arguments[0].text }, env);
+            } else bind(d.name, expression(d.initializer, env, entry), env);
+          }
         } else if (ts.isExportAssignment(s)) expression(s.expression, env, entry);
-        else fail("Unsupported emitted module initializer");
+        else fail(`Unsupported emitted module initializer ${s.getText().slice(0,100)}`);
       }
       return env;
     };
@@ -203,7 +269,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         }
         return decode(linked);
       }
-      const module = modules.get(entry.script.path);
+      const module = modules.get(nativeModules.owner(entry)?.id ?? entry.script.path);
       if (module?.has(name)) return module.get(name);
       if (["Map", "URLSearchParams", "FormData", "String", "encodeURIComponent", "Intl"].includes(name)
         && receipt.intrinsicIdentities.some((r) => r.label === name && r.observed && r.snapshot)) return { kind: "intrinsic", name };
@@ -212,6 +278,33 @@ export function checkBindingEffects(candidate, artifact, receipt) {
     const invoke = (fn, args) => {
       if (fn.kind !== "function") fail("Unresolved or unsupported callee");
       const { node, entry } = fn;
+      const contract = reactContract(entry, nativeModules);
+      if (contract) {
+        contractClosure(entry);
+        moduleEnvironment(entry);
+        if (contract === "jsx") {
+          if (args.length < 2 || args.length > 3 || !(args[0].kind === "scalar" && args[0].type === "string" || args[0].kind === "symbol" && args[0].name === "ReactFragment")
+            || args[1].kind !== "object" || args[2] && !primitive(args[2]) || ["ref", "key"].some((k) => args[1].fields[k] && !primitive(args[1].fields[k]))) fail("Unproved React element inputs");
+          return { kind: "object", fields: { props: args[1] } };
+        }
+        if (!["ref", "state"].includes(contract) || entry === mounted || args.length !== 1 || !primitive(args[0]) || stack.size) fail("Unsupported React hook initializer/location");
+        const slot = hookIndex++, observed = receipt.hooks?.[slot];
+        if (contract === "ref") {
+          assert.ok(observed?.kind === "ref" && typeof observed.current === "boolean", "Native ref slot unavailable");
+          return { kind: "hookRef", slot, value: scalar("boolean", observed.current) };
+        }
+        assert.equal(observed?.kind, "state", "Native state slot unavailable");
+        assert.ok(observed.value?.kind === "null" || observed.value?.kind === "scalar" && ["boolean", "string", "number"].includes(observed.value.type), "Native state value is not scalar");
+        for (const [key, label] of [["fiberIdentity", "hook-fiber"], ["queueIdentity", "hook-queue"]])
+          assert.ok(Number.isInteger(observed[key]) && receipt.intrinsicIdentities[observed[key]]?.label === label, "Native hook ownership identity missing");
+        for (const [key, expected] of [["target", "dispatch"], ["reducer", "reducer"]]) {
+          const link = observed[key], target = index.functions.get(link?.function), script = scripts.get(link?.location?.scriptId);
+          assert.ok(target && reactContract(target, nativeModules) === expected && script?.sha256 === target.script.sha256, "Unproved native state dispatcher/reducer");
+          contractClosure(target);
+          assert.deepEqual(link.location, { scriptId: script.scriptId, ...bindingFunctionLocation(target) }, "Native hook callable location differs");
+        }
+        return { kind: "array", fresh: true, items: [decode(observed.value), { kind: "hookSetter", slot }] };
+      }
       if (!entry || stack.has(node) || stack.size >= 24 || node.asteriskToken || node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) fail("Unsupported recursive/async render call");
       moduleEnvironment(entry);
       const env = new Map(fn.environment ?? []);
@@ -297,7 +390,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
           if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ts.isIdentifier(node.left) || !env.has(node.left.text)) fail("Write to borrowed/nonlocal state");
           const value = expression(node.right, env, entry); env.set(node.left.text, value); return value;
         }
-        if (node.operatorToken.kind === ts.SyntaxKind.CommaToken) fail("Unsupported render sequence");
+        if (node.operatorToken.kind === ts.SyntaxKind.CommaToken) { expression(node.left, env, entry); return expression(node.right, env, entry); }
         const a = expression(node.left, env, entry), b = expression(node.right, env, entry);
         if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return truth(a) === true ? b : truth(a) === false ? a : join(a, b);
         if (node.operatorToken.kind === ts.SyntaxKind.BarBarToken) return truth(a) === true ? a : truth(a) === false ? b : join(a, b);
@@ -363,7 +456,15 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       if (value.kind === "union") value.alternatives.forEach(installed);
     };
     installed(rendered);
-    return { outcome: "proved", renderCalls: [...renderCalls], artifactSha256: artifact.sha256,
+    assert.equal(hookIndex, receipt.hooks?.length ?? 0, "Source/native hook inventory differs");
+    const hookBindings = Object.fromEntries([...env].filter(([name, v]) => ["hookRef", "hookSetter"].includes(v.kind) && frames.get(mounted.id).bindings[name]).map(([name, v]) => [name, v]));
+    for (const [name, value] of Object.entries(hookBindings)) {
+      const linked = frames.get(mounted.id).bindings[name];
+      if (!linked) continue;
+      assert.ok(linked.kind === value.kind && linked.slot === value.slot && Number.isInteger(linked.identity)
+        && receipt.intrinsicIdentities[linked.identity]?.label === `hook:${value.slot}:${value.kind}`, "Handler/native hook identity differs");
+    }
+    return { outcome: "proved", renderCalls: [...renderCalls], hookBindings, artifactSha256: artifact.sha256,
       derivationSha256: bindingHash(JSON.stringify(derivation)), derivation, operations };
   } catch (error) { return { outcome: "unknown", reason: error.message }; }
 }

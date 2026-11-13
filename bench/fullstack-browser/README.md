@@ -113,12 +113,13 @@ The Next observation additionally requires `native-binding-code/v1`: exact publi
 bytes extracted from the stopped immutable image, with image/source identity and content hashes.
 `binding-image.mjs` only copies those bytes; it does not execute an image or rebuild its code.
 `binding-links.mjs` records CDP function locations, exact executed-script correspondence and
-descriptor-only native lexical edges. Getters, proxies, bound functions, foreign/evaluated
-scripts and unavailable links remain unknown. Candidate/helper functions are never called by
+descriptor-only native lexical edges. Arbitrary getters, proxies, bound functions, foreign/evaluated
+scripts and unavailable links remain unknown. The emitted static export getter is resolved by
+its exact body, native scope descriptors and own data field without invoking it. Candidate/helper functions are never called by
 discovery. Harness-authored reference equality compares identities. Array allocation checks also
 use the document-start native descriptor intrinsic, without invoking an application accessor.
-The array constructor and species getter must retain their native identities; checking `slice`
-alone cannot prove allocation effects. Every supported transport intrinsic used by the mounted
+The array constructor, species getter, iterator and iterator completion chain must retain their
+native identities; checking `slice` alone cannot prove allocation/destructuring effects. Every supported transport intrinsic used by the mounted
 handler must resolve through its actual lexical scope to the captured native intrinsic, not an
 imported same-name function.
 
@@ -132,6 +133,22 @@ the proof. Array callbacks are checked against observed data; `filter`/`map`/`sl
 results, and `sort` requires a fresh receiver on every relevant path. The limited cache/Intl/
 URLSearchParams value construction needed by the emitted repository Next control is modeled;
 arbitrary JavaScript, bundler loaders and framework internals are not inferred pure.
+
+The production Next slice recognizes only the emitted static Turbopack registration/import
+grammar. Dependency initializers are closed transitively, including duplicate emitted module
+definitions. Reviewed React JSX/scalar-hook and framework-initialization contracts are bound to
+exact containing-factory and callable hashes in `binding-modules.mjs`, not module numbers,
+function names, framework version strings or caller flags. Changed or unknown bodies reject.
+An initialization contract does not authorize arbitrary exported calls with application data.
+JSX accepts host/Fragment construction with plain props and scalar key/ref only.
+
+The native pending-submit preflight is limited to scalar state dispatch and an owned boolean
+ref guard/write. CDP links each handler binding to the owning fiber's actual hook slot; state
+dispatchers must have the exact native bound fiber/queue and source-bound dispatcher/reducer,
+including the exact emitted dependency closure rather than unchanged entry-function text alone.
+The live ref must be a writable own data field. Prefixes are checked in execution order, so an
+already-set guard cannot be treated as an unconditional POST. Hook aliases, missing identities,
+unsupported actions and unproved callbacks do not gain authority from their spelling.
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
@@ -204,8 +221,15 @@ also demonstrates the terminal props-factory escape independently of discovery.
 checks their CDP-linked native POST, renamed-safe helper, effectful substitution, sibling effects,
 initializer/callback retention and altered proof bytes/locations. The source-only Next controls
 still execute the actual submit function but now require rejection without emitted provenance.
-The test-only JSX/runtime adapter is not a compiled Next deployment or new contender evidence. These are apparatus
-tests, not new contender evidence; historical saved observations are not rewritten.
+The test-only JSX/runtime adapter is not a compiled Next deployment or new contender evidence.
+`BINDING_NEXT_IMAGE=<immutable image id> node --test bench/fullstack-browser/binding-production.test.mjs`
+is the opt-in bounded production-image control. Its unchanged case extracts actual image bytes,
+loads the real Next page, requires native discovery/replay and clicks its native submit button.
+It checks again after the actual response changes component state. Intercepted emitted-bundle
+negative/rename controls carry separate synthetic identities, never image qualification; they
+retain the real React mount and compare actual HTTP requests for sibling/initializer/callback
+retention and helper/dependency substitution. These are apparatus tests, not new contender
+evidence; historical saved observations are not rewritten.
 
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That

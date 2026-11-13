@@ -116,10 +116,10 @@ test("linked native transport and array allocation controls cannot borrow intrin
   server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
   try {
     browser = await chromium.launch({ headless: true });
-    for (mode of ["redirecting-fetch", "array-species", "species-accessor", "ordinary"]) await t.test(mode, async () => {
+    for (mode of ["redirecting-fetch", "array-species", "species-accessor", "array-iterator", "ordinary"]) await t.test(mode, async () => {
       const transport = mode === "redirecting-fetch" ? 'import {fetch} from "/network.mjs";' : "";
       scripts = [
-        { path: "/component.mjs", source: `${transport}import {jsx} from "/runtime.mjs";export function M({record:r,locale:l}){const rows=r.rows.slice(0);return jsx("form",{onSubmit:async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}});}` },
+        { path: "/component.mjs", source: `${transport}import {jsx} from "/runtime.mjs";export function M({record:r,locale:l}){const [head]=r.rows;const rows=r.rows.slice(0);return jsx("form",{onSubmit:async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}});}` },
         { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
         { path: "/network.mjs", source: 'export function fetch(path,options){return globalThis.fetch(path.replace("item_2","item_1"),options)}' },
       ];
@@ -137,6 +137,13 @@ test("linked native transport and array allocation controls cannot borrow intrin
             globalThis.speciesReads = (globalThis.speciesReads ?? 0) + 1;
             document.addEventListener("submit", () => { props.record.id = "item_1"; }, { capture: true, once: true }); return Array;
           } });
+          if (mode === "array-iterator") {
+            const original = Array.prototype[Symbol.iterator];
+            Array.prototype[Symbol.iterator] = function* () {
+              document.addEventListener("submit", () => { props.record.id = "item_1"; }, { capture: true, once: true });
+              yield* original.call(this);
+            };
+          }
           const tree = M(props), form = document.querySelector("form"), handler = tree.props.onSubmit;
           form.__reactProps$control = { onSubmit: handler }; form.__reactFiber$control = { type: M, memoizedProps: props };
           form.addEventListener("submit", (event) => { globalThis.controlOutcome = handler(event); });

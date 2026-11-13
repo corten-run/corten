@@ -40,8 +40,13 @@ function renderExpression(node) {
   if (ts.isParenthesizedExpression(node)) return renderExpression(node.expression);
   if (ts.isPropertyAccessExpression(node)) return !node.questionDotToken && renderExpression(node.expression);
   if (ts.isElementAccessExpression(node)) return !node.questionDotToken && renderExpression(node.expression) && renderExpression(node.argumentExpression);
-  if (ts.isCallExpression(node) || ts.isNewExpression(node)) return !(node.flags & ts.NodeFlags.OptionalChain)
-    && renderExpression(node.expression) && (node.arguments ?? []).every(renderExpression);
+  if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+    let callee = node.expression;
+    while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+    if (ts.isCallExpression(node) && ts.isBinaryExpression(callee) && callee.operatorToken.kind === ts.SyntaxKind.CommaToken
+      && ts.isNumericLiteral(callee.left) && callee.left.text === "0") callee = callee.right;
+    return !(node.flags & ts.NodeFlags.OptionalChain) && renderExpression(callee) && (node.arguments ?? []).every(renderExpression);
+  }
   if (ts.isArrayLiteralExpression(node)) return node.elements.every(renderExpression);
   if (ts.isObjectLiteralExpression(node)) return node.properties.every((property) => ts.isPropertyAssignment(property)
     ? (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) || ts.isNumericLiteral(property.name)) && renderExpression(property.initializer)
@@ -281,11 +286,42 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
         || ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "FormData"
           && value.arguments?.length === 1 && eventField(value.arguments[0], "currentTarget");
     };
-    const prefixStatement = (node) => ts.isEmptyStatement(node)
-      || ts.isVariableStatement(node) && node.declarationList.declarations.every(prefixDeclaration)
-      || ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && !(node.expression.flags & ts.NodeFlags.OptionalChain)
-        && node.expression.arguments.length === 0 && eventField(node.expression.expression, "preventDefault");
+    const hook = (node, kind) => ts.isIdentifier(node) && effects.hookBindings?.[node.text]?.kind === kind
+      && !declarations.some((d) => within(d, handler) && bindsName(d.name, node.text) && within(node, bindingScope(d)))
+      ? effects.hookBindings[node.text] : null;
+    const boolean = (node) => node.kind === ts.SyntaxKind.TrueKeyword ? true : node.kind === ts.SyntaxKind.FalseKeyword ? false
+      : ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken && ts.isNumericLiteral(node.operand) ? !Number(node.operand.text) : undefined;
+    const refRead = (node) => ts.isPropertyAccessExpression(node) && !node.questionDotToken && node.name.text === "current" && hook(node.expression, "hookRef");
+    const prefixExpression = (node, refs) => {
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.CommaToken)
+        return prefixExpression(node.left, refs) && prefixExpression(node.right, refs);
+      if (ts.isCallExpression(node) && !(node.flags & ts.NodeFlags.OptionalChain)) {
+        if (!node.arguments.length && eventField(node.expression, "preventDefault")) return true;
+        return !!hook(node.expression, "hookSetter") && node.arguments.length === 1 && boolean(node.arguments[0]) !== undefined;
+      }
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const ref = refRead(node.left), value = boolean(node.right);
+        if (ref && value !== undefined) { refs.set(ref.slot, value); return true; }
+      }
+      return false;
+    };
+    const prefixStatement = (node, refs) => {
+      if (ts.isEmptyStatement(node)) return true;
+      if (ts.isVariableStatement(node)) return node.declarationList.declarations.every(prefixDeclaration);
+      if (ts.isExpressionStatement(node)) return prefixExpression(node.expression, refs);
+      if (ts.isIfStatement(node) && !node.elseStatement && ts.isReturnStatement(node.thenStatement) && !node.thenStatement.expression) {
+        let test = node.expression;
+        if (ts.isBinaryExpression(test) && test.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+          if (!prefixExpression(test.left, refs)) return false;
+          test = test.right;
+        }
+        const ref = refRead(test);
+        return !!ref && refs.get(ref.slot) === false;
+      }
+      return false;
+    };
     const unconditional = (call) => {
+      const prefixes = [];
       for (let node = call; node !== handler; node = node.parent) {
         const parent = node.parent;
         const supported = parent && (parent === handler || ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent)
@@ -299,10 +335,11 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
           // Only modeled pre-fetch effects are supported. In particular an
           // unknown alias write, getter read, helper call or await is not pure.
           const index = parent.statements.indexOf(node);
-          if (index >= 0 && parent.statements.slice(0, index).some((s) => !prefixStatement(s))) return false;
+          if (index >= 0) prefixes.push(parent.statements.slice(0, index));
         }
       }
-      return true;
+      const refs = new Map(Object.values(effects.hookBindings ?? {}).filter((v) => v.kind === "hookRef").map((v) => [v.slot, v.value.value]));
+      return prefixes.reverse().flat().every((statement) => prefixStatement(statement, refs));
     };
     const visit = (node) => {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "fetch" && node.arguments.length >= 2
