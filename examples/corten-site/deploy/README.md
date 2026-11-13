@@ -142,6 +142,10 @@ each of the other names to reach it and asks for one certificate that holds them
 certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
 back only itself. The machine says which name it waits for, or why a certificate was refused
 (`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
+Taking the names on runs `provision.sh` a second time, which writes the deploy key's file and
+the deploy's `sudo` rule again: a deploy that reaches the machine in that instant can fail,
+and is run again. That has not been seen; where the names are there already, the second run
+is over well before the first release is built.
 After an apply the workflow asks the machine for each name, for ten minutes where it made the
 machine, and fails where one does not send its visitors to the site. Changing the list
 replaces the droplet on the next apply.
@@ -418,30 +422,41 @@ new name; after a run that had stopped between the keys' halves it made the keys
 stopped, writing nothing more, when the host key could not be read back; and interrupted with
 the keys on disk it left nothing in its temporary directory.
 
-The names that redirect were checked at `914ad4c7f` in Ubuntu 24.04 containers with a stand-in
+The names that redirect were checked at `a8335bcd7` in Ubuntu 24.04 containers with a stand-in
 for `systemctl` that starts and reloads nginx, and with certbot pointed at Pebble, Let's
 Encrypt's test server, in a container beside them, so the lines that ask for a certificate ran
 as they are. `provision.sh`, given one name that redirects, was issued one certificate for both
 names; nginx then answered the other name with 308 to the same path and query at the site's
 name on ports 80 and 443, the site's own name with 502 on 443 (no app behind it), and a name
 in neither list with 308 on port 80 and 502 on 443. Run again with the same names it asked for
-no certificate; with a name more, for one that holds all three; with none, for none, and the
-other names were no longer redirected on 443. A name written as a URL was refused before
-anything was installed. `boot.sh`, with two names that redirect and one of them pointing at an
-address that answers nothing, waited (two rounds of its 30 seconds were watched), and went on
-to the certificate when that name reached the machine; with no such names it ran as before.
-The step the workflow runs after an apply, trusting Pebble's root alone, said that each name
-sends its visitors to the site, and failed for a name the machine does not redirect and for
-one nginx redirects that the certificate lacks. A plan with stand-in values adds one record
-for each name (none with the zone elsewhere), and is refused for a name outside the zone, the
-site's own name, a name given twice, and a URL. The site's smoke test was not run again
-through this nginx: the server that answers the site is as it was.
+no certificate; with a name more, one fewer, and none, each time for one that holds the
+site's name and the names given and no other, and a name no longer given was no longer
+redirected on 443. It refused, before anything was installed, a URL, a name in capitals, one
+that starts with a hyphen, `*`, the site's own name among the others, and a site's name with
+a space in it.
+
+`boot.sh`, with two names that redirect and one of them pointing at an address that answers
+nothing, got the site's certificate and answered for the site (502), said which name it was
+waiting for each 30 seconds, and when that name reached the machine was issued the
+certificate for all three and redirected both. Run again as the unit would after a failure,
+it asked for no certificate. With a name the machine could reach and Pebble could not
+resolve, it ended in failure with the site still answering under its own certificate, and the
+same on the next try. With no names it asked for one certificate and finished. The step the
+workflow runs after an apply, trusting Pebble's root alone, said that each name sends its
+visitors to the site; failed for a list `jq` cannot read; failed after a minute for a name
+the machine does not redirect; and, told the machine was made in that run, waited and passed
+when the machine took the name on half a minute in (`914ad4c7f` had the list read inside the
+loop's own line, where a list that cannot be read passed). A plan with stand-in values adds
+one record for each name (none with the zone elsewhere), and is refused for a name outside
+the zone, the site's own name, a name given twice, and a URL. The site's smoke test was not
+run again through this nginx: the server that answers the site is as it was.
 
 On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on
 `a7bbe4cc9` (one run): `bootstrap.sh` had set the repository up on GitHub, the state went to
-a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the droplet, handed its
-files by cloud-init, ran `boot.sh` and `provision.sh` and got its certificate from Let's
-Encrypt, answering 502 under the site's name 1 min 42 s after the apply. The workflow then
+a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the
+droplet, handed its files by cloud-init, ran `boot.sh` and `provision.sh` and got its
+certificate from Let's Encrypt, answering 502 under the site's name 1 min 42 s after the
+apply. The workflow then
 started the Site workflow, which shipped the release and was answered by the page, its JSON
 and its live stream as that commit. An earlier run had stopped at the bucket, with a key that
 could not make one.
