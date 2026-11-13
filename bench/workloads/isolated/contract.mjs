@@ -97,6 +97,7 @@ function request(value) {
   exact(value, ["group", "round", "commit", "recipe"], "request");
   definition(value.group);
   assert.match(value.commit ?? "", /^[a-f0-9]{40}$/, "full measured commit required");
+  assert.equal(typeof value.recipe, "string", "recipe must be a string");
   assert.ok(Object.hasOwn(recipes, value.recipe) && recipes[value.recipe].includes(value.group), "recipe is not supported for this group");
   const pattern = value.group === "catalog-page" ? /^c[1-9]\d*$/ : value.group === "json-api" ? /^j[1-9]\d*$/
     : value.group === "localized-marketplace" ? /^[rw][1-9]\d*$/

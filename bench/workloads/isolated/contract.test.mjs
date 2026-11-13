@@ -172,6 +172,17 @@ test("request accepts no arbitrary commands, flags, subsets, paths, environments
   assert.equal(official.status.executionAuthorized, false);
 });
 
+test("JSON-roundtripped recipe arrays cannot select overrides by object-key coercion", () => {
+  for (const [group, recipe] of [["mixed-production", "mixed-measure"],
+    ["localized-marketplace", "marketplace-short-window"], ["live-delivery", "native-feed-measure"],
+    ["recoverable-live", "native-feed-measure"]]) {
+    const input = JSON.parse(JSON.stringify({ ...requestFor(group, recipe), recipe: [recipe], review: null }));
+    assert.throws(() => bindExecution(input), /recipe must be a string/, `${group}: bindExecution`);
+    const { review, ...subject } = input;
+    assert.throws(() => reviewSubject(subject), /recipe must be a string/, `${group}: reviewSubject`);
+  }
+});
+
 test("self-rehashed mutations cannot change frozen selection, sources, commands, settings or validation states", () => {
   const good = bind("catalog-page");
   const mutations = [
