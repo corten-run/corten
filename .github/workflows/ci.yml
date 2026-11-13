@@ -160,6 +160,7 @@ jobs:
         run: |
           npm run check
           npm run check:workloads
+          node --test bench/client-heavy/verify.test.mjs
           echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system
       # libraries they need, for the @playwright/test version in package.json. Installing them on
@@ -176,7 +177,7 @@ jobs:
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: Client-heavy observer and runner
         if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT npm run check:client-heavy
+        run: $PLAYWRIGHT node --test --test-concurrency=1 bench/client-heavy/observer.test.mjs bench/client-heavy/run.test.mjs
       - name: watchlist
         if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |

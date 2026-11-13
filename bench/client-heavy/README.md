@@ -121,6 +121,9 @@ Offline inventory imports do not evaluate unrelated legacy benchmark execution
 settings such as `BENCH_APPS`, `BENCH_TIER` or `BENCH_EDGE`. Those settings still
 retain their validation in the legacy execution module; they cannot filter this
 verifier's required inventory or prevent it from returning a diagnostic report.
+CI runs these Git-backed offline tests as the checkout-owning user on the host;
+the observer and runner tests remain in Playwright's browser container. Git's
+repository-ownership protection is unchanged.
 
 Its fixed API is `await validateSaved({ folder, round, commit })`, exported from
 `verify.mjs`. No validator, command, contender, plan, output or policy override is
