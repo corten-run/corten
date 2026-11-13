@@ -79,8 +79,10 @@ clients and retains separate `edge-qualification.json`, edge native controls and
 direct/edge browser receipts. Missing edge defenses are deployment outcomes, not
 assumed native mechanism failures. A healthy native form is still mandatory.
 
-The retained `w10/aspnet/api/deployed-edge/slow-bodies` observation (producer
-`398b3482f`) has no missing direct ASP.NET production features. Effective TLS
+The retained `w10/aspnet/api/deployed-edge/slow-bodies` observation has original
+producer identity 398b3482f, preserved unchanged in its saved provenance. The
+reviewed producer changes are imported here as `226bf8c53`; that import is not
+the capture's measured commit. It has no missing direct ASP.NET production features. Effective TLS
 qualification observes unknown Host 200 and an unfinished head still held at
 40,070 ms. The cap probe establishes only 536/473 completed TLS handshakes within
 its unchanged connection deadline, below the required 950. Its connection-cap
