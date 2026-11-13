@@ -44,8 +44,8 @@ image's executable version has not been established here, so this is not a measu
 speed delta from that image or from an earlier floating-tag fullstack round.
 
 Marketplace's existing comparison already treats the resolved k6 image ID as an
-input. Integration with the newer marketplace raw validator remains a separate
-requirement. JSON API records the actual probe and strictly replays every retained
+input. Marketplace's native raw v3 validator requires the actual executable probe
+in both its raw tool observation and summary. JSON API records the actual probe and strictly replays every retained
 provenance field before qualifying a measurement. Fullstack's trend report refuses
 a baseline-to-current range containing mixed or missing tool identity once any
 round records it. Catalog's native saved-evidence v2 also requires that provenance;
