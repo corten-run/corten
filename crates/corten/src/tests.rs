@@ -3866,7 +3866,7 @@ async fn an_upgrade_under_a_nested_api_takes_its_origins() {
             router.oneshot(req).await.unwrap().status()
         }
     };
-    assert_eq!(status("https://inner.example").await, StatusCode::UPGRADE_REQUIRED, "allowed: a oneshot cannot switch");
+    assert_eq!(status("https://inner.example").await, StatusCode::BAD_REQUEST, "allowed: a oneshot cannot switch");
     assert_eq!(status("https://outer.example").await, StatusCode::FORBIDDEN, "the outer API's origin is not the inner's");
     // An inner API that allows no site: the outer's partner may not switch under it either.
     let router = App::new(Routes::new())
@@ -10140,7 +10140,7 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
 
 /// A route that takes `Upgrade` switches the connection: a WebSocket handshake from the page's own
 /// origin or from a client that is not a browser gets its 101 and then the bytes, one from another
-/// site is refused as a cross-site write is, and a request that does not ask to switch is a 426,
+/// site is refused as a cross-site write is, and a request that does not ask to switch is a 400,
 /// or, where the route takes `Option<Upgrade>`, its other answer.
 #[tokio::test]
 async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() {
@@ -10176,7 +10176,7 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let app = App::new(Routes::from(routes)).api::<ApiRoot>(|api| {
+    let app = App::new(Routes::from(routes)).error_page(test_error_page, ()).api::<ApiRoot>(|api| {
         api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(echo) })))
             .allow_origin("https://partner.example")
     });
@@ -10224,8 +10224,39 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let (head, _) = handshake("/ws", "chat", "").await;
     assert!(head.starts_with("http/1.1 400"), "only a WebSocket handshake is accepted as one: {head}");
 
-    let plain = raw_get(addr, "/ws", "").await;
-    assert!(plain.starts_with("HTTP/1.1 426"), "{plain}");
+    for path in ["/ws", "/either", "/api/ws"] {
+        for accept in ["text/html", "application/json"] {
+            let refused = raw_get(
+                addr,
+                path,
+                &format!("connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\naccept: {accept}\r\n"),
+            )
+            .await;
+            let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+            assert!(head.starts_with("http/1.1 426"), "{refused}");
+            assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+            assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+            assert!(
+                head.lines()
+                    .filter_map(|line| line.strip_prefix("connection: "))
+                    .flat_map(|line| line.split(','))
+                    .any(|token| token.trim() == "upgrade"),
+                "{refused}"
+            );
+            if path == "/api/ws" || accept == "application/json" {
+                assert!(head.contains("content-type: application/problem+json"), "{refused}");
+            }
+            if path == "/ws" && accept == "text/html" {
+                assert!(refused.contains("Something went wrong"), "the custom error page keeps the headers: {refused}");
+            }
+        }
+    }
+
+    for path in ["/ws", "/tunnel"] {
+        let plain = raw_get(addr, path, "").await;
+        assert!(plain.starts_with("HTTP/1.1 400"), "{plain}");
+        assert!(!plain.to_ascii_lowercase().contains("\r\nupgrade:"), "the route's protocol is not known: {plain}");
+    }
 
     let (head, stream) = handshake("/either", "websocket", "").await;
     assert!(head.starts_with("http/1.1 101"), "{head}");
@@ -10262,10 +10293,43 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
 #[route("/api/ws")]
 struct ApiWs;
 
+#[tokio::test]
+async fn an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade() {
+    use crate::upgrade::Upgrade;
+    let routes =
+        || Routes::from(Table::new().route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })));
+    let router = App::new(routes()).router();
+    for version in [http::Version::HTTP_11, http::Version::HTTP_2] {
+        let req = Request::get("/ws")
+            .version(version)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(!res.headers().contains_key(header::UPGRADE));
+        assert!(!res.headers().contains_key(header::CONNECTION));
+    }
+    let client = App::new(routes()).test();
+    let res = client
+        .get(&crate::Local::parse("/ws").unwrap())
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, "websocket")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(!res.headers().contains_key(header::UPGRADE));
+    assert!(!res.headers().contains_key(header::CONNECTION));
+}
+
 /// A handshake with no `Sec-Fetch-Site` (what Chromium and Firefox send) is held to its `Origin`
 /// against `Host`, scheme included once the app says it is HTTPS only: a plain-http page on the
 /// app's host cannot open a socket to the HTTPS app with the user's `Secure` cookies (#1212).
-/// Allowed, a oneshot answers 426, since it cannot switch; refused, 403.
+/// Allowed, a oneshot answers 400, since it cannot switch; refused, 403.
 #[tokio::test]
 async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     use crate::security::Policy;
@@ -10288,7 +10352,7 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
             .unwrap();
         router.oneshot(req).await.unwrap().status()
     };
-    let (open, refused) = (StatusCode::UPGRADE_REQUIRED, StatusCode::FORBIDDEN);
+    let (open, refused) = (StatusCode::BAD_REQUEST, StatusCode::FORBIDDEN);
     let https_only = app(Policy::new().hsts());
     let either = app(Policy::new());
     assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");

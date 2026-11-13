@@ -28,7 +28,7 @@ use crate::{Abort, Error, Signal};
 /// handler answers it with a [`Switch`], and its work then runs on the connection's [`Stream`].
 /// It is a route like any other, so it takes `Caller<T>` and is in a routes module, an area or an
 /// API, and a browser's switch from another site is refused (403) as a cross-site write is. A
-/// request that does not ask to switch is answered 426, and a route that does not take
+/// request that does not ask to switch is answered 400, and a route that does not take
 /// `Upgrade` never switches. A URL that is both a page (or a relayed answer) and a socket takes
 /// `Option<Upgrade>`, which is `None` for a request that does not ask, and answers
 /// [`SwitchOr`].
@@ -71,6 +71,29 @@ pub struct Upgrade {
     version: Option<HeaderValue>,
 }
 
+/// Kept as the error's source so its response can carry the handshake's required headers,
+/// as a `Refused` carries its challenge, without adding headers to every `Error`.
+#[derive(Debug)]
+pub(crate) struct WrongVersion;
+
+impl std::fmt::Display for WrongVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a WebSocket handshake must be version 13")
+    }
+}
+
+impl std::error::Error for WrongVersion {}
+
+impl WrongVersion {
+    pub(crate) fn headers(headers: &mut HeaderMap) {
+        // RFC 6455, 4.2.2 and 4.4; a 426 also needs Upgrade, with its Connection option
+        // (RFC 9110, 15.5.22 and 7.8). Only `websocket` knows which protocol to name.
+        headers.insert(header::SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13"));
+        headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+        headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+    }
+}
+
 /// Whether a request asks to switch protocols: a `GET` with `Upgrade` and `upgrade` among its
 /// `Connection` tokens.
 pub(crate) fn asks(method: &Method, headers: &HeaderMap) -> bool {
@@ -90,7 +113,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Upgrade {
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
         if !asks(&parts.method, &parts.headers) {
             return Err(Error::new("this route switches protocols: send a GET with Connection: upgrade and an Upgrade header")
-                .with_status(StatusCode::UPGRADE_REQUIRED)
+                .with_status(StatusCode::BAD_REQUEST)
                 .into_response());
         }
         Upgrade::take(parts).map_err(IntoResponse::into_response)
@@ -132,7 +155,7 @@ impl Upgrade {
             return Err(Error::new(
                 "this connection cannot switch protocols: an HTTP/1.1 connection served by corten::serve can (not HTTP/2, not a test's app.test())",
             )
-            .with_status(StatusCode::UPGRADE_REQUIRED));
+            .with_status(StatusCode::BAD_REQUEST));
         };
         let protocol = parts.headers.get(header::UPGRADE).cloned().unwrap_or_else(|| HeaderValue::from_static(""));
         let key = parts.headers.get(header::SEC_WEBSOCKET_KEY).cloned();
@@ -146,8 +169,9 @@ impl Upgrade {
     }
 
     /// Accepts a WebSocket handshake (RFC 6455): a 101 with its `Sec-WebSocket-Accept`, and
-    /// `run` on the connection once it has switched. A handshake that is not a WebSocket's, or
-    /// not version 13, is a 400.
+    /// `run` on the connection once it has switched. A handshake that is not a WebSocket's is a
+    /// 400; one not version 13 is a 426 with `Sec-WebSocket-Version: 13`, `Upgrade: websocket`
+    /// and `Connection: upgrade`, including on the app's error page.
     pub fn websocket<F, Fut>(self, run: F) -> crate::Result<Switch>
     where
         F: FnOnce(Stream, Signal) -> Fut + Send + 'static,
@@ -158,7 +182,7 @@ impl Upgrade {
                 .with_status(StatusCode::BAD_REQUEST));
         }
         if self.version.as_ref().is_none_or(|v| v.as_bytes() != b"13") {
-            return Err(Error::new("a WebSocket handshake must be version 13").with_status(StatusCode::BAD_REQUEST));
+            return Err(Error::new(WrongVersion).with_status(StatusCode::UPGRADE_REQUIRED));
         }
         // 16 random bytes, base64: 24 characters, the last two padding.
         let key = match &self.key {

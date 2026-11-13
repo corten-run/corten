@@ -1370,7 +1370,14 @@ impl IntoResponse for Error {
                 let reason = self.status.canonical_reason().unwrap_or("Error");
                 Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
             }
-            Err(source) => Error { status: self.status, source }.answer(),
+            Err(source) => {
+                let wrong_version = self.status == StatusCode::UPGRADE_REQUIRED && source.is::<upgrade::WrongVersion>();
+                let mut res = Error { status: self.status, source }.answer();
+                if wrong_version {
+                    upgrade::WrongVersion::headers(res.headers_mut());
+                }
+                res
+            }
         }
     }
 }

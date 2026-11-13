@@ -1879,7 +1879,11 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    [design Limit 26](../design.md#limit-origin-scheme)), so an app served only over HTTPS says
    so with `hsts`. A route whose callers must not be browsers at all refuses them in its
    `Identify` (a request with `Origin` or `Sec-Fetch-Site`).
-2. A request that does not ask to switch gets a 426, and a route that does not take `Upgrade`
+2. A request that does not ask to switch gets a 400: the extractor serves tunnels too, so it
+   cannot name a required protocol in the `Upgrade` header a 426 must carry. A WebSocket
+   handshake with a version other than 13 gets a 426 with `Sec-WebSocket-Version: 13`,
+   `Upgrade: websocket` and `Connection: upgrade`, kept on the error page and JSON failures.
+   A route that does not take `Upgrade`
    never switches: only an `Upgrade` makes the 101, so a socket opens only where a route
    declared one. A URL that is a socket and also something else (a page, or a gateway's relayed
    answer) takes `Option<Upgrade>`, `None` when the request does not ask, and returns
@@ -1900,7 +1904,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    tunnel that relays another server's switch and then passes bytes both ways
    (`tokio::io::copy_bidirectional`).
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
-   `CONNECT`) and a test's `app().test()` get a 426.
+   `CONNECT`) and a test's `app().test()` get a 400, without `Upgrade` or `Connection`
+   (HTTP/2 forbids those headers).
 
 `corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
 gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body
