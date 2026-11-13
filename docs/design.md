@@ -2638,10 +2638,17 @@ rules something out.
     exists, so its first version is published by hand; and a test of each of those on every
     platform. Such a launcher would also have to check the binary before running it. Its publish
     step could write each archive's sha256 into the package from the same run's builds, so that
-    is a constraint on its design, not a reason against it. That the release's own archives carry
-    no checksum, signature or attestation is a gap of its own, which `cargo binstall` and a manual
-    download already have
+    is a constraint on its design, not a reason against it. The release workflow now gives its
+    archives GitHub build provenance, verified before any crate is published or the GitHub
+    release is created, and a plain `SHA256SUMS` file (which detects a changed or damaged
+    download, not who built it), which closes the manual-download half of a gap of its own
     ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
+    `cargo binstall` does not consume that file or GitHub attestations; it verifies only a
+    minisign signature, which needs a signing key the release holds, so it still has only HTTPS
+    until that is decided, and verification before installation uses the
+    [manual download](guide/getting-started.md#verify-a-prebuilt-binary) (cargo-binstall
+    1.27.0's `SUPPORT.md` and `SIGNING.md`, read 2026-11-13).
+    That evidence does not make an npm initializer's extra channel or lifecycle any smaller.
 
     The name is held all the same, as [Releasing](../CONTRIBUTING.md#releasing) holds `corten` on
     crates.io should it come free ("take it only so no one else can"): `npm create corten` runs

@@ -294,9 +294,25 @@ Every published crate (all of `crates/`) shares the version in `[workspace.packa
 released together; the examples have `publish = false`. Pushing a tag `vX.Y.Z` runs the
 `Release` workflow (`.github/workflows/release.yml`): the checks, a `corten` binary for each
 platform, `cargo publish --workspace` (each crate after the ones it depends on), then a GitHub
-release with the binaries and the version's `CHANGELOG.md` section as its notes (attached as
-`CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub release allows).
+release with the binaries, `SHA256SUMS` and the version's `CHANGELOG.md` section as its notes
+(attached as `CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub
+release allows).
 It stops before publishing when the tag, the workspace version and the changelog disagree.
+A separate `attest` job, which builds nothing, signs each archive's GitHub build provenance, so
+the build jobs never hold an OIDC token. `verify-archives` then requires exactly the five
+expected archives, verifies each one's provenance against this workflow, commit and tag, and
+writes `SHA256SUMS` and its sha256 as a job output; `publish` needs it, so a missing or invalid
+attestation stops the release before the `release` environment's approval and before anything
+reaches crates.io. `github-release` checks that the `SHA256SUMS` it downloaded has that sha256,
+then that the archives it uploads are exactly the ones it lists, with their sha256s. That shows
+the release carries the bytes `verify-archives` verified; the checksums themselves are not
+signed and say nothing about who built the archives, which only the attestations show. Users
+verify downloaded archives as in
+[Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary). `cargo binstall`
+checks only HTTPS today: it would verify a minisign signature
+(`[package.metadata.binstall.signing]`), which needs a signing key the release holds as a
+secret, and whether to keep one is not decided
+([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.

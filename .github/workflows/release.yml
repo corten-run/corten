@@ -1,7 +1,8 @@
 # Publishes a release when a tag vX.Y.Z is pushed (CONTRIBUTING.md, Releasing): the checks, the
-# corten binary for each platform, every crate on crates.io, then a GitHub release with the
-# binaries and the CHANGELOG.md section for the version as its notes (attached as a file, and
-# linked from the notes, when it is longer than a GitHub release allows).
+# corten binary for each platform, their build provenance and its verification, every crate on
+# crates.io, then a GitHub release with the binaries, their SHA256SUMS and the CHANGELOG.md
+# section for the version as its notes (attached as a file, and linked from the notes, when it is
+# longer than a GitHub release allows).
 name: Release
 
 on:
@@ -13,8 +14,20 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The archives the binaries job builds, one per matrix target, named as
+  # [package.metadata.binstall] in crates/corten-cli/Cargo.toml expects. The later jobs attest,
+  # verify and release exactly these.
+  ARCHIVES: |-
+    corten-x86_64-unknown-linux-musl.tgz
+    corten-aarch64-unknown-linux-musl.tgz
+    corten-x86_64-apple-darwin.tgz
+    corten-aarch64-apple-darwin.tgz
+    corten-x86_64-pc-windows-msvc.zip
 
 jobs:
+  # Reuses CI, whose actions follow tags. It holds only contents: read (ci.yml asks for no more and
+  # is passed no secrets) and produces nothing the release uses; the jobs below pin every action
+  # to a commit.
   checks:
     uses: ./.github/workflows/ci.yml
 
@@ -23,7 +36,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      # This workflow's own jobs run their actions at the commits read, not at tags that can move.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - id: version
         name: The tag, the crates and CHANGELOG.md name the same version
         run: |
@@ -39,7 +55,7 @@ jobs:
             printf '%s\n' "The notes for $version are longer than a GitHub release allows. They are attached as CHANGELOG-$version.md and are in [CHANGELOG.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md) at this tag." > notes.md
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: notes
           path: |
@@ -59,22 +75,82 @@ jobs:
           - { target: x86_64-pc-windows-msvc, os: windows-2025 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
       - run: cargo build --release --locked -p corten-cli --target ${{ matrix.target }}
-      # The archive names are the ones [package.metadata.binstall] in crates/corten-cli/Cargo.toml expects.
+      # The archive names are the ones in ARCHIVES above.
       - if: runner.os != 'Windows'
         run: tar -czf corten-${{ matrix.target }}.tgz -C target/${{ matrix.target }}/release corten
       - if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path target/${{ matrix.target }}/release/corten.exe -DestinationPath corten-${{ matrix.target }}.zip
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: corten-${{ matrix.target }}
           path: corten-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  # Signs the archives' build provenance in a job of its own, so the jobs that build them (and run
+  # the dependencies' build scripts) never hold an OIDC token. It checks out and builds nothing.
+  attest:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: corten-*
+          merge-multiple: true
+      - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ env.ARCHIVES }}
+
+  # Before anything is published (and before the release environment asks for approval): exactly
+  # the archives in ARCHIVES, each with provenance from this workflow at this commit and tag, and
+  # the SHA256SUMS the GitHub release attaches.
+  verify-archives:
+    needs: attest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      # github-release accepts only the SHA256SUMS with this digest.
+      sha256sums: ${{ steps.verify.outputs.sha256sums }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: corten-*
+          merge-multiple: true
+      - id: verify
+        name: Verify every release archive
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' $ARCHIVES | sort)
+          found=$(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          [ "$found" = "$expected" ] || { printf 'expected archives:\n%s\nfound:\n%s\n' "$expected" "$found"; exit 1; }
+          sha256sum $ARCHIVES > SHA256SUMS
+          for archive in $ARCHIVES; do
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow corten-run/corten/.github/workflows/release.yml \
+              --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF"
+          done
+          echo "sha256sums=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sha256sums
+          path: SHA256SUMS
+          if-no-files-found: error
 
   publish:
-    needs: [checks, version, binaries]
+    needs: [checks, version, binaries, verify-archives]
     runs-on: ubuntu-24.04
     # Protect this environment in the repository settings; crates.io's trusted publisher names it.
     environment: release
@@ -89,30 +165,50 @@ jobs:
       # already published (step 3 there).
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - id: auth
         if: env.HAS_TOKEN != 'true'
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       # Publishes every crate without publish = false, each after the crates it depends on.
       - run: cargo publish --workspace --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
 
   github-release:
-    needs: [version, publish]
+    needs: [version, verify-archives, publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
+          pattern: corten-*
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: notes
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: sha256sums
+      # SHA256SUMS is the file verify-archives wrote (its digest is that job's output), and the
+      # archives released are exactly the ones it lists, byte for byte.
+      - name: The archives match the verified SHA256SUMS
+        run: |
+          set -euo pipefail
+          [ -n "$SHA256SUMS_DIGEST" ] || { echo "verify-archives gave no SHA256SUMS digest"; exit 1; }
+          echo "$SHA256SUMS_DIGEST  SHA256SUMS" | sha256sum --check --strict
+          sha256sum --check --strict SHA256SUMS
+          [ "$(sha256sum $ARCHIVES)" = "$(cat SHA256SUMS)" ] || { echo "SHA256SUMS does not list exactly the archives in ARCHIVES"; exit 1; }
+        env:
+          SHA256SUMS_DIGEST: ${{ needs.verify-archives.outputs.sha256sums }}
       # CHANGELOG-<version>.md is there only when the notes were too long for the release itself.
       - run: |
           shopt -s nullglob
           extra=(CHANGELOG-*.md)
           shopt -u nullglob
-          gh release create "$GITHUB_REF_NAME" corten-* "${extra[@]}" --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" $ARCHIVES SHA256SUMS "${extra[@]}" --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
