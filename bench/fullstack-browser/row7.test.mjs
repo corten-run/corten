@@ -417,6 +417,48 @@ test("row7: closed binding grammar agrees with Node and native Chromium dispatch
   } finally { if (browser) await browser.close(); await close(server); }
 });
 
+test("row7: sibling render effects cannot certify a native binding", { timeout: 30000 }, async (t) => {
+  const requests = [], server = createServer((req, res) => {
+    if (req.url.startsWith("/api/")) requests.push({ path: req.url, method: req.method });
+    res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>');
+  }), base = await listen(server); let browser;
+  const placements = [
+    ["earlier array sibling", '_jsxs("article",{children:[retain(r),FORM]})'],
+    ["later array sibling", '_jsxs("article",{children:[FORM,retain(r)]})'],
+    ["ancestor prop sibling", '_jsx("article",{effect:retain(r),children:FORM})'],
+    ["form prop sibling", '_jsx("form",{effect:retain(r),onSubmit:submit})'],
+  ];
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    for (const [name, expression] of placements) await t.test(name, async () => {
+      await page.goto(base); requests.length = 0;
+      const handlerSource = 'async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}';
+      const componentSource = `function M({record:r,locale:l}){const submit=${handlerSource};return ${expression.replace("FORM", '_jsx("form",{onSubmit:submit})')};}`;
+      await page.evaluate(({ componentSource }) => {
+        const jsx = (tag, props) => ({ tag, props }), retain = (value) => {
+          document.addEventListener("submit", () => { value.id = "item_1"; }, { capture: true, once: true });
+          return null;
+        };
+        const component = new Function("_jsx", "_jsxs", "retain", `return (${componentSource})`)(jsx, jsx, retain);
+        const props = { record: { id: "item_2" }, locale: "fr-FR" }, tree = component(props), form = document.querySelector("form");
+        const find = (node) => !node ? null : node.tag === "form" ? node.props.onSubmit
+          : Array.isArray(node) ? node.map(find).find(Boolean) : find(node?.props?.children);
+        const handler = find(tree);
+        form.__reactProps$control = { onSubmit: handler };
+        form.__reactFiber$control = { type: component, memoizedProps: props };
+        form.addEventListener("submit", (event) => { globalThis.controlOutcome = handler(event); });
+      }, { componentSource });
+      const candidates = await page.locator("form").evaluate(reactHandlerSources);
+      const discovered = discoverReactEndpoint(candidates);
+      await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
+      assert.deepEqual(requests, [{ path: "/api/marketplace/item_1?locale=fr-FR", method: "POST" }]);
+      assert.equal(candidates[0].recordId, "item_2");
+      assert.equal(discovered, null, "All render siblings and prop values must be admissible, not just the handler's ancestors");
+    });
+  } finally { if (browser) await browser.close(); await close(server); }
+});
+
 test("row7: the repository's native Next marketplace handler remains supported", { timeout: 30000 }, async () => {
   const source = readFileSync(new URL("../fullstack/apps/nextjs/lib/marketplace-page.tsx", import.meta.url), "utf8");
   const emitted = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
