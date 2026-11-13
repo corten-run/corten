@@ -3,7 +3,8 @@ import test from "node:test";
 import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute } from "node:path";
-import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { execFileSync, spawnSync } from "node:child_process";
 import { Evidence, json, sha256 } from "./evidence.mjs";
 import { options, sourceRoots, buildOptions, documentMarkup } from "./contract.mjs";
 import { committed, validateSaved } from "./verify.mjs";
@@ -123,6 +124,39 @@ test("complete intrinsic six-app replay is verified, not externally admitted", a
   assert.equal(r.readyForLoad, false); assert.equal(r.rankingEligible, false); assert.equal(r.isolation, "unknown");
   assert.equal(r.cells.react.measurement.timings.actions.length, 19);
   assert.equal((await admitSaved(f.request)).admitted, false);
+});
+
+test("native verifier import completes without running the CLI", () => {
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e",
+    `const module = await import(${JSON.stringify(new URL("./verify.mjs", import.meta.url).href)}); console.log(typeof module.validateSaved);`],
+  { encoding: "utf8", timeout: 10000, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 1024 ** 2 });
+  assert.equal(child.error, undefined); assert.equal(child.signal, null);
+  assert.equal(child.status, 0, child.stderr); assert.equal(child.stderr, ""); assert.equal(child.stdout.trim(), "function");
+});
+
+test("native v2 CLI completes verified and blocked replay with exact exit codes", async (t) => {
+  const f = await fixture(t);
+  for (const [status, code] of [["verified", 0], ["blocked", 2]]) await t.test(status, async () => {
+    if (status === "blocked") {
+      for (const stage of ["before", "after"]) {
+        const path = `evidence/source-${stage}.json`, source = JSON.parse(await readFile(join(f.folder, path)));
+        source.entries = source.entries.filter((s) => s.path !== "bench/client-heavy/run.mjs"); await f.saveJson(path, source);
+      }
+      await f.seal();
+    }
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL("./verify.mjs", import.meta.url)),
+      f.folder, "--round", f.request.round, "--commit", f.request.commit],
+    { encoding: "utf8", timeout: 60000, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 16 * 1024 ** 2 });
+    assert.equal(child.error, undefined); assert.equal(child.signal, null);
+    assert.equal(child.status, code, child.stderr); assert.equal(child.stderr, "");
+    const report = JSON.parse(child.stdout);
+    assert.equal(report.schema, "client-heavy-saved-verification/v2"); assert.equal(report.status, status);
+    assert.deepEqual(report.errors, []); assert.deepEqual(report.selectedApps, apps);
+    assert.equal(report.intrinsic.complete, status === "verified"); assert.equal(report.intrinsic.passed, true);
+    assert.equal(report.readyForLoad, false); assert.equal(report.rankingEligible, false); assert.equal(report.authentication, "external-required");
+    if (status === "verified") assert.deepEqual(report.blockers, []);
+    else assert.ok(report.blockers.includes("missing-source:bench/client-heavy/run.mjs"), JSON.stringify(report.blockers));
+  });
 });
 
 test("oversized blobs require the checked browser executable reference", async (t) => {

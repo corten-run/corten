@@ -525,9 +525,12 @@ export function cliOptions(args) {
   return { folder: args[0], round: args[2], commit: args[4] };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+async function main() {
   try {
     const result = await validateSaved(cliOptions(process.argv.slice(2)));
     console.log(JSON.stringify(result, null, 2)); process.exitCode = result.status === "verified" ? 0 : ["invalid", "failed"].includes(result.status) ? 1 : 2;
   } catch { console.error("Usage: node bench/client-heavy/verify.mjs <folder> --round <round> --commit <full-sha>"); process.exitCode = 1; }
 }
+
+// Finish module evaluation before v2 imports the shared readers from this module.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) void main();
