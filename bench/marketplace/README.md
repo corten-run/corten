@@ -282,13 +282,16 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
-New native runs retain `evidenceVersion: "marketplace-raw/v2"` alongside the unchanged
+New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the unchanged
 `marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
 above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
 available, but its success is not raw-evidence validation. Old folders without the new
 receipts fail closed; do not backfill them with inferred observations.
+The v3 receipts also retain the selected immutable k6 manifest, platform and actual
+executable version in both the summary and raw tool observation. Earlier versions
+without that identity remain historical, not newly qualified v3 measurements.
 
 The replay checks both sources, every localized page and neutral JSON profile/pass/phase,
 exact per-pass metrics and aggregates, raw qualification and browser/content gate results,

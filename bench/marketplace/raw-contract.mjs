@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const evidenceVersion = "marketplace-raw/v2";
+export const evidenceVersion = "marketplace-raw/v3";
 export const ownerLabel = "run.corten.marketplace";
 export const nodeImage = "node:24-bookworm-slim";
-export const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
+export { k6Image } from "../load-tool.mjs";
 export const upstreamInterpretation = "single-process upstream; a busy API may be the throughput limit, not the app";
 const environment = ["MARKETPLACE_SOURCE", "MARKETPLACE_FIXTURE_PATH", "API_BASE", "PORT", "HOSTS", "PROFILE", "MAX_CONNECTIONS", "LOCALE", "BASE", "TARGET", "DURATION", "MODE", "RATE", "VUS"];
 

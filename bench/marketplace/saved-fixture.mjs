@@ -9,6 +9,7 @@ import { splitApps } from "./run-contract.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, upstreamInterpretation } from "./raw-contract.mjs";
+import { k6Provenance } from "../load-tool.mjs";
 
 export function summaryFixture(commit) {
   const apps = splitApps("production-performant", 3)[0];
@@ -51,7 +52,9 @@ export function summaryFixture(commit) {
 
 export function writeSavedFixture(folder, commit, tree) {
   const s = summaryFixture(commit); s.evidenceVersion = evidenceVersion;
-  s.tools.upstream.image = nodeImage; s.tools.k6.image = k6Image; s.tools.k6.repoDigests = [k6Image];
+  s.tools.upstream.image = nodeImage;
+  s.tools.k6 = k6Provenance({ Id: s.tools.k6.imageId, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
+    "k6 v2.4.0 (synthetic test executable, not a native measurement)");
   const write = (path, value) => { const full = join(folder, path); mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, typeof value === "string" ? value : JSON.stringify(value)); };
   const resources = [];
   let next = 0;
@@ -72,7 +75,7 @@ export function writeSavedFixture(folder, commit, tree) {
   const images = Object.fromEntries(s.options.apps.map((app) => [app, { id: s.apps[app].imageId, cmd: ["native"], entrypoint: null,
     labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": featureProfile } }]));
   write("images.json", images); write("tools.json", Object.fromEntries(Object.keys(s.tools).map((k) => [k, { id: s.tools[k].imageId, cmd: k === "upstream" ? ["node"] : k === "checker" ? ["/bin/bash"] : null,
-    entrypoint: k === "k6" ? ["k6"] : k === "upstream" ? ["docker-entrypoint.sh"] : null, ...(k === "k6" ? { repoDigests: [k6Image] } : {}) }])));
+    entrypoint: k === "k6" ? ["k6"] : k === "upstream" ? ["docker-entrypoint.sh"] : null, ...(k === "k6" ? { repoDigests: [k6Image], platform: s.tools.k6.platform, version: s.tools.k6.version, versionOutput: s.tools.k6.versionOutput } : {}) }])));
   const appRuntime = (app, source, extra = {}) => runtime(app, "app", 2 ** 30, { cmd: images[app].cmd,
     env: { MARKETPLACE_SOURCE: source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: `http://${upstream.name}:8080`, PORT: "8080", HOSTS: `${s.runId}-${app},localhost,127.0.0.1`,
       PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }, ulimits: [{ Name: "nofile", Soft: 65536, Hard: 65536 }], mounts: [mount("/fixtures")], ...extra });
