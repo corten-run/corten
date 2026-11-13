@@ -23,9 +23,7 @@ done
 apt-get install -y --no-install-recommends nginx curl
 
 # Two ways to know a name reaches this machine; either will do. A certificate asked for then
-# is asked for by the machine the name reaches. The certificate holds the site's name and each
-# name that redirects to it, and is refused if one of them is not here yet, so the wait is for
-# all of them.
+# is asked for by the machine the name reaches.
 #
 # One: a word only this machine knows, served where certbot's challenge will be (nginx as
 # installed serves /var/www/html, and so does the site's own configuration under this path),
@@ -50,16 +48,32 @@ assigned() {
     [ -n "$address" ] || return 1
     getent ahostsv4 "$1" | awk -v address="$address" '$1 == address { found = 1 } END { exit !found }'
 }
-reached() {
-    for name in $domain $redirects; do
-        answers "$name" || assigned "$name" || return 1
+wait_for() {
+    until answers "$1" || assigned "$1"; do
+        echo "waiting for $1 to reach this machine"
+        sleep 30
     done
 }
 
-until reached; do
-    sleep 30
-done
-rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
+# The site first, under its own name alone. A name that redirects to it and is late, or is
+# refused a certificate, then holds back only itself: the site is served meanwhile, and this
+# unit's journal says which name is waited for. A run after one that failed further on finds
+# the certificate there and leaves this step out: asked for the site's name alone, a
+# certificate that holds the others already would be replaced by one without them, and again
+# below by one with them, at each new try.
+wait_for "$domain"
+if [ -z "$redirects" ] || [ ! -e "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine"
+fi
 
-sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
+# Then the names that redirect, once each reaches this machine: one certificate that holds
+# them and the site's name takes the place of the site's (provision.sh). The word is still
+# served meanwhile: the site's configuration answers that path on port 80 for any name.
+if [ -n "$redirects" ]; then
+    for name in $redirects; do
+        wait_for "$name"
+    done
+    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
+fi
+rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
 touch /var/lib/corten-site-boot.done

@@ -192,12 +192,13 @@ Corten is pre-1.0, so any minor version may change the API.
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
   certificate, and nginx answers it on both ports with a redirect (308) to the same path at
-  the site's name. A new machine waits for every name to reach it before it asks for the
-  certificate, a run of `provision.sh` asks for a new one only when the one in place lacks a
-  name, and after an apply the `Site machine` workflow fails where a name does not send its
-  visitors to the site. Port 80 now redirects to the site's name whatever host was asked for,
-  not to the host the request named. A test of the site looks in the checkout for every file
-  or directory the page links to in the repository
+  the site's name. A new machine serves the site under its own name first, then takes the
+  other names on once each reaches it, so a name that is late or refused a certificate holds
+  back only itself. A run of `provision.sh` asks for a certificate only when the names the
+  one in place holds are not the ones given, and after an apply the `Site machine` workflow
+  fails where a name does not send its visitors to the site. Port 80 now redirects to the
+  site's name whatever host was asked for, not to the host the request named. A test of the
+  site looks in the checkout for every file or directory the page links to in the repository
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Changed

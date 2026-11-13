@@ -559,11 +559,12 @@ mod tests {
         corten::types::Types::new().components(COMPONENTS).sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
     }
 
-    /// The page's links into the repository are addresses on GitHub, which a test cannot ask.
-    /// Each names a file or a directory on `main`, so the one in this checkout is looked for: a
-    /// guide that moves takes its link with it, or fails here.
+    /// The page's links to a file or a directory of the repository are addresses on GitHub,
+    /// which a test cannot ask. Each names a path on `main`, so the one in this checkout is
+    /// looked for: a guide that moves takes its link with it, or fails here. Links to anything
+    /// else (the repository's front page, another site) are not looked at.
     #[tokio::test]
-    async fn every_link_into_the_repository_names_what_is_there() {
+    async fn every_link_to_a_path_in_the_repository_names_one_that_is_there() {
         let page = app().test().get(&page()).await;
         let html = page.text();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -580,6 +581,8 @@ mod tests {
                 found += 1;
             }
         }
+        // Not a count of the page's links: a floor, so a change to how they are written does
+        // not leave this looking at none.
         assert!(found >= 10, "the page's links into the repository were not found: {found}");
     }
 

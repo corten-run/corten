@@ -101,9 +101,10 @@ to install its packages and get a certificate, and then a whole run of the Site 
 tests and builds before it ships. For the first machine made for corten.run (one run, on
 `a7bbe4cc9`, with the name already at DigitalOcean's servers) the machine answered under its
 certificate 1 min 42 s after the apply ended, and the Site run started then had shipped and
-checked the release 1 min 54 s after that; a replacement has not been timed. The old machine and its
-certificate are gone by then, and Let's Encrypt issues the same names five certificates a week:
-a sixth replacement inside a week leaves the site down until its limit allows another. So
+checked the release 1 min 54 s after that; a replacement has not been timed. The old machine
+and its certificate are gone by then, and Let's Encrypt issues the same names five
+certificates a week: a sixth replacement inside a week leaves the site down until its limit
+allows another. So
 gather changes to those files into one merge. When an apply fails, run the workflow again
 (`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
 to a machine that answers 502. With deploys on, a run fails when the machine does not answer.
@@ -133,12 +134,17 @@ on the next apply.
 
 `SITE_REDIRECTS` is a JSON list of other names in the zone that send their visitors to the
 site's, such as `["www.example.com"]` for a site at `example.com`. Each gets a record at the
-same address (yours to make, with the zone elsewhere) and a place on the site's certificate,
-and nginx answers it on both ports with a redirect (308) to the same path at the site's name;
-the app never sees it. A new machine waits until every one of the names reaches it before it
-asks for the certificate, which is refused if one does not. After an apply the workflow asks
-the machine for each name and fails where one does not send its visitors to the site. Changing
-the list replaces the droplet on the next apply.
+same address and a place on the site's certificate, and nginx answers it on both ports with a
+redirect (308) to the same path at the site's name; the app never sees it. With the zone
+elsewhere the records are yours to make, before the variable is set. A new machine serves the
+site under its own name first, with a certificate for that name alone, and then waits for
+each of the other names to reach it and asks for one certificate that holds them all: two
+certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
+back only itself. The machine says which name it waits for, or why a certificate was refused
+(`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
+After an apply the workflow asks the machine for each name, for ten minutes where it made the
+machine, and fails where one does not send its visitors to the site. Changing the list
+replaces the droplet on the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
@@ -176,9 +182,10 @@ are kept apart on GitHub and not on the machine.
    be changed but not removed that way; the page shows a change after the service next starts
    (`systemctl restart corten-site`, or the next deploy). A fifth argument is the other names
    that send their visitors to the site's, with spaces between them (`'www.<domain>'`): point
-   each at the machine first, as in step 2. It is given on every run: a run without it stops
-   redirecting them, and a run with a name the certificate lacks asks for a certificate that
-   holds them all.
+   each at the machine first, as in step 2. It is given on every run, and the certificate
+   follows it: a run whose names are not the ones the certificate holds asks for a
+   certificate that holds the site's name and those given, so a run without a name stops
+   redirecting it and takes it off the certificate, and its record can then go.
 4. Make the `site` environment, which only `main` may deploy to, and give it the key. A
    repository secret could be read by a workflow on any pushed branch; an environment's is
    handed only to a job the environment's rule lets in.

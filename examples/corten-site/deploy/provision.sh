@@ -18,10 +18,24 @@ key=$3
 machine=${4:-}
 redirects=${5:-}
 here=$(cd "$(dirname "$0")" && pwd)
-# The names are written into nginx's configuration and read there as nginx reads them.
-case $domain$redirects in
-*[!a-z0-9.\ -]*) echo "give each name alone, in lower case: no scheme, path or port" >&2; exit 1 ;;
+# The names are written into nginx's configuration and handed to certbot, and each reads them
+# its own way: a name is lower-case letters, digits, dots and hyphens, and does not start with
+# a hyphen. A name that redirects is not the site's own.
+not_a_name() {
+    echo "give each name alone, in lower case: no scheme, path or port, and the site's own name once" >&2
+    exit 1
+}
+case $domain in
+"" | -* | *[!a-z0-9.-]*) not_a_name ;;
 esac
+case $redirects in
+*[!a-z0-9.\ -]*) not_a_name ;;
+esac
+for name in $redirects; do
+    case $name in
+    "$domain" | -*) not_a_name ;;
+    esac
+done
 # What the machine is, as the page states it: the argument, or what an earlier run was given.
 [ -n "$machine" ] || machine=$(sed -n 's/^CORTEN_SITE_MACHINE=//p' /etc/corten-site.env 2>/dev/null || true)
 # systemd reads quotes and backslashes in an environment file as its own, not as the text, and
@@ -85,17 +99,20 @@ ufw --force enable
 
 # The certificate first, answered by nginx as it is installed, then the site's own configuration,
 # which names it. certbot's timer renews it; nginx takes the new one on reload. One certificate
-# holds the site's name and each name that redirects to it, and is asked for again only when
-# the one in place lacks a name: then it is replaced by one that holds them all.
+# holds the site's name and each name that redirects to it, and no other: a name it kept after
+# its record was gone would fail every renewal, the site's with it. So it is asked for again
+# only when the names it holds are not the ones given, and is then replaced by one that holds
+# those.
 certificate=/etc/letsencrypt/live/$domain/fullchain.pem
-holds_every_name() {
-    [ -e "$certificate" ] || return 1
-    for name in $domain $redirects; do
-        openssl x509 -in "$certificate" -noout -checkhost "$name" | grep -q 'does match certificate' || return 1
-    done
+held() {
+    openssl x509 -in "$certificate" -noout -ext subjectAltName | tr ',' '\n' | sed -n 's/^ *DNS://p' | sort -u
+}
+given() {
+    # shellcheck disable=SC2086 # one name a word
+    printf '%s\n' "$domain" $redirects | sort -u
 }
 install -d /var/www/html
-if ! holds_every_name; then
+if [ ! -e "$certificate" ] || [ "$(held)" != "$(given)" ]; then
     systemctl start nginx
     set -- -d "$domain"
     for name in $redirects; do
@@ -104,8 +121,8 @@ if ! holds_every_name; then
     certbot certonly --webroot -w /var/www/html --cert-name "$domain" "$@" --renew-with-new-domains \
         -m "$email" --agree-tos --non-interactive --deploy-hook 'systemctl reload nginx'
 fi
-# A name nginx never matches stands where there are none, so the server that redirects is
-# there and answers nothing.
+# `_`, which is no host's name, stands where there are none, so the server that redirects is
+# there and no visitor reaches it.
 sed -e "s/SITE_DOMAIN/$domain/g" -e "s/SITE_REDIRECTS/${redirects:-_}/g" "$here/nginx.conf" > /etc/nginx/sites-available/corten-site
 ln -sf /etc/nginx/sites-available/corten-site /etc/nginx/sites-enabled/corten-site
 rm -f /etc/nginx/sites-enabled/default

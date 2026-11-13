@@ -165,16 +165,25 @@ jobs:
             gh workflow run site.yml --ref main --repo "$GITHUB_REPOSITORY"
             echo "The machine at $ADDRESS answers as $SITE_DOMAIN ($code); the Site workflow is started."
           fi
-          # A machine that answers as the site holds its whole configuration, so each name that
-          # redirects is asked too, under its own name and so its own place on the certificate.
+          # Each name that redirects is asked too, under its own name and so its own place on the
+          # certificate. A machine made now serves the site first and takes those names on once
+          # each reaches it: ten minutes for that, a minute otherwise.
           [ "$code" != 000 ] || exit 0
+          # Read first, so a list jq cannot read fails the step: a loop over nothing would pass.
+          names=$(jq -r '.[]' <<< "$REDIRECTS")
+          if [ "$MADE" = true ]; then tries=30; else tries=3; fi
           lost=0
-          for name in $(jq -r '.[]' <<< "$REDIRECTS"); do
-            to=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$name:443:$ADDRESS" "https://$name/" 2>/dev/null) || to=000
+          for name in $names; do
+            to=000
+            for _ in $(seq 1 "$tries"); do
+              to=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$name:443:$ADDRESS" "https://$name/" 2>/dev/null) || to=000
+              [ "$to" != "308 https://$SITE_DOMAIN/" ] || break
+              sleep 20
+            done
             if [ "$to" = "308 https://$SITE_DOMAIN/" ]; then
               echo "https://$name/ sends its visitors to https://$SITE_DOMAIN/."
             else
-              echo "::error::https://$name/ at $ADDRESS does not send its visitors to https://$SITE_DOMAIN/ (it answered: $to)."
+              echo "::error::https://$name/ at $ADDRESS does not send its visitors to https://$SITE_DOMAIN/ (it answered: $to). The site is served without it. A new machine takes the name on once the name reaches it: on the machine, journalctl -u corten-site-boot says which name it waits for, or why its certificate was refused."
               lost=1
             fi
           done
