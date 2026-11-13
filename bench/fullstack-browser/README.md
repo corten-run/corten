@@ -48,7 +48,7 @@ For existing images or an independent native readback path, use a targets JSON w
 ```
 
 ```sh
-node --test bench/fullstack-browser/runner.test.mjs bench/fullstack-browser/browser.test.mjs
+node --test bench/fullstack-browser/runner.test.mjs bench/fullstack-browser/transports.test.mjs bench/fullstack-browser/browser.test.mjs
 node bench/fullstack-browser/run.mjs w2 --targets bench/fullstack-browser/work/targets.json --out bench/fullstack-browser/work/w2
 node bench/fullstack-browser/run.mjs w3 --build --out bench/fullstack-browser/work/w3 --apps nextjs --cases fixture-en-US-desktop-js,api-fr-FR-mobile-no-js
 ```
@@ -172,6 +172,28 @@ matching architecture. Wrong locale/item/transport/content/status/payload remain
 The physical path and body hash remain in the raw ledger. Its exported
 `normalizeSvelteKitCase` is the shared oracle's clone-only normalization hook, not a changed
 gate or document fallback. No shared workload file is edited.
+
+React Router Single Fetch is recognized from the mounted native `Form`, its owning React
+fiber, the native route manifest and the observed `text/x-script` pooled envelope. Action
+`data` and loader route envelopes are checked separately; physical `.data` URLs remain in
+the ledger. `normalizeReactRouterCase` provides a clone-only oracle hook and refuses failed
+or unfinished requests. A 404 status is captured independently from the visible error page;
+an empty native 404 body still fails the visible-error check.
+
+Next's mounted React handler is read independently before submission. Nuxt's mounted Vue
+invoker and TanStack's mounted React handler are followed through bounded CDP lexical-scope
+reads, not called. The supported native URL expressions or public native server-function
+URL must bind the destination before the observed POST. Only source hashes, selected route
+fields and endpoint receipts are saved; raw scopes, handler source and tokens are not.
+Unsupported bindings fail closed instead of guessing from the subsequent POST.
+
+Actions wait for actual observed request completion and, with JS enabled, a real animation
+frame within the original action deadline. An interim cleared status message is not a settled
+render. Late requests are checked again before each step's snapshot. Body-capture failures
+retain their request-local error, and the final request ledger retains late completion or
+failure evidence. CDP frame/loader facts distinguish observed document-replacement
+cancellations from other native failures where identity is unambiguous; these annotations
+do not waive failed requests, supply missing bytes, retry an action or increase its timeout.
 
 `resources.mjs` installs observers before native scripts and records native add/remove/once/
 abort listener lifetimes, timeouts/intervals/animation/idle callbacks, native DOM observers,

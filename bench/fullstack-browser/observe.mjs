@@ -3,6 +3,10 @@ import { publicURL, publicInput, sha256, transportOf } from "./contract.mjs";
 import { snapshotPage } from "../marketplace/check.mjs";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
 import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";
+import { inspectScopedBinding } from "./scopes.mjs";
+import { singleFetchData } from "./navigation.mjs";
+import { NativeNetworkAudit } from "./cancellations.mjs";
+import { performance } from "node:perf_hooks";
 
 export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
   const document = rows.find((r) => r.resource === "document");
@@ -15,13 +19,16 @@ export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
 
 // No headers, cookies, transport tokens, full POST bodies or raw HTML are saved.
 export function observeNetwork(page) {
-  const rows = [], pending = new Set(), byRequest = new Map(), failures = [];
+  const rows = [], pending = new Set(), byRequest = new Map(), byId = new Map(), bindings = new Map(), failures = [];
+  const waiters = new Set();
+  const notify = () => { for (const wake of waiters) wake(); waiters.clear(); };
   let formBinding = null;
   const track = (promise) => { pending.add(promise); promise.catch((e) => failures.push(e.message)).finally(() => pending.delete(promise)); };
   page.on("request", (request) => {
     const row = { id: randomUUID(), ...publicURL(request.url()), method: request.method(), transport: transportOf(request),
       resource: request.resourceType(), status: null, completed: false, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
-    rows.push(row); byRequest.set(request, row);
+    rows.push(row); byRequest.set(request, row); byId.set(row.id, request); bindings.set(request, formBinding);
+    notify();
     track((async () => {
       let input = publicInput(request, formBinding);
       if (input === null) {
@@ -31,7 +38,7 @@ export function observeNetwork(page) {
       Object.assign(row, input);
     })());
   });
-  page.on("requestfailed", (r) => { const row = byRequest.get(r); if (row) row.failure = r.failure()?.errorText ?? "request failed"; });
+  page.on("requestfailed", (r) => { const row = byRequest.get(r); if (row) row.failure = r.failure()?.errorText ?? "request failed"; notify(); });
   page.on("response", (response) => {
     const row = byRequest.get(response.request());
     if (!row) return;
@@ -39,7 +46,7 @@ export function observeNetwork(page) {
     const headers = response.headers(); row.type = headers["content-type"] ?? null; row.encoding = headers["content-encoding"] ?? "identity";
     row.hasCsp = Boolean(headers["content-security-policy"]);
   });
-  page.on("requestfinished", (request) => track((async () => {
+  page.on("requestfinished", (request) => { track((async () => {
     const row = byRequest.get(request), response = await request.response();
     if (!row || !response) return;
     row.completed = true;
@@ -48,15 +55,46 @@ export function observeNetwork(page) {
     // are Playwright's HTTP size estimate, not TLS/link-layer traffic.
     row.bytes = { encodedBody: size.responseBodySize, headers: size.responseHeadersSize, decodedBody: null };
     if (response.status() >= 300 && response.status() < 400) return;
-    const body = await response.body(); row.bytes.decodedBody = body.length; row.bodySha256 = sha256(body);
+    let body;
+    try { body = await response.body(); }
+    catch (error) { row.captureError = error.message; throw error; }
+    row.bytes.decodedBody = body.length; row.bodySha256 = sha256(body);
+    const form = bindings.get(request);
+    if (form?.router?.basis === "mounted-react-router-Form" && row.resource === "fetch" && /^text\/x-script\b/.test(row.type ?? "")) {
+      const data = singleFetchData(body, row.method);
+      if (data) {
+        row.nativeData = data;
+        row.nativeProtocol = { framework: "react-router", transportAtDispatch: row.transport, form: structuredClone(form) };
+        row.transport = "router";
+      }
+    }
     if (row.transport === "router" && /\/__data\.json$/.test(row.path) && /^application\/json\b/.test(row.type ?? "")) {
       try {
         const value = JSON.parse(body.toString("utf8"));
         if (value.type === "data" && Array.isArray(value.nodes)) row.nativeData = { framework: "sveltekit", type: value.type, nodes: value.nodes.map((node) => node?.type ?? null) };
       } catch { /* A malformed native payload is retained, never normalized. */ }
     }
-  })()));
-  return { rows, failures, bindForm(form) { formBinding = form ? structuredClone(form) : null; }, async drain() { while (pending.size) await Promise.allSettled([...pending]); } };
+  })().finally(notify)); });
+  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); };
+  let native;
+  return { rows, failures,
+    attachCDP(cdp) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; }); },
+    annotate() { native?.annotate(rows); },
+    bindForm(form) { formBinding = form ? structuredClone(form) : null; }, drain,
+    async settle(offset, deadline, requirePost = false) {
+      while (performance.now() < deadline) {
+        const observed = rows.slice(offset);
+        if ((!requirePost || observed.some((row) => row.method === "POST")) && observed.every((row) => row.completed || row.failure)) {
+          await drain();
+          if (rows.slice(offset).every((row) => row.completed || row.failure)) return;
+        }
+        await new Promise((resolve) => {
+          const wake = () => { clearTimeout(timer); waiters.delete(wake); resolve(); };
+          const timer = setTimeout(wake, Math.max(0, deadline - performance.now())); waiters.add(wake);
+        });
+      }
+      throw new Error("Native request completion not observed within the action deadline");
+    } };
 }
 
 // Read native bindings, never install a common navigation/form implementation.
@@ -74,6 +112,20 @@ export function nativeDOM() {
   const turboDisabled = article?.closest("[data-turbo]")?.getAttribute("data-turbo") === "false";
   const updateURI = document.querySelector("script[data-update-uri]")?.getAttribute("data-update-uri");
   const updateURL = updateURI ? new URL(updateURI, document.baseURI) : null;
+  const reactProps = form && Object.keys(form).find((key) => key.startsWith("__reactProps$"));
+  const reactFiber = form && Object.keys(form).find((key) => key.startsWith("__reactFiber$"));
+  let router = null;
+  if (typeof form?.[reactProps]?.onSubmit === "function" && form.getAttribute("data-discover") === "true") {
+    for (let node = form[reactFiber], index = 0; node && index++ < 32; node = node.return) {
+      if (node.type?.displayName === "Form" && node.memoizedProps?.reloadDocument !== true && node.memoizedProps?.navigate !== false
+        && node.memoizedProps?.method?.toLowerCase() === "post" && globalThis.__reactRouterContext && globalThis.__reactRouterManifest?.routes) {
+        const path = new URL(form.action).pathname;
+        router = { basis: "mounted-react-router-Form", wirePath: path + ".data", routes: Object.keys(globalThis.__reactRouterManifest.routes),
+          handlerSource: Function.prototype.toString.call(form[reactProps].onSubmit), componentSource: Function.prototype.toString.call(node.type.render) };
+        break;
+      }
+    }
+  }
   return { scriptPaths, nextPage, turbo, turboDisabled, components: [...new Set(wire.map((el) => el.getAttribute("wire:id")))],
     hasMetaCsp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy" i]')),
     preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, path: new URL(el.href).pathname })),
@@ -85,14 +137,31 @@ export function nativeDOM() {
       models: Object.fromEntries([...form.elements].filter((el) => ["email", "target_price"].includes(el.name)).map((el) => [el.name,
         [...el.attributes].find((a) => /^wire:model(?:\.|$)/.test(a.name))?.value ?? null])),
       component: form.closest("[wire\\:id]")?.getAttribute("wire:id") ?? null,
+      router,
       binding: [...form.attributes].find((a) => a.name.startsWith("wire:submit"))?.name ?? (form.hasAttribute("data-patch") ? "data-patch" : null),
       turbo: form.closest("[data-turbo]")?.getAttribute("data-turbo") !== "false", encoding: form.enctype,
       updatePath: updateURL?.origin === location.origin ? updateURL.pathname : null } : null };
 }
-export async function nativeForm(page, native, app, js) {
+export async function nativeForm(page, native, app, js, cdp, inspect = true) {
   const form = native.form;
-  if (form && js && app === "nextjs") form.enhancement = discoverReactEndpoint(await page.locator(".marketplace__alert form").evaluate(reactHandlerSources));
+  if (form && js && inspect && app === "nextjs") form.enhancement = discoverReactEndpoint(await page.locator(".marketplace__alert form").evaluate(reactHandlerSources));
+  if (form && js && inspect && ["nuxt", "tanstack-start"].includes(app)) {
+    const receipt = await inspectScopedBinding(cdp, app, page.url(), form.action);
+    form.enhancement = receipt.binding; form.bindingObservation = { trace: receipt.trace, reason: receipt.reason };
+  }
+  if (form?.router) {
+    sanitizeNative(native);
+    if (js && app === "react-router") form.enhancement = { path: form.action, transport: "router", basis: form.router.basis };
+  }
   return form;
+}
+export function sanitizeNative(native) {
+  const router = native.form?.router;
+  if (router) for (const name of ["handler", "component"]) {
+    if (typeof router[`${name}Source`] === "string") router[`${name}Sha256`] = sha256(router[`${name}Source`]);
+    delete router[`${name}Source`];
+  }
+  return native;
 }
 export function architecture(app, native) {
   if (app === "nextjs") return native.nextPage?.startsWith("/marketplace/") ? "next-pages" : "unverified-next-architecture";
@@ -102,7 +171,7 @@ export function architecture(app, native) {
   return native.markers[marker] ? app : `unverified-${app}-architecture`;
 }
 export async function visibleDOM(page) {
-  const native = await page.evaluate(nativeDOM);
+  const native = sanitizeNative(await page.evaluate(nativeDOM));
   const present = await page.locator("article.marketplace").count();
   return { observer: randomUUID(), url: publicURL(page.url()), native,
     page: present ? await page.evaluate(snapshotPage) : null,
@@ -120,7 +189,7 @@ export async function responseDocument(browser, response, url) {
       else await route.abort();
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
-    return { observer: randomUUID(), responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: await page.evaluate(nativeDOM),
+    return { observer: randomUUID(), responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
       scope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
   } finally { await context.close(); }
 }

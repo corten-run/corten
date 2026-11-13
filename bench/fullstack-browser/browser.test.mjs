@@ -6,7 +6,9 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { chromium } from "@playwright/test";
-import { readStore, semanticSignature, waitForSemanticChange } from "./journey.mjs";
+import { readStore, semanticSignature, waitForSemanticChange, observedFrame } from "./journey.mjs";
+import { inspectScopedBinding } from "./scopes.mjs";
+import { performance } from "node:perf_hooks";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 
@@ -115,4 +117,60 @@ test("resource audit observes real retirement, leaked callbacks/timers, and dest
       assert.ok(snapshot.scopes.every((s) => Object.values(s.owned).every((n) => n === 0)));
     } finally { await disabled.close(); }
   } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+});
+
+test("CDP reads mounted lexical bindings without submitting or persisting native scope contents", { timeout: 30000 }, async () => {
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end('<!doctype html><div class="marketplace__alert"><form></form></div>');
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true }); const context = await browser.newContext();
+    try {
+      const page = await context.newPage(); await page.goto(base);
+      await observedFrame(page, performance.now() + 5000);
+      const cdp = await context.newCDPSession(page); const released = [];
+      const audited = { send: async (method, args) => { if (method === "Runtime.releaseObjectGroup") released.push(args.objectGroup); return cdp.send(method, args); } };
+      await page.evaluate(() => {
+        globalThis.submissions = 0;
+        const form = document.querySelector("form"), route = { params: { id: "item_2", locale: "fr-FR" } };
+        const secret = "SECRET-NOT-A-RECEIPT";
+        const rpc = async () => { globalThis.submissions++; return secret; };
+        const submit = async (event) => rpc(`/api/marketplace/${encodeURIComponent(String(route.params.id))}`, { method: `POST`, body: event });
+        const e = submit, t = [], bc = {};
+        const wrapper = (n, ...r) => { for (let e = 0; e < t.length; e++) { let r = bc[t[e]]; if (r && r(n, t)) return; } return e(n, ...r); };
+        form[Symbol("_vei")] = { onSubmit: { value: wrapper } };
+        const server = Object.assign(() => { globalThis.submissions++; return secret; }, { url: "/_serverFn/" + "b".repeat(64) });
+        const nativeSubmit = (event) => server({ data: event });
+        form.__reactProps$apparatus = { onSubmit: (event) => nativeSubmit(event) };
+      });
+      const nuxt = await inspectScopedBinding(audited, "nuxt", base, "/marketplace/fr-FR/item_2");
+      assert.equal(nuxt.binding.path, "/api/marketplace/item_2"); assert.ok(nuxt.trace.length >= 2);
+      const tanstack = await inspectScopedBinding(audited, "tanstack-start", base, "/marketplace/fr-FR/item_2");
+      assert.equal(tanstack.binding.path, "/_serverFn/" + "b".repeat(64));
+      assert.equal(await page.evaluate(() => globalThis.submissions), 0);
+      assert.ok(!JSON.stringify({ nuxt, tanstack }).includes("SECRET")); assert.equal(released.length, 2);
+      assert.equal((await inspectScopedBinding(audited, "nuxt", base, "/marketplace/fr-FR/item_1")).binding, null);
+      await page.evaluate(() => {
+        const form = document.querySelector("form"), key = Object.getOwnPropertySymbols(form)[0];
+        // The similarly named outer function must not stand in for a local parameter.
+        const rpc = () => {};
+        const route = { params: { id: "item_2", locale: "fr-FR" } };
+        form[key].onSubmit.value = (rpc) => { void route; return rpc("/api/marketplace/item_2", { method: "POST" }); };
+        void rpc;
+      });
+      assert.equal((await inspectScopedBinding(audited, "nuxt", base, "/marketplace/fr-FR/item_2")).binding, null);
+      await page.evaluate(() => {
+        const form = document.querySelector("form"), key = Object.getOwnPropertySymbols(form)[0], rpc = () => {};
+        form[key].onSubmit.value = () => { const neverCalled = () => rpc("/api/marketplace/item_2", { method: "POST" }); void neverCalled; };
+      });
+      assert.equal((await inspectScopedBinding(audited, "nuxt", base, "/marketplace/fr-FR/item_2")).binding, null);
+      await page.evaluate(() => { document.querySelector("form").remove(); });
+      assert.equal((await inspectScopedBinding(audited, "tanstack-start", base, "/marketplace/fr-FR/item_2")).binding, null);
+      assert.equal(released.length, 6);
+    } finally { await context.close(); }
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
