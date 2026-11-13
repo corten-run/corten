@@ -12,22 +12,36 @@ defmodule NativeLive.Screen do
      |> stream(:rows, [])}
   end
 
-  def handle_event("start", %{"from" => from, "initial" => initial}, socket) do
-    ready = Store.call({:subscribe, self(), from, initial})
-    socket = push_event(socket, "parity", Map.put(ready, :kind, "ready"))
+  def handle_event(
+        "start",
+        %{"from" => from, "initial" => initial, "observed" => observed},
+        socket
+      ) do
+    case Store.call({:subscribe, self(), from, initial, observed}) do
+      {:error, reason} ->
+        {:noreply, push_event(socket, "parity", %{kind: "error", message: reason})}
 
-    if initial do
-      {:noreply, snapshot(socket)}
-    else
-      state = Store.call({:client, socket.assigns.client})
-      {:noreply, socket |> replace(state) |> push_event("parity", %{kind: "restore"})}
+      ready ->
+        socket = push_event(socket, "parity", Map.put(ready, :kind, "ready"))
+
+        cond do
+          initial || ready.needs_snapshot ->
+            {:noreply, snapshot(socket)}
+
+          ready.status == "expired" ->
+            {:noreply, socket}
+
+          true ->
+            state = Store.call({:client, socket.assigns.client})
+            {:noreply, socket |> replace(state) |> push_event("parity", %{kind: "restore"})}
+        end
     end
   end
 
   def handle_event("snapshot", _, socket), do: {:noreply, snapshot(socket)}
 
-  def handle_event("acknowledge", _, socket) do
-    :ok = Store.call({:ack, self()})
+  def handle_event("acknowledge", observed, socket) do
+    :ok = Store.call({:ack, self(), observed})
     {:noreply, socket}
   end
 

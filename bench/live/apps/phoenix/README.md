@@ -15,7 +15,14 @@ delivery in flight until the browser acknowledges the native DOM patch. Hold,
 drop and duplicate controls affect actual native deliveries. Overflow captures
 the saturation counters before clearing pending work and requesting a native
 authoritative resnapshot. Snapshot replacements do not increment event effects.
-Duplicate/gap guards use retained native client state, never a workload oracle.
+Duplicate/gap guards use acknowledged native client state, never a sent message
+or workload oracle. One separately inventoried candidate is staged until the
+browser acknowledges its actual DOM cursor, effect count and row count. Reconnect
+reconciles the browser's previously observed state against the acknowledged or
+staged candidate before suppressing any effect. The browser retains that actual
+observation because a native LiveView remount replaces the old DOM before its hook
+starts. A dropped event replays; an applied event with a dropped acknowledgement
+does not increment the counter or append its effect twice.
 
 The ordinary Phoenix router/controller JSON endpoints implement configure,
 snapshot, resources, publish and control. Snapshot reads are independent reads,
@@ -60,4 +67,11 @@ The integration owner registers `directory: 'phoenix'`,
 `wire: 'phoenix-liveview'`, `wireModule: './apps/phoenix/wire.mjs'`, and topology
 `one BEAM/Bandit process with native LiveView/PubSub; no external broker/database`.
 The wire binding checks native Phoenix v2 LiveView diff/reply envelopes and returns
-the original event/snapshot objects without manufacturing observations.
+the original event/snapshot/resource objects in native arrival order, without
+manufacturing observations or reading HTTP publisher/resource responses.
+
+`node bench/live/apps/phoenix/test/adversarial.mjs http://127.0.0.1:8080`
+intercepts the actual WebSocket to drop the first native event or its browser
+acknowledgement, requires recovery within two seconds, and independently checks
+two pages sharing one browser cookie jar. These are correctness regressions, not
+load qualification or measurement admission.

@@ -4,6 +4,7 @@ import { LiveSocket } from 'phoenix_live_view';
 
 const records = [], effects = [];
 let settings, hook, detached = false, through = 0, resume = false;
+let lastObserved;
 let chain = Promise.resolve(), publication = Promise.resolve(), resolveReady, resolveFinished;
 const record = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
 const rows = () => [...document.querySelector('#rows').children].map(tr => ({ id: tr.id,
@@ -18,7 +19,9 @@ async function request(path, data) {
 async function resources() {
   const value = await request('/parity/resources'); record('resources', value); return value;
 }
-function acknowledge() { hook.pushEvent('acknowledge', {}); }
+const observed = () => ({ through: +document.querySelector('#effects').dataset.through,
+  effectCount: +document.querySelector('#effects').value, rowCount: rows().length });
+function acknowledge() { hook.pushEvent('acknowledge', observed()); }
 function snapshot() { record('snapshot-request'); hook.pushEvent('snapshot', {}); }
 function received(message) {
   const receivedAt = performance.now(), barrier = publication;
@@ -26,6 +29,7 @@ function received(message) {
     await barrier;
     if (message.kind === 'finished') { resolveFinished(); return; }
     if (detached) return;
+    if (message.kind === 'error') throw new Error(message.message);
     if (message.kind === 'ready') {
       record('resources', message.resources);
       if (resume) {
@@ -33,16 +37,19 @@ function received(message) {
         if (message.status === 'expired') snapshot();
       }
     } else if (message.kind === 'restore') {
+      lastObserved = observed();
       if (+document.querySelector('#effects').dataset.through === through) resolveReady();
       acknowledge();
     } else if (message.kind === 'snapshot') {
       through = +document.querySelector('#effects').dataset.through;
       record('snapshot', { ...message.snapshot, ...application(), through });
-      acknowledge(); resolveReady();
+      lastObserved = observed();
+      acknowledge(); resolveReady(); resume = true;
     } else if (message.kind === 'event') {
       through = +document.querySelector('#effects').dataset.through;
       if (message.disposition === 'applied') effects.push(message.event.effectId);
       record('event', { event: message.event, disposition: message.disposition, receivedAt, ...application() });
+      lastObserved = observed();
       if (message.disposition === 'gap') snapshot(); else acknowledge();
     } else if (message.kind === 'overflow') {
       record('resources', message.resources);
@@ -56,11 +63,11 @@ const liveSocket = new LiveSocket('/live', Socket, {
     mounted() {
       hook = this;
       this.handleEvent('parity', received);
-      this.pushEvent('start', { from: through, initial: !resume });
+      this.pushEvent('start', { from: through, initial: !resume, observed: resume ? lastObserved : observed() });
     },
     reconnected() {
       hook = this;
-      this.pushEvent('start', { from: through, initial: !resume });
+      this.pushEvent('start', { from: through, initial: !resume, observed: resume ? lastObserved : observed() });
     },
   } },
 });

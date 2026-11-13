@@ -72,33 +72,57 @@ defmodule NativeLive.Store do
     else
       ref = Process.monitor(pid)
       s = put_in(s.connections[pid], %{ref: ref, client: client})
-      s = update_in(s.clients, &Map.put_new(&1, client, %{through: 0, rows: %{}, count: 0}))
+
+      s =
+        update_in(
+          s.clients,
+          &Map.put_new(&1, client, %{
+            through: 0,
+            rows: %{},
+            count: 0,
+            initialized: false,
+            pending: nil
+          })
+        )
+
       {:reply, :ok, s}
     end
   end
 
-  def handle_call({:subscribe, pid, from, initial}, _, s) do
+  def handle_call({:subscribe, pid, from, initial, observed}, _, s) do
     if Map.has_key?(s.connections, pid) && is_integer(from) && from >= 0 && from <= s.through do
-      history = :queue.to_list(s.history)
-      expired = from < s.through && (history == [] || from < hd(history)["seq"] - 1)
-      replay = if initial || expired, do: [], else: Enum.filter(history, &(&1["seq"] >= from))
+      client = s.connections[pid].client
+      current = s.clients[client]
+      reconciliation = if initial, do: {:ok, current}, else: reconcile(current, from, observed)
 
-      reader = %{
-        queue: :queue.new(),
-        count: 0,
-        replay: :queue.from_list(replay),
-        inflight: false,
-        overflowed: false
-      }
+      case reconciliation do
+        {:ok, state} ->
+          s = put_in(s.clients[client], state)
+          history = :queue.to_list(s.history)
+          expired = from < s.through && (history == [] || from < hd(history)["seq"] - 1)
+          replay = if initial || expired, do: [], else: Enum.filter(history, &(&1["seq"] >= from))
 
-      s = put_in(s.readers[pid], reader)
+          reader = %{
+            queue: :queue.new(),
+            count: 0,
+            replay: :queue.from_list(replay),
+            inflight: false,
+            overflowed: false
+          }
 
-      {:reply,
-       %{
-         from: from,
-         status: if(expired, do: "expired", else: "accepted"),
-         resources: resources(s)
-       }, s}
+          s = put_in(s.readers[pid], reader)
+
+          {:reply,
+           %{
+             from: from,
+             status: if(expired, do: "expired", else: "accepted"),
+             needs_snapshot: not state.initialized,
+             resources: resources(s)
+           }, s}
+
+        :error ->
+          {:reply, {:error, "browser state is not acknowledged or pending"}, s}
+      end
     else
       {:reply, {:error, "invalid reader or cursor"}, s}
     end
@@ -112,8 +136,16 @@ defmodule NativeLive.Store do
 
   def handle_call({:snapshot, pid, client}, _, s) do
     snap = snapshot(s)
-    state = %{Map.fetch!(s.clients, client) | through: s.through, rows: s.rows}
-    s = put_in(s.clients[client], state)
+
+    state = %{
+      Map.fetch!(s.clients, client)
+      | through: s.through,
+        rows: s.rows,
+        initialized: true,
+        pending: nil
+    }
+
+    s = put_in(s.clients[client].pending, state)
     reader = Map.fetch!(s.readers, pid)
 
     s =
@@ -129,9 +161,22 @@ defmodule NativeLive.Store do
     {:reply, {snap, state}, %{s | reads: s.reads + 1}}
   end
 
-  def handle_call({:ack, pid}, _, s) do
-    s = if Map.has_key?(s.readers, pid), do: put_in(s.readers[pid].inflight, false), else: s
-    {:reply, :ok, pump(s, pid)}
+  def handle_call({:ack, pid, observed}, _, s) do
+    if Map.has_key?(s.readers, pid) do
+      client = s.connections[pid].client
+      current = s.clients[client]
+      candidate = current.pending || current
+
+      if observed_state?(candidate, observed) do
+        s = put_in(s.clients[client], %{candidate | pending: nil})
+        s = put_in(s.readers[pid].inflight, false)
+        {:reply, :ok, pump(s, pid)}
+      else
+        {:reply, {:error, "browser acknowledgement differs"}, s}
+      end
+    else
+      {:reply, :ok, s}
+    end
   end
 
   def handle_call({:finish, pid, client}, _, s) do
@@ -293,7 +338,7 @@ defmodule NativeLive.Store do
             end
 
           send(pid, {:parity_event, event, disposition, state})
-          s = put_in(s.clients[client], state)
+          s = put_in(s.clients[client].pending, %{state | pending: nil})
           put_in(s.readers[pid], %{reader | inflight: true})
         else
           s
@@ -335,9 +380,40 @@ defmodule NativeLive.Store do
         retainedClients: map_size(s.clients),
         retainedClientLimit: 16,
         retainedClientRows: Enum.sum(Enum.map(Map.values(s.clients), &map_size(&1.rows))),
+        stagedClientRows:
+          Enum.sum(
+            Enum.map(Map.values(s.clients), fn c ->
+              if c.pending, do: map_size(c.pending.rows), else: 0
+            end)
+          ),
+        stagedStatesLimitPerClient: 1,
         storeMailboxMessages: elem(Process.info(self(), :message_queue_len), 1),
         nativeSocketBufferBytes: "not-observable-through-LiveView-public-API"
       }
     }
+  end
+
+  defp observed_state?(state, observed) when is_map(observed) do
+    is_integer(observed["through"]) and is_integer(observed["effectCount"]) and
+      is_integer(observed["rowCount"]) and observed["through"] == state.through and
+      observed["effectCount"] == state.count and observed["rowCount"] == map_size(state.rows)
+  end
+
+  defp observed_state?(_, _), do: false
+
+  defp reconcile(state, from, observed) do
+    cond do
+      not is_map(observed) or observed["through"] != from ->
+        :error
+
+      observed_state?(state, observed) ->
+        {:ok, %{state | pending: nil}}
+
+      state.pending != nil and observed_state?(state.pending, observed) ->
+        {:ok, %{state.pending | pending: nil}}
+
+      true ->
+        :error
+    end
   end
 end
