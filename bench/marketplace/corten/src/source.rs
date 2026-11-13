@@ -32,21 +32,67 @@ impl Source {
             "records",
             id,
         ]);
-        let response = client.get(url).send().await?;
+        let response = client.get(url).send().await.map_err(upstream_error)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if !response.status().is_success() {
             return Err(corten::Error::new(format!("marketplace API returned {}", response.status())));
         }
-        let record = corten::json::from_slice(&response.bytes().await?)?;
+        let record = corten::json::from_slice(&response.bytes().await.map_err(upstream_error)?)?;
         Ok(Some(Arc::new(record)))
     }
+}
+
+fn upstream_error(error: reqwest::Error) -> corten::Error {
+    let status = if error.is_timeout() {
+        corten::http::StatusCode::GATEWAY_TIMEOUT
+    } else {
+        corten::http::StatusCode::INTERNAL_SERVER_ERROR
+    };
+    corten::Error::new(error).with_status(status)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn whole_read_timeouts_are_gateway_timeouts_and_close_the_source() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+        for body in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut head = Vec::new();
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    head.push(byte[0]);
+                }
+                if body {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"id\":")
+                        .unwrap();
+                }
+                let mut byte = [0];
+                assert_eq!(socket.read(&mut byte).unwrap(), 0, "timed-out upstream was not closed");
+            });
+            let source = Source::Api {
+                client: reqwest::Client::builder().timeout(Duration::from_millis(200)).build().unwrap(),
+                base: format!("http://{addr}").parse().unwrap(),
+            };
+            let error = source.record("item_1").await.unwrap_err();
+            assert_eq!(error.status_code(), corten::http::StatusCode::GATEWAY_TIMEOUT);
+            tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn http_records_are_fetched_once_and_parsed_on_each_request() {
         use std::{
