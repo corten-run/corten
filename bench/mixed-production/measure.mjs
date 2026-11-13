@@ -8,6 +8,8 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { afterFunctionalGate, sha256, sleep } from "./capture.mjs";
 import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
+import { resourceBoundary, resourceCoveragePolicy } from "./resources.mjs";
+import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 
 export async function measureNativeGroup(context) {
   const { summary, options, folder, repo, runId, network, nodeImage, browserImage, plan, records, token, readbacks,
@@ -20,11 +22,11 @@ export async function measureNativeGroup(context) {
   const root = join(folder, "measurement"); mkdirSync(root);
   const result = summary.timing = { schema: "mixed-native-measurement/v1", complete: false, qualified: false, calibrated: false,
     timingBlocked: true, comparisonEligible: false, nativeProfile: options.profile, planSha256: plan.sha256,
-    cpus, calibrationPolicy, interpretation: "Equal-plan closed-loop achieved load, not saturation/capacity; comparisons require explicit disjoint CPU placement and complete repeated native windows.",
+    cpus, calibrationPolicy, resourceCoveragePolicy, interpretation: "Equal-plan closed-loop achieved load, not saturation/capacity; comparisons require explicit disjoint CPU placement and complete repeated native windows.",
     cells: Object.fromEntries(summary.inventory.map((app) => [app, Object.fromEntries(["fixture", "api"].map((source) => [source, {
       qualification: null, calibration: null, passes: Array.from({ length: options.passes }, (_, i) => ({ pass: i + 1, outcome: "not-run", metrics: null })),
     }]))])), failures: [] };
-  summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
+  summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
   const mount = ["-v", `${repo}:/src:ro`, "-v", `${realpathSync(join(repo, "node_modules"))}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
   const outputPath = (path) => `/out/${relative(folder, path).replaceAll("\\", "/")}`;
   const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
@@ -39,10 +41,11 @@ export async function measureNativeGroup(context) {
       throw new Error("owned native participant cleanup failed");
     }
   };
-  const participant = async (name, imageId, role) => {
+  const participant = async (name, imageId, role, paused = false) => {
     const info = await inspect(name);
     assert.equal(info.Image, imageId, "native participant image changed");
     assert.ok(info.State.Running && !info.State.OOMKilled && info.RestartCount === 0, "native participant stopped/restarted/OOM");
+    assert.equal(info.State.Paused, paused, "native participant pause state changed");
     return { role, id: info.Id, imageId: info.Image, startedAt: info.State.StartedAt, state: info.State,
       config: { env: info.Config.Env.filter((value) => !value.startsWith("MIXED_CONTROL_TOKEN=")), memory: info.HostConfig.Memory,
         nanoCpus: info.HostConfig.NanoCpus, cpuset: info.HostConfig.CpusetCpus, networkMode: info.HostConfig.NetworkMode } };
@@ -99,9 +102,10 @@ export async function measureNativeGroup(context) {
       const port = (await inspect(up)).NetworkSettings.Ports["8080/tcp"][0].HostPort;
       await control(`http://127.0.0.1:${port}`, token, "startup", { mode: "normal", delayMs: 0, path: "/marketplace/records/item_1" });
       await own(appArgs(name, source, up, imageId), name); await ready(name, "/marketplace/en-US/item_1", probes, "app");
+      const startupObservation = await control(`http://127.0.0.1:${port}`, token, "startup");
       const seconds = stage === "calibration" ? options.calibration : options.duration;
       const settings = { plan, records, app, source, base: "http://127.0.0.1:8080", upstream: `http://${up}:8080`, readbackPath: readbacks[app] ?? "/api/alerts",
-        seconds, warmup: options.warmup, tailSeconds: options.tailSeconds, maxCycles: options.maxCycles, folder: outputPath(dir), settings: options };
+        seconds, warmup: options.warmup, tailSeconds: options.tailSeconds, maxCycles: options.maxCycles, folder: outputPath(dir), settings: options, startupObservation };
       record(join(dir, "settings.json"), settings);
       await own(["run", "-d", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "512m", ...mount,
         "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "-e", `MIXED_CONTROL_TOKEN=${token}`, browserImage.Id, "node", "bench/mixed-production/load-worker.mjs", outputPath(join(dir, "settings.json"))], worker);
@@ -111,8 +115,9 @@ export async function measureNativeGroup(context) {
         assert.ok(Date.now() < untilReady && !io.interrupted, "load worker readiness failed"); await sleep(50);
       }
       const participantsBefore = { app: await participant(name, imageId, "app"), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
-      const before = await counters(names), hostStart = performance.now();
       sampler = sampleStats(Object.values(names), join(dir, "stats.log"), seconds + options.tailSeconds + 15);
+      const beforeBoundary = await resourceBoundary(docker, Object.values(names));
+      const before = await counters(names), hostStart = performance.now();
       record(join(dir, "go.json"), { go: true });
       const until = Date.now() + (seconds + options.tailSeconds + 10) * 1000;
       let window;
@@ -120,11 +125,21 @@ export async function measureNativeGroup(context) {
         if (existsSync(join(dir, "window.json"))) { window = JSON.parse(readFileSync(join(dir, "window.json"), "utf8")); if (window.finishedAt) break; }
         await sleep(100);
       }
-      assert.ok(window?.complete && window.finishedAt, "native window failed or exceeded its budget");
-      const after = await counters(names); stats = await sampler.stop(); sampler = null;
+      assert.ok(window?.finishedAt, "native window exceeded its budget");
+      // Freeze the owned producer before the final independent ledger read. Late
+      // requests already in flight remain visible; no app can enqueue more work
+      // between reconciliation and admission. Cleanup removes the paused app.
+      await docker(["pause", name]);
+      const admission = { nativePausedUnixMs: Date.now(), settleMs: options.cleanupMs };
+      await sleep(options.cleanupMs);
+      const finalUpstreamLedger = await control(`http://127.0.0.1:${port}`, token, "ledger");
+      record(join(dir, "final-upstream-ledger.json"), { admission, ledger: finalUpstreamLedger });
+      const after = await counters(names), afterBoundary = await resourceBoundary(docker, Object.values(names));
+      record(join(dir, "resource-boundaries.json"), { before: beforeBoundary, after: afterBoundary });
+      stats = await sampler.stop(); sampler = null;
       const hostElapsedMs = performance.now() - hostStart;
       const sampled = JSON.parse(readFileSync(join(dir, "stats.log.json"), "utf8")).samples;
-      const participantsAfter = { app: await participant(name, imageId, "app"), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
+      const participantsAfter = { app: await participant(name, imageId, "app", true), upstream: await participant(up, nodeImage.Id, "upstream"), load: await participant(worker, browserImage.Id, "load") };
       for (const role of Object.keys(names)) assert.deepEqual([participantsAfter[role].id, participantsAfter[role].startedAt], [participantsBefore[role].id, participantsBefore[role].startedAt]);
       const requestArtifacts = [];
       const captures = window.cycles.map((cycle) => {
@@ -138,7 +153,11 @@ export async function measureNativeGroup(context) {
       const warmups = Array.from({ length: window.warmup.cycles }, (_, i) => JSON.parse(readFileSync(join(dir, `warmup_${i}`, "capture.json"), "utf8")));
       const raw = { schema: "mixed-native-window-receipt/v1", app, source, stage, pass, planSha256: plan.sha256, imageId, nativeProfile: options.profile,
         hostElapsedMs, window, participantsBefore, participantsAfter, counters: Object.fromEntries(Object.keys(names).map((role) => [role, { before: before[role], after: after[role] }])),
-        samples: Object.fromEntries(Object.entries(names).map(([role, n]) => [role, sampled[n]])), readiness: probes,
+        samples: Object.fromEntries(Object.entries(names).map(([role, n]) => [role,
+          [...beforeBoundary.samples[n], ...(sampled[n] ?? []), ...afterBoundary.samples[n]].toSorted((a, b) => a.t - b.t)])), readiness: probes,
+        startupObservation, finalUpstreamLedger, admission, resourceBoundaries: { before: beforeBoundary, after: afterBoundary },
+        upstreamReconciliation: reconcileLedger(finalUpstreamLedger, upstreamManifest(plan, source, startupObservation,
+          [...warmups.map((c, i) => upstreamPhase("warmup", i, c.capture, source)), ...captures.map((c, i) => upstreamPhase("cycle", i, c.capture, source))])),
         requestArtifacts, warmupCaptures: warmups.map((_, i) => { const path = join(dir, `warmup_${i}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }),
         cycleCaptures: window.cycles.map((cycle) => { const path = join(dir, `cycle_${cycle.cycle}`, "capture.json"); return { path: relative(folder, path), sha256: sha256(readFileSync(path)) }; }) };
       const artifact = record(join(dir, "receipt.json"), raw);

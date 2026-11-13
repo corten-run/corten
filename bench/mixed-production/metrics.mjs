@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { expectedOutcome, oracle } from "./capture.mjs";
 import { loadPaths } from "./load-capture.mjs";
 import { summarizeSamples } from "../catalog/stats.mjs";
+import { coveredSamples } from "./resources.mjs";
+import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 
 export const calibrationPolicy = Object.freeze({ minimumSteadyCycles: 3, maximumDrainFraction: 0.25,
   maximumGeneratorCpuFraction: 0.7, maximumUpstreamCpuFraction: 0.7, maximumEventLoopLagP99Ms: 20 });
@@ -25,7 +27,7 @@ const percentile = (values, p) => {
 const latency = (rows, key) => ({ samples: rows.length, p50Ms: percentile(rows.map((r) => r[key]), 0.5),
   p95Ms: percentile(rows.map((r) => r[key]), 0.95), p99Ms: percentile(rows.map((r) => r[key]), 0.99) });
 
-export function deriveWindow({ window, captures, warmups, plan, records, source, counters, samples, quotas, stage }) {
+export function deriveWindow({ window, captures, warmups, plan, records, source, counters, samples, quotas, stage, finalUpstreamLedger, startupObservation, admission }) {
   assert.equal(window.schema, "mixed-native-window/v1"); assert.equal(window.source, source);
   assert.equal(window.complete, true, "native window incomplete"); assert.equal(window.failure, null);
   assert.ok(window.warmup?.passed && window.warmup.cycles > 0, "native warmup missing/failed");
@@ -37,6 +39,15 @@ export function deriveWindow({ window, captures, warmups, plan, records, source,
   }
   assert.ok(cycles.length > 0 && cycles.length === captures.length);
   assert.ok(Number.isFinite(window.elapsedMs) && window.elapsedMs >= window.seconds * 1000);
+  const phases = [...warmups.map((c, i) => upstreamPhase("warmup", i, c.capture, source)),
+    ...captures.map((c, i) => upstreamPhase("cycle", i, c.capture, source))];
+  const reconciled = reconcileLedger(finalUpstreamLedger, upstreamManifest(plan, source, startupObservation, phases));
+  assert.ok(reconciled.valid && finalUpstreamLedger.sealedUnixMs >= window.finishedUnixMs,
+    "final upstream ledger differs from saved operations or contains late work");
+  assert.ok(Number.isSafeInteger(admission?.nativePausedUnixMs) && Number.isSafeInteger(admission.settleMs) && admission.settleMs > 0
+    && admission.nativePausedUnixMs >= finalUpstreamLedger.sealedUnixMs
+    && finalUpstreamLedger.snapshotUnixMs >= admission.nativePausedUnixMs + admission.settleMs,
+  "final upstream ledger must follow native producer cutoff and settlement");
   const operations = [];
   for (const [index, cycle] of cycles.entries()) {
     assert.equal(cycle.cycle, index); assert.equal(cycle.passed, true);
@@ -64,7 +75,7 @@ export function deriveWindow({ window, captures, warmups, plan, records, source,
   for (const role of ["app", "upstream", "load"]) {
     const c = counters[role];
     assert.ok(c && [c.before, c.after].every(Number.isSafeInteger) && c.before >= 0 && c.after >= c.before, "missing/backwards cgroup CPU counter");
-    const observed = samples[role];
+    const coverage = coveredSamples(samples[role], window), observed = coverage.selected;
     // The shared sampler timestamps receipt, so a buffered chunk can contain several
     // real Docker samples at one clock tick. Keep them, but never invent spacing.
     assert.ok(observed?.length >= 2 && observed.at(-1).t > observed[0].t
@@ -73,6 +84,7 @@ export function deriveWindow({ window, captures, warmups, plan, records, source,
     assert.ok(Number.isFinite(quotas[role]) && quotas[role] > 0);
     resources[role] = { ...summary, cpuUsec, cpuCeilingCores: quotas[role], sampleReceiptSpanMs: observed.at(-1).t - observed[0].t,
       sampleReceiptCollisions: observed.filter((s, i) => i && s.t === observed[i - 1].t).length,
+      sampleLeadingGapMs: coverage.leadingMs, sampleTrailingGapMs: coverage.trailingMs, maximumSampleGapMs: coverage.maximumGapMs,
       cpuPctOfQuota: 100 * cpuUsec / (window.elapsedMs * 1000 * quotas[role]),
       cpuUsecPerPrimaryOperation: cpuUsec / operations.length };
   }
