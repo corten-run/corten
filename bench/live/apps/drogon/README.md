@@ -144,7 +144,7 @@ docker run --rm -p 127.0.0.1:8080:8080 cb-parity-live-drogon
 ```
 
 The Dockerfile verifies Drogon's tagged source commit
-`3aae769cc405cf5abb9d477675c6430924f02c7c`, including its pinned Trantor submodule,
+`drogonframework/drogon@3aae769cc405cf5abb9d477675c6430924f02c7c`, including its pinned Trantor submodule,
 builds a Release binary, runs the native CTest suite with assertions enabled and
 warnings as errors, and runs production as UID 10001. It needs no author-local
 SDK image. Identical verified SDK build layers can be reused by Docker's cache.
