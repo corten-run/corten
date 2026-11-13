@@ -92,6 +92,7 @@ if (!isMainThread) {
     for (const source of ['fixture', 'api']) {
       const name = `compiled-gin-production-${source}-${process.pid}`;
       docker('run', '-d', '--name', name, '--cpus', '1', '--memory', '512m',
+        ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
         '--label', 'agent.owner=codex', '--label', 'agent.task=compiled-alerts',
         '-p', '127.0.0.1::8080', '-v', `${folder}:/fixtures:ro`,
         '-e', 'PROFILE=matched', '-e', 'HOSTS=localhost,127.0.0.1', '-e', 'MAX_CONNECTIONS=1000',

@@ -121,7 +121,9 @@ jobs:
           dotnet test tests/Marketplace.Tests.csproj -c Release
       - name: Test native compiled alert forms and independent readback
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
-        run: node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+        run: |
+          npx playwright install --with-deps chromium
+          node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
       - name: Test native Gin production boundaries and matched forms
         if: matrix.app == 'gin'
         run: |
