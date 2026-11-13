@@ -87,20 +87,38 @@ export function installResourceObserver() {
   };
   for (const name of ["MutationObserver", "ResizeObserver", "IntersectionObserver"]) {
     const Original = globalThis[name]; if (!Original) continue;
-    const owners = new WeakMap(), observe = Original.prototype.observe, disconnect = Original.prototype.disconnect;
+    const owners = new WeakMap(), observe = Original.prototype.observe, disconnect = Original.prototype.disconnect, unobserve = Original.prototype.unobserve;
     globalThis[name] = new Proxy(Original, { construct(Target, args, newTarget) {
-      const owned = entry("subscriptions"); owned.active = false;
+      const state = { targets: new WeakMap(), subscriptions: new Set() };
       const callback = args[0];
-      const observer = Reflect.construct(Target, [function(...values) { return invoke(owned, callback, this, values); }, ...args.slice(1)], newTarget);
-      owners.set(observer, owned); return observer;
+      if (typeof callback !== "function") return Reflect.construct(Target, args, newTarget);
+      const observer = Reflect.construct(Target, [function(...values) {
+        const scopes = new Set(values[0].map((record) => scopeOf(record.target)));
+        const previous = activeScope; activeScope = scopes.size === 1 ? [...scopes][0] : null;
+        try { return Reflect.apply(callback, this, values); } finally { activeScope = previous; }
+      }, ...args.slice(1)], newTarget);
+      owners.set(observer, state); return observer;
     } });
     Original.prototype.observe = function(target, ...args) {
-      const owned = owners.get(this);
+      const state = owners.get(this);
       const value = Reflect.apply(observe, this, [target, ...args]);
-      if (owned) { owned.active = true; owned.scope ??= scopeOf(target); owned.target = new WeakRef(target); }
+      if (state) {
+        let owned = state.targets.get(target);
+        if (!owned) { owned = entry("subscriptions", target); state.targets.set(target, owned); state.subscriptions.add(owned); }
+        owned.active = true;
+      }
       return value;
     };
-    Original.prototype.disconnect = function() { const value = Reflect.apply(disconnect, this, []); const owned = owners.get(this); if (owned) owned.active = false; return value; };
+    if (unobserve) Original.prototype.unobserve = function(target) {
+      const value = Reflect.apply(unobserve, this, [target]), owned = owners.get(this)?.targets.get(target);
+      if (owned) owned.active = false;
+      return value;
+    };
+    Original.prototype.disconnect = function() {
+      const value = Reflect.apply(disconnect, this, []);
+      for (const owned of owners.get(this)?.subscriptions ?? []) owned.active = false;
+      return value;
+    };
   }
   for (const name of ["EventSource", "WebSocket", "Worker", "SharedWorker"]) {
     const Original = globalThis[name]; if (!Original) continue;
