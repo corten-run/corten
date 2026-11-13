@@ -4,14 +4,15 @@ Row 7 checkpoint, not official-run readiness. Expected USD is unknown; no price 
 runtime estimate is supplied. No real-account provider operation, allocation, deletion, restart,
 publication, schedule change or shared-state mutation was performed for this slice.
 
-**Current blocker:** independent exact-head review found that a saved doctl
-context name plus pre/post account probes does not freeze
-credentials. Rebinding and restoring the named context between probes can target
-a foreign account. Follow-up exact-head review of the in-memory repair found that
-native HTTPS diagnostics could emit its Authorization value. The diagnostic
-preflight repair below awaits fresh exact-head independent review; no P1 clearance
-or cloud-action approval is claimed.
-The separate mixed-inbox/inspection bridge below does not repair or waive it.
+**Current status:** the credential-owning worker-snapshot implementation has fresh
+independent exact-head security review with no remaining scoped findings. The
+controller executes the verified bootstrap bytes, not a second read of its mutable
+entry path; credential consumption and provider HTTPS stay inside the clean worker.
+The earlier credential, diagnostic, executable-closure and shutdown failures are
+retained under Historical Evidence And Proposals below, not current review blockers.
+This scoped clearance is not overall readiness or cloud-action approval. Merged CI,
+official-source qualification and complete native producer/OS/validator closure
+remain pending; the mixed-inbox/inspection bridge does not waive those gates.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
@@ -21,15 +22,17 @@ deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
 
 **Production is operator gated, not a fake-only transport.** `cloud-production.mjs`
-composes the lifecycle with bounded read-only doctl credential consumption,
-fixed-endpoint DigitalOcean REST and OpenSSH subprocesses;
+composes the lifecycle with a private credential-owning worker for bounded read-only
+doctl credential consumption and fixed-endpoint DigitalOcean REST, plus OpenSSH
+subprocesses;
 the `droplet.mjs` CLI delegates to that same composition. Direct core imports keep
 their default cloud-execution guard so they cannot accidentally bypass approval.
 Only synthetic configurations and a loopback fake API are used for native credential
 checks; no real account store or provider operation is used. There is no
 hidden launcher: an approved detach provisions once, verifies uploads, starts the
-fixed systemd job and returns. Do not approve any action until the new transport
-and native producer/OS/validator closure have passed independent review and merged.
+fixed systemd job and returns. The provider security review does not authorize an
+action: the coherent integration still requires merged CI, official-source
+qualification and independently reviewed complete native producer/OS/validator closure.
 
 The wrapper adds no provider, workload, adapter, environment or timing overrides.
 Its only extra options are `--print-approval` and
@@ -223,12 +226,26 @@ errors refuse immediately rather than being treated as missing directories.
 Preview never creates missing directories; core setup may create normal new ones.
 No control child inherits a DigitalOcean token override. SSH/SCP may use the existing
 agent/default keys. No credential is accepted in CLI arguments or remote scripts.
+`cloud-provider.mjs` is the controller-side IPC client, not a credential consumer
+or native HTTPS client. It captures the builtin-only worker bootstrap bytes in the
+same read whose hash enters the fixed thirteen-file executable manifest. It starts
+the fixed physical Node executable with only `--input-type=module -` and the fixed
+worker-path root anchor, sending those captured bytes over stdin. Node does not
+execute the entry path again. The child receives an explicit environment allowlist,
+not ambient loader/preload, diagnostic, CA, TLS or key-log settings; its process stdout
+and stderr are discarded. Strict boot/init/action/result IPC checks nonce and action sequence,
+never arbitrary code, commands or URLs. Before any project import, the worker checks
+the complete manifest and installs a closed load hook that serves the verified
+snapshot bytes and refuses unlisted executable imports.
+
 The inherited noncredential config locations are captured once per action. After
 approval and under the lifecycle lock, `doctl auth token --context NAMED_CONTEXT`
-consumes the selected existing stored credential exactly once through private,
-bounded stdout capture. It does not switch/default a context or copy its config.
+consumes the selected existing stored credential exactly once inside that worker through
+private, bounded stdout capture. It does not switch/default a context or copy its config.
 All subsequent provider calls use that same private in-memory value, never another
 doctl config read, token environment/argument, persisted token or config snapshot.
+The token and raw credential-command output never enter the controller's buffers,
+IPC results, errors or logs.
 The token command does not refresh OAuth state; expiration or unavailable identity
 fails closed rather than reloading mutable credentials mid-action.
 Before and after every provider command, the account endpoint must report exactly the
@@ -243,7 +260,11 @@ without this binding fail closed and need operator inspection, not automatic ado
 Named-context consumption follows [doctl's auth-token command](https://docs.digitalocean.com/reference/doctl/reference/auth/token/)
 and its [read-only implementation](https://github.com/digitalocean/doctl/blob/main/commands/auth.go).
 Account/team fields follow [DigitalOcean's account schema](https://github.com/digitalocean/openapi/blob/main/specification/resources/account/models/account.yml).
-Before consuming any credential, the provider refuses configured `NODE_DEBUG`,
+The clean child, rather than an inference from the parent's mutable environment,
+is the diagnostic boundary. Deleting `NODE_OPTIONS` or `NODE_DEBUG` after parent
+startup does not disable effective/cached diagnostics; the parent therefore never
+owns the credential. Inside the worker, `cloud-provider-engine.mjs` additionally
+refuses configured `NODE_DEBUG`,
 `NODE_DEBUG_NATIVE` or TLS key logging, active inspection, and enabling native
 trace/key-log/heap/profile/report options from `NODE_OPTIONS` or CLI flags.
 It checks Node's cached HTTP/HTTPS debug enablement as well: deleting an environment
@@ -255,8 +276,8 @@ parameter defaults and ordinary non-diagnostic Node options remain usable.
 so quoting or escaping an enabling option cannot hide it from the preflight.
 This follows [Node's documented diagnostic controls](https://nodejs.org/docs/latest-v24.x/api/cli.html#node_debugmodule).
 
-`cloud-provider.mjs` supports only account lookup, complete bounded droplet census,
-one exact-host create, matching create-action polling and one exact-ID delete.
+The worker's fixed provider action grammar supports only account lookup, complete bounded
+droplet census, one exact-host create, matching create-action polling and one exact-ID delete.
 The HTTPS origin is fixed, certificate verification is explicit, redirects are
 never followed and no HTTP error/network failure is retried. Census pagination
 must remain on the fixed endpoint, contain unique IDs and match its stable total;
@@ -264,14 +285,19 @@ an incomplete census cannot prove absence. Create waits only through bounded
 read-only polling of its exact droplet/action identity, never a repeated POST.
 Responses have a body bound and whole-request deadline; in-flight timeout,
 cancellation or malformed responses conservatively retain lifecycle locks.
+Every provider-owning controller action awaits the same cached worker-close promise
+before releasing its operation lock, including early-return and error paths. Forced
+worker termination or uncertain shutdown retains the operation lock and any acquired
+root launch lock. The outer finalizer awaits that same settlement, not a new teardown
+after lock release. Ordinary confirmed shutdown releases the locks normally.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
 
-No tool version/configuration, agent-key availability, network, provisioning,
-Linux systemd behavior or image-install supply chain has been exercised here.
-Timeouts force termination of the local CLI child only, never prove descendant
-termination, and retain the lifecycle locks as described above; they never stop the remote unit.
+Synthetic local worker controls do not qualify the operator's actual tool/configuration,
+agent-key availability, network, provisioning, remote Linux systemd behavior or
+image-install supply chain. A local control-subprocess timeout never proves descendant
+termination and retains the lifecycle locks as described above; it never stops the remote unit.
 Synchronous control calls cannot process an in-process cancellation callback until
 the current bounded call returns; cancellation is checked before subsequent calls.
 An SSH timeout never proves a remote command stopped. No recovery path stops a
@@ -352,6 +378,19 @@ Real OS behavior of that publication step remains an integration/host check.
 
 ## Readiness And Verification
 
+Fresh independent exact-head review cleared the provider worker-snapshot security
+repair, including the complete executable closure and pre-unlock shutdown boundary.
+Synthetic Windows and Linux checks cover an ordinary native stdin-entry positive,
+post-hash/pre-launch replacement of every bound source without marker execution,
+parent startup diagnostics deleted before import, and normal versus withheld worker
+shutdown. These controls use synthetic credentials/source dependencies, not actual
+account stores or provider operations. Their scoped clearance is not campaign validity.
+
+The parent also has local integrated cloud/core test evidence. Neither local tests
+nor independent provider review substitutes for merged CI, official-source
+qualification or complete native producer/OS/validator evidence. Those remain pending;
+there is no official launch authorization or overall readiness claim here.
+
 The current bridge was read with `git show` against the parent-integrated core
 Git tree `sha1:b37727d761c0726af36d41e77d6693c59cb0033c`; no core files were
 imported into this cloud-owned branch. Exact inspected LF blob bytes are:
@@ -364,8 +403,23 @@ imported into this cloud-owned branch. Exact inspected LF blob bytes are:
 These are content/Git-tree digests, not published commit references. Its entry supports both fixed inboxes
 and its inspection returns `verified` for intrinsic all-group completion. The
 mapping above consumes that exact schema, not the historical proposal below.
-Bridge re-review and the separate credential-binding P1 remain gates. The following
-base-read/proposed-seam notes are historical evidence, not current readiness.
+The parent has integrated the reviewed bridge/core and provider implementation;
+that integration does not supply the remaining readiness evidence above.
+
+## Historical Evidence And Proposals
+
+The earlier named-context pre/post-account probes did not freeze credentials:
+rebinding and restoring the context could target a foreign account. An intermediate
+in-memory provider then exposed synthetic Authorization values through native HTTPS
+diagnostics. Environment-only preflight was insufficient when startup diagnostics
+survived deletion of `NODE_OPTIONS` before import. Later worker probes found an
+incomplete executable closure, shutdown uncertainty after lock release, and entry
+replacement after the parent's hash but before native launch. These were actual
+failing/red synthetic controls, not real-account operations. They motivated the
+now-reviewed worker-snapshot design above; they are not unwaived current P1 findings.
+
+The following base reads, proposed seams, pending statements and measured repair
+results describe their historical checkpoints, not the current readiness disposition.
 
 Base read: `41a84f57273b8c1c40e5822e815fc3e94edc6df0`. An earlier private
 campaign checkpoint's API unconditionally returned
@@ -397,7 +451,7 @@ local-only detach preview returned 2, listed 12 missing modules (the offline
 contract already exists), reported `fullGroupQualified:false`, and created no
 state directory. That preview invoked local Git only, never doctl/SSH/SCP.
 
-## Campaign Handoff
+### Historical Campaign Handoff
 
 Offline intrinsic validity is distinct from source/host trust. Do not require an
 impossible signature authenticating a native capture as a permanent qualification
@@ -431,7 +485,7 @@ unconditional false qualification is a temporary integration limitation, not the
 intended final composition or an additional cryptographic requirement. None of
 these proposed fields has been invented as passing native evidence in this slice.
 
-### Exact API Proposal Pending Agreement
+#### Historical API Proposal Pending Agreement
 
 Read-only inspection of an earlier private author tree confirmed the three-key API and fixed
 entry above. Its verifier is still synchronous, has only three native adapters,
@@ -512,6 +566,8 @@ folders lacking a journal seal before group finish; full async native adapters,
 producer/OS validity, agreed versioned return and native CLI zero semantics.
 These findings were reported by the parent, not cleared by controller tests.
 The proposed fields and current API agreement still require author confirmation.
+
+### Historical Verification
 
 Focused tests (fake provider/process controls, local temporary files, a local
 lock-holder child and synthetic local validator workers only):
