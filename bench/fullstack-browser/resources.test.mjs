@@ -4,6 +4,31 @@ import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
 import { installResourceObserver } from "./resources.mjs";
 
+test("obsolete AbortSignal registrations cannot erase a replacement listener binding", { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(); await context.addInitScript(installResourceObserver);
+    try {
+      const page = await context.newPage(); await page.goto('data:text/html,<article class="marketplace"><button>Probe</button></article>');
+      for (const replacement of ["plain", "signal", "once"]) for (const capture of [false, true]) {
+      const result = await page.evaluate(({ replacement, capture }) => {
+        const button = document.querySelector("button"), signal = new AbortController(); let calls = 0;
+        const next = new AbortController();
+        const callback = () => { calls++; };
+        button.addEventListener("probe", callback, { signal: signal.signal, capture });
+        button.removeEventListener("probe", callback, capture);
+        button.addEventListener("probe", callback, { capture, ...(replacement === "signal" ? { signal: next.signal } : {}), once: replacement === "once" });
+        signal.abort(); button.removeEventListener("probe", callback, capture);
+        button.dispatchEvent(new Event("probe"));
+        const snapshot = __fullstackBrowserAudit.checkpoint();
+        return { calls, owned: snapshot.scopes.find((s) => s.scope === snapshot.scope).owned };
+      }, { replacement, capture });
+      assert.equal(result.calls, 0); assert.equal(result.owned.listeners, 0);
+      }
+    } finally { await context.close(); }
+  } finally { await browser.close(); }
+});
+
 test("observer subscriptions retain every native target and follow unobserve/disconnect exactly", { timeout: 30000 }, async () => {
   const browser = await chromium.launch({ headless: true });
   try {
