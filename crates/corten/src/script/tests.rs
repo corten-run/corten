@@ -204,6 +204,25 @@ fn a_float_argument_is_written_as_display_writes_it() {
     }
 }
 
+/// An integer argument, and a ref's integer value, are the digits `Display` writes, whatever the
+/// type and sign, though they are written as markup writes a number, without the formatter.
+#[test]
+fn an_integer_argument_is_written_as_display_writes_it() {
+    let ints: [i64; 10] = [0, 7, 10, 99, 100, 1250, -1, -100, 9_007_199_254_740_991, -9_007_199_254_740_991];
+    for n in ints {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+    for n in [0u8, 9, 255] {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+    for n in [i32::MIN, i32::MAX] {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+}
+
 /// `data-on` is single-quoted, so a JSON argument keeps its quotes; an apostrophe, `&`, `<` and
 /// `>` in it are entities, and the browser reads the same JSON back.
 #[cfg(feature = "json")]
