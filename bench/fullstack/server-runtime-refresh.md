@@ -1,7 +1,8 @@
 # Server runtime refresh
 
-Based on `00fe34a735b4d8bc6d15a5d6b4e2265c2b8cbad0`; origin was fetched and
-read at `4966977c8b8a7a367c0ed9087e1ae4e0b938f288` on 2026-11-13.
+The runtime slices were prepared in an author worktree; origin was fetched and
+read at `4966977c8b8a7a367c0ed9087e1ae4e0b938f288` on 2026-11-13. Author-local
+revision identities remain in retained operator receipts, not published commit citations.
 This is the server-runtime portion of
 [#1393 bench/fullstack builds on .NET 10, Java 25, Ruby 3.4, PHP 8.4, Python 3.14, Elixir 1.19/OTP 28 and Node 24 while each runtime's newest stable is a line ahead](https://github.com/corten-run/corten/issues/1393).
 The issue and every REST comment were read, including the latest-stable correction in
@@ -54,9 +55,9 @@ The PHP base actually reports PHP 8.5.12 ZTS, FrankenPHP 1.13.5 and Caddy
 3.10.0. The [Spring Boot 4.1.2 system-requirements source](https://github.com/spring-projects/spring-boot/blob/v4.1.2/documentation/spring-boot-docs/src/docs/antora/modules/ROOT/pages/system-requirements.adoc)
 explicitly supports Java 27.
 
-Original runtime-check app inputs were frozen at `cdb81f523050dc15419eeb3e0cd757eb13c08b93`:
-Rails `1f07f2086`, Python `14152315e`, Spring `54ad3fbb1`, Laravel
-`70d3a9079`, Phoenix `cdb81f523`. Each slice contains only runtime inputs.
+Original runtime-check app inputs were frozen separately for Rails, Python,
+Spring, Laravel and Phoenix. Retained operator receipts identify those author-local
+revisions and exact source/image hashes. They do not qualify the integrated source.
 The unchanged marketplace checker SHA-256 is
 `9e4f8d9c252dbb32e5221673dbf852a8950cd3306725f1658ec5ee78c6c1dc02`;
 catalog checker SHA-256 is
@@ -200,8 +201,8 @@ no yield-based dependency providers; its existing request-disconnect, deadline,
 owned-task cancellation, serialization-error and trace-cleanup tests remain
 enabled, not replaced with a synthetic route or weakened checks.
 
-The corrected app source is `7bab53f369ed9f2be7c239621f850c45db948dff`, app-tree
-`841bd3e1d241fcdf3a4aa872831cd0b6d736b35d`. Only FastAPI's requirements pin changes;
+The corrected FastAPI app changes only its requirements pin; the retained retake
+receipt binds the exact source tree to the new image below. Separately,
 the second review repair labels the supplied fullstack Gin Go 1.27.3 checks as
 historical/pending instead of claiming they qualify Go 1.27.4/templ 0.3.1118.
 No new fullstack Gin qualification is claimed. Shared recipes remain parent-owned.
@@ -237,5 +238,5 @@ created retake containers and networks were removed, with no task volume left.
 The labeled image, package metadata, source/image/checker hashes and all original,
 failed and retaken logs remain local review evidence. Independent fresh review,
 parent import and exact-source composed htmx/runtime qualification are still
-required before release. The older prepared htmx context bound to `d16da6316`
+required before release. The older prepared htmx context using FastAPI 0.162.5
 cannot qualify this new source and must be recomposed explicitly.

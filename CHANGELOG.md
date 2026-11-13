@@ -20,8 +20,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - Align server build recipes with the refreshed Python 3.15 and Java 27 images,
-  and the Express Node/Bun comparison with the reviewed htmx 4 artifact. Changed
-  inputs require new native qualification; older captures remain historical.
+  the native Spring JSON check with its production toolchain, deployment runtime
+  descriptions with their current sources, and the Express Node/Bun comparison
+  with the reviewed htmx 4 artifact. Changed inputs require new native qualification;
+  older captures remain historical.
 
 - Bind grouped comparison eligibility to the committed offline latest-stable dependency
   policy while preserving every contender's native outcomes and failed evidence.

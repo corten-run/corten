@@ -114,6 +114,19 @@ test("actual launch topologies stay distinct, without a framework replacement or
   assert.equal(n.environment.NODE_ENV, "production");
 });
 
+test("server deployment descriptions match the refreshed production runtimes", () => {
+  for (const [group, app, runtime] of [
+    ["catalog-page", "fastapi", "CPython 3.15.2"],
+    ["localized-marketplace", "django", "CPython 3.15.2"],
+    ["json-api", "spring", "Temurin 27.0.1.0.2+1 JRE"],
+    ["fullstack-browser", "rails", "CRuby 4.0.9"],
+    ["fullstack-browser", "laravel", "PHP 8.5.12 ZTS"],
+  ]) {
+    assert.equal(manifest(group, app).configuration.runtime, runtime, `${app}: stale runtime description`);
+    assert.equal(manifest(group, app).qualification, "pending", `${app}: metadata cannot qualify an image`);
+  }
+});
+
 test("native profile facts and pending alternatives are concrete and group-scoped", () => {
   assert.match(manifest("localized-marketplace", "django").configuration.server, /Granian WSGI/);
   assert.deepEqual(manifest("localized-marketplace", "django").configuration.builds.app.args, { PROFILE: "matched" });
