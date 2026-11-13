@@ -1,7 +1,10 @@
 """Real native HTTP requests retain their own transparent W3C traceparent."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import product
 import json
 import os
 import socket
@@ -9,6 +12,7 @@ from threading import Event, Thread
 import time
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 import httpx
 import uvicorn
@@ -48,7 +52,7 @@ class TraceContextTests(unittest.TestCase):
         class DelayedSource(MarketplaceSource):
             async def get(self, record_id, traceparent=None):
                 self.loop = asyncio.get_running_loop()
-                if traceparent == FIRST and not hold_body.is_set():
+                if traceparent in (FIRST, "\xe9") and not hold_body.is_set():
                     entered.set()
                     while not release.is_set():
                         await asyncio.sleep(0.005)
@@ -75,24 +79,38 @@ class TraceContextTests(unittest.TestCase):
                     time.sleep(0.01)
 
                 def send(path, trace=None, post=False):
+                    data = {"email": "trace@example.test", "target_price": "12.50" if "/en-US/" in path else "12,50"}
+                    if isinstance(trace, bytes):
+                        # Send obs-text bytes over the native socket, not HTTPX's ASCII str API.
+                        headers = {"traceparent": trace}
+                        cookie = client.build_request("GET", path).headers.get("cookie")
+                        if cookie is not None:
+                            headers["Cookie"] = cookie
+                        if post:
+                            headers["Content-Type"] = "application/x-www-form-urlencoded"
+                        with closing(HTTPConnection(*sock.getsockname(), timeout=10)) as raw:
+                            raw.request("POST" if post else "GET", path,
+                                body=urlencode(data) if post else None, headers=headers)
+                            response = raw.getresponse()
+                            return httpx.Response(response.status, content=response.read())
                     headers = {} if trace is None else {"traceparent": trace}
                     if post:
-                        target = "12.50" if "/en-US/" in path else "12,50"
-                        return client.post(path, headers=headers, data={"email": "trace@example.test", "target_price": target})
+                        return client.post(path, headers=headers, data=data)
                     return client.get(path, headers=headers)
 
                 cases = [("/api/marketplace/item_1", False)]
                 self.assertEqual(send("/marketplace/en-US/item_1", post=True).status_code, 200)
                 cases += [(f"/marketplace/{locale}/item_1", post)
                           for locale in ("en-US", "fr-FR", "de-DE") for post in (False, True)]
-                for path, post in cases:
-                    with self.subTest(path=path, post=post), ThreadPoolExecutor(max_workers=1) as pool:
+                for (path, post), trace in product(cases, (FIRST, b"\xe9")):
+                    with self.subTest(path=path, post=post, trace=trace), ThreadPoolExecutor(max_workers=1) as pool:
                         entered.clear()
                         release.clear()
                         start = len(observations)
-                        old = pool.submit(send, path, FIRST, post)
+                        old = pool.submit(send, path, trace, post)
                         try:
-                            self.assertTrue(entered.wait(5), "request captured trace before delayed source read")
+                            if not entered.wait(5):
+                                self.fail(f"source did not capture trace; response status {old.result(timeout=1).status_code}")
                             self.assertEqual(send(path, SECOND, post).status_code, 200)
                             self.assertFalse(old.done())
                             self.assertEqual(send(path, None, post).status_code, 200)
@@ -101,8 +119,9 @@ class TraceContextTests(unittest.TestCase):
                         self.assertEqual(old.result(timeout=10).status_code, 200)
                         self.assertEqual(send(path, "not-a-valid-traceparent", post).status_code, 200)
                         self.assertEqual(send(path, None, post).status_code, 200)
+                        received = trace.decode("latin-1") if isinstance(trace, bytes) else trace
                         self.assertEqual(observations[start:], [("/marketplace/records/item_1", trace)
-                            for trace in (SECOND, None, FIRST, "not-a-valid-traceparent", None)])
+                            for trace in (SECOND, None, received, "not-a-valid-traceparent", None)])
 
                 # Headers already sent upstream, but the old native body read is still pending.
                 hold_body.set()
@@ -119,7 +138,7 @@ class TraceContextTests(unittest.TestCase):
                 self.assertEqual(send("/api/marketplace/item_1").status_code, 200)
                 self.assertEqual([trace for _, trace in observations[start:]], [FIRST, SECOND, None])
                 readback = client.get("/api/alerts").json()
-                self.assertEqual(len(readback), 16)
+                self.assertEqual(len(readback), 31)
                 self.assertTrue(all(row["email"] == "trace@example.test" and row["target_minor"] == 1250 for row in readback))
         finally:
             release.set()
