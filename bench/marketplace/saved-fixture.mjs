@@ -109,7 +109,7 @@ export function writeSavedFixture(folder, commit, tree) {
         const metrics = phase === "warmup" ? run.warmup : run.phases[phase];
         metrics.requests = count; metrics.rps = rate;
         if (phase !== "warmup") metrics.perCpuSecond = count;
-        const load = runtime("k6", "load", 2 ** 30, { image: k6Image, entrypoint: ["k6"], mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
+        const load = runtime("k6", "load", 2 * 2 ** 30, { image: k6Image, entrypoint: ["k6"], mounts: [mount("/bench")], env: loadEnvironment(s, profile, phase, coldApp.name),
           cmd: ["run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], state: state(false, new Date(start + 100).toISOString(), new Date(end - 100).toISOString()) });
         const names = phase === "warmup" ? [] : [coldApp.name, ...(profile.source === "api" ? [upstream.name] : [])];
         const before = {}, after = {};
@@ -137,7 +137,7 @@ export function writeSavedFixture(folder, commit, tree) {
           const samples = Object.fromEntries(names.map((n) => [n, [0, 1, 2].map((i) => ({ t: start + (1 + i * 5) * 1000, cpu: 90 + i * 10, mem: 9 + i }))]));
           const stats = { samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
           write(`${base}/${phase}-stats.log.json`, { summary: Object.fromEntries(names.map((n) => [n, stats])), samples });
-          write(`${base}/${phase}-stats.log`, names.flatMap((Name) => samples[Name].map((p) => JSON.stringify({ Name, CPUPerc: `${p.cpu}%`, MemUsage: `${p.mem}MiB / 1GiB` }))).join("\n") + "\n");
+          write(`${base}/${phase}-stats.log`, names.flatMap((Name) => samples[Name].map((p) => JSON.stringify({ Name, CPUPerc: `${p.cpu}%`, MemUsage: `${p.mem}MiB / ${Name === coldApp.name ? "1GiB" : "512MiB"}` }))).join("\n") + "\n");
           if (profile.source === "api") run.phases[phase].upstream.interpretation = upstreamInterpretation;
         }
         start = end + 1000;

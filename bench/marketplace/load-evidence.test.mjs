@@ -68,6 +68,42 @@ test("real producer callback and copy path retain k6 engine elapsed, including g
 });
 
 // Opt-in local producer integration, never part of offline saved validation.
+test("execution bounds conserve arrival slots and latency work without rejecting valid drops or cutoff work", () => {
+  const elapsed = 15137.123456, counter = (count) => ({ count, rate: count / (elapsed / 1000) });
+  const original = {
+    load: { env: { MODE: "fixed", RATE: "150", VUS: "64" }, state: { Running: false, OOMKilled: false, ExitCode: 0,
+      StartedAt: "2026-01-01T00:00:00.100Z", FinishedAt: "2026-01-01T00:00:16Z" } },
+    summary: { metrics: { http_reqs: counter(2250), iterations: counter(2250), vus_max: { max: 200 },
+      http_req_duration: { avg: 1, max: 4 }, iteration_duration: { avg: 1, max: 4 } } },
+    clock: { testRunDurationMs: elapsed }, start: Date.parse("2026-01-01T00:00:00Z"), end: Date.parse("2026-01-01T00:00:17Z"), seconds: 15,
+  };
+  validateLoadExecution(original);
+  for (const edit of [
+    (v) => { v.summary.metrics.dropped_iterations = counter(1e9); },
+    (v) => { v.summary.metrics.http_reqs = counter(1e9); v.summary.metrics.iterations = counter(1e9); },
+    (v) => { v.summary.metrics.http_req_duration.max = 1e9; },
+    (v) => { v.summary.metrics.iteration_duration.max = 1e9; },
+    (v) => { v.summary.metrics.http_req_waiting = { avg: 1, max: 1e9 }; },
+    (v) => { v.summary.metrics["http_req_duration{expected_response:true}"] = { avg: 1, max: 1e9 }; },
+    (v) => { v.summary.metrics.http_req_duration = { avg: 2000, max: 2000 }; },
+    (v) => { v.summary.metrics.iteration_duration = { avg: 2000, max: 2000 }; },
+    (v) => { v.summary.metrics.http_req_duration.avg = 2; },
+    (v) => { v.summary.metrics.http_req_duration.max = 5; },
+  ]) { const v = structuredClone(original); edit(v); assert.throws(() => validateLoadExecution(v), /capacity|elapsed|iteration/); }
+  const capacity = structuredClone(original);
+  capacity.summary.metrics.http_reqs = counter(1500); capacity.summary.metrics.iterations = counter(1500);
+  capacity.summary.metrics.dropped_iterations = counter(750); validateLoadExecution(capacity);
+  const cutoff = structuredClone(original);
+  cutoff.summary.metrics.iterations = counter(2249); cutoff.summary.metrics.http_req_duration.avg = 1.001;
+  validateLoadExecution(cutoff);
+  // Boundary slots use the executor's integer-nanosecond tick, not an arbitrary
+  // percentage, and allow slot zero plus 1 ns clock conversion rounding.
+  const tick = Math.floor(1e9 / 150), slots = Math.floor(Math.ceil(elapsed * 1e6 + 1) / tick) + 1;
+  const edge = structuredClone(original); edge.summary.metrics.dropped_iterations = counter(slots - 2250);
+  validateLoadExecution(edge); edge.summary.metrics.dropped_iterations = counter(slots - 2249);
+  assert.throws(() => validateLoadExecution(edge), /schedule capacity/);
+});
+
 // Both images must already be cached; no pulls, external networking or ports.
 test("pinned real k6 producer exports replayable elapsed against an isolated HTTP mock", { skip: process.env.MARKETPLACE_PRODUCER_MOCK !== "1" }, async (t) => {
   const folder = mkdtempSync(join(tmpdir(), "marketplace-k6-mock-"));

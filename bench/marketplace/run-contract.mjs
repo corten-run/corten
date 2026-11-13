@@ -142,6 +142,20 @@ export function readLoadSummary(summary) {
     // Every exported latency trend has at most one sample per HTTP request (or
     // completed iteration). Even one maximum must contribute to its mean.
     assert.ok(trend.avg * requests.count >= trend.max * (1 - 1e-12), `load ${name} mean cannot contain its maximum`);
+    // For position k+f, the least sum compatible with q is the smaller of
+    // (n-k)*q and (n-k-1)*q/f. Apply the same bound to max - sample for the
+    // upper mean. Unknown tagged populations use the conservative limit 1-p.
+    const count = name === "iteration_duration" ? iterations.count : !name.includes("{") ? requests.count : null;
+    if (count === 0) assert.equal(trend.max, 0, "empty latency population has nonzero samples");
+    const weight = (p) => {
+      if (!count) return 1 - p;
+      const position = p * (count - 1), k = Math.floor(position), f = position - k;
+      return Math.min(count - k, f > 0 ? (count - k - 1) / f : Infinity) / count;
+    };
+    const rounding = trend.max * 1e-12;
+    for (const [key, p] of [["p(50)", 0.5], ["p(95)", 0.95], ["p(99)", 0.99]]) {
+      assert.ok(trend.avg + rounding >= weight(p) * trend[key] && trend.avg <= trend.max - weight(1 - p) * (trend.max - trend[key]) + rounding, `load ${name} mean/quantile feasibility disagrees`);
+    }
   }
   const failedRate = failures?.value ?? failures?.rate;
   assert.ok(Number.isFinite(failedRate) && failedRate >= 0 && failedRate <= 1, "load missing failure rate");

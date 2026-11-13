@@ -16,6 +16,31 @@ const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "in
 const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
 const imageId = (s) => assert.match(s, /^sha256:[a-f0-9]{64}$/);
+function cpuCount(value) {
+  assert.match(value, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/, "invalid observed CPU inventory");
+  const used = new Set();
+  for (const part of value.split(",")) {
+    const [first, last = first] = part.split("-").map(Number);
+    assert.ok(Number.isSafeInteger(first) && first >= 0 && last >= first && last <= 4095, "invalid observed CPU range");
+    for (let i = first; i <= last; i++) { assert.ok(!used.has(i), "duplicate observed CPU"); used.add(i); }
+  }
+  return used.size;
+}
+function cpuBudget(c, milliseconds, onlineCpus) {
+  const cores = cpuCount(c.cpuset || onlineCpus), period = c.cpuPeriod || 100000;
+  const quota = c.nanoCpus ? c.nanoCpus / 1e9 * period : c.cpuQuota;
+  const usec = (milliseconds + 2) * 1000;
+  // Two truncated wall-clock endpoints, two partial CFS periods, and a
+  // conservative whole period per CPU for non-expiring local runtime slices.
+  return Math.min(cores * usec, quota * (Math.ceil(usec / period) + 1) + cores * period) + 2;
+}
+function displayedMemory(value) {
+  const m = /^\s*(\d+(?:\.(\d+))?)\s*(B|[KMGT]i?B)\s*$/.exec(value);
+  assert.ok(m, "invalid Docker memory display");
+  // Docker BytesSize uses %.4g: omitted trailing zeroes do not reduce precision.
+  const magnitude = Math.floor(Math.log10(Number(m[1]) || 1));
+  return { mib: memoryMiB(value), rounding: memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2 };
+}
 
 /** Returns the validated summary, or throws MARKETPLACE_EVIDENCE_INVALID (also for missing raw).
  * No Docker, HTTP, writes, or fetching: only bounded saved files and a local Git commit object.
@@ -71,7 +96,7 @@ function replay({ folder, round, commit }) {
     assert.equal(c.owner, s.runId, "raw runtime is not owned by this run");
     assert.equal(c.memoryBytes, memory, "raw runtime memory limit differs");
     assert.equal(c.cpuset, s.measurement.cpus[role].cpuset ?? "", "raw runtime CPU placement differs");
-    assert.ok(c.nanoCpus === quota * 1e9 && c.cpuQuota === 0 || c.nanoCpus === 0 && Number.isSafeInteger(c.cpuPeriod) && c.cpuPeriod > 0 && Number.isSafeInteger(c.cpuQuota) && c.cpuQuota / c.cpuPeriod === quota, "raw runtime CPU quota differs");
+    assert.ok(c.nanoCpus === quota * 1e9 && c.cpuQuota === 0 && c.cpuPeriod === 0 || c.nanoCpus === 0 && Number.isSafeInteger(c.cpuPeriod) && c.cpuPeriod >= 1000 && c.cpuPeriod <= 1000000 && Number.isSafeInteger(c.cpuQuota) && c.cpuQuota / c.cpuPeriod === quota, "raw runtime CPU quota differs");
     assert.equal(typeof c.state?.Running, "boolean"); assert.equal(typeof c.state.OOMKilled, "boolean");
     assert.ok(!c.state.Error, "Docker runtime error");
     assert.notEqual(c.state.Restarting, true, "container is restarting");
@@ -226,7 +251,7 @@ function replay({ folder, round, commit }) {
           assert.equal(raw.upstream.id, upstream.id); assert.equal(raw.upstream.state.StartedAt, upstream.state.StartedAt);
           covers(raw.upstream, time(run.startedAt));
         } else assert.equal(raw.upstream, null);
-        const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 ** 30);
+        const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 * 2 ** 30);
         assert.equal(k6.image, k6Image);
         assert.deepEqual(k6.entrypoint, toolImages.k6.entrypoint);
         assert.equal(k6.name, `${s.runId}-k6`); assert.ok(!loadIds.has(k6.id), "load phase reused a k6 container"); loadIds.add(k6.id);
@@ -253,8 +278,14 @@ function replay({ folder, round, commit }) {
         const appStopped = !raw.app.state.Running || raw.app.state.OOMKilled;
         exactKeys(raw.before, participants); exactKeys(raw.after, appStopped ? [] : participants);
         for (const name of participants) {
+          const c = name === coldApp.name ? raw.app : raw.upstream;
           assert.ok(Number.isSafeInteger(raw.before[name]) && raw.before[name] >= 0, "invalid CPU counter before load");
-          if (!appStopped) assert.ok(Number.isSafeInteger(raw.after[name]) && raw.after[name] > raw.before[name], "invalid CPU counter after load");
+          assert.ok(raw.before[name] <= cpuBudget(c, time(k6.state.StartedAt) - time(c.state.StartedAt), s.host.onlineCpus), "CPU counter exceeds container lifetime capacity");
+          if (!appStopped) {
+            assert.ok(Number.isSafeInteger(raw.after[name]) && raw.after[name] > raw.before[name], "invalid CPU counter after load");
+            assert.ok(raw.after[name] - raw.before[name] <= cpuBudget(c, end - start, s.host.onlineCpus), "CPU delta exceeds phase capacity");
+            assert.ok(raw.after[name] <= cpuBudget(c, end - time(c.state.StartedAt), s.host.onlineCpus), "CPU counter exceeds container lifetime capacity");
+          }
           cpuObservations.push({ id: name === coldApp.name ? coldApp.id : upstream.id, start, end, before: raw.before[name], after: raw.after[name] });
         }
         const stop = phaseEnd({ ...raw.seen, errors: raw.seen.errors.map((e) => ({ ...e, error: new Error(e.error) })), summary: k6Summary });
@@ -279,7 +310,12 @@ function replay({ folder, round, commit }) {
             const p = JSON.parse(line); assert.ok(Object.hasOwn(history, p.Name), "unexpected stats participant");
             assert.match(p.CPUPerc, /^\d+(?:\.\d+)?%$/);
             assert.ok(history[p.Name].length < 1000, "stats log exceeds sample bound");
-            history[p.Name].push({ cpu: parseFloat(p.CPUPerc), mem: memoryMiB(p.MemUsage.split("/")[0]) });
+            const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
+            assert.equal(parts.length, 2, "memory display missing its limit");
+            const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
+            assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
+            assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
+            history[p.Name].push({ cpu: parseFloat(p.CPUPerc), mem: usage.mib });
           }
           const stats = {};
           for (const name of participants) {

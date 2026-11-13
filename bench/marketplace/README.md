@@ -325,6 +325,36 @@ Fixed-rate drops and failed requests remain app outcomes, not a new admission te
 All exported HTTP and iteration latency trends require nonnegative finite values, ordered
 percentiles below the maximum, and a mean bounded by the maximum and its contribution
 over at most the request count. These checks also apply to stopped phases.
+For each linear-interpolated nonnegative quantile `q(p)`, the mean must also lie
+between `(1-p)*q(p)` and `p*q(p) + (1-p)*max` (with relative `1e-12` rounding).
+For known request/iteration sample counts replay tightens these limits using the
+actual interpolated order-statistic position, including one- and two-sample cases.
+Every latency maximum must fit the retained engine elapsed clock, allowing only
+1 ns conversion rounding or relative `1e-12`, whichever is larger. Total HTTP and
+completed-iteration duration work cannot exceed maximum VUs times engine elapsed;
+HTTP work must fit completed iteration work plus the maximum duration of each
+unfinished request. These are feasibility checks, not latency admission thresholds.
+
+The generator receipt must retain the producer's **2 GiB** limit, not the app's
+1 GiB limit. Fixed requests plus dropped iterations cannot exceed the number of
+arrival slots in the actual engine elapsed window. Replay uses the executor's
+integer-nanosecond `floor(1e9 / RATE)` tick, slot zero and 1 ns clock conversion
+rounding. Using the whole elapsed window, including graceful stop, is conservative
+with respect to scheduling jitter; it is not a fixed percentage waiver. Real capacity
+drops within this bound remain app outcomes.
+
+CPU deltas must fit their enclosing retained phase window and the participant's
+quota and logical CPU count. Absolute counters must also fit the container lifetime;
+the pre-load counter precedes generator start, while the post-load counter precedes
+receipt completion. The upper bound allows 2 ms for the two wall-clock endpoints,
+two partial CFS periods and a conservative whole period per CPU for non-expiring
+CPU-local runtime slices, capped by physical CPU time. NanoCPU limits use Docker's
+default 100 ms period; explicit CFS periods must be within Linux's 1 ms to 1 s range.
+See [Linux CFS bandwidth and runtime-slice caveats](https://docs.kernel.org/scheduler/sched-bwc.html).
+Each raw Docker memory sample and its displayed limit must fit the participant's
+retained memory limit. The only display allowance is half a four-significant-digit
+step from [Docker's `BytesSize` formatter](https://github.com/docker/go-units/blob/master/size.go),
+including omitted trailing zeroes, not a percentage of the container's capacity.
 
 Upstream control snapshots retain both per-record requests and status answers. The native
 upstream increments both synchronously before serving a control GET, so their totals must

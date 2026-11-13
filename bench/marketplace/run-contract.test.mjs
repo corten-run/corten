@@ -135,6 +135,32 @@ test("all native latency exports obey ordering and statistical bounds, not just 
   const zero = k6(); for (const name of ["http_req_duration", "iteration_duration"]) for (const key of Object.keys(zero.metrics[name])) zero.metrics[name][key] = 0;
   assert.equal(readLoadSummary(zero).p99, 0);
 });
+
+test("nonnegative k6 linear quantiles constrain the mean for every latency export", () => {
+  for (const name of ["http_req_duration", "iteration_duration", "http_req_waiting", "http_req_duration{expected_response:true}"]) {
+    for (const trend of [
+      { avg: 1, "p(50)": 100, "p(95)": 100, "p(99)": 100, max: 100 },
+      { avg: 50, "p(50)": 1, "p(95)": 1, "p(99)": 1, max: 100 },
+    ]) {
+      const v = k6(); v.metrics[name] = trend;
+      assert.throws(() => readLoadSummary(v), /mean\/quantile feasibility/, name);
+    }
+  }
+  // Construct real nonnegative sample histories, including small-sample linear
+  // interpolation and skewed tails, rather than prescribing arbitrary stats.
+  for (const samples of [[100], [0, 100], [0, 0, 100], [0, 100, 100], Array(2249).fill(0).concat(100)]) {
+    const q = (p) => { const i = (samples.length - 1) * p, f = Math.floor(i); return samples[f] + (samples[Math.ceil(i)] - samples[f]) * (i - f); };
+    const v = k6(); v.metrics.http_reqs.count = samples.length; v.metrics.iterations.count = samples.length;
+    v.metrics.http_req_failed.fails = samples.length; v.metrics.checks.passes = samples.length * 2;
+    for (const c of Object.values(v.root_group.checks)) c.passes = samples.length;
+    const trend = { avg: samples.reduce((a, b) => a + b, 0) / samples.length, "p(50)": q(0.5), "p(95)": q(0.95), "p(99)": q(0.99), max: samples.at(-1) };
+    v.metrics.http_req_duration = trend; v.metrics.iteration_duration = trend;
+    assert.equal(readLoadSummary(v).requests, samples.length);
+  }
+  const boundary = k6();
+  boundary.metrics.http_req_duration = { avg: 50, "p(50)": 100, "p(95)": 100, "p(99)": 100, max: 100 };
+  assert.throws(() => readLoadSummary(boundary), /mean\/quantile feasibility/);
+});
 test("an upstream error answer during a phase is counted, so the run fails on it", () => {
   const counts = (answers) => ({ status: 200, answers, requests: { item_1: Object.values(answers).reduce((sum, n) => sum + n, 0) } });
   assert.equal(upstreamErrors(counts({ 200: 10 }), counts({ 200: 50 })), 0);
