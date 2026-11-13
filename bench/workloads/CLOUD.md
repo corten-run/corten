@@ -176,8 +176,8 @@ Real OS behavior of that publication step remains an integration/host check.
 
 ## Readiness And Verification
 
-Base read: `41a84f57273b8c1c40e5822e815fc3e94edc6df0`. Separate campaign source read:
-`69bc0ffc62ec73ad4b4671ee57ae3e47a2afdead`. That API unconditionally returns
+Base read: `41a84f57273b8c1c40e5822e815fc3e94edc6df0`. The separate development
+campaign source initially returned
 blocked/failed/invalid, `qualified:false`, `controllerReady:false` and
 `deletionAuthorized:false`. Even manifest-verified is byte integrity, not independent
 review, complete native production/OS evidence, source qualification or readiness.
@@ -203,7 +203,7 @@ exercise lost/crashed creates, start loss, active/missing/foreign units, live an
 dead locks, concurrent collect, state/path aliases, hostile archives, hash/tree
 mutation, interrupted extraction, cancellation, uncertain deletion and audit races.
 The test fixtures are manufactured apparatus inputs, never passing native results.
-The independent review of `616a8a245f7988d1505ec9e1c97cd0d144382e4a`
+The independent review of the initial controller implementation
 identified high-bit exit-marker acceptance and implicit-directory expansion before
 the tree limit. Permanent tests reproduced both failures before these repairs;
 the original 30 tests still passed. A separate test reproduced the unbounded
