@@ -1846,6 +1846,13 @@ impl Req {
         }
     }
 
+    /// Whether this request's path is under an area with a stylesheet, so its patch links one.
+    #[inline]
+    fn links_section(&self) -> bool {
+        let path = self.uri.path();
+        self.shared.sections.iter().any(|(prefixes, _)| prefixes.iter().any(|prefix| crate::api::under(prefix, path)))
+    }
+
     /// A swapped-in page's preloads: what its handlers' modules import (sibling modules,
     /// `corten/events`, `corten/views`), so the runtime fetches them with the modules, as a full
     /// load's head does, rather than once each module arrives. The modules themselves the runtime
@@ -2028,7 +2035,11 @@ impl Req {
 
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
-        let mut body = String::new();
+        // The last size of a patch that links its area's stylesheets, so its buffer is allocated
+        // once with room for them, as a page's is. One with none renders as it did without areas.
+        static LINKED: AtomicUsize = AtomicUsize::new(256);
+        let linked = self.links_section();
+        let mut body = if linked { String::with_capacity(LINKED.load(Ordering::Relaxed)) } else { String::new() };
         crate::form::DREW_KEY.set(false);
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
         #[cfg(debug_assertions)]
@@ -2047,7 +2058,10 @@ impl Req {
         self.render_into(view, &mut body, false)?;
         // After the patch, where adding them moves nothing and the runtime takes them out before
         // it reads the patch's elements.
-        self.section_links(&mut body);
+        if linked {
+            self.section_links(&mut body);
+            LINKED.store(body.len() + body.len() / 8, Ordering::Relaxed);
+        }
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if crate::form::DREW_KEY.take() {

@@ -1437,7 +1437,9 @@ mod tests {
             let (status, body) = action(app(dev), "/stray").await;
             assert_eq!(status, 500);
             assert!(
-                !dev || body.contains("/stray answers with a patch that renders BadgeList, whose stylesheet is linked from the area /admin only"),
+                !dev || body.contains(
+                    "/stray answers with a patch that renders BadgeList, whose stylesheet is linked from the area /admin only"
+                ),
                 "{body}"
             );
         }
