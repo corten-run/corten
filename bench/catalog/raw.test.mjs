@@ -160,6 +160,23 @@ test("native cumulative counters and sample clocks retain cross-phase chronology
   assert.throws(() => replayCatalog(g.summary, g.reader, g.commit), "sample time outside measured window cannot verify");
 });
 
+test("native upstream identity is continuous across phases and candidates", () => {
+  for (const [app, pass, changedPhases] of [
+    ["corten", 1, ["sat64"]],
+    ["corten", 1, ["sat64", "sat256"]],
+    ["aspnet", 1, phases],
+  ]) {
+    const f = fixture();
+    for (const phase of changedPhases) {
+      const path = `api/${app}/p${pass}-page/${phase}-cpu-counters.json`;
+      const proof = JSON.parse(f.files.get(path));
+      proof.ids[`${f.summary.runId}-upstream`] = "d".repeat(64);
+      f.put(path, proof);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /upstream.*identity/);
+  }
+});
+
 test("native sampler rejects a trailing incomplete record and retains its bytes", async () => {
   const folder = mkdtempSync(join(tmpdir(), "catalog-stats-framing-"));
   const old = childProcess.spawn;

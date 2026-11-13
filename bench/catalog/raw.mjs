@@ -29,6 +29,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   assert.deepEqual(cleanup, { runId: summary.runId, containers: [], networks: [] }, "owned resources remain or cleanup proof differs");
   assert.deepEqual(readJson("tools.json"), summary.tools, "tool observations differ");
   for (const name of ["upstream", "checker", "k6"]) assert.match(summary.tools?.[name]?.imageId, /^sha256:[a-f0-9]{64}$/);
+  let upstreamId;
   for (const [app, entry] of Object.entries(summary.apps)) {
     assert.match(entry.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(entry.imageBytes) && entry.imageBytes > 0);
@@ -78,6 +79,10 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
               const names = [appName, ...(source === "api" ? [upstreamName] : [])];
               for (const field of ["before", "after", "ids"]) assert.deepEqual(Object.keys(proof[field]).sort(), [...names].sort());
               assert.equal(proof.ids[appName], instance.id);
+              if (source === "api") {
+                upstreamId ??= proof.ids[upstreamName];
+                assert.equal(proof.ids[upstreamName], upstreamId, "upstream container identity changed during the round");
+              }
               assert.deepEqual(Object.keys(deltas).sort(), [...names].sort());
               const stats = readJson(`${raw}/${phase}-stats.log.json`);
               assert.deepEqual(Object.keys(stats.samples).sort(), [...names].sort());
