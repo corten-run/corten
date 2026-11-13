@@ -2,6 +2,68 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
 import { installObserver } from "./observer.mjs";
+import { socketFixture } from "./socket-fixture.mjs";
+
+test("bootstrap source subscriptions and connections are not subtracted from the zero baseline", { timeout: 30000 }, async () => {
+  const peer = await socketFixture();
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage(), sent = [];
+    page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => sent.push(payload)));
+    await page.evaluate(installObserver);
+    const observed = await page.evaluate(async (url) => {
+      const o = window.clientObserver, source = new EventTarget(), receive = () => {};
+      source.addEventListener("tick", receive);
+      window.clientSource = source;
+      const socket = window.reviewSocket = new WebSocket(url);
+      await new Promise((ok, reject) => { socket.onopen = ok; socket.onerror = reject; });
+      socket.send("bootstrap");
+      const baseline = o.begin().owned;
+      source.removeEventListener("tick", receive);
+      socket.send("operation");
+      const beforeClose = o.owned();
+      return { baseline, beforeClose, network: o.network };
+    }, peer.url);
+    await peer.close();
+    observed.final = await page.evaluate(async () => {
+      const socket = window.reviewSocket;
+      if (socket.readyState !== WebSocket.CLOSED) await new Promise((ok) => { socket.onclose = ok; });
+      return window.clientObserver.owned();
+    });
+    assert.equal(observed.baseline.subscriptions, 1);
+    assert.equal(observed.baseline.listeners, 1);
+    assert.equal(observed.baseline.connections, 1);
+    assert.equal(observed.beforeClose.subscriptions, 0);
+    assert.equal(observed.beforeClose.connections, 1);
+    assert.ok(Object.values(observed.final).every((n) => n === 0), JSON.stringify(observed.final));
+    assert.deepEqual(observed.network.map((r) => r.transport), ["WebSocket", "WebSocket.send", "WebSocket.send"]);
+    assert.deepEqual(sent.slice(0, 2), ["bootstrap", "operation"]);
+    assert.ok(peer.receivedBytes() > 0);
+  } finally { try { await browser?.close(); } finally { await peer.close(); } }
+});
+
+test("released bootstrap subscriptions leave a real zero baseline; bootstrap EventSource stays owned", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.evaluate(installObserver);
+    const observed = await page.evaluate(() => {
+      const o = window.clientObserver, source = window.clientSource = new EventTarget(), controller = new AbortController();
+      source.addEventListener("tick", () => {}, { signal: controller.signal });
+      controller.abort();
+      const released = o.owned(), events = new EventSource("http://127.0.0.1:1/events");
+      const baseline = o.begin().owned;
+      events.close();
+      return { released, baseline, final: o.owned(), network: o.network };
+    });
+    assert.ok(Object.values(observed.released).every((n) => n === 0));
+    assert.equal(observed.baseline.subscriptions, 0);
+    assert.equal(observed.baseline.connections, 1);
+    assert.ok(Object.values(observed.final).every((n) => n === 0));
+    assert.deepEqual(observed.network, [{ transport: "EventSource" }]);
+  } finally { await browser.close(); }
+});
 
 test("global event-handler properties are counted until cleared without changing dispatch", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -121,11 +183,14 @@ test("failed HTTP, beacon, WebSocket and EventSource attempts cannot hide", asyn
       await fetch("http://127.0.0.1:1/fail").catch(() => {});
       navigator.sendBeacon("http://127.0.0.1:1/beacon");
       const ws = new WebSocket("ws://127.0.0.1:1/socket"), es = new EventSource("http://127.0.0.1:1/events");
+      let sendError;
+      try { ws.send("not-open"); } catch (error) { sendError = error.name; }
       const active = o.owned(); ws.close(); es.close(); await o.wait(100);
-      return { active, final: o.owned(), network: o.network };
+      return { active, final: o.owned(), network: o.network, sendError };
     });
     assert.equal(observed.active.connections, 2);
     assert.equal(observed.final.connections, 0);
-    assert.deepEqual(observed.network.map((r) => r.transport), ["fetch", "beacon", "WebSocket", "EventSource"]);
+    assert.equal(observed.sendError, "InvalidStateError");
+    assert.deepEqual(observed.network.map((r) => r.transport), ["fetch", "beacon", "WebSocket", "EventSource", "WebSocket.send"]);
   } finally { await browser.close(); }
 });

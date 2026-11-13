@@ -110,13 +110,15 @@ export function installObserver() {
     window[name] = class extends Native {
       constructor(...args) {
         super(...args);
-        if (recording) { connections.add(this); network.push({ transport: name }); }
+        connections.add(this); network.push({ transport: name });
         original.add.call(this, "close", () => connections.delete(this));
         if (name === "EventSource") original.add.call(this, "error", () => { if (this.readyState === 2) connections.delete(this); });
       }
       close(...args) { const result = super.close(...args); if (name === "EventSource") connections.delete(this); return result; }
     };
   }
+  const socketSend = WebSocket.prototype.send;
+  WebSocket.prototype.send = function(...args) { network.push({ transport: "WebSocket.send" }); return socketSend.apply(this, args); };
   // These apps do not use workers. Fail closed rather than omit their resource/network activity.
   for (const name of ["Worker", "SharedWorker"]) if (window[name]) window[name] = class { constructor() { throw new Error("unobserved-worker-not-supported"); } };
   const globalTargets = () => [window, document, document.documentElement, document.body].filter(Boolean);
@@ -139,27 +141,38 @@ export function installObserver() {
     .filter(([name, callback]) => baselineHandlers.get(target)?.get(name) !== callback)
     .map(([type]) => ({ type, target, property: true }))) : [];
   const owned = () => {
-    const live = [...listeners].filter((r) => r.owned && !(r.target instanceof AbortSignal));
+    const live = [...listeners].filter((r) => (r.owned || r.target === window.clientSource) && !(r.target instanceof AbortSignal));
     // Detached element-bound UI handlers cannot receive browser input. Global listeners
-    // installed before begin() belong to the page bootstrap, not this mount.
+    // installed before begin() belong to the page bootstrap, not this mount. The
+    // application's input source is never infrastructure, even before begin().
     const lasting = live.filter((r) => !(r.target instanceof Node) ||
       r.target.isConnected);
     return { subscriptions: live.filter((r) => r.target === window.clientSource).length, connections: connections.size,
       listeners: lasting.length + propertyListeners().length, timers: timers.size, pendingTasks: tasks.size };
   };
+  const visible = (element) => element.checkVisibility({ visibilityProperty: true, opacityProperty: true });
   const dom = () => {
     screen ??= document.getElementById("screen");
     if (!screen) throw new Error("screen-missing");
-    const visible = [...screen.querySelectorAll("tr[data-row]")].filter((e) => !e.hidden && (!screen.isConnected || e.checkVisibility()));
-    const selected = visible.filter((e) => e.getAttribute("aria-selected") === "true" || e.hasAttribute("data-selected"));
+    if (screen.isConnected && !visible(screen)) throw new Error("screen-not-visible");
+    const text = (element) => {
+      if (!element || (screen.isConnected && !visible(element))) throw new Error("content-not-visible");
+      if (screen.isConnected) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        for (let node; (node = walker.nextNode());) if (node.textContent.trim() && !visible(node.parentElement)) throw new Error("content-not-visible");
+      }
+      return element.textContent;
+    };
+    const shown = [...screen.querySelectorAll("tr[data-row]")].filter((e) => !e.hidden && (!screen.isConnected || visible(e)));
+    const selected = shown.filter((e) => e.getAttribute("aria-selected") === "true" || e.hasAttribute("data-selected"));
     if (selected.length > 1) throw new Error("multiple-selected-rows");
-    return { id: `dom-${++domId}`, rows: visible.map((e) => ({ id: e.cells[0].textContent, label: e.cells[1].textContent, node: token(e) })),
-      selected: selected[0]?.cells[0].textContent ?? null,
-      cards: [...screen.querySelectorAll("[data-card]")].filter((e) => !screen.isConnected || e.checkVisibility()).map((e) => ({ id: e.querySelector("b").textContent, priceMinor: Number(e.querySelector("span").textContent), node: token(e) })),
-      totalMinor: Number(screen.querySelector("#total").textContent) };
+    return { id: `dom-${++domId}`, rows: shown.map((e) => ({ id: text(e.cells[0]), label: text(e.cells[1]), node: token(e) })),
+      selected: selected[0] ? text(selected[0].cells[0]) : null,
+      cards: [...screen.querySelectorAll("[data-card]")].filter((e) => !screen.isConnected || visible(e)).map((e) => ({ id: text(e.querySelector("b")), priceMinor: Number(text(e.querySelector("span"))), node: token(e) })),
+      totalMinor: Number(text(screen.querySelector("#total"))) };
   };
-  window.clientObserver = { now, dom, owned, network,
-    listenerDetails() { return [...listeners].filter((r) => r.owned || r.pageOwned).concat(propertyListeners()).map((r) => ({ type: r.type, target: r.target.constructor.name, connected: r.target instanceof Node ? r.target.isConnected : null, pageOwned: !!r.pageOwned, property: !!r.property })); },
+  window.clientObserver = { now, dom, owned, network, visible,
+    listenerDetails() { return [...listeners].filter((r) => r.owned || r.pageOwned || r.target === window.clientSource).concat(propertyListeners()).map((r) => ({ type: r.type, target: r.target.constructor.name, connected: r.target instanceof Node ? r.target.isConnected : null, pageOwned: !!r.pageOwned, property: !!r.property })); },
     begin() { for (const target of globalTargets()) baselineHandlers.set(target, handlers(target)); recording = true; return { kind: "resources", at: now(), owned: owned() }; },
     loaded() { return JSON.parse(document.getElementById("fixture").textContent).initial; },
     detached() { return screen && !screen.isConnected; },
