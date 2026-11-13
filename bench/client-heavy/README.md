@@ -104,3 +104,67 @@ sources, and disclose that the observer/runner are newer than the build receipt.
 This does not bypass the runner's mandatory fresh build or create a new baseline.
 Without it the native integration tests are explicitly skipped; the observer and
 dispatch-gate tests need no build. The hostile cases are not framework evidence.
+
+## Saved Evidence
+
+The standalone verifier uses only Node built-ins and the existing offline oracle.
+It does not import Playwright, run saved code, build apps, launch browsers or
+servers, contact a network, or write artifacts. Run it against a quiescent local
+directory, with the requested round and full measured commit supplied independently:
+
+```sh
+node bench/client-heavy/verify.mjs bench/client-heavy/work/local --round local --commit <full-commit-sha>
+node --test bench/client-heavy/verify.test.mjs
+```
+
+Its fixed API is `await validateSaved({ folder, round, commit })`, exported from
+`verify.mjs`. No validator, command, contender, plan, output or policy override is
+accepted. The matching CLI accepts exactly the arguments above, in that order.
+Local Git objects for the supplied commit must be available; the verifier never
+fetches them. Read-only Git object queries compare the saved source/input hashes
+against that exact commit. v1 checkout hashes may match committed LF or CRLF bytes;
+this compatibility check cannot authenticate the source or the build. Reviewed
+runner/build snapshots prevent silently inheriting changed option semantics.
+
+The JSON report uses `client-heavy-saved-verification/v1`. `status: "invalid"`
+means malformed, inconsistent, incompatible or unreadable evidence was observed;
+`errors` locates each detected problem. `status: "blocked"` means those diagnostic
+checks passed but required proof is missing. `diagnosticsPassed` distinguishes
+these cases; it is **not** native qualification. CLI exits are 1 for invalid/usage
+and 2 for blocked. There is deliberately no success exit for native/v1 evidence.
+Consumers, including the isolated worker, must retain the report and blockers,
+not convert a blocked report or an empty error list into success.
+
+Verification checks the entire current six-app registry and definition, effective
+fixture and cleanup/timeout options, source provenance, saved build inventory,
+actual bundle bytes/hashes, and each raw per-app file against `result.json`.
+Every supplied qualification and measurement capture is replayed with the existing
+oracle, including both passes when one fails. Saved oracle results, pass/ready
+flags, operation order, timings and measurement gating must agree with the raw
+observations. Derived operation counts, capture duration, cleanup release and
+post-probe observation intervals come from the records, and bundle sizes come
+from saved bytes. Failed, unsupported and not-run outcomes stay explicit, with
+unavailable measurements `null`, never zero. A file ledger hashes every saved
+native output, including generated files not covered by v1's build receipt.
+
+The verifier refuses traversal, absolute paths inside receipts, links/junctions,
+linked ancestors, hardlinks, duplicate/case-colliding files and build inputs,
+nonregular files and unexpected artifact files/directories. It uses exact integer
+file identities and bounds the tree to 4,096 entries, 20 directory levels, 64 MiB
+per file and 512 MiB total. The unit tests create and remove real temporary saved
+trees with synthetic observations and hostile mutations, not native Rust builds
+or framework measurements.
+
+Current `client-heavy-native/v1` does not save a source-bound invocation/plan and
+Cargo tool identity, complete source/dependency bytes, independently established
+fresh source-to-bundle build proof, raw mount/operation timing starts, or positive
+terminal browser/server closure and interruption receipts. Its empty
+`cleanupFailures` array is not positive cleanup proof. An oracle can check a
+trace's semantics, not authenticate a fabricated browser observation. Consequently
+even fully self-consistent files and hashes remain blocked. Plausible `readyMs`
+and `elapsedMs` scalars cannot be recomputed and are not released as verified
+timings (`timings: null`). `valid`, `ready`, `readyForLoad` and `rankingEligible`
+remain false, and isolation remains `"unknown"`. No saved summary flag, note or
+self-consistent replacement bundle can promote those states. Missing native
+proof requires a separately reviewed runner/evidence change, not a verifier
+override or a relabeling of historical artifacts.
