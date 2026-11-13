@@ -2015,10 +2015,20 @@ impl<S: Steps> crate::router::Stages for At<S> {
 /// route whose requests may be in another scope, with the one the request's path is in.
 fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
     let layer = Arc::new(layer);
-    let by_path: Arc<dyn crate::router::Stages> = Arc::new(At { layer: layer.clone(), scope: None });
-    Router::new(table, Some(by_path), |path| {
-        let scope = layer.scopes.of_route(path)?.clone();
-        Some(Arc::new(At { layer: layer.clone(), scope: Some(scope) }) as Arc<dyn crate::router::Stages>)
+    let at = |scope: Option<&Arc<Scope>>| -> Arc<dyn crate::router::Stages> {
+        Arc::new(At { layer: layer.clone(), scope: scope.cloned() })
+    };
+    // One for each scope, which all its routes share.
+    let scopes = &layer.scopes;
+    let each: Vec<(&Arc<Scope>, Arc<dyn crate::router::Stages>)> = [&scopes.own, &scopes.app]
+        .into_iter()
+        .chain(scopes.prefixed.iter().map(|(_, scope)| scope))
+        .map(|scope| (scope, at(Some(scope))))
+        .collect();
+    Router::new(table, Some(at(None)), |path| {
+        let scope = scopes.of_route(path)?;
+        let (_, stages) = each.iter().find(|(each, _)| Arc::ptr_eq(each, scope)).expect("every scope has its stages");
+        Some(stages.clone())
     })
 }
 

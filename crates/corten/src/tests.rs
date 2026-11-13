@@ -4335,11 +4335,20 @@ impl crate::Middleware for Met {
     }
 }
 
+/// A parameter route of the area `/shop`, which can match the prefix of the area inside it.
+#[derive(crate::Route)]
+#[route("/shop/{id}")]
+struct ShopAny<'a> {
+    id: &'a str,
+}
+
 /// An app whose area `/shop`, and `/shop/desk` inside it, each set a CSP source and middleware,
 /// the outer one a deadline and both a body limit, over the app's shorter deadline and smaller
-/// limit; with `catch_all`, the app's `/{*rest}` answers every path no other route does. Each route
-/// waits 200 ms for a `GET` with `x-slow`, and answers a `POST` with the length of its body.
-fn shop_app(catch_all: bool) -> Router {
+/// limit; with `catch_all`, the app's `/{*rest}` answers every path no other route does, and with
+/// `shop_any`, the outer area's `/shop/{id}` every segment under `/shop`, `/shop/desk` among them.
+/// Each route waits 200 ms for a `GET` with `x-slow`, and answers a `POST` with the length of
+/// its body.
+fn shop_app(catch_all: bool, shop_any: bool) -> Router {
     let answer = || {
         get(|headers: http::HeaderMap| async move {
             if headers.contains_key("x-slow") {
@@ -4356,6 +4365,7 @@ fn shop_app(catch_all: bool) -> Router {
         .body_limit(1 << 10)
         .middleware(Met("app"))
         .area::<Shop>(|shop| {
+            let shop = if shop_any { shop.route::<ShopAny>(crate::Methods::reads(answer())) } else { shop };
             shop.route::<ShopItem>(crate::Methods::reads(answer()))
                 .deadline(Duration::from_secs(10))
                 .body_limit(4 << 10)
@@ -4390,7 +4400,7 @@ async fn shop_call(router: &Router, method: &str, path: &str, slow: bool, body: 
 /// where the inner sets none; read from the route the router matched (#1213).
 #[tokio::test]
 async fn a_route_in_an_area_meets_its_areas_deadline_body_limit_csp_and_middleware() {
-    let router = shop_app(false);
+    let router = shop_app(false, false);
     let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/item", true, 0).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline, not the app's 50 ms");
     assert_eq!(met, "desk shop app", "the app's middleware, then the outer area's, then the inner one's");
@@ -4408,7 +4418,7 @@ async fn a_route_in_an_area_meets_its_areas_deadline_body_limit_csp_and_middlewa
 /// and has its CSP, and one outside every area the app's alone (#1213).
 #[tokio::test]
 async fn an_unknown_url_under_an_areas_prefix_is_answered_with_the_areas_settings() {
-    let router = shop_app(false);
+    let router = shop_app(false, false);
     let (status, met, csp, _) = shop_call(&router, "GET", "/shop/desk/nope", false, 0).await;
     assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "desk shop app"));
     assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "{csp}");
@@ -4425,7 +4435,7 @@ async fn an_unknown_url_under_an_areas_prefix_is_answered_with_the_areas_setting
 /// a route that can reach under another prefix is read by the request's path (#1213).
 #[tokio::test]
 async fn a_catch_all_outside_an_area_answers_under_it_with_the_areas_settings() {
-    let router = shop_app(true);
+    let router = shop_app(true, false);
     let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/other", true, 0).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline");
     assert_eq!(met, "desk shop app");
@@ -4436,6 +4446,25 @@ async fn a_catch_all_outside_an_area_answers_under_it_with_the_areas_settings() 
     assert!(!csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
     assert_eq!(shop_call(&router, "GET", "/other", true, 0).await.0, StatusCode::SERVICE_UNAVAILABLE, "the app's deadline");
     assert_eq!(shop_call(&router, "POST", "/other", false, 3 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE, "the app's limit");
+}
+
+/// An outer area's parameter route that matches the prefix of an area inside it (`/shop/{id}` at
+/// `/shop/desk`) answers it with the inner area's settings, as every request under that prefix
+/// meets: its middleware, CSP and body limit, and the outer area's deadline where it sets none.
+/// Another segment keeps the outer area's alone (#1213).
+#[tokio::test]
+async fn an_outer_areas_parameter_route_at_an_inner_areas_prefix_meets_the_inner_areas_settings() {
+    let router = shop_app(false, true);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline, not the app's 50 ms");
+    assert_eq!(met, "desk shop app", "the inner area's middleware too");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/other", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "the outer area's alone: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/other", false, 6 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 /// A middleware reads the client's address as a handler would, and the answer is then private.
