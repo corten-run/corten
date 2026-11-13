@@ -175,6 +175,8 @@ jobs:
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
+          docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-playwright-tools .
+          image="corten-playwright-tools"
           run="docker run --rm --network host --ipc host -v $PWD:/src -w /src"
           echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
           # For a test that restarts its server: the runner's docker CLI and socket as well.

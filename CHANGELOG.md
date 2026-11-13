@@ -30,6 +30,9 @@ Corten is pre-1.0, so any minor version may change the API.
   native benchmark evidence. Collection, archive and artifact namespaces share the
   portable-name check without decoding names or relaxing traversal, link or collision checks.
 
+- Prepare current Git in the browser CI image so native immutable-source checks run
+  with replacement objects and lazy fetching disabled, instead of failing on an older CLI.
+
 - Register the native Rails, Phoenix and Laravel live ports without promoting
   historical captures. Retain Livewire/Reverb wire and DOM evidence, including
   negative HTTP controls and request timings on failed journeys; Laravel's
