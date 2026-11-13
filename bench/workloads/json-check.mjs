@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { get } from "../catalog/check.mjs";
 import { validateCatalog, validateRecord as catalogRecord } from "../catalog/contract.mjs";
 import { validateMarketplace, validateRecord as marketplaceRecord } from "../marketplace/records.mjs";
+import { recordAttempt } from "../catalog/record-attempt.mjs";
 
 export const jsonCheckSchema = "record-json-checks/v1";
 const contracts = {
@@ -68,17 +69,25 @@ export async function checkJsonApp({ payload, base, records, source, upstream, o
   if (source === "api") assert.ok(upstream, "API checks require an owned upstream control URL");
   try {
     if (source === "api") await control({});
+    const attempt = recordAttempt(records, `/api/${contract.path}`);
     let next = 0, failure;
     await Promise.all(Array.from({ length: 8 }, async () => {
       try {
         while (next < ids.length && !failure) {
           const id = ids[next++];
-          json(await read(route(id)), records[id], id);
+          const intent = attempt.start(id), response = await read(route(id));
+          attempt.finish(intent, response);
+          json(response, records[id], id);
           result.jsonRecords++;
         }
       } catch (error) { failure ??= error; }
     }));
-    if (failure) throw failure;
+    if (failure) {
+      const snapshot = attempt.snapshot();
+      if (source === "api") await counters(Object.fromEntries(snapshot.requests.map((r) => [r.id, 1])), "failed sweep upstream reads differ");
+      failure.recordAttempt = snapshot;
+      throw failure;
+    }
     assert.equal(result.jsonRecords, ids.length, "incomplete JSON record coverage");
     if (source === "api") {
       await counters(Object.fromEntries(ids.map((id) => [id, 1])), "complete record sweep requires one upstream read for every record");

@@ -2,6 +2,7 @@
 import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan } from "./contract.mjs";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { k6Provenance } from "../load-tool.mjs";
+import { recordAttemptSchema } from "../catalog/record-attempt.mjs";
 
 export function observations(profile, records) {
   const p = payloads[profile.payload], ids = Object.keys(records), first = ids[0], events = [];
@@ -104,4 +105,29 @@ export function result() {
     }
   }
   return { summary: s, artifacts, load, put };
+}
+
+// Deliberately synthetic negative raw capture for verifier mutation tests.
+// It is not a native measurement or an independent source audit.
+export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0]) {
+  const f = result(), s = f.summary, checked = s.apps[app].checks[profile.key];
+  const records = payloads[profile.payload].records(), ids = Object.keys(records).slice(0, 8), start = Date.parse(s.startedAt);
+  const requests = ids.map((id, index) => ({ id, index, path: route(profile, id), startedOrder: index, finishedOrder: index + ids.length,
+    startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
+  const attempt = { schema: recordAttemptSchema, recordsSha256: sha256(JSON.stringify(records)), requests };
+  const raw = f.load(checked.raw), path = `/__${payloads[profile.payload].path}/control`;
+  raw.liveness = Object.fromEntries(["app", "upstream"].map((role) => [role, { containerId: role === "app" ? raw.runtime.containerId : raw.participants.upstream.containerId,
+    startedAt: s.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
+    restarting: false, restartCount: 0, exitCode: 0, error: "" }]));
+  const reset = { kind: "control", method: "POST", path, value: {}, status: 200, body: "{}" };
+  raw.events = [reset, ...requests.map((r) => ({ kind: "application", method: "GET", path: r.path, ...r.response })),
+    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {} }) },
+    ...(profile.source === "api" ? [reset] : [])];
+  checked.raw = f.put(raw);
+  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 2 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
+  delete checked.functional;
+  for (const entry of Object.values(s.apps)) for (const p of s.group.cases) { entry.runs[p.key] = []; entry.aggregates[p.key] = {}; }
+  s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";
+  s.cleanup = f.put({ runId: s.runId, containers: [], networks: [] });
+  return f;
 }

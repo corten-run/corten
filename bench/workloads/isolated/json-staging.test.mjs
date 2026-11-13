@@ -5,7 +5,7 @@ import os from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { mock, test } from "node:test";
-import { result } from "../../json-api/test-fixtures.mjs";
+import { result, failedResult } from "../../json-api/test-fixtures.mjs";
 import { descriptor } from "../../json-api/contract.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { digest, inside, inspectEvidence, tree } from "./evidence.mjs";
@@ -42,6 +42,26 @@ test("actual native raw functional replay can stage only an honestly blocked che
     const original = structuredClone(s); mutate(s); save(); assert.throws(() => inspectPreparation(binding, native));
     for (const key of Object.keys(s)) delete s[key]; Object.assign(s, original); save();
   }
+});
+
+test("replayed negative preparation can await the same independent image/source audit without approving itself", () => {
+  const f = failedResult(), summary = f.summary, folder = join(temporary, "negative-preparation"); mkdirSync(folder);
+  summary.options.build = true; summary.options.checkOnly = true;
+  for (const entry of Object.values(summary.apps)) for (const checked of Object.values(entry.checks)) {
+    delete checked.native; checked.nativeSourceVerified = false; checked.nativeSerializationVerified = false;
+  }
+  summary.failures = structuredClone(s.failures);
+  for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+  const save = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); save();
+  const b = { ...binding, execution: { effectiveOptions: summary.options } };
+  const prepared = inspectPreparation(b, folder);
+  assert.equal(prepared.report.baseline, false); assert.equal(prepared.report.attemptComplete, false);
+  assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functionalComplete, true);
+  assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functional, false);
+  const target = auditSubject({ campaignSha256: "campaign", commit: summary.commit, sourceSha256: "sources" }, prepared, tree(folder),
+    { files: sourceFiles }, []);
+  assert.equal(target.qualified, false); assert.equal(target.identities.length, 36);
+  delete summary.cleanup; save(); assert.throws(() => inspectPreparation(b, folder), "missing cleanup must not stage");
 });
 test("exact current built image identity is required, not generic source presence", () => {
   const inspect = mock.method(childProcess, "execFileSync", (binary, args, options) => {

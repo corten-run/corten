@@ -33,7 +33,7 @@ test("real committed sources include native implementations, locks, registry and
   const sources = captureSources(commit);
   assert.ok(Object.isFrozen(sources.files));
   for (const path of ["bench/workloads/registry.mjs", "bench/workloads/isolated/contract.mjs", "bench/workloads/isolated/contract.test.mjs",
-    "bench/client-heavy/run.mjs", "bench/live/parity.mjs", "bench/live/native-http.mjs", "bench/live/apps/laravel/wire.mjs",
+    "bench/catalog/record-attempt.mjs", "bench/client-heavy/run.mjs", "bench/live/parity.mjs", "bench/live/native-http.mjs", "bench/live/apps/laravel/wire.mjs",
     "bench/live/apps/rails/wire.mjs", "bench/live/apps/phoenix/wire.mjs", "crates/corten/src/lib.rs", "package-lock.json", "bench/browser/package-lock.json"]) {
     const actual = execFileSync("git", ["show", `${commit}:${path}`], { cwd: root });
     assert.equal(sources.files.find((f) => f.path === path)?.sha256, createHash("sha256").update(actual).digest("hex"), path);

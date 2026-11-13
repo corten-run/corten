@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { groupNames, selectedApps } from "../registry.mjs";
-import { result as jsonResult } from "../../json-api/test-fixtures.mjs";
+import { result as jsonResult, failedResult } from "../../json-api/test-fixtures.mjs";
 
 const seams = new Map();
 for (const group of groupNames.filter((g) => !["catalog-page", "json-api", "localized-marketplace"].includes(g)))
@@ -23,7 +23,8 @@ let action = "normal", calls = [];
 for (const [path, { group, name }] of seams) mock.module(urls.get(path), { exports: { [name]: async (input, folder) => {
   calls.push({ group, input, folder });
   if (action === "throw") throw new Error("SYNTHETIC_PRIVATE_SENTINEL");
-  if (group === "catalog-page") return { status: "verified", complete: true, report: { baseline: true } };
+  if (group === "catalog-page") return { status: "verified", complete: true, report: { baseline: true, attemptComplete: true,
+    outcomes: selectedApps(group).map((app) => ({ app, outcome: "passed" })), comparisonEligibleApps: selectedApps(group) } };
   if (group === "localized-marketplace") return JSON.parse(readFileSync(join(input.folder, "summary.json")));
   if (group === "client-api") return { schema: "client-heavy-saved-verification/v2" };
   if (action === "mutate") appendFileSync(join(folder, "raw.log"), "changed");
@@ -63,6 +64,22 @@ test("marketplace replay's actual summary return preserves observed exclusions a
   f.summary.apps[first].qualification.fixture.eligible = false; writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));
   const report = await inspectNative(f.binding, f.folder);
   assert.equal(report.status, "failed"); assert.equal(report.attemptComplete, true); assert.equal(report.outcomes[0].outcome, "failed");
+});
+
+test("real JSON raw replay composes a complete failed target without treating arbitrary invalid evidence as failure", async (t) => {
+  const f = fixture(t, "json-api"), raw = failedResult(), summary = raw.summary;
+  for (const [path, bytes] of raw.artifacts) writeFileSync(join(f.folder, path), bytes);
+  const save = () => writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary)); save();
+  Object.assign(f.binding, { request: { group: "json-api", round: summary.round, commit: summary.commit },
+    execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } });
+  const report = await inspectNative(f.binding, f.folder);
+  assert.equal(report.status, "failed"); assert.equal(report.attemptComplete, true); assert.equal(report.cleanupComplete, true);
+  assert.deepEqual(report.outcomes, selectedApps("json-api").map((app) => ({ app, outcome: app === "corten" ? "failed" : "passed" })));
+  assert.deepEqual(report.comparisonEligibleApps, []);
+  delete summary.apps.corten.checks[summary.group.cases[0].key].native; save();
+  const invalid = await inspectNative(f.binding, f.folder);
+  assert.equal(invalid.status, "invalid"); assert.equal(invalid.attemptComplete, false);
+  assert.ok(invalid.outcomes.every((r) => r.outcome === "not-run"));
 });
 test("awaited mutation, unsafe evidence and private native errors fail closed", async (t) => {
   const f = fixture(t, "live-delivery");

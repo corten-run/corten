@@ -187,22 +187,38 @@ export async function run(args) {
           const spec = { identity: expected, base, upstream: upstreams[profile.payload].url, recordsPath: join(repo, c.payloads[profile.payload].fixture),
             rawPath: join(out, "responses.jsonl"), resultPath: join(out, "functional.json") };
           writeFileSync(join(out, "check-input.json"), JSON.stringify(spec, null, 2));
+          let checkerFailure;
           try { await command(process.execPath, [join(here, "check.mjs"), join(out, "check-input.json")], { timeout: 5 * 60 * 1000, file: join(out, "check.log") }); }
+          catch (error) { checkerFailure = error; }
           finally {
-            if (existsSync(spec.rawPath)) checked.raw = write(`${path}/observations.json`, { identity: expected, runtime: c.runtimeReceipt(await inspect(name), expected, c.runtimeContext(summary, profile)),
-              participants: await participants(expected, profile, { upstream: upstreams[profile.payload].name }),
-              events: readFileSync(spec.rawPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) });
+            if (existsSync(spec.rawPath)) {
+              const context = c.runtimeContext(summary, profile), app = await inspect(name), upstream = await inspect(upstreams[profile.payload].name);
+              checked.raw = write(`${path}/observations.json`, { identity: expected, runtime: c.runtimeReceipt(app, expected, context),
+                participants: { upstream: c.participantReceipt(upstream, expected, context, "upstream") }, liveness: evidence.functionalLiveness({ app, upstream }),
+                events: readFileSync(spec.rawPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) });
+            }
           }
-          checked.functional = JSON.parse(readFileSync(spec.resultPath, "utf8"));
-          evidence.verifyFunctional(checked.functional, loadArtifact(checked.raw).events, profile, c.payloads[profile.payload].records());
+          if (checkerFailure) {
+            // Only the fixed checker's retained record sweep and actual normal
+            // exit can identify a target failure. Other errors remain harness failures.
+            const negative = { ...JSON.parse(readFileSync(`${spec.resultPath}.failure.json`, "utf8")), exit: checkerFailure.exit, clock: checkerFailure.clock };
+            evidence.verifyFunctionalFailure(negative, loadArtifact(checked.raw).events, expected, c.payloads[profile.payload].records());
+            evidence.verifyFunctionalLiveness(loadArtifact(checked.raw), negative);
+            checked.failure = write(`${path}/functional-failure.json`, negative);
+          } else {
+            checked.functional = JSON.parse(readFileSync(spec.resultPath, "utf8"));
+            evidence.verifyFunctional(checked.functional, loadArtifact(checked.raw).events, profile, c.payloads[profile.payload].records());
+          }
           checked.native = write(`${path}/native-audit.json`, qualify(expected)); checked.nativeSerializationVerified = true; checked.nativeSourceVerified = true;
-          return true;
+          return !checkerFailure;
         } finally {
           try { writeFileSync(join(out, "app.log"), await docker(["logs", name])); } catch {}
           await remove(name); save();
         }
       },
       async gate(qualified) {
+        if (!qualified && Object.values(summary.apps).some((entry) => Object.values(entry.checks).some((checked) => checked.failure)))
+          summary.timingDisposition = "gated-functional";
         summary.checksPassed = qualified; save();
         if (!qualified) log("Full JSON matrix unqualified: no timing runs will start; all selected rows retained.");
         else if (!options.checkOnly) {
@@ -242,6 +258,12 @@ export async function run(args) {
         await docker(["network", "rm", net.Id], { cleanup: true });
       }
     } catch (error) { summary.cleanupFailures.push({ resource: network, error: error.message }); }
+    try {
+      const containers = (await docker(["ps", "-a", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+      const networks = (await docker(["network", "ls", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+      summary.cleanup = write("cleanup.json", { runId, containers, networks });
+      assert.deepEqual(containers, [], "owned containers remain"); assert.deepEqual(networks, [], "owned networks remain");
+    } catch (error) { summary.cleanupFailures.push({ resource: runId, error: error.message }); }
     try {
       summary.commitAfter = await command("git", ["rev-parse", "HEAD"], { cleanup: true });
       summary.dirtyAfter = Boolean(await command("git", ["status", "--porcelain"], { cleanup: true }));

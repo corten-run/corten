@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { articleHtml, expectedArticle, expectedPageChecks, filterPrefixes, representativeIds, validateCatalog, validateRecord } from "./contract.mjs";
 import { steady } from "../../scripts/steady.mjs";
+import { recordAttempt } from "./record-attempt.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export async function get(url, accept = "application/json") {
@@ -83,7 +84,7 @@ export const referenceHtml = (record, prefix = "") => `<!doctype html><html lang
 export async function control(upstream, value) {
   const response = await fetch(`${upstream}/__catalog/control`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value), signal: AbortSignal.timeout(5000) });
   assert.equal(response.status, 200, "upstream control");
-  await response.text();
+  return { kind: "control", method: "POST", path: "/__catalog/control", value, status: response.status, body: await response.text() };
 }
 async function once(upstream, id) {
   const state = await get(`${upstream}/__catalog/control`);
@@ -96,6 +97,9 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
   const result = { jsonRecords: 0, pages: 0, profiles: [], upstream: source === "api" ? {} : null };
   // JSON every record, not a comparison with another framework's implementation.
   const ids = Object.keys(catalog);
+  const attempt = recordAttempt(catalog, "/api/catalog");
+  // A healthy, reset owned fixture distinguishes target responses from injected faults.
+  const reset = upstream ? await control(upstream, {}) : null;
   let next = 0;
   let jsonFailure;
   await Promise.all(Array.from({ length: 8 }, async () => {
@@ -103,7 +107,9 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
     while (next < ids.length) {
       if (jsonFailure) return;
       const id = ids[next++];
+      const intent = attempt.start(id);
       const response = await get(`${base}/api/catalog/${id}`);
+      attempt.finish(intent, response);
       assert.equal(response.status, 200, `JSON ${id}`);
       assert.match(response.type ?? "", /^application\/json\b/);
       const actual = JSON.parse(response.body);
@@ -113,7 +119,16 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
     }
     } catch (error) { jsonFailure ??= error; }
   }));
-  if (jsonFailure) throw jsonFailure;
+  if (jsonFailure) {
+    if (!upstream) throw jsonFailure; // Legacy standalone checks cannot supply negative upstream proof.
+    const observed = await get(`${upstream}/__catalog/control`);
+    assert.equal(observed.status, 200);
+    const snapshot = attempt.snapshot();
+    assert.deepEqual(JSON.parse(observed.body).requests, source === "api"
+      ? Object.fromEntries(snapshot.requests.map((r) => [r.id, 1])) : {}, "failed sweep upstream reads differ");
+    jsonFailure.recordAttempt = { ...snapshot, source, control: { reset, observed } };
+    throw jsonFailure;
+  }
   for (const path of ["/catalog/record_501", "/api/catalog/record_501", "/catalog/does-not-exist", "/api/catalog/does-not-exist"]) assert.equal((await get(base + path, path.startsWith("/api/") ? "application/json" : "text/html")).status, 404, `${path}: unknown must be 404`);
 
   const representative = representativeIds(catalog);
@@ -229,6 +244,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const result = JSON.stringify(await checkApp({ base, catalog, source, upstream, browser }), null, 2);
     if (output) writeFileSync(output, result);
     console.log(result);
-  }
-  finally { clearTimeout(watchdog); await browser.close(); }
+  } catch (error) {
+    if (output && error.recordAttempt) writeFileSync(`${output}.failure.json`, JSON.stringify(error.recordAttempt, null, 2));
+    throw error;
+  } finally { clearTimeout(watchdog); await browser.close(); }
 }

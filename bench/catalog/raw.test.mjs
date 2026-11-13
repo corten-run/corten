@@ -13,7 +13,9 @@ import { aggregate, cpuSettings, expectedPageChecks, parseArgs, phases, readLoad
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog } from "./report.mjs";
-import { rawSchema, replayCatalog, containerEvidence } from "./raw.mjs";
+import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage } from "./raw.mjs";
+import { recordAttemptSchema } from "./record-attempt.mjs";
+import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
 import { k6Image, k6Provenance } from "../load-tool.mjs";
@@ -93,6 +95,114 @@ function fixture() {
     assert.ok(files.has(key), `missing ${key}`); return files.get(key);
   } }, commit };
 }
+
+function failedFixture() {
+  const f = fixture(), s = f.summary, app = s.group.apps[0], source = "fixture", start = Date.parse(s.startedAt);
+  s.host = { checkout: "/synthetic/checkout" };
+  s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";
+  s.tools.upstream.image = upstreamImage; s.tools.checker.image = checkerImage; f.put("tools.json", s.tools);
+  const requests = Object.keys(records()).slice(0, 8).map((id, index) => ({ id, index, path: `/api/catalog/${id}`, startedOrder: index,
+    finishedOrder: index + 8, startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
+  const failure = { schema: recordAttemptSchema, recordsSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), requests, source,
+    control: { reset: { method: "POST", path: "/__catalog/control", value: {}, status: 200, body: "{}" }, observed: { status: 200, body: '{"requests":{}}' } } };
+  const checked = { failure, qualification: qualificationIdentity(s.group, app, source, s.apps[app].imageId) };
+  s.apps[app].checks[source] = checked;
+  f.put(`${source}/${app}/qualification.json`, checked); f.put(`${source}/${app}/checks.json`, { failure }); f.put(`${source}/${app}/checks.json.failure.json`, failure);
+  // No timing was performed after this functional gate. Remove synthetic timing files.
+  for (const path of f.files.keys()) if (/\/p\d+-/.test(path)) f.files.delete(path);
+  for (const [name, entry] of Object.entries(s.apps)) {
+    entry.runs = {}; entry.phases = {};
+    for (const src of s.group.sources) {
+      const running = (image, role, memory, cmd = []) => ({ Id: (role === "api" ? "d" : "c").repeat(64), Image: image,
+        State: { Running: true, OOMKilled: false, Dead: false, StartedAt: s.startedAt },
+        HostConfig: { NanoCpus: s.measurement.cpus[role].quota * 1e9, CpusetCpus: s.measurement.cpus[role].cpuset ?? "", Memory: memory },
+        Config: { Cmd: cmd, Env: [`CATALOG_SOURCE=${src}`, "CATALOG_FIXTURE_PATH=/fixtures/catalog.json", `API_BASE=http://${s.runId}-upstream:8080`], Labels: { "run.corten.catalog": s.runId } } });
+      const runtime = running(entry.imageId, "app", 2 ** 30), upstream = running(s.tools.upstream.imageId, "api", 512 * 2 ** 20, ["node", "/bench/catalog/upstream.mjs"]);
+      const negative = name === app && src === source;
+      const checker = { ...running(s.tools.checker.imageId, "load", 2 ** 31), Id: "e".repeat(64), RestartCount: 0,
+        State: { Status: "exited", Running: false, OOMKilled: false, Dead: false, Paused: false, Restarting: false, ExitCode: negative ? 1 : 0,
+          Error: "", StartedAt: s.startedAt, FinishedAt: new Date(start + 2).toISOString() } };
+      checker.HostConfig.NetworkMode = `container:${runtime.Id}`;
+      checker.Config.Cmd = ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", src, `http://${s.runId}-upstream:8080`, "/results/checks.json"];
+      const mount = (Source, Destination, RW = false) => ({ Type: "bind", Source, Destination, RW });
+      for (const info of [runtime, upstream]) { info.networks = [`${s.runId}-net`]; info.mounts = [mount(`${s.host.checkout}/bench/catalog/fixtures`, "/fixtures")]; }
+      upstream.mounts.push(mount(`${s.host.checkout}/bench`, "/bench"));
+      checker.mounts = [mount(s.host.checkout, "/repo"), mount(`${s.host.checkout}/bench/catalog/results/${s.round}/${src}/${name}`, "/results", true)];
+      f.put(`${src}/${name}/checker.json`, { runtime, upstream, checker, exit: { code: negative ? 1 : 0, signal: null, expired: false, interrupted: false } });
+    }
+  }
+  f.put("summary.json", s); return f;
+}
+
+test("catalog negative raw replay retains every selected app without timing or baseline promotion", () => {
+  const f = failedFixture(), report = replayCatalog(f.summary, f.reader, f.commit);
+  assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true);
+  assert.deepEqual(report.outcomes, f.summary.group.apps.map((app, i) => ({ app, outcome: i ? "passed" : "failed" })));
+  assert.deepEqual(report.comparisonEligibleApps, []);
+});
+
+test("the real catalog saved API feeds the fixed isolated replay for positive and failed attempts", async () => {
+  for (const f of [fixture(), failedFixture()]) {
+    const folder = mkdtempSync(join(tmpdir(), "catalog-core-attempt-"));
+    try {
+      for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
+      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+        execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
+      const report = await inspectNative(b, folder), failed = !!f.summary.timingDisposition;
+      assert.equal(report.status, failed ? "failed" : "verified"); assert.equal(report.attemptComplete, true);
+      assert.deepEqual(report.comparisonEligibleApps, failed ? [] : b.selection.apps);
+      if (failed) {
+        rmSync(join(folder, "api/gin/checker.json"));
+        assert.equal((await inspectNative(b, folder)).status, "blocked", "missing raw proof is not a complete target failure");
+      }
+    } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+  }
+});
+
+test("catalog negative replay requires normal checker exit, full prefixes, runtime/source/tools and cleanup", () => {
+  const mutateFile = (f, path, fn) => { const v = JSON.parse(f.files.get(path)); fn(v); f.put(path, v); };
+  for (const mutate of [
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.checker.State.OOMKilled = true; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.checker.State.ExitCode = 137; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.exit.expired = true; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.runtime.Image = `sha256:${"e".repeat(64)}`; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.runtime.HostConfig.NanoCpus++; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.runtime.mounts[0].RW = true; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.upstream.mounts[0].Source = "/wrong-fixture"; }),
+    (f) => mutateFile(f, "fixture/corten/checker.json", (p) => { p.upstream.State.Running = false; }),
+    (f) => f.files.delete("api/gin/checker.json"),
+    (f) => f.files.delete("fixture/corten/checks.json.failure.json"),
+    (f) => { f.summary.apps.corten.checks.fixture.failure.requests[0].response = undefined; },
+    (f) => { f.summary.apps.corten.checks.fixture.failure.control.reset.value = { status: 503 }; },
+    (f) => { f.summary.apps.gin.runs["fixture-page"] = [{ pass: 1 }]; },
+    (f) => { f.summary.apps.gin.phases["fixture-page"] = { fixed: {} }; },
+    (f) => { f.summary.tools.checker.image = "unbound:tool"; f.put("tools.json", f.summary.tools); },
+    (f) => { f.summary.dirtyAfter = true; },
+    (f) => { f.summary.failures.push({ stage: "harness" }); },
+    (f) => { f.summary.cleanupFailures.push({ resource: "leftover" }); },
+    (f) => f.put("cleanup.json", { runId: f.summary.runId, containers: ["leftover"], networks: [] }),
+    (f) => { delete f.summary.apps.gin; },
+    (f) => { f.summary.apps.gin.checks.api.profiles.pop(); f.put("api/gin/qualification.json", f.summary.apps.gin.checks.api); const { qualification, ...check } = f.summary.apps.gin.checks.api; f.put("api/gin/checks.json", check); },
+  ]) { const f = failedFixture(); mutate(f); assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, mutate.toString()); }
+});
+
+test("matching all summary/failure copies cannot disguise a fabricated or incomplete negative prefix", () => {
+  for (const mutate of [
+    (p) => { delete p.requests[0].response; },
+    (p) => { p.requests[0].id = "record_499"; },
+    (p) => { p.requests[0].startedAt = 1; },
+    (p) => { p.requests[0].finishedOrder = p.requests[0].startedOrder; },
+    (p) => { p.requests[0].path = "/wrong"; },
+    (p) => { p.control.reset.value = { status: 503 }; },
+    (p) => { p.control.observed.body = '{"requests":{"unexpected":1}}'; },
+    (p) => { for (const r of p.requests) r.response = { status: 200, type: "application/json", body: JSON.stringify(records()[r.id]) }; },
+  ]) {
+    const f = failedFixture(), checked = f.summary.apps.corten.checks.fixture;
+    mutate(checked.failure); f.put("fixture/corten/qualification.json", checked); f.put("fixture/corten/checks.json", { failure: checked.failure });
+    f.put("fixture/corten/checks.json.failure.json", checked.failure);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, mutate.toString());
+  }
+});
 
 test("raw replay accepts the complete synthetic native matrix, not summary-only evidence", () => {
   const f = fixture();

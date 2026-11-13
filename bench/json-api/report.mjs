@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
-import { functionalVerifier, verifyAggregates, verifyRun } from "./evidence.mjs";
+import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 
@@ -17,9 +17,15 @@ export function inspectJson(summary, { load, commit } = {}) {
   assert.match(summary.round ?? "", /^j[1-9]\d*$/); assert.equal(summary.options.round, summary.round);
   assert.ok([1, 3, 5].includes(summary.options.passes), "invalid pass count");
   assert.ok(typeof load === "function", "raw evidence reader required");
-  const warnings = [], apps = {}, cases = summary.group.cases;
+  const warnings = [], apps = {}, cases = summary.group.cases, preparationGates = [];
+  const gated = summary.timingDisposition === "gated-functional";
   const problem = (label, error) => warnings.push(`${label}: ${error.message ?? error}`);
-  const check = (label, fn) => { try { fn(); return true; } catch (error) { problem(label, error); return false; } };
+  const check = (label, fn, preparation = true) => {
+    let valid = false;
+    try { fn(); valid = true; } catch (error) { problem(label, error); }
+    if (preparation) preparationGates.push(valid);
+    return valid;
+  };
   check("provenance", () => {
     assert.match(summary.commit ?? "", /^[a-f0-9]{40}$/, "full measured commit missing");
     if (commit !== undefined) assert.equal(summary.commit, commit, "measured commit differs");
@@ -39,11 +45,12 @@ export function inspectJson(summary, { load, commit } = {}) {
     assert.deepEqual(summary.measurement, { cpus: expected, encoding: "identity", fixedRate: summary.options.rate,
       appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, loadMemoryBytes: 2 ** 31,
       nativeProfile: "framework-default", phases: ["warmup", ...phases] }, "measurement settings differ");
-    for (const tool of ["node", ...(summary.options.checkOnly ? [] : ["k6"])]) {
+    assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
+    for (const tool of ["node", ...(summary.options.checkOnly || gated ? [] : ["k6"])]) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
       assert.equal(summary.tools[tool].image, tool === "node" ? nodeImage : k6Image, "wrong tool image reference");
     }
-    if (!summary.options.checkOnly) verifyK6Provenance(summary.tools.k6);
+    if ((!summary.options.checkOnly && !gated) || summary.tools.k6 !== undefined) verifyK6Provenance(summary.tools.k6);
   });
   const fixtures = {}, functionalVerifiers = {};
   check("fixture set", () => assert.deepEqual(Object.keys(summary.fixtures ?? {}).sort(), Object.keys(payloads).sort()));
@@ -66,21 +73,33 @@ export function inspectJson(summary, { load, commit } = {}) {
       const key = profile.key, row = rows[key] = { functional: false, nativeQualified: false, complete: false, passes: 0, rps: null };
       const expected = entry ? identity(summary, app, profile) : null;
       const checked = entry?.checks?.[key];
-      row.functional = check(`${app} ${key} functional`, () => {
+      row.functionalComplete = check(`${app} ${key} functional`, () => {
         assert.deepEqual(checked?.identity, expected, "missing/wrong functional identity");
         const raw = load(checked.raw); assert.deepEqual(raw.identity, expected, "wrong raw functional identity");
         const context = runtimeContext(summary, profile);
         verifyRuntime(raw.runtime, expected, context); verifyParticipants(raw, expected, context, ["upstream"]);
-        functionalVerifiers[key](checked.functional, raw.events);
+        if (checked.failure !== undefined) {
+          assert.equal(checked.functional, undefined, "contradictory positive/negative check");
+          const failure = load(checked.failure);
+          verifyFunctionalFailure(failure, raw.events, expected, fixtures[profile.payload]);
+          verifyFunctionalLiveness(raw, failure);
+          assert.ok(failure.clock.startedAt >= Date.parse(summary.startedAt) && failure.clock.finishedAt <= Date.parse(summary.finishedAt), "checker outside native run");
+          assert.ok(Object.values(raw.liveness).every((s) => Date.parse(s.startedAt) >= Date.parse(summary.startedAt)), "participant started before native run");
+        } else { functionalVerifiers[key](checked.functional, raw.events); row.functional = true; }
       });
       row.nativeQualified = check(`${app} ${key} native audit`, () => {
         const native = load(checked?.native);
         verifyNativeReceipt(native.receipt, expected, native.files);
         assert.equal(checked.nativeSerializationVerified, true, "native audit not qualified");
         assert.equal(checked.nativeSourceVerified, true, "native source audit not qualified");
-      });
+      }, false);
       const runs = entry?.runs?.[key] ?? [];
       const timing = check(`${app} ${key} timing`, () => {
+        if (gated) {
+          assert.deepEqual(runs, [], "timing started despite global parity gate");
+          assert.deepEqual(entry.aggregates[key], {}, "aggregates present despite global parity gate");
+          return;
+        }
         assert.ok(Array.isArray(runs) && runs.length === summary.options.passes, "missing requested JSON passes");
         const used = new Set();
         for (const run of runs) {
@@ -89,7 +108,7 @@ export function inspectJson(summary, { load, commit } = {}) {
           row.passes++;
         }
         verifyAggregates(entry.aggregates[key], runs, summary.options.passes);
-      });
+      }, false);
       // Partial values are retained and labeled, never zero-filled or a complete comparison.
       const available = Array.isArray(runs) ? runs.filter((r) => r.phases?.sat64?.metrics?.rps > 0) : [];
       if (available.length) {
@@ -98,20 +117,32 @@ export function inspectJson(summary, { load, commit } = {}) {
         row.efficiency = Object.fromEntries(["perCpuSecond", "memMaxMiB", "p95", "cpuAvgPct"].map((metric) => [metric, spread(available.map((r) => r.phases.sat64.metrics[metric]))]));
         row.efficiency.upstreamCpuAvgPct = spread(available.map((r) => r.phases.sat64.metrics.upstream?.cpuAvgPct));
       }
-      row.complete = row.functional && row.nativeQualified && timing;
+      row.complete = row.functional && row.nativeQualified && timing && !gated;
+      row.attemptComplete = row.functionalComplete && row.nativeQualified && timing;
       if (row.rps && !row.complete) row.rps.unverifiedPartial = true;
     }
   }
+  const negative = Object.values(apps).some((rows) => Object.values(rows).some((r) => r.functionalComplete && !r.functional));
+  if (negative) check("functional cleanup", () => assert.deepEqual(load(summary.cleanup), { runId: summary.runId, containers: [], networks: [] }, "owned resource cleanup is not proven"));
   check("suite outcome", () => {
-    assert.equal(summary.complete, true, "runner did not complete a qualified matrix"); assert.equal(summary.checksPassed, true);
+    assert.equal(gated, negative, "global timing disposition differs from replayed functional outcomes");
+    assert.equal(summary.complete, !gated, "runner outcome differs from the functional gate"); assert.equal(summary.checksPassed, !gated);
+    if (gated) {
+      assert.ok(negative, "no replayed target violation for global gate");
+    }
     assert.deepEqual(summary.failures, [], "recorded runner failures"); assert.deepEqual(summary.cleanupFailures, [], "recorded cleanup failures");
     assert.notEqual(summary.options.checkOnly, true, "check-only evidence is not a timed baseline");
-  });
-  const baseline = warnings.length === 0;
+  }, false);
+  const baseline = warnings.length === 0 && !gated && !negative;
+  const attemptComplete = warnings.length === 0;
+  const functionalAttemptComplete = preparationGates.every(Boolean);
   if (!baseline) for (const rows of Object.values(apps)) for (const row of Object.values(rows)) if (row.rps) row.rps.unverifiedPartial = true;
-  return { group: summary.group, round: summary.round, commit: summary.commit, baseline, apps, warnings,
+  return { group: summary.group, round: summary.round, commit: summary.commit, baseline, attemptComplete, functionalAttemptComplete,
+    outcomes: summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional) ? "failed" : "passed" })),
+    comparisonEligibleApps: baseline ? [...summary.group.apps] : [], apps, warnings,
     config: { options: summary.options, measurement: summary.measurement, timingPlan: summary.timingPlan, commitAfter: summary.commitAfter, dirty: summary.dirty, dirtyAfter: summary.dirtyAfter },
-    status: baseline ? "COMPLETE" : "INCOMPLETE: not a baseline", fixtureHashes: Object.fromEntries(Object.entries(fixtures).map(([p, f]) => [p, sha256(JSON.stringify(f))])) };
+    status: baseline ? "COMPLETE" : attemptComplete ? "COMPLETE ATTEMPT: functional failure; not a baseline" : "INCOMPLETE: not a baseline",
+    fixtureHashes: Object.fromEntries(Object.entries(fixtures).map(([p, f]) => [p, sha256(JSON.stringify(f))])) };
 }
 
 export function renderJson(report) {

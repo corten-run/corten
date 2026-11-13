@@ -420,11 +420,21 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
 5. Browser adapter at 831de1cf is imported unchanged. Native b3597261f still reports genuine
    source/whole-terminal/capture gaps; its fixed validator must establish semantic browser
    closure separately from core OS exit. All 240 selected native cells remain required.
-6. Catalog/marketplace raw validators are fixed imports, pending parent integration and
-   current producer review. Catalog's positive-only baseline replay cannot yet classify a
-   complete negative framework attempt. JSON retains its original strict report and exact
-   accepted-audit binding: no negative attempt is promoted merely to make that baseline
-   pass. Failure-aware raw completeness must be native-derived before such attempts qualify.
+6. Catalog/JSON raw replay distinguishes a complete failed functional attempt from a
+   successful baseline. The bounded negative path is an initial JSON record-sweep violation:
+   actual request intents and complete responses replay against canonical records, all
+   started requests settle, and the fixed checker exits normally with code one. Catalog
+   additionally retains inspected checker/app/upstream identities, CPU/memory/source settings
+   and checker terminal state; JSON binds actual child exit/clock plus its existing runtime
+   and upstream observations. Every selected app/source/payload is still attempted. Native
+   owned-resource cleanup and all existing source/image/configuration gates remain mandatory.
+   A single proven negative gates timing for the whole group; healthy peers remain passed
+   but comparison-ineligible, and baseline remains false. No unsupported outcome is inferred.
+   Network errors, missing responses, later browser assertions, timeouts, OOM, failed audits,
+   harness errors or incomplete cleanup are not converted into complete target failures.
+   JSON preparation may stage these replayed negative cells for independent review, but
+   cannot approve itself. Timing-phase native receipts must still match the separately
+   accepted exact image/source audit; core OS/lifecycle gates remain separate prerequisites.
 
 The parent owns provider lifecycle, remote transport, unit ownership, archive validation,
 reviewed merge, guide/changelog integration and broader repository checks outside this

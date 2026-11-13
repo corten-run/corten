@@ -20,8 +20,9 @@ export function inspectPreparation(binding, root) {
   assert.deepEqual(summary.cleanupFailures, []);
   const report = inspectJson(summary, { load: reader(root), commit: binding.request.commit });
   assert.equal(report.baseline, false);
-  assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => r.functional && !r.nativeQualified && r.passes === 0)),
-    "all 36 functional cells must pass without prebuild audit claims");
+  assert.equal(report.functionalAttemptComplete, true, "functional raw matrix/configuration incomplete");
+  assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => r.functionalComplete && !r.nativeQualified && r.passes === 0)),
+    "all 36 functional attempts must replay without prebuild audit claims");
   assert.equal(summary.failures.length, 36, "only the 36 missing independent audits may block staging");
   const seen = new Set();
   for (const failure of summary.failures) {

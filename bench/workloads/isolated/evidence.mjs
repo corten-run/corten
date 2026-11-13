@@ -129,7 +129,7 @@ export function inspectEvidence(binding, root) {
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
     report = inspectJson(summary, { load: reader(root), commit });
-    assert.equal(report.baseline, true, `strict JSON report incomplete: ${report.warnings.join("; ")}`);
+    assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);
     assert.equal(summary.split, undefined, "split evidence is not this isolated native command");

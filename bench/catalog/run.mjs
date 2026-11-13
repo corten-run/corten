@@ -30,7 +30,7 @@ try {
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
-const { containerEvidence, rawSchema } = observations;
+const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
 const plan = timingPlan(options, sources, targets);
@@ -47,6 +47,7 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
+summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
@@ -87,9 +88,12 @@ async function command(binary, args, { timeout = 30000, file, capture = true, cl
   child.stderr.on("data", (c) => keep(c, true));
   const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
   try {
-    const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
+    const { code, signal } = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", (code, signal) => resolve({ code, signal })); });
     if (ioError) throw ioError;
-    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+    if (code !== 0 || killed || (interrupted && !cleanup)) {
+      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+      failure.exit = { code, signal, expired: killed, interrupted: interrupted && !cleanup }; throw failure;
+    }
     return output.result();
   } finally { clearTimeout(timer); children.delete(child); output.close(); }
 }
@@ -124,7 +128,7 @@ async function portOf(name) {
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
-const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+const nodeImage = observations.upstreamImage;
 const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
@@ -298,16 +302,32 @@ try {
         // stays a trustworthy browser origin without disabling security features.
         await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
           "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/checks.json"], checkContainer);
+        let checkerFailure, boundary;
         try { await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") }); }
-        finally { await remove(checkContainer); }
-        const checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
+        catch (error) { checkerFailure = error; }
+        finally {
+          try {
+            boundary = { checker: checkBoundaryEvidence(await inspect(checkContainer)), runtime: checkBoundaryEvidence(await inspect(name)), upstream: checkBoundaryEvidence(await inspect(upstreamName)),
+              exit: checkerFailure ? checkerFailure.exit : { code: 0, signal: null, expired: false, interrupted: false } };
+            writeFileSync(join(out, "checker.json"), JSON.stringify(boundary, null, 2));
+          } finally { await remove(checkContainer); }
+        }
+        let checked;
+        if (checkerFailure) {
+          const failure = JSON.parse(readFileSync(join(out, "checks.json.failure.json"), "utf8"));
+          verifyFailedCheck(failure, source); verifyCheckBoundary(boundary, summary, app, source, true);
+          checked = { failure };
+          writeFileSync(join(out, "checks.json"), JSON.stringify(checked, null, 2));
+        } else checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
         if (group) {
           checked.qualification = qualificationIdentity(group, app, source, entry.imageId);
           writeFileSync(join(out, "qualification.json"), JSON.stringify(checked, null, 2));
         }
         entry.checks[source] = checked;
-        assert.equal(checked.jsonRecords, 500, "incomplete JSON checks");
-        assert.equal(checked.profiles.length, 8, "incomplete browser profiles");
+        if (!checked.failure) {
+          assert.equal(checked.jsonRecords, 500, "incomplete JSON checks");
+          assert.equal(checked.profiles.length, 8, "incomplete browser profiles");
+        }
       } catch (e) { fail(app, source, "checks", e); }
       finally {
         if (active.has(checkContainer)) await remove(checkContainer);
@@ -316,10 +336,12 @@ try {
       }
       save();
     }
-  summary.checksPassed = summary.failures.length === 0;
+  const targetFailed = Object.values(summary.apps).some((entry) => Object.values(entry.checks).some((check) => check.failure));
+  summary.checksPassed = summary.failures.length === 0 && !targetFailed;
+  if (targetFailed) summary.timingDisposition = "gated-functional";
   save();
-  if (!summary.checksPassed) throw new Error("parity failed; no app will be load-tested");
-  if (!options.checkOnly) {
+  if (summary.failures.length) throw new Error("parity failed; no app will be load-tested");
+  if (summary.checksPassed && !options.checkOnly) {
     summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
@@ -358,7 +380,7 @@ try {
       save();
     }
   }
-  summary.complete = summary.failures.length === 0;
+  summary.complete = summary.checksPassed && summary.failures.length === 0;
 } catch (e) { fail(null, null, "suite", e); }
 finally {
   for (const name of [...active].reverse()) {

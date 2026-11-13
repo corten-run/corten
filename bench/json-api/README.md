@@ -126,6 +126,21 @@ already the required JSON value; differing whitespace or key order still takes t
 structural comparison. Every app's identity, status, content type, sweep and source controls
 remain independently checked. This is report-side validation work, not application output caching.
 
+An initial record-sweep violation may instead produce `functional.json.failure.json`.
+Its `record-json-attempt/v1` observations bind the canonical fixture hash, ordered request
+intents, response bytes and complete request boundaries. Saved replay derives the violation
+from status/content type/JSON/value, never from the checker's assertion message. The runner
+retains the actual normal child exit one and clock alongside raw responses and existing
+image/source/CPU/upstream context. Missing responses, timeouts, control failures and errors
+outside this bounded sweep remain incomplete attempts, not failed-target qualification.
+All 36 cells are attempted and all native source audits remain required, even for a negative
+cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
+with empty runs/aggregates and retained owned-container/network cleanup inventory.
+`inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
+separately from `baseline`. A complete negative attempt has `baseline: false`, no eligible
+comparisons and process exit one. Check-only preparation remains unqualified pending the
+independent exact-image audit, whether its observed functional outcome passed or failed.
+
 This implementation has unit/fake-operation and HTTP test coverage, not a measured nine-app
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
