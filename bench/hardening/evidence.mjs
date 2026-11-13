@@ -91,6 +91,21 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   assert.match(clock.monotonicNs, /^\d+$/); assert.match(cleanup.nativeClock.monotonicNs, /^\d+$/);
   const cleanupAtMs = Number(BigInt(cleanup.nativeClock.monotonicNs) - BigInt(clock.monotonicNs)) / 1e6;
   assert.ok(cleanupAtMs >= reaped.atMs, "cleanup clock preceded injector cleanup");
+  if (Object.values(lifecycle).some((p) => p.observation)) {
+    const complete = one("probe-complete");
+    assert.ok(Number.isFinite(complete.atMs) && complete.atMs >= Math.max(reaped.atMs, b.legitimate.after.endMs));
+    assert.ok(raw.indexOf(complete) > raw.indexOf(one("control-after")), "terminal boundary preceded final receiving controls");
+    const minimum = BigInt(clock.monotonicNs) + BigInt(Math.ceil(complete.atMs * 1e6));
+    for (const p of Object.values(lifecycle)) {
+      const window = p.observation; assert.ok(window, "missing terminal observation interval");
+      for (const bound of [window.start, window.end]) {
+        assert.equal(bound.bootId, clock.bootId, "terminal observation and injector clocks differ");
+        assert.match(bound.monotonicNs, /^\d+$/);
+      }
+      assert.ok(BigInt(window.start.monotonicNs) >= minimum && BigInt(window.end.monotonicNs) >= BigInt(window.start.monotonicNs)
+        && BigInt(window.end.monotonicNs) <= BigInt(cleanup.nativeClock.monotonicNs), "terminal observation interval escaped post-probe/pre-cleanup bounds");
+    }
+  }
   const attack = raw.filter((r) => r.type === "attack").sort((a, c) => a.index - c.index);
   assert.deepEqual(attack.map((r) => r.index), b.attack.scheduledAtMs.map((_, i) => i), "attack attempt indices incomplete");
   assert.ok(Array.isArray(settings.emissionPlan) && settings.emissionPlan.length === attack.length, "missing exact native emission plan; historical evidence cannot establish current semantic qualification");

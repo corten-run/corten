@@ -215,3 +215,39 @@ owned container and volumes were removed, with zero remaining control resources.
 This control is not a fresh native framework run. No full matrix, framework
 change or performance/ranking measurement was performed. Fresh independent
 review and integrating repository-wide checks remain outstanding.
+
+## Endpoint binding and observer-exit follow-up
+
+Fresh review of `43780246ecdaaf73af0f8b38c2beaf6baa9d1031` found two remaining
+P2 gaps. Both were reproduced before repair: the real Docker namespace-join
+error after a target's natural exit escaped as apparatus-invalid, and a retained
+`w11` preflight marketplace page 200 supplied terminal recovery for each of the
+application, proxy and API-upstream roles when only the wrapper path changed.
+
+The shared collector now re-inspects after observer failure and preserves an
+unchanged critical target's verified exit state. It records unavailable health
+and the actual observer error, never a successful substitute response. Running,
+changed/restarted or daemon-failed targets and the unused fixture upstream do
+not take that path. Existing external lifecycle intervention gates remain intact.
+
+`lifecycleVersion: 4` binds actual response URL, method and Host to the qualified
+native endpoint. The HTTP observer records its own acquisition start/end times;
+a separately observed Linux monotonic interval must contain them, share the
+injector's boot identity, follow the raw post-controls `probe-complete` boundary
+and precede cleanup. No timestamp or observation is backfilled into old evidence.
+
+Focused tests passed 33/33 and the combined hardening/workloads/production-
+qualification/edge suite passed 287/287. The retained `w10` and `w11` replays each
+passed 42/42 checks, including preflight, stale time, wrong URL/Host/method for
+all three critical roles, interval bounds, natural exit and external-kill refusal.
+The metadata in terminal replay mutations is explicitly hypothetical, not a new
+native observation or numeric qualification. Original artifact manifests remain
+unchanged, and strict historical qualification remains refused.
+
+`verify-exit.mjs` observed the actual Docker namespace-join failure after natural
+exit and retained target-capacity-failure with numeric qualification false.
+`verify-health.mjs` also passed under the endpoint/time-bound receipt contract.
+Both controls removed their labeled containers and volumes. No full matrix,
+native framework run, new application implementation, cloud work or publishing
+was performed. The integrating parent needs both the earlier repair commit and
+this follow-up; fresh independent review remains outstanding.

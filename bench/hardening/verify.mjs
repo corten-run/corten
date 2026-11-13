@@ -13,7 +13,7 @@ const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 export function verify(folder) {
   const summary = read(join(folder, "summary.json")); assert.equal(summary.schema, schema); assert.equal(summary.registryDigest, registryDigest);
   assert.equal(summary.semanticReceiptsVersion, 2, "historical capture predates full-duration pressure and response deadline gates; do not backfill or promote it");
-  assert.equal(summary.lifecycleVersion, 3, "historical capture predates terminal native health/liveness receipts; do not backfill or qualify it");
+  assert.equal(summary.lifecycleVersion, 4, "historical capture predates endpoint/time-bound terminal health receipts and exit-race handling; do not backfill or qualify it");
   assert.equal(digest(readFileSync(join(folder, "fixtures/marketplace.json"))), summary.fixtureSha256, "native fixture bytes changed");
   groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
   if (summary.nativeControlsVersion === 1) assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
@@ -45,6 +45,7 @@ export function verify(folder) {
     const lifecycle = {};
     for (const p of deployment.processes) {
       lifecycle[p.id] = read(join(out, `${p.id}-lifecycle.json`));
+      assert.ok(lifecycle[p.id].observation, "missing terminal observation interval");
       const origin = deployment.provenance.find((o) => o.id === p.id); assert.ok(origin);
       const before = read(join(out, `${p.id}-before.json`));
       assert.equal(origin.image, before.info.Image); assert.equal(origin.config, digest(readFileSync(join(out, `${p.id}-before.json`))));

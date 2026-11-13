@@ -13,6 +13,7 @@ node bench/hardening/verify.mjs bench/hardening/results/w1
 node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
 node bench/hardening/verify-network.mjs
 node bench/hardening/verify-health.mjs
+node bench/hardening/verify-exit.mjs
 ```
 
 The dispatcher interface is `export async function run(args)`, where `args` is
@@ -49,7 +50,7 @@ establishment by the 2,000 ms connection timeout or release, whichever is earlie
 (within the existing `maxStartLagMs`), requires full-duration trickle counts and
 cadence, and rejects completed legitimate responses beyond the unchanged 600 ms
 deadline or their window.
-`lifecycleVersion: 3` requires terminal recovery of the application, edge proxy
+`lifecycleVersion: 4` requires terminal recovery of the application, edge proxy
 and API-source upstream, not only a successful earlier HTTP request. After the
 timed probe and its receiving controls finish, separate short-lived observers in
 each service's own network namespace request its native liveness path (the API
@@ -61,6 +62,21 @@ establish recovery or numeric qualification. A missing native liveness path stay
 an explicit gap. No Docker healthcheck is installed or changed; absent checks are
 `not-configured`, not invented healthy results. Terminal target failures remain
 target-capacity outcomes; failure of the idle fixture upstream remains apparatus.
+Replay checks the actual response receipt's complete URL (including scheme and
+authority), `GET` method and HTTP Host, not only its wrapper path. Acquisition
+timestamps are recorded inside the HTTP observer. They must lie inside a separate
+Linux monotonic observation interval with the same kernel boot identity, after
+the probe's final receiving controls and before owned cleanup. Preflight page
+responses, stale endpoint receipts and missing timestamps cannot supply terminal
+health. The observer interval is retained in each native lifecycle artifact;
+`probe-complete` is the raw post-controls boundary. Missing clocks are unavailable,
+never zero-time observations.
+If observer creation/start fails, the collector re-inspects the target. An
+unchanged service-critical container that actually exited, with valid exit state
+and no daemon error, retains unavailable health plus the observer error and can
+produce a target-capacity outcome. Live targets, changed identities/restarts and
+fixture-upstream failures are not converted to target outcomes. Replay continues
+to reject external stop/kill/restart events; no exit is manufactured or restarted.
 Verification rejects older producer versions explicitly; historical evidence is
 never backfilled.
 `review-regressions.mjs CELL` independently replays retained API/edge slow-body
@@ -71,6 +87,10 @@ stays running while its actual healthcheck turns unhealthy and its terminal HTTP
 probe returns 503. Each observation independently blocks recovery for the three
 critical roles. This is not native framework evidence. The control removes its
 container and volumes; it publishes no ports and changes no shared images.
+`verify-exit.mjs` checks the real Docker race: a local target exits naturally
+after the running check, and a labeled observer cannot join its network namespace.
+The shared collector must preserve the verified exit as a target-capacity failure,
+not apparatus-invalid. Both containers and their volumes are removed afterwards.
 
 Each phase starts fresh native application and upstream containers. Production
 qualification uses the unchanged `bench/marketplace/qualify.mjs` infrastructure.
@@ -255,3 +275,15 @@ Independent review and repository-wide checks remain the integrating parent's
 responsibility when this task explicitly disallows subagents and edits outside
 this directory. Run the focused checks above and report actual native verification
 and residual gaps, never a passing oracle fixture as a native result.
+
+## Repair Handoff
+
+The endpoint/time-binding and observer-exit repair follows `43780246ecdaaf73af0f8b38c2beaf6baa9d1031`.
+An integrating checkout that has not imported that commit needs it and the
+follow-up commit in order. Current focused tests pass 33/33; the combined
+hardening/workload/production-qualification/edge suite passes 287/287. Retained
+`w10` and `w11` each pass 42/42 in-memory regressions, without rewriting or
+numerically qualifying either capture. Both real-Docker controls pass and clean
+up their exact owned resources. A fresh lifecycle-v4 native capture, independent
+review and integrating repository-wide checks remain outstanding; no full matrix
+or framework changes are part of this repair.

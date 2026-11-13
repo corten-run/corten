@@ -360,6 +360,7 @@ export async function runProbe(config, emit, sample) {
   const controlAfter = await controls(phase); emit({ type: "control-after", ...controlAfter });
   assert.deepEqual(failures, [], "injector task failure"); assert.deepEqual(pool.errors, [], "local injector resource failure");
   assert.equal(attacks.length, b.attack.scheduledAtMs.length); assert.equal(good.length, Object.values(b.legitimate).reduce((n, w) => n + w.scheduledAtMs.length, 0));
+  emit({ type: "probe-complete", atMs: now() });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

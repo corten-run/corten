@@ -11,8 +11,8 @@ import { validateQualification } from "../marketplace/feature-contract.mjs";
 const hash = (body) => createHash("sha256").update(body).digest("hex");
 export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca } = {}) {
   return new Promise((resolve) => {
-    const started = performance.now(), chunks = [], address = new URL(url);
-    const row = { url: String(url), method, host: host ?? address.host };
+    const startedNs = String(process.hrtime.bigint()), started = performance.now(), chunks = [], address = new URL(url);
+    const row = { url: String(url), method, host: host ?? address.host, startedNs };
     let size = 0, complete = false;
     const req = (address.protocol === "https:" ? https : http)(address, { method, agent: false, ca,
       ...(address.protocol === "https:" ? { servername: address.hostname } : {}),
@@ -28,7 +28,8 @@ export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca 
     req.once("close", () => {
       clearTimeout(timer);
       const bytes = Buffer.concat(chunks);
-      Object.assign(row, { complete, bytes: size, sha256: hash(bytes), body: bytes.toString("utf8"), ms: performance.now() - started }); resolve(row);
+      Object.assign(row, { complete, bytes: size, sha256: hash(bytes), body: bytes.toString("utf8"), ms: performance.now() - started,
+        endedNs: String(process.hrtime.bigint()) }); resolve(row);
     });
     req.end(body);
   });

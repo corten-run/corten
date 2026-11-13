@@ -2,26 +2,62 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { observe } from "./native.mjs";
+import { nativeClock } from "./clock.mjs";
 
 export const terminalHealthPaths = (qualification, edgeQualification) => ({ application: qualification.probes.live?.path ?? null,
   upstream: "/health", ...(edgeQualification ? { proxy: edgeQualification.probes.live?.path ?? null } : {}) });
+export const terminalHealthEndpoints = (paths) => Object.fromEntries(Object.entries(paths).map(([role, path]) => [role,
+  path === null ? null : (role === "proxy" ? "https://localhost:8080" : "http://127.0.0.1:8080") + path]));
 
 export async function observeTerminalHealth(base, path, timeoutMs, request = observe) {
-  return { path, response: path === null ? null : await request(base + path, { timeoutMs }) };
+  const bootId = process.platform === "linux" ? nativeClock().bootId : null;
+  return { path, bootId, response: path === null ? null : await request(base + path, { timeoutMs }) };
 }
 
-function liveness(health, path) {
+export async function collectTerminalHealth({ role, source, path, inspect, observe }) {
+  const before = await inspect();
+  let health;
+  if (!before.State.Running) health = { path, response: null, unavailable: "not-running" };
+  else if (path === null) health = { path, response: null };
+  else {
+    try { health = await observe(); }
+    catch (error) {
+      const after = await inspect(), state = after.State;
+      const critical = ["application", "proxy"].includes(role) || role === "upstream" && source === "api";
+      const exited = !state.Running && state.Status === "exited" && !state.Error && !state.Dead
+        && Number.isInteger(state.ExitCode) && Number.isFinite(Date.parse(state.FinishedAt))
+        && Date.parse(state.FinishedAt) >= Date.parse(before.State.StartedAt);
+      if (!critical || !exited || after.Id !== before.Id || state.StartedAt !== before.State.StartedAt) throw error;
+      // Replay still rejects external stop/kill/restart events. Do not manufacture a health response.
+      return { after, health: { path, response: null, unavailable: "not-running", observerError: error.message } };
+    }
+  }
+  return { after: await inspect(), health };
+}
+
+function liveness(health, path, observation, endpoint) {
   if (!health) return "unavailable"; // Historical captures have no terminal HTTP observation.
   assert.equal(health.path, path, "terminal health path differs from native qualification");
   if (path === null) { assert.equal(health.response, null); return "missing"; }
   assert.ok(typeof path === "string" && path.startsWith("/"));
   if (health.response === null) { assert.equal(health.unavailable, "not-running"); return "unavailable"; }
   const row = health.response;
+  assert.ok(observation, "missing terminal observation interval");
+  assert.equal(health.bootId, observation.start.bootId, "terminal health clock boot differs");
+  assert.equal(observation.end.bootId, observation.start.bootId, "terminal observation clock boot differs");
+  for (const ns of [row.startedNs, row.endedNs, observation.start.monotonicNs, observation.end.monotonicNs]) assert.match(ns, /^\d+$/, "missing terminal acquisition time");
+  assert.ok(BigInt(row.startedNs) >= BigInt(observation.start.monotonicNs)
+    && BigInt(row.endedNs) >= BigInt(row.startedNs) && BigInt(row.endedNs) <= BigInt(observation.end.monotonicNs),
+  "terminal health acquisition escaped terminal observation interval");
+  assert.equal(row.url, new URL(endpoint).href, "terminal health actual URL differs from native endpoint");
+  assert.equal(row.method, "GET", "terminal health actual method differs");
+  assert.equal(row.host, new URL(endpoint).host, "terminal health actual Host differs");
   assert.ok(typeof row.body === "string" && typeof row.complete === "boolean" && Number.isFinite(row.ms) && row.ms >= 0);
   assert.equal(row.bytes, Buffer.byteLength(row.body));
   assert.equal(row.sha256, createHash("sha256").update(row.body).digest("hex"), "terminal health bytes differ");
   assert.ok(!["EMFILE", "ENFILE", "ENOBUFS", "ENOMEM", "EADDRNOTAVAIL", "EACCES", "EPERM", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"].includes(row.error), "local terminal health client failure");
-  return row.complete && !row.error && !row.timedOut && row.status === 200 && row.ms <= 600 ? "observed" : "failed";
+  return row.complete && !row.error && !row.timedOut && row.status === 200 && row.ms <= 600
+    && BigInt(row.endedNs) - BigInt(row.startedNs) <= 600_000_000n ? "observed" : "failed";
 }
 
 export async function trackedImageBuild(summary, tag, save, build) {
@@ -81,7 +117,7 @@ export function failureKind(stage, error) {
   return ["native-parity", "edge-parity", "native-form"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
 }
 
-export function terminalRecovery(recovered, processes, resources, lifecycle, source = "fixture", paths = {}) {
+export function terminalRecovery(recovered, processes, resources, lifecycle, source = "fixture", paths = {}, endpoints = terminalHealthEndpoints(paths)) {
   const applications = processes.filter((p) => p.role === "application");
   const critical = processes.filter((p) => p.role === "application" || p.role === "proxy" || p.role === "upstream" && source === "api");
   const terminalServices = critical.map((p) => {
@@ -91,13 +127,13 @@ export function terminalRecovery(recovered, processes, resources, lifecycle, sou
     const dockerHealth = state.Health?.Status ?? (configured?.length && configured[0] !== "NONE" ? "unavailable" : "not-configured");
     assert.ok(["healthy", "unhealthy", "starting", "unavailable", "not-configured"].includes(dockerHealth));
     return { id: p.id, role: p.role, running: state.Running, finishedAt: state.FinishedAt, exitCode: state.ExitCode, oomKilled: state.OOMKilled,
-      dockerHealth, liveness: liveness(lifecycle[p.id].health, paths[p.role]),
+      dockerHealth, liveness: liveness(lifecycle[p.id].health, paths[p.role], lifecycle[p.id].observation, endpoints[p.role]),
       healthy: state.Running && !state.Paused && !state.Restarting && !state.Dead && !state.OOMKilled
         && ["healthy", "not-configured"].includes(dockerHealth), evidence: `${p.id}-lifecycle.json` };
   });
   for (const p of processes.filter((p) => p.role === "upstream" && source === "fixture")) {
     assert.equal(lifecycle[p.id].after.State.Running, true, "fixture apparatus upstream exited");
-    if (paths.upstream) assert.equal(liveness(lifecycle[p.id].health, paths.upstream), "observed", "fixture apparatus upstream unhealthy");
+    if (paths.upstream) assert.equal(liveness(lifecycle[p.id].health, paths.upstream, lifecycle[p.id].observation, endpoints.upstream), "observed", "fixture apparatus upstream unhealthy");
   }
   const terminalApplications = terminalServices.filter((p) => p.role === "application").map(({ role, ...p }) => p);
   const sampledRunning = resources.filter((r) => applications.some((p) => p.id === r.id)).every((r) => r.running);
