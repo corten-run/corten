@@ -390,8 +390,8 @@ async fn a_method_the_route_has_no_handler_for_is_a_405_that_says_which_it_has()
     let refused = send("PUT", "/ping", &[]).await;
     assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into()]));
     assert_eq!(refused.header("content-security-policy"), Some("sandbox"));
-    // OPTIONS, which no route here names, is one the server implements (a CORS preflight's), and
-    // its 405 says what the resource allows.
+    // OPTIONS, which no route here names, is always one the server implements: its caller asks
+    // what the resource allows, and the 405's `Allow` tells it.
     let refused = send("OPTIONS", "/items/7", &[]).await;
     assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into(), "POST".into()]));
     // The path is matched before the method: `/items/new` has no POST, and `/items/{id}`'s is
@@ -403,9 +403,9 @@ async fn a_method_the_route_has_no_handler_for_is_a_405_that_says_which_it_has()
 #[tokio::test]
 async fn a_method_no_route_in_the_app_has_is_a_501_with_no_allow() {
     // RFC 9110 9.1: the server implements it for no resource, so this one's `Allow` is not the
-    // answer. `TRACE` is HTTP's own, and no route here names it.
+    // answer. `TRACE` and `CONNECT` are HTTP's own, and no route here names either.
     // Methods are case-sensitive (9.1): `get` is not `GET` but an extension method no route has.
-    for method in ["PROPFIND", "QUERY", "TRACE", "get"] {
+    for method in ["PROPFIND", "QUERY", "TRACE", "CONNECT", "get"] {
         let refused = send(method, "/items/7", &[]).await;
         assert_eq!((refused.status, refused.header("allow")), (501, None), "{method}");
     }

@@ -881,7 +881,7 @@ before it (a route that says `unstaged` goes through none;
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a method no route has (501), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   a method no route has (the router's 501, not one a handler or a middleware answers), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
    the error page starts the layout reads not started yet and waits for them, here, outside 5: a
    middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
@@ -1628,7 +1628,7 @@ Under the prefix:
    speaks another protocol's errors (an Anthropic- or OpenAI-compatible gateway, or an MCP
    endpoint's JSON-RPC errors, as `examples/card-market`'s `/mcp` answers them): it returns a
    `ToJson` value, so a key check in `Identify` and the API's unknown URLs, wrong methods,
-   deadline and refusals all answer as its clients parse them. A `421` for a host the app does
+   methods no route has (501), deadline and refusals all answer as its clients parse them. A `421` for a host the app does
    not answer is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
 5. `Api::allow_origin` lets one site's pages call these routes from the browser: Corten answers
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
@@ -2688,7 +2688,7 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
 | `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
-| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`) | 501 |
+| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed` | 501 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
@@ -2707,8 +2707,11 @@ route's `Allow` (RFC 9110 15.5.6); any other (`PROPFIND`, `QUERY`, `PUT` in an a
 none, or `get`, since a method's name is case-sensitive) is a 501 with no `Allow` (9.1), since
 no resource here supports it and the route's `Allow` is not the answer. The path is matched first: an unknown URL is a 404 whatever its
 method, as it is for a method the app does implement. Only a request that reaches a route's
-405 checks the method again, so a request a route answers costs no more (within 5 instructions
-when measured, [design Choice 25](../design.md#choice-axum-router), step 1).
+405 checks the method again, so a request a route answers costs no more (within 3 instructions
+of Corten's own code when measured, [design Choice 25](../design.md#choice-axum-router), Stands on). Such a 501 is a
+refusal of a method the app does not implement, not a failure: Corten does not log it as an
+error, and an alert on a proxy's or a CDN's 5xx rate can leave it out ([Deploying](deploy.md#what-the-proxy-must-do), item 13),
+since scanners send `PROPFIND`, `TRACE` and made-up methods to any site.
 
 Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
 navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure

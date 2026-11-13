@@ -63,12 +63,25 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404`, `405` and `501`.
+/// An answer that is a status alone: the router's `404` and `405`.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
     fn call(&self, _: Request) -> Answering {
         Box::pin(std::future::ready(self.0.into_response()))
+    }
+}
+
+/// The router's `501` for a method no route in the app has, marked so the error page tells it
+/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]).
+struct Unimplemented;
+
+impl Endpoint for Unimplemented {
+    #[cold]
+    fn call(&self, _: Request) -> Answering {
+        let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
+        res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
+        Box::pin(std::future::ready(res))
     }
 }
 
@@ -540,7 +553,7 @@ impl Router {
         }
         let not_found: Route = Arc::new(Status(StatusCode::NOT_FOUND));
         let not_allowed: Route = Arc::new(Status(StatusCode::METHOD_NOT_ALLOWED));
-        let not_implemented: Route = Arc::new(Status(StatusCode::NOT_IMPLEMENTED));
+        let not_implemented: Route = Arc::new(Unimplemented);
         let known = Known::of(routes.iter());
         let dispatch = Dispatch { paths, routes, stages, not_found, not_allowed, not_implemented, known };
         Router { inner: Inner::Routes(Arc::new(dispatch)), edge: true }

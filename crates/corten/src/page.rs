@@ -419,8 +419,10 @@ pub enum Failure {
     /// no route has is [`Failure::UnknownMethod`].
     WrongMethod,
     /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
-    /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): 501, with no
-    /// `Allow` (RFC 9110 9.1). A handler's `Error::status(NOT_IMPLEMENTED)` is [`Failure::Failed`].
+    /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): the router's
+    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this; a `501` a handler or a
+    /// middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is
+    /// [`Failure::Failed`].
     UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
@@ -564,6 +566,8 @@ pub(crate) enum Cause {
     TimedOut,
     Refused,
     Unidentified,
+    /// The router's `501`: no route in the app has the method.
+    UnknownMethod,
 }
 
 /// The error page of an app that gives none ([`crate::App::error_page`]): a plain document. An app
@@ -2714,14 +2718,14 @@ async fn page_or_error<S: crate::app::Steps>(
         Some(Cause::TimedOut) => Failure::TimedOut,
         Some(Cause::Refused) => Failure::Refused { status },
         Some(Cause::Unidentified) => Failure::Unidentified { detail },
+        Some(Cause::UnknownMethod) => Failure::UnknownMethod,
         None if rejection => Failure::Rejected { status, detail },
         // Nothing is here, whether no route has the URL or the handler found nothing.
         None if status == StatusCode::NOT_FOUND => Failure::NotFound,
         None if detail.is_some() => Failure::Failed { status, detail },
         None => match status {
             StatusCode::METHOD_NOT_ALLOWED => Failure::WrongMethod,
-            // The router's: a handler's `Error::status` carries its detail, and is `Failed`.
-            StatusCode::NOT_IMPLEMENTED => Failure::UnknownMethod,
+            // A handler's or a middleware's empty `501` among them: only the router's is marked.
             status => Failure::Failed { status, detail: None },
         },
     };

@@ -5752,9 +5752,14 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
             })
         })
         .router();
-    let (status, headers, body) = call_with_any(shaped, "GET", "/lane/items/0", &[]).await;
+    let (status, headers, body) = call_with_any(shaped.clone(), "GET", "/lane/items/0", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, "application/json"));
     assert_eq!(body, r#"{"type":"error","error":{"code":404,"message":"Not Found"}}"#);
+    // The router's 501, for a method no route in the app has, is in the API's shape too.
+    let (status, headers, body) = call_with_any(shaped, "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_IMPLEMENTED, "application/json"));
+    assert_eq!(body, r#"{"type":"error","error":{"code":501,"message":"Not Implemented"}}"#);
+    assert!(!headers.contains_key("allow"), "{headers:?}");
 
     // A panic there is the API's 500.
     let router = App::new(Routes::new()).api(unstaged_api::api).router();
@@ -12937,41 +12942,85 @@ mod layout_reads {
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "DELETE", "/", None, None).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>405</p>"), "{body}");
-        // A method no route in the app has (the shop's `any` route takes every method, so an app
-        // without one): `Failure::UnknownMethod`, waited for as the 405 is, not a handler's 501.
-        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
-        let home = Table::new().route(
-            "/",
-            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
-        );
-        let router = App::new(Routes::from(home))
-            .error_page(
-                |failure: Failure, req: Req| async move {
-                    let unknown = matches!(failure, Failure::UnknownMethod);
-                    req.page::<ForOne>(Layout {
-                        req: &req,
-                        children: html! {
-                            <p>{failure.status().as_u16()}</p>
-                            if unknown { <p>"unknown method"</p> }
-                        },
-                    })
-                },
-                (),
-            )
-            .layout_read(count.clone())
-            .layout_read(SignedIn)
-            .middleware(AsViewer(Some("ada")))
-            .router();
-        let (status, headers, body) = call_with(router, "PROPFIND", "/", None, None).await;
-        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
-        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>501</p>"), "{body}");
-        assert!(body.contains("<p>unknown method</p>"), "{body}");
-        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
         // A `HEAD` has no body, so it starts none.
         let count = CartCount::default();
         let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/nowhere", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A middleware that answers `/soon` itself with a bare `501`, as one for a part of the app not
+    /// built yet would.
+    struct NotBuilt;
+
+    impl crate::Middleware for NotBuilt {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            if req.uri().path() == "/soon" {
+                return crate::response::IntoResponse::into_response(StatusCode::NOT_IMPLEMENTED);
+            }
+            next.run(req).await
+        }
+    }
+
+    /// An app with no `any` route, so `PROPFIND` is a method no route has, and with `501`s of its
+    /// own: a handler's `Error::status` (`/said`), a handler's bare status (`/bare`) and a
+    /// middleware's (`/soon`). Its error page names the failure it got.
+    fn not_built(count: CartCount) -> Router {
+        let routes = Table::new()
+            .route(
+                "/",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+            )
+            .route("/said", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::NOT_IMPLEMENTED)) }))
+            .route("/bare", get(|_req: Req| async move { StatusCode::NOT_IMPLEMENTED }));
+        App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    let kind = match &failure {
+                        Failure::UnknownMethod => "unknown method",
+                        Failure::Failed { .. } => "failed",
+                        _ => "other",
+                    };
+                    req.page::<ForOne>(Layout {
+                        req: &req,
+                        children: html! {
+                            <p>{failure.status().as_u16()}</p>
+                            <p>{kind}</p>
+                        },
+                    })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), NotBuilt))
+            .router()
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_the_routers_501_starts_the_reads_and_waits_for_them() {
+        // A method no route in the app has: the request's fault, as a 405 is.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, headers, body) = call_with(not_built(count.clone()), "PROPFIND", "/", None, None).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>501</p>"), "{body}");
+        assert!(body.contains("<p>unknown method</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_501_the_app_answers_is_failed_and_waits_for_none() {
+        // A part of the app not built yet, not a method no route has: `Failure::Failed`, as any
+        // 5xx, whether the handler said so with `Error::status`, with the bare status, or a
+        // middleware answered it.
+        for path in ["/said", "/bare", "/soon"] {
+            let at = std::time::Instant::now();
+            let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+            let (status, _, body) = call_with(not_built(slow), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{path}");
+            assert!(!body.contains("count") && body.contains("<p>501</p>") && body.contains("<p>failed</p>"), "{path}: {body}");
+            assert!(at.elapsed() < Duration::from_secs(1), "{path}: {:?}", at.elapsed());
+        }
     }
 
     #[tokio::test(start_paused = true)]

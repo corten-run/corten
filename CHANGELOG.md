@@ -246,17 +246,22 @@ Corten is pre-1.0, so any minor version may change the API.
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
   server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
-  it implements and this resource lacks. This changes a status code an app's clients see. A method
+  it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
+  where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
+  CDN's 5xx rate; the app does not log it as an error, and the deploy guide says how to leave it
+  out of alerting ([Deploying](docs/guide/deploy.md#what-the-proxy-must-do), item 13). A method
   some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
   route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
   501; an unknown URL is still a 404 whatever the method. A browser gets the error page as the
   new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
-  page waits for the layout's reads (a handler's `Error::status(NOT_IMPLEMENTED)` is still
-  `Failure::Failed`), and an API its JSON. **Breaking:** an app's error page that matches
+  page waits for the layout's reads (only the router's 501 is; a 501 a handler or a middleware
+  answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still `Failure::Failed`), and
+  an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
   `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
-  405 checks the method again: measured with callgrind (release, three runs each, every run the
-  same), a page route, an unstaged route and a 404 move by 1 to 5 instructions, a 405 costs 18
-  more (6,921 against 6,903) and a `PROPFIND` that was a 405 costs 309 fewer as a 501
+  405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
+  within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
+  fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
+  355 to 481 more as a 501, which allocates the router's marker
   ([design Choice 25](docs/design.md#choice-axum-router), step 1)
   ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,

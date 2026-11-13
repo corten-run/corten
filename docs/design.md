@@ -1093,20 +1093,21 @@ rules something out.
        sets no order among its errors when more than one applies, and the `404` keeps the app's
        own not-found page for a mistyped address, where a `501` would say nothing about it.
        A browser's `501` is the error page's `Failure::UnknownMethod`, which the request is at
-       fault for as it is for a `405`, so the page waits for the layout's reads.
+       fault for as it is for a `405`, so the page waits for the layout's reads; the router marks
+       its `501` (a response extension), so a `501` a handler or a middleware answers for a part
+       not built yet stays `Failure::Failed`, a failure of the app's.
        The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
-       `OPTIONS` always among them, and every method once any route takes every method (`any`,
-       a relay whose upstream may implement it); only a request that reaches a route's `405`
-       reads them, so no other request does more work. Measured (callgrind, release, glibc's
-       allocator, the run of 1,200 requests less the run of 200 over 1,000 in process, three runs
-       of each build, every run the same, on `794e6c7f` and on it with this change, in a harness
-       outside the repository): a page route 17,822 instructions against 17,827, an unstaged
-       route 6,885 against 6,886 and a page's 404 21,657 against 21,660; a `405` at an unstaged
-       route 6,921 against 6,903, the 18 the method's second look costs there; and `PROPFIND` at
-       it 6,695 as a `501` against 7,004 as a `405`, which had an `Allow` to write. The error
-       page's `Failure::UnknownMethod`, added after these were counted, is chosen only once a failed
-       answer for the error page is found not to be a `404`, which none of the requests above
-       reaches, so they stand.
+       `OPTIONS` always among them (`OPTIONS` because its caller asks what a resource allows,
+       which the `405`'s `Allow` tells it, where a `501` would tell it nothing), and every method
+       once any route takes every method (`any`, a relay whose upstream may implement it); only a
+       request that reaches a route's `405` reads them, so no other request does more work
+       (Stands on has the counts).
+       A `501` is a 5xx, so a scanner's `PROPFIND` or `TRACE` raises a proxy's or a CDN's 5xx
+       rate, where a `405` did not; RFC 9110 9.1 says a server SHOULD answer it so, a client
+       reads from it that no resource here takes the method, and Corten does not log it as an
+       error, so the deploy guide tells operators to leave these out of 5xx alerting
+       ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 13) rather than Corten keeping
+       the `405` the standard does not ask for.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:
@@ -1265,7 +1266,20 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Stands on: measured (callgrind, release, three runs of each build with jemalloc and with
+    Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
+    not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
+    for a method the server knows that the target resource does not support, and MUST carry
+    `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
+    case-sensitive; step 1); measured (callgrind, release, glibc's allocator, the run of 1,200
+    requests less the run of 200 over 1,000 in process, three runs of each build alternating,
+    every run within 2 of the others, on `8b02835d` and on it with step 1's `501` and its
+    marker, in a harness outside the repository: a page route 17,403 instructions against
+    17,585, the 182 fewer all in glibc's `_int_malloc` and `unlink_chunk` with every function of
+    Corten's within 3; an unstaged route 7,023 against 7,022 and a page's `404` 21,991 against
+    21,988; a `405` 6,557 against 6,529 at an unstaged route and 22,352 against 22,323 at a page,
+    the 28 to 29 the method's second look costs; and `PROPFIND` as a `501` 6,978 against 6,623 as a
+    `405` at the unstaged route and 22,906 against 22,425 at the page, the marker's extension
+    map allocated on that cold path); measured (callgrind, release, three runs of each build with jemalloc and with
     glibc, every run the same but the feed's, step 4 at `5548c97a` against step 3 at `67e7f5f5`, built with
     feature `json`, in a harness outside the repository that answers the same JSON item by each
     request shape, the dispatch suite unchanged: a staged page 478 fewer, every other request
@@ -1322,8 +1336,8 @@ rules something out.
     order the Values give, which is why the suite comes first).
 
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
-    (other than one changed to follow a standard where axum did not, which step 1 records, as it
-    records the `501`), or
+    (other than the `501` for a method no route in the app has, RFC 9110 9.1, which step 1
+    records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
     ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
@@ -1343,8 +1357,9 @@ rules something out.
     unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`; 2026-11-12, the dispatch suite with its one case changed
-    for RFC 9110 9.1 (the `501`) and the four requests above, on `794e6c7f` and on it with that
-    change.
+    for RFC 9110 9.1 (the `501`); 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
+    them, and the seven requests Stands on counts for the `501`, on `8b02835d` and on it with
+    the `501` and its marker.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
