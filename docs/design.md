@@ -900,7 +900,8 @@ rules something out.
     ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first;
     2026-11-10, the limit set per app, area and API and its cost, measured against `9653c20c`;
     2026-11-12, an area's limit read from its route's scope, not by a prefix lookup, measured
-    with the area's other settings at `6ffc316f` ([Choice 28](#choice-fixed-stages), Stands on).
+    with the area's other settings at `f7d33ce2` against main `31de4268`
+    ([Choice 28](#choice-fixed-stages), Stands on).
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -1525,11 +1526,17 @@ rules something out.
     nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
     with those of the areas and APIs around it) is resolved once for each when the router is
     built and given to each of its routes, so a request reads it from the route it matched; only
-    an unknown URL, whose `404` belongs to the prefix it is under, and a route whose parameter or
-    catch-all can match under another prefix, an area's, an API's or one of Corten's own
-    (`/corten/`, the assets'), so every route with a parameter in its first segment (`/{slug}`,
-    `/{*rest}`) even in an app with no areas, look it up by the request's path, a scan of those
-    prefixes. A route that says `unstaged` where it is declared, in the app's routes
+    an unknown URL, whose `404` belongs to the prefix it is under, and a route that can match a
+    path under another prefix, an area's, an API's or one of Corten's own (`/corten/`, the
+    assets'), look it up by the request's path, a scan of those prefixes. Which routes can is
+    counted segment by segment when the router is built (`api::can_match_under`): a parameter
+    matches one segment that starts and ends with the text around it, a catch-all the rest, and a
+    prefix of Corten's own holds only paths with a segment after it. So a page's `/{*rest}` looks
+    up by path, as does `/{slug}` beside an area at `/shop` (it matches `/shop`) and `/shop/{id}`
+    beside one at `/shop/desk`, while `/{slug}` in an app with no areas, or beside `/shop/desk`
+    alone, has its scope. The count may still send a route by path that cannot match (two
+    parameters in one segment); it never gives a route a scope when one of its paths is under
+    another prefix. A route that says `unstaged` where it is declared, in the app's routes
     module, an area's or an API's, goes through none of the stages, the app's, area's and API's
     middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
     order a reader checks is still one, and a flag, as `no_store` is, that names what the route
@@ -1641,7 +1648,10 @@ rules something out.
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
     one boxed future, 21,374 to 21,511 instructions against 20,497 to 20,646 with none; a request
-    outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
+    outside that area 19,909 to 19,913 against 19,706, which was then a scan of the areas'
+    prefixes on every request and since
+    [#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)
+    is paid only where the route can match under one (measured below); an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
     be in the request outside the area); measured (callgrind, release, the same JSON handler
@@ -1673,7 +1683,15 @@ rules something out.
     page in the inner area 23,732.9 (23,731.5 to 23,732.9) against 18,261.3 (18,259.9 to
     18,261.3) as an app route, 5,471.6 more (5,470.2 to 5,473.0), and the API's JSON 13,647.3
     (13,647.1 to 13,647.4) against 12,956.9 (12,956.9 to 12,957.0) for the same handler as an app
-    route, 690.3 more (690.2 to 690.5)); measured (callgrind, release, five runs each, the same
+    route, 690.3 more (690.2 to 690.5)); measured (callgrind, release, jemalloc, three runs each,
+    the routes counted by segment at `084db982` against `416882fa`, the same harness with its
+    `slug`, `routed` and `rest` targets: a page at `/{slug}` in the app with no areas 18,406.4
+    (18,406.4 to 18,407.8) against 18,520.7 (18,520.7 to 18,520.8), 114.4 fewer, now 145.4 over
+    the same page at a fixed route, 18,261.0; in the app with areas, where `/{slug}` can match
+    `/shop` and still looks its scope up by path, 18,740.7 against 18,740.8; and there a page an
+    app `/{*rest}` answers outside every area 19,236.7 (19,236.6 to 19,238.3) against 18,569.8
+    (18,569.7 to 18,569.8) at `/elsewhere/item`, 667.0 more in both builds; every other target
+    within 0.1 of before); measured (callgrind, release, five runs each, the same
     handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
@@ -1725,8 +1743,15 @@ rules something out.
     with two areas and an API costs more than about 100 instructions over the same request in its
     app with none, beyond the difference measured once each route was given its scope (at
     `6ffc316f`: 5,472 for the page in the inner area against the same page as an app route, and
-    690 for the API's JSON route against the same handler as an app route); or a lookup by path
-    comes back for a route that cannot match under another prefix.
+    690 for the API's JSON route against the same handler as an app route); or, in one build of
+    the same harness in its app with areas, a page an app catch-all answers outside every area,
+    which looks its scope up by path, costs more than about 100 instructions over the same page at
+    an app route there, beyond the 667 measured at `084db982` (19,236.7 through the catch-all
+    against 18,569.8 at the route, a catch-all's match counted in it); or a route whose every
+    path is outside the other prefixes is sent by path for a reason other than two parameters in
+    one segment, which says the segment count has grown looser than it reads; or one is given a
+    scope while one of its paths is under another prefix, which a request would then answer with
+    the wrong area's settings.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1752,7 +1777,8 @@ rules something out.
     builds (three runs each with jemalloc and with glibc, every run the same); 2026-11-12, each
     route given its area's or API's scope at `f7d33ce2` against main `31de4268`
     ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)),
-    and the app with areas against the one with none in one build at `6ffc316f`.
+    and the app with areas against the one with none in one build at `6ffc316f`; 2026-11-13,
+    routes counted by segment at `084db982` against `416882fa`, with a catch-all's request.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports

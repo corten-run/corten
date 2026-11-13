@@ -258,11 +258,13 @@ Corten is pre-1.0, so any minor version may change the API.
   middleware, its API) from the route it matched: `App::router` resolves each area's and API's
   once, with those of the areas and APIs around it, and gives it to each of their routes, where
   each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
-  is its prefix's, and a route whose parameter or catch-all can match under another prefix (a
-  page's `/{*rest}`, and so every route with a parameter in its first segment, which can match
-  under Corten's own `/corten/`) look it up by path, so what a request meets is unchanged. A page in an
-  inner area costs 328 instructions fewer and an API's JSON 223 fewer, and in an app with no
-  areas or APIs each costs 138 fewer (callgrind, release, jemalloc, five runs each)
+  is its prefix's, and a route that can match a path under another prefix, counted segment by
+  segment (a page's `/{*rest}`, or `/{slug}` beside an area at `/shop`), look it up by path, so
+  what a request meets is unchanged. Measured at `f7d33ce2` against main `31de4268` (callgrind,
+  release, jemalloc, five runs each), a page in an inner area costs 328 instructions fewer and an
+  API's JSON 223 fewer, and in an app with no areas or APIs each costs 138 fewer; and later,
+  counting segments, a page at `/{slug}` in an app with no areas costs 114 fewer than
+  when it was looked up by path (at `084db982` against `416882fa`, three runs each)
   ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 - `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
