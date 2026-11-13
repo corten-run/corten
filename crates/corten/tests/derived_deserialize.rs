@@ -757,6 +757,25 @@ twin! { cents, corten::FromJson,
     pub struct Cents(pub i64);
 }
 
+// Transparent beside a field serde does not read: a `PhantomData` and a defaulted field are
+// left out of the pick as a skipped one is.
+twin! { tagged, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Tagged {
+        pub id: u64,
+        pub kind: PhantomData<String>,
+    }
+}
+
+twin! { named, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Named {
+        pub text: String,
+        #[serde(default)]
+        pub hits: u8,
+    }
+}
+
 twin! { filters, corten::FromJson,
     #[derive(Default)]
     #[serde(default, deny_unknown_fields, rename = "Filter", expecting = "a filter")]
@@ -833,6 +852,10 @@ fn from_json_reads_what_serde_s_derive_reads() {
     for text in ["250", "-3", "2.5", "\"250\"", "[250]"] {
         same_read::<cents::ours::Cents, cents::theirs::Cents>(text);
     }
+    for text in ["7", "\"x\"", "-1", "null", "[7]", r#"{"id":7}"#] {
+        same_read::<tagged::ours::Tagged, tagged::theirs::Tagged>(text);
+        same_read::<named::ours::Named, named::theirs::Named>(text);
+    }
     for text in [r#"{}"#, r#"{"page":2}"#, r#"{"page":2,"search":"red"}"#, r#"{"page":2,"x":1}"#, "[3]", "[]", "null"] {
         same_read::<filters::ours::Filters, filters::theirs::Filters>(text);
     }
@@ -870,6 +893,8 @@ fn corten_s_reader_reads_each_type_itself() {
     read_alone::<marker::ours::Marker, marker::theirs::Marker>("null");
     read_alone::<name::ours::Name, name::theirs::Name>("\"Ada\"");
     read_alone::<cents::ours::Cents, cents::theirs::Cents>("250");
+    read_alone::<tagged::ours::Tagged, tagged::theirs::Tagged>("7");
+    read_alone::<named::ours::Named, named::theirs::Named>("\"x\"");
     read_alone::<filters::ours::Filters, filters::theirs::Filters>(r#"{"page":2,"search":"red"}"#);
     read_alone::<status::ours::Status, status::theirs::Status>("\"sent\"");
 }
@@ -1084,6 +1109,9 @@ fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
     read_alone::<derived::Generic<u32>, generic::theirs::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#);
     // Another word is one of the enum's.
     assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
+    // A transparent struct is described as the field it is read as.
+    assert_eq!(Generator::root_for_read::<tagged::ours::Tagged>()["type"], "integer");
+    assert_eq!(Generator::root_for_read::<named::ours::Named>()["type"], "string");
 }
 
 #[test]
@@ -1107,6 +1135,10 @@ fn from_json_passes_the_deserializer_serde_s_names() {
 fn from_json_reads_serde_s_value_deserializers_the_same() {
     same_from::<id::ours::Id, id::theirs::Id, _>(|| 7u64.into_deserializer(), "an integer as a newtype");
     same_from::<cents::ours::Cents, cents::theirs::Cents, _>(|| 7i64.into_deserializer(), "an integer as a transparent");
+    same_from::<tagged::ours::Tagged, tagged::theirs::Tagged, _>(|| 7u64.into_deserializer(), "beside a PhantomData");
+    same_from::<tagged::ours::Tagged, tagged::theirs::Tagged, _>(|| "x".into_deserializer(), "a string beside a PhantomData");
+    same_from::<named::ours::Named, named::theirs::Named, _>(|| "x".into_deserializer(), "beside a defaulted field");
+    same_from::<named::ours::Named, named::theirs::Named, _>(|| 7u64.into_deserializer(), "an integer beside a defaulted field");
     same_from::<marker::ours::Marker, marker::theirs::Marker, _>(|| ().into_deserializer(), "a unit");
     same_from::<status::ours::Status, status::theirs::Status, _>(|| "sent".into_deserializer(), "a variant by alias");
     same_from::<status::ours::Status, status::theirs::Status, _>(|| "hidden".into_deserializer(), "a skipped variant");

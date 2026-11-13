@@ -6,27 +6,28 @@
 //! duplicate or missing field without a default gives up, so serde_json's answer (an error, or
 //! `None` for an `Option`) is the one returned.
 //!
-//! `#[serde(...)]` is read so the value is what serde's `Deserialize` makes; an attribute that changes
-//! how serde reads in a way this does not follow is a compile error.
+//! `#[serde(...)]` is read once, by [`crate::deserialize::read_from_json`], and the reader and the
+//! `Deserialize` it falls back to are both written from that reading, so the value is what that
+//! `Deserialize` makes; an attribute that changes how serde reads in a way this does not follow is
+//! a compile error.
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
 
 use crate::{
-    component::split,
     derive::{parse_item, Item},
+    deserialize::{read_from_json, transparent_field, Container, Field, Reading, Shape, UnitVariant},
     schema::{left_out, Body as Schema, DefaultValue, SchemaField, SchemaVariant, VShape},
-    to_json::{bounded, field_rule, serde_args_for, variant_rule, Arg, Value, RULES},
-    tokens::{err, is_ident, is_punct, q, Error},
+    to_json::bounded,
+    tokens::{err, q, Error},
 };
 
-const NAME: &str = "FromJson";
-
 pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
-    let item = parse_item(input, NAME, true)?;
-    let mut out = impls(&item)?;
-    // serde's `Deserialize`, the fallback, from the same attributes: the type needs no
+    let item = parse_item(input, "FromJson", true)?;
+    let reading = read_from_json(&item, false)?;
+    let mut out = impls(&item, &reading, false)?;
+    // serde's `Deserialize`, the fallback, from the same reading: the type needs no
     // `#[derive(Deserialize)]` beside this one.
-    out.extend(crate::deserialize::for_from_json(&item)?);
+    out.extend(crate::deserialize::for_from_json(&item, &reading)?);
     Ok(out)
 }
 
@@ -42,67 +43,51 @@ pub fn beside_deserialize(item: &Item) -> TokenStream {
     if crate::deserialize::struct_lends(item) {
         return TokenStream::new();
     }
-    match impls_with(item, !item.impl_generics.is_empty()) {
+    match read_from_json(item, true).and_then(|reading| impls(item, &reading, !item.impl_generics.is_empty())) {
         Ok(code) => q("::corten::__if_json! { __A0 }", &[code]),
         Err(_) => TokenStream::new(),
     }
 }
 
-/// The `FromJson` impl and its schema (feature `types`).
-fn impls(item: &Item) -> Result<TokenStream, Error> {
-    impls_with(item, false)
-}
-
-/// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
-/// text) and its bounds are only the type's own. A generic type's impl also asks for
-/// `Self: DeserializeOwned`, the trait's supertrait, on either path: the bounds inferred for its
-/// `Deserialize` (`T: Default` for a defaulted `Vec<T>`) need not follow from the ones here, the
-/// derive's own `Deserialize` included.
-fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
-    let container = Container::read(&item.attrs, item.is_enum)?;
-    let schema;
-    let body = if item.is_enum {
-        let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
-        let (code, variants, other) = enumeration(&container, body)?;
-        // With `#[serde(other)]`, any word is one of the enum's.
-        schema = if other {
-            Schema::Value(q("::std::string::String", &[]))
-        } else {
-            Schema::Enum { tagging: crate::schema::Tagging::External, variants }
-        };
-        code
-    } else if let Some(fields) = &item.tuple {
-        let fields = parse_fields(fields, false)?;
-        let read: Vec<TokenStream> = fields.iter().filter(|f| !f.skip).map(ty).collect();
-        schema = match (container.transparent || fields.len() == 1, read.as_slice()) {
-            (true, [only]) => Schema::Value(only.clone()),
-            _ => Schema::Tuple(read),
-        };
-        if container.transparent {
-            transparent(&fields, item.name.span())?
-        } else {
-            tuple(&fields, item.name.span())?
+/// The `FromJson` impl and its schema (feature `types`); with `by_serde`, the `FromJson` impl is
+/// the trait's own body (serde_json reads the text) and its bounds are only the type's own. A
+/// generic type's impl also asks for `Self: DeserializeOwned`, the trait's supertrait, on either
+/// path: the bounds inferred for its `Deserialize` (`T: Default` for a defaulted `Vec<T>`) need
+/// not follow from the ones here, the derive's own `Deserialize` included.
+fn impls(item: &Item, reading: &Reading, by_serde: bool) -> Result<TokenStream, Error> {
+    let container = &reading.container;
+    let (body, schema) = match &reading.shape {
+        Shape::Enum(variants) => {
+            let (code, described) = enumeration(variants);
+            // With `#[serde(other)]`, any word is one of the enum's.
+            let schema = if variants.iter().any(|v| v.other) {
+                Schema::Value(q("::std::string::String", &[]))
+            } else {
+                Schema::Enum { tagging: crate::schema::Tagging::External, variants: described }
+            };
+            (code, schema)
         }
-    } else if let Some(fields) = &item.body {
-        let fields = parse_fields(fields, true)?;
-        schema = if container.transparent {
-            match fields.iter().find(|f| !f.skip) {
-                Some(f) => Schema::Value(ty(f)),
-                None => Schema::Unit,
-            }
-        } else {
-            Schema::Object { fields: schema_fields(&container, &fields), deny_unknown: container.deny_unknown_fields }
-        };
-        if container.transparent {
-            transparent(&fields, item.name.span())?
-        } else {
-            object(&container, &fields)
+        Shape::Named(fields) | Shape::Tuple(fields) if container.transparent => {
+            let one = transparent_field(item, fields)?;
+            (transparent(fields, one), Schema::Value(ty(one)))
         }
-    } else {
-        schema = Schema::Unit;
-        q("if __r.null() { ::core::result::Result::Ok(Self) } else { ::core::result::Result::Err(::corten::json::__read::Fallback) }", &[])
+        Shape::Tuple(fields) => {
+            let read: Vec<TokenStream> = fields.iter().filter(|f| !f.skip).map(ty).collect();
+            let schema = match (fields.len() == 1, read.as_slice()) {
+                (true, [only]) => Schema::Value(only.clone()),
+                _ => Schema::Tuple(read),
+            };
+            (tuple(fields, item.name.span())?, schema)
+        }
+        Shape::Named(fields) => (
+            object(container, fields),
+            Schema::Object { fields: schema_fields(container, fields), deny_unknown: container.deny_unknown_fields },
+        ),
+        Shape::Unit => (
+            q("if __r.null() { ::core::result::Result::Ok(Self) } else { ::core::result::Result::Err(::corten::json::__read::Fallback) }", &[]),
+            Schema::Unit,
+        ),
     };
-
     // Each type parameter must be FromJson itself (and describe itself, for the schema).
     let mut where_clause = if by_serde {
         item.where_clause.clone()
@@ -161,136 +146,8 @@ fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     Ok(out)
 }
 
-fn unsupported<T>(arg: &Arg) -> Result<T, Error> {
-    err(
-        arg.span,
-        format!(
-            "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json, and an empty `impl corten::FromJson for T {{}}` makes it a FromJson read by serde_json)",
-            arg.key
-        ),
-    )
-}
-
-fn string(arg: &Arg) -> Result<String, Error> {
-    match &arg.value {
-        Value::Str(s) => Ok(s.clone()),
-        _ => err(arg.span, format!("FromJson: use #[serde({} = \"...\")]", arg.key)),
-    }
-}
-
-fn rule(arg: &Arg) -> Result<String, Error> {
-    let rule = string(arg)?;
-    if !RULES.contains(&rule.as_str()) {
-        return err(arg.span, format!("FromJson: unknown rename_all rule {rule:?}; serde's are {}", RULES.join(", ")));
-    }
-    Ok(rule)
-}
-
-fn default(arg: &Arg) -> Result<DefaultValue, Error> {
-    match &arg.value {
-        Value::Bare => Ok(DefaultValue::Trait),
-        Value::Str(path) => match path.parse::<TokenStream>() {
-            Ok(path) => Ok(DefaultValue::Path(path)),
-            Err(_) => err(arg.span, "FromJson: default takes a function's path"),
-        },
-        Value::Group(_) => err(arg.span, "FromJson: use #[serde(default)] or #[serde(default = \"path\")]"),
-    }
-}
-
-#[derive(Default)]
-struct Container {
-    rename_all: Option<String>,
-    default: Option<DefaultValue>,
-    deny_unknown_fields: bool,
-    transparent: bool,
-}
-
-impl Container {
-    fn read(attrs: &[Group], is_enum: bool) -> Result<Self, Error> {
-        let mut c = Container::default();
-        for arg in serde_args_for(attrs, NAME)? {
-            match arg.key.as_str() {
-                "rename_all" => c.rename_all = Some(rule(&arg)?),
-                "default" if !is_enum => c.default = Some(default(&arg)?),
-                "deny_unknown_fields" => c.deny_unknown_fields = true,
-                "transparent" if !is_enum => c.transparent = true,
-                "rename_all_fields" if !is_enum => {
-                    return err(arg.span, "FromJson: #[serde(rename_all_fields)] can only be used on enums")
-                }
-                // Writing only, the type's own name, serde's path, or its error text and bounds:
-                // none changes what a successful read makes.
-                "rename" | "rename_all_fields" | "into" | "crate" | "expecting" | "bound" => {}
-                _ => return unsupported(&arg),
-            }
-        }
-        Ok(c)
-    }
-}
-
-struct Field {
-    /// The name, without `r#`; `None` in a tuple.
-    name: Option<String>,
-    /// The identifier as written (`r#type` stays raw), or the position in a tuple.
-    member: TokenTree,
-    rename: Option<String>,
-    aliases: Vec<String>,
-    default: Option<DefaultValue>,
-    skip: bool,
-    ty: Vec<TokenTree>,
-    /// For the schema: its doc comment.
-    doc: String,
-}
-
-fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
-    let mut fields = Vec::new();
-    for (index, tokens) in split(group.stream(), ',').into_iter().enumerate() {
-        let mut j = 0;
-        let mut attrs = Vec::new();
-        while is_punct(tokens.get(j), '#') {
-            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
-                attrs.push(g.clone());
-            }
-            j += 2;
-        }
-        if is_ident(tokens.get(j), "pub") {
-            j += 1;
-            if matches!(tokens.get(j), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
-                j += 1;
-            }
-        }
-        let (name, member, ty) = if named {
-            let (Some(TokenTree::Ident(ident)), true) = (tokens.get(j), is_punct(tokens.get(j + 1), ':')) else {
-                return err(group.span(), "FromJson: expected a named field");
-            };
-            let text = ident.to_string();
-            (
-                Some(text.strip_prefix("r#").unwrap_or(&text).to_string()),
-                TokenTree::Ident(ident.clone()),
-                tokens[j + 2..].to_vec(),
-            )
-        } else {
-            (None, TokenTree::Literal(Literal::usize_unsuffixed(index)), tokens[j..].to_vec())
-        };
-        let doc = crate::schema::doc(&attrs);
-        let mut field = Field { name, member, rename: None, aliases: Vec::new(), default: None, skip: false, ty, doc };
-        for arg in serde_args_for(&attrs, NAME)? {
-            match arg.key.as_str() {
-                "rename" => field.rename = Some(string(&arg)?),
-                "alias" => field.aliases.push(string(&arg)?),
-                "default" => field.default = Some(default(&arg)?),
-                "skip" | "skip_deserializing" => field.skip = true,
-                // Writing only, or bounds.
-                "skip_serializing" | "skip_serializing_if" | "serialize_with" | "bound" | "getter" => {}
-                _ => return unsupported(&arg),
-            }
-        }
-        fields.push(field);
-    }
-    Ok(fields)
-}
-
 fn ty(field: &Field) -> TokenStream {
-    field.ty.iter().cloned().collect()
+    field.written.clone()
 }
 
 fn var(index: usize) -> TokenStream {
@@ -323,22 +180,13 @@ fn container_default(container: &Container) -> TokenStream {
     }
 }
 
-/// A named field's key: its `rename`, or its name under the container's rule.
-fn key(container: &Container, field: &Field) -> String {
-    let name = field.name.as_deref().unwrap_or_default();
-    field
-        .rename
-        .clone()
-        .unwrap_or_else(|| container.rename_all.as_deref().map_or(name.to_string(), |rule| field_rule(name, rule)))
-}
-
 /// The fields a read takes, as the schema describes them: by key, with what a left-out one is.
 fn schema_fields(container: &Container, fields: &[Field]) -> Vec<SchemaField> {
     fields
         .iter()
         .filter(|f| !f.skip)
         .map(|f| SchemaField {
-            key: key(container, f),
+            key: f.primary.clone(),
             ty: ty(f),
             doc: f.doc.clone(),
             default: left_out(f.default.as_ref(), container.default.as_ref(), &ty(f), &f.member.clone().into()),
@@ -348,8 +196,14 @@ fn schema_fields(container: &Container, fields: &[Field]) -> Vec<SchemaField> {
         .collect()
 }
 
-fn byte_string(text: &str) -> TokenStream {
-    TokenTree::Literal(Literal::byte_string(text.as_bytes())).into()
+/// A key or a variant's word: its own name, or any of its aliases.
+fn pattern(name: &str, aliases: &[String]) -> TokenStream {
+    let mut pattern: TokenStream = TokenTree::Literal(Literal::byte_string(name.as_bytes())).into();
+    for alias in aliases {
+        pattern.extend(q("|", &[]));
+        pattern.extend([TokenTree::Literal(Literal::byte_string(alias.as_bytes()))]);
+    }
+    pattern
 }
 
 /// A struct with named fields, from an object.
@@ -366,11 +220,6 @@ fn object(container: &Container, fields: &[Field]) -> TokenStream {
             build.extend(q("__A0: __A1,", &[member, fallback_value(container, field)]));
             continue;
         }
-        let mut pattern = byte_string(&key(container, field));
-        for alias in &field.aliases {
-            pattern.extend(q("|", &[]));
-            pattern.extend(byte_string(alias));
-        }
         vars.extend(q("let mut __A0: ::core::option::Option<__A1> = ::core::option::Option::None;", &[var(index), ty(field)]));
         arms.extend(q(
             "__A0 => {
@@ -379,7 +228,7 @@ fn object(container: &Container, fields: &[Field]) -> TokenStream {
                 }
                 __A1 = ::core::option::Option::Some(__A2);
             }",
-            &[pattern, var(index), read(field)],
+            &[pattern(&field.primary, &field.aliases), var(index), read(field)],
         ));
         build.extend(q(
             "__A0: match __A1 { ::core::option::Option::Some(v) => v, ::core::option::Option::None => __A2 },",
@@ -427,11 +276,6 @@ fn object_over_default(container: &Container, fields: &[Field]) -> TokenStream {
             }
             continue;
         }
-        let mut pattern = byte_string(&key(container, field));
-        for alias in &field.aliases {
-            pattern.extend(q("|", &[]));
-            pattern.extend(byte_string(alias));
-        }
         vars.extend(q("let mut __A0 = false;", &[var(index)]));
         arms.extend(q(
             "__A0 => {
@@ -441,7 +285,7 @@ fn object_over_default(container: &Container, fields: &[Field]) -> TokenStream {
                 __A1 = true;
                 __out.__A2 = __A3;
             }",
-            &[pattern, var(index), member.clone(), read(field)],
+            &[pattern(&field.primary, &field.aliases), var(index), member.clone(), read(field)],
         ));
         if let Some(value) = own_default {
             after.extend(q("if !__A0 { __out.__A1 = __A2; }", &[var(index), member, value]));
@@ -505,86 +349,43 @@ fn tuple(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
     ))
 }
 
-/// `#[serde(transparent)]`: the one field that is not skipped is the value; the others are
-/// their defaults.
-fn transparent(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
-    let mut read_fields = fields.iter().filter(|f| !f.skip);
-    let (Some(_), None) = (read_fields.next(), read_fields.next()) else {
-        return err(span, "FromJson: #[serde(transparent)] needs exactly one field that is not skipped");
-    };
+/// `#[serde(transparent)]`: `one` (its [`transparent_field`]) is the value; each other field is
+/// its default (a `PhantomData`'s is `PhantomData`).
+fn transparent(fields: &[Field], one: &Field) -> TokenStream {
     let mut build = TokenStream::new();
     for field in fields {
-        let value = if field.skip {
+        let value = if std::ptr::eq(field, one) {
+            read(field)
+        } else {
             match &field.default {
                 Some(DefaultValue::Path(path)) => q("__A0()", std::slice::from_ref(path)),
                 _ => q("::core::default::Default::default()", &[]),
             }
-        } else {
-            read(field)
         };
         build.extend(q("__A0: __A1,", &[field.member.clone().into(), value]));
     }
-    Ok(q("::core::result::Result::Ok(Self { __A0 })", &[build]))
+    q("::core::result::Result::Ok(Self { __A0 })", &[build])
 }
 
-/// An enum of unit variants, from its name as a string, and whether one is `#[serde(other)]` (a
-/// `UrlValue`'s: any other word gives up, and serde's `Deserialize` reads it as that variant).
-fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<SchemaVariant>, bool), Error> {
+/// An enum of unit variants, from its name as a string, and each variant as the schema describes
+/// it. A `UrlValue`'s `#[serde(other)]` variant is read by its own name: any other word gives up,
+/// and serde's `Deserialize` reads it as that variant.
+fn enumeration(variants: &[UnitVariant]) -> (TokenStream, Vec<SchemaVariant>) {
     let mut arms = TokenStream::new();
-    let mut variants = Vec::new();
-    let mut other = false;
-    for tokens in crate::component::variants(body.stream()) {
-        let mut j = 0;
-        let mut attrs = Vec::new();
-        while is_punct(tokens.get(j), '#') {
-            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
-                attrs.push(g.clone());
-            }
-            j += 2;
-        }
-        let Some(TokenTree::Ident(ident)) = tokens.get(j) else { return err(body.span(), "FromJson: expected a variant") };
-        if matches!(tokens.get(j + 1), Some(TokenTree::Group(_))) {
-            return err(
-                ident.span(),
-                "FromJson: only an enum of unit variants is read; derive Deserialize alone for this enum (as a field it is then read by serde_json)",
-            );
-        }
-        let (mut rename, mut aliases, mut skip) = (None, Vec::new(), false);
-        for arg in serde_args_for(&attrs, NAME)? {
-            match arg.key.as_str() {
-                "rename" => rename = Some(string(&arg)?),
-                "alias" => aliases.push(string(&arg)?),
-                "skip" | "skip_deserializing" => skip = true,
-                "skip_serializing" | "serialize_with" | "bound" => {}
-                "other" => other = true,
-                _ => return unsupported(&arg),
-            }
-        }
-        if skip {
-            continue;
-        }
-        let name = rename.unwrap_or_else(|| {
-            let text = ident.to_string();
-            let text = text.strip_prefix("r#").unwrap_or(&text).to_string();
-            container.rename_all.as_deref().map_or(text.clone(), |rule| variant_rule(&text, rule))
-        });
-        variants.push(SchemaVariant { name: name.clone(), doc: crate::schema::doc(&attrs), shape: VShape::Unit });
-        let mut pattern = byte_string(&name);
-        for alias in &aliases {
-            pattern.extend(q("|", &[]));
-            pattern.extend(byte_string(alias));
-        }
-        arms.extend(q("__A0 => ::core::result::Result::Ok(Self::__A1),", &[pattern, TokenTree::Ident(ident.clone()).into()]));
+    let mut described = Vec::new();
+    for v in variants {
+        described.push(SchemaVariant { name: v.name.clone(), doc: v.doc.clone(), shape: VShape::Unit });
+        arms.extend(q(
+            "__A0 => ::core::result::Result::Ok(Self::__A1),",
+            &[pattern(&v.name, &v.aliases), TokenTree::Ident(v.ident.clone()).into()],
+        ));
     }
-    Ok((
-        q(
-            "match __r.name()? {
+    let code = q(
+        "match __r.name()? {
             __A0
             _ => ::core::result::Result::Err(::corten::json::__read::Fallback),
         }",
-            &[arms],
-        ),
-        variants,
-        other,
-    ))
+        &[arms],
+    );
+    (code, described)
 }
