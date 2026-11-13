@@ -128,7 +128,7 @@ docker run -d --name feeds-nats --network feeds nats:2-alpine -js
 docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
 docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
 node examples/listings-feed/smoke.mjs http://localhost:18485
-docker rm -f corten-listings-feed feeds-pg feeds-nats
+docker rm -f -v corten-listings-feed feeds-pg feeds-nats
 docker network rm feeds
 ```
 
@@ -182,7 +182,7 @@ docker network create corten-test
 docker run -d --name corten-test-pg --network corten-test -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:16-alpine
 docker run -d --name corten-test-nats --network corten-test nats:2-alpine -js
 docker run --rm --network corten-test -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -e CORTEN_TEST_DATABASE_URL=postgres://postgres:postgres@corten-test-pg/feeds -e CORTEN_TEST_NATS_URL=nats://corten-test-nats:4222 -w /src rust:1-bookworm cargo test -p corten-cluster -- --test-threads=1
-docker rm -f corten-test-pg corten-test-nats
+docker rm -f -v corten-test-pg corten-test-nats
 docker network rm corten-test
 ```
 
