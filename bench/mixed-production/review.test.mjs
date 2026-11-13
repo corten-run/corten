@@ -74,8 +74,8 @@ test("a real byte-forwarding native endpoint passes semantic JSON extraction, no
       upstream: upstreamEvidence(await control(base, token, "json")) };
     assert.equal(checkCell(plan, capture, records, request).passed, true,
       "the semantic oracle cannot certify native parsing: a separate exact-source gate is required");
-    assert.throws(() => verifySourceAudit(null, { commit: "a".repeat(40), nativeProfile: "defaults" }, { sourceFiles: [], files: {} },
-      { buildCommit: "a".repeat(40), buildDirty: "false", profile: "defaults", id: `sha256:${"a".repeat(64)}` }), /independent source audit/);
+    assert.throws(() => verifySourceAudit(null, { commit: "a".repeat(40), nativeProfile: "defaults", contextArchiveSha256: "f".repeat(64) }, { sourceFiles: [], files: {} },
+      { buildCommit: "a".repeat(40), buildDirty: "false", profile: "defaults", contextArchiveSha256: "f".repeat(64), id: `sha256:${"a".repeat(64)}` }), /independent source audit/);
   } finally { await transport.close(); await browser.close(); await close(app); await close(upstream); }
 });
 

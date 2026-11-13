@@ -347,3 +347,13 @@ test("boundary collection uses real Docker fields and refuses absent, duplicated
   for (const bad of [[rows[0]], [rows[0], rows[0]], [{ ...rows[0], CPUPerc: "unknown" }, rows[1]]])
     await assert.rejects(resourceBoundary(async () => bad.map((r) => JSON.stringify(r)).join("\n"), ["app", "load"]));
 });
+
+test("an observed clock rollback inside a real boundary read cannot be sorted away", async () => {
+  const now = Date.now;
+  const clock = [3000, 2000];
+  Date.now = () => clock.shift();
+  try {
+    await assert.rejects(resourceBoundary(async () => JSON.stringify({ Name: "app", CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }),
+      ["app"]), /clock moved backwards during collection/);
+  } finally { Date.now = now; }
+});

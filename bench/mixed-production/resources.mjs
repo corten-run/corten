@@ -36,6 +36,8 @@ export async function resourceBoundary(docker, names) {
   const startedUnixMs = Date.now();
   const raw = await docker(["stats", "--no-stream", "--format", "{{json .}}", ...names], { timeout: 10000 });
   const receivedUnixMs = Date.now(), samples = {};
+  assert.ok(Number.isSafeInteger(startedUnixMs) && Number.isSafeInteger(receivedUnixMs)
+    && receivedUnixMs >= startedUnixMs, "resource boundary clock moved backwards during collection");
   for (const line of raw.trim().split(/\r?\n/)) {
     const row = JSON.parse(line);
     assert.ok(names.includes(row.Name) && !Object.hasOwn(samples, row.Name), "unexpected/duplicate resource boundary participant");
