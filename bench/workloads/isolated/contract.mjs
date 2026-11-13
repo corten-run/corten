@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
 import { runnerFor } from "../run.mjs";
@@ -21,7 +22,12 @@ import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
+// New native v2 exposes a pure parser. Older committed runners retain their exact
+// reviewed source pin; a missing/invalid dependency inside a present parser fails.
+const clientParser = existsSync(new URL("../../client-heavy/contract.mjs", import.meta.url))
+  ? await import("../../client-heavy/contract.mjs") : null;
 const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
+  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
 const loadedCommit = git(["rev-parse", "HEAD"]).toString().trim();
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -38,7 +44,7 @@ const exact = (value, keys, at) => {
 // These two runners do not export dependency-free option parsers. Their snapshots
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
-  "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e",
+  ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
   "bench/live/parity.mjs": "86f400cf14cc566e61b0ce900993b800b3ba2c564e01a21a206b0f98ea84687d",
 });
 const sourceRoots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -91,6 +97,7 @@ export const recipes = freeze({
   "native-defaults": [...groupNames],
   "marketplace-short-window": ["localized-marketplace"],
   "mixed-measure": ["mixed-production"],
+  "mixed-production-measure": ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
 });
 function request(value) {
@@ -150,7 +157,11 @@ function native(group, round, recipe, reviewId) {
     effective = parse(args, available);
   } else if (group === "mixed-production") {
     defaults = mixedOptions(base); args.push("--build");
-    if (recipe === "mixed-measure") { args.push("--measure"); changes.push({ measure: true, profile: "defaults" }); }
+    if (["mixed-measure", "mixed-production-measure"].includes(recipe)) {
+      args.push("--measure");
+      if (recipe === "mixed-production-measure") args.push("--profile", "matched");
+      changes.push({ measure: true, profile: recipe === "mixed-production-measure" ? "matched" : "defaults" });
+    }
     effective = mixedOptions(args);
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
   } else if (group === "fullstack-browser") {
@@ -158,11 +169,22 @@ function native(group, round, recipe, reviewId) {
     args.push("--build", "--out", artifactRoot);
     effective = browserOptions(args); settings = clone(browserSettings);
   } else if (group === "client-heavy") {
+    if (clientParser) {
+      const parsed = clientParser.options(base), d = parsed.invocation.defaults;
+      defaults = { rows: d.rows, large: d.large, append: d.append, cards: d.cards, seed: d.seed, cleanupMs: d["cleanup-ms"],
+        observationMs: d["observation-ms"], timeoutMs: d["timeout-ms"], cargo: d.cargo };
+      args.push("--out", artifactRoot);
+      const actual = clientParser.options(args), value = actual.invocation.effective;
+      effective = { rows: value.rows, large: value.large, append: value.append, cards: value.cards, seed: value.seed,
+        cleanupMs: value["cleanup-ms"], observationMs: value["observation-ms"], timeoutMs: value["timeout-ms"], cargo: actual.cargo, out: artifactRoot };
+      settings = actual.workload;
+    } else {
     defaults = { rows: 14, large: 110, append: 7, cards: 24, seed: 7, cleanupMs: 2000, observationMs: 100, timeoutMs: 30000, cargo: "cargo" };
     args.push("--out", artifactRoot);
     effective = { ...defaults, out: artifactRoot };
     settings = createClientWorkload({ seed: defaults.seed, rowCount: defaults.rows, largeRowCount: defaults.large,
       appendCount: defaults.append, dashboardCount: defaults.cards });
+    }
   } else if (["live-delivery", "recoverable-live"].includes(group)) {
     defaults = { apps: selectedApps(group), build: false, profile: "bounded", measure: false };
     args.push("--build");
@@ -188,9 +210,9 @@ function native(group, round, recipe, reviewId) {
 function resources(group, recipe) {
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
-    measurement: recipe === "mixed-measure" ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+    measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, qualificationWorker: 2 ** 30, load: 2 ** 31 }, loadSharedMemoryBytes: 512 * 2 ** 20 } : null,
-    requestedCpuEnv: recipe === "mixed-measure" ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
+    requestedCpuEnv: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
@@ -254,7 +276,7 @@ function build(r, sources, review) {
   const body = { ...subject, subjectSha256, sources, review: declaredReview, execution,
     preparation: preparation(r.group), resources: resources(r.group, r.recipe), validation: checks,
     coverage: coverage(r.group), status: { binding: "verified-offline", nativeEvidence: "unknown", ready: false, executionAuthorized: false,
-      blockers: ["no launcher or functional collector in this slice", "merged-source and independent parity/deployment review not established",
+      blockers: ["offline binding has not executed a native worker or collected evidence", "merged-source and independent parity/deployment review not established",
         "fresh host, actual runtime configuration, isolation and cleanup evidence not observed",
         ...(declaredReview.state === "unknown" ? ["exact-recipe review declaration missing"] : ["review declaration is not authenticated independent review evidence"]),
         ...(checks.validator === null ? ["standalone complete native evidence validator not integrated"] : []),
