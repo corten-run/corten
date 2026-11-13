@@ -27,7 +27,8 @@ To run it with `cargo run` (or `corten dev`) from this directory instead, publis
 services' ports (`-p 5432:5432` on Postgres, `-p 4222:4222` on NATS): the defaults below reach
 them on `localhost`. `corten` is the framework's command (`cargo install corten-cli`).
 
-Remove them afterwards: `docker rm -f feeds-pg feeds-nats` and `docker network rm feeds`.
+Remove them afterwards: `docker rm -f -v feeds-pg feeds-nats` (`-v` also removes the volume Postgres
+keeps its data in) and `docker network rm feeds`.
 
 | Variable | What it does | Default |
 |---|---|---|

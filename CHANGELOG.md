@@ -224,6 +224,18 @@ Corten is pre-1.0, so any minor version may change the API.
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
   from the metadata address.
+- `examples/corten-site`'s machine sends other names on to the site's: the repository variable
+  `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
+  by hand) gives each name a record at the machine's address and a place on the site's
+  certificate, and nginx answers it on both ports with a redirect (308) to the same path at
+  the site's name. A new machine serves the site under its own name first, then takes the
+  other names on once each reaches it, so a name that is late or refused a certificate holds
+  back only itself. A run of `provision.sh` asks for a certificate only when the names the
+  one in place holds are not the ones given, and after an apply the `Site machine` workflow
+  fails where a name does not send its visitors to the site. Port 80 now redirects to the
+  site's name whatever host was asked for, not to the host the request named. A test of the
+  site looks in the checkout for every file or directory the page links to in the repository
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Changed
 
@@ -275,9 +287,33 @@ Corten is pre-1.0, so any minor version may change the API.
   would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
   would fail to build. The data block the issue asks for is left open
   ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+- The seven crates name `https://corten.run` as their `homepage` again, now that the site is
+  served there
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
 
+- A typed link no longer writes a path value that would open another page: `.` or `..`, which a
+  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
+  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
+  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
+  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  slug `/posts`). A debug build panics when such a link is written, naming the route by its
+  module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
+  (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
+  route and field, counting only a refusal written while the subscriber takes an error event of
+  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
+  filters on an event's message text or its line can disagree with that check either way: a
+  refusal it drops still uses up the one line, and one it would log may never be logged).
+  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
+  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
+  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
+  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
+  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
+  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
+  dot a second read (docs/design.md#limit-path-values)
+  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
   with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
@@ -375,6 +411,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
+  listings-feed README and its failover benchmark remove their Postgres containers with
+  `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
+  behind
+  ([#1233 The Postgres containers CONTRIBUTING and the listings-feed example start are removed with docker rm -f, which keeps each one's anonymous data volume](https://github.com/corten-run/corten/issues/1233)).
 - The app guide's table of defaults has rows for the handler deadline (30 seconds, then a 503, or
   the client's 408 while it waited for the body) and the request body limit (2 MiB for `Json`,
   `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so

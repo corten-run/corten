@@ -88,8 +88,8 @@ jobs:
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
         run: |
-          docker run --rm --cpus 1 --memory 1g cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read
-          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read
+          docker run --rm --cpus 1 --memory 1g cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read app.test_trace_context
+          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json app.test_alerts app.test_page_read app.test_trace_context
           node bench/fullstack/apps/fastapi/check-native.mjs cb-catalog-fastapi
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources

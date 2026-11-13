@@ -364,16 +364,35 @@ compile either when both are in one module, and stops the app at startup otherwi
 `/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
 compile.
 
-A `#[derive(Route)]` link always stays on this site. A path that starts with a parameter
-(`/{*page}`, `/{user}/posts`) could otherwise write `//evil.example/x` for a value from the request
-that starts with `/` (or an empty one), which a browser reads as another site's address; the link
-writes that second `/` as `%2F` (`/%2Fevil.example/x`), which a catch-all reads back as the same
-value. An empty first parameter is then still not the page it names (`/%2Fposts` for an empty
-`user`), so do not link one. A route path that itself starts with `//` does not compile, nor does a
-hand-written `Route` with one where the app adds it. A hand-written `write_href` must start
-with exactly one `/` and write no `\` or control character, which a browser reads as `/` or drops;
+A `#[derive(Route)]` link always stays on this site. A path that starts with a catch-all
+(`/{*page}`) could otherwise write `//evil.example/x` for a value from the request that starts
+with `/`, which a browser reads as another site's address; the link writes that second `/` as
+`%2F` (`/%2Fevil.example/x`), which the catch-all reads back as the same value. A route path that
+itself starts with `//` does not compile, nor does a hand-written `Route` with one where the app
+adds it. A hand-written `write_href` must start with exactly one `/` and write no `\` or control
+character, which a browser reads as `/` or drops;
 `redirect_with_notice` and `resend_to` check the address they send and answer an error otherwise,
 so neither is an open redirect.
+
+Nor does a link open another page of the site than the one its values name, so some values cannot
+be a path parameter ([the limit on path values](../design.md#limit-path-values)): `.` and `..`,
+which a browser resolves away before it asks (`/items/..` opens `/`, and `%2e` is a dot to it
+too), a `{*rest}` value with such a segment (`public/../private/x`), and an empty value first or
+last in the path, before text in its segment, or as a whole `{*rest}` value, where the router has
+no segment for it (`/{user}/posts` would be `//posts`, another host). A debug build panics when
+such a link is written, naming the route by its module path (`shop::url::Item`) and the field; a
+release build writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400,
+and logs that as an error once for each route and field. A refusal counts only when the subscriber
+then in place takes an error event of Corten's, as Corten's default subscriber and a level or
+target filter do; a subscriber that filters on an event's message text or its line can disagree
+with that check either way: a refusal it drops still uses up the one line, and one it would log
+may never be logged. A value that only contains dots
+(`a.b`, `.hidden`) is written as it is, as is an empty one between two segments (`/shelves//`
+for `/shelves/{id}/`), which reads back. Refuse these values where the app stores them (a slug, a
+user name, a file key), so no link reaches the check. A route's own path with a `.` or `..`
+segment, or that text after a parameter, does not compile. These are checks of
+`#[derive(Route)]` links: a `Route` written by hand writes its own values in `write_href`, and
+nothing checks them.
 
 Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
 back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
