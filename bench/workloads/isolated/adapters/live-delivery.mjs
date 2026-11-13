@@ -8,6 +8,8 @@ import { groupNames } from "../../registry.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime } from "../host-lifetime.mjs";
 import { verifyHostBoundary } from "../host-observation.mjs";
+import { liveCaptureSchema, liveContracts } from "../../live.mjs";
+import { negativeRequests } from "../../../live/admission.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const codePaths = Object.freeze({
@@ -71,6 +73,27 @@ function phaseProof(binding, folder, startedAt) {
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
 
+function observedFailure(a, group, profile) {
+  const networkObserved = (network) => network.some((response) => response.kind === "response" && typeof response.requestId === "string"
+    && Number.isInteger(response.status) && response.status >= 100 && response.status <= 599
+    && network.some((request) => request.kind === "request" && request.requestId === response.requestId && request.url === response.url));
+  if (a.schema === "native-live-fanout-failure/v1") return Array.isArray(a.browsers) && a.browsers.length > 0
+    && a.browsers.length <= a.clients && a.browsers.every((b) => Array.isArray(b.records) && Array.isArray(b.failures)
+      && typeof b.html === "string" && Array.isArray(b.network) && networkObserved(b.network));
+  if (a.schema !== "native-live-failure/v1") return true;
+  if (!a.capture || !Array.isArray(a.controls) || !Array.isArray(a.network) || !Array.isArray(a.failures) || typeof a.html !== "string") return false;
+  assert.equal(a.capture.schema, liveCaptureSchema); assert.equal(a.capture.contract, liveContracts[group]); assert.ok(Array.isArray(a.capture.records));
+  const requests = negativeRequests(a.workload, profile);
+  assert.ok(a.controls.length <= requests.length);
+  for (const [i, control] of a.controls.entries()) {
+    assert.deepEqual(control.request, requests[i]); assert.ok(Number.isInteger(control.status) && control.status >= 100 && control.status <= 599);
+    assert.equal(typeof control.body, "string");
+  }
+  // A source-bound error string alone does not show any target work. Keep such
+  // producer/harness failures, but do not qualify them using an empty OS scope.
+  return a.controls.length > 0 || networkObserved(a.network);
+}
+
 // status/attemptComplete describe intrinsic replay of requested native work,
 // including complete failures. They do not clear the independent OS resource,
 // terminal cleanup or observed-launch gates listed in blockers.
@@ -122,7 +145,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     clock(plan.startedAt);
     const provenance = new Map();
     const legacyMeasurements = new Set();
-    let allAttempted = true, failed = false;
+    let allAttempted = true, failed = false, failedEvidenceComplete = true;
     for (const [index, entry] of plan.inventory.entries()) {
       const app = apps[index], cell = ledger.cells[index], outcome = result.outcomes[index];
       assert.equal(entry.app, app); assert.equal(cell.implementation, entry.implementation);
@@ -187,6 +210,7 @@ export async function inspectLiveSaved(binding, folder, group) {
         if (!options.measure) assert.equal(cell.measurement, "not-run");
       }
       for (const a of retained) {
+        failedEvidenceComplete &&= observedFailure(a, group, options.profile);
         const p = present(a.provenance, `native-provenance-missing:${app}`); assert.ok(p);
         for (const key of ["commit", "code", "diffSha256", "contractSha256", "sourceHashes", "sourceSha256", "imageSourceSha256", "containerId", "imageId", "nativePort", "processTopology", "processInventory", "container"]) {
           present(p[key], `native-provenance-fields-missing:${app}`);
@@ -237,8 +261,11 @@ export async function inspectLiveSaved(binding, folder, group) {
       try { proof = phaseProof(binding, folder, plan.startedAt); }
       catch (error) { if (error?.code !== "ENOENT") throw error; }
       if (proof?.complete) {
-        assert.equal(proof.code, failed ? 1 : 0, "observed exit contradicts native outcomes");
+        assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");
         result.cleanupComplete = true; result.resources = "verified"; result.blockers = [...missing];
+        if (!failedEvidenceComplete) {
+          result.status = "blocked"; result.attemptComplete = false; result.blockers.push("native-failed-attempt-raw-observation-missing");
+        }
       } else if (proof) result.status = "blocked";
     }
     return result;

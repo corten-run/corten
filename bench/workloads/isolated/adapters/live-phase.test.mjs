@@ -1,18 +1,25 @@
 // Synthetic kernel/native records exercise real replay, not actual OS qualification.
 import assert from "node:assert/strict";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { join, posix } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { tree } from "../evidence.mjs";
 import { composePhase } from "../composition.mjs";
 import { composeHostProof, inspectLifetime } from "../host-lifetime.mjs";
+import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { inspectSaved as delivery } from "./live-delivery.mjs";
 import { inspectSaved as recovery } from "./recoverable-live.mjs";
-import { syntheticFixture } from "./live-delivery.test.mjs";
+import { rewriteArtifact, syntheticFixture } from "./live-delivery.test.mjs";
 
 async function fixture(t, group, change = () => {}) {
   const f = await syntheticFixture(t, group, { allRegistered: true, round: "r17" });
+  for (const entry of f.plan.inventory) for (let i = 0; i < f.plan.scenarios.length; i++) await rewriteArtifact(f, entry.app, i, (a) => {
+    a.capture = { schema: liveCaptureSchema, contract: liveContracts[group], records: [] };
+    a.controls = []; a.failures = []; a.html = "<main>native target unavailable</main>";
+    a.network = [{ kind: "request", requestId: "http-1", method: "GET", url: "http://127.0.0.1:12345/" },
+      { kind: "response", requestId: "http-1", status: 500, url: "http://127.0.0.1:12345/" }];
+  });
   const phase = join(f.folder, "r17-0123456789abcdef", `${group === "live-delivery" ? "06" : "07"}-${group}-timing`);
   await mkdir(phase, { recursive: true });
   const native = join(phase, "native");
@@ -71,9 +78,21 @@ for (const [name, change, expected] of [
   ["remaining host process", (f) => { f.after.processes = [{ pid: 101, startTicks: "1010" }]; }, "invalid"],
   ["absent controls", (f) => { for (const s of f.samples) s.groups[0].files["cpu.max"] = null; }, "blocked"],
   ["missing browser", (f) => { f.samples[1].processes.pop(); f.samples[1].groups[0].files["cgroup.procs"] = "100"; }, "blocked"],
+  ["unexplained native exit", (f) => { f.terminal.command.code = 99; }, "invalid"],
 ]) test(`live external ${name} cannot clear cleanup`, async (t) => {
   const f = await fixture(t, "live-delivery", change), result = await f.inspect();
   assert.equal(result.cleanupComplete, false); assert.equal(result.status, expected);
+});
+
+test("a source-bound harness error without target observations is retained but cannot qualify", async (t) => {
+  const f = await fixture(t, "live-delivery");
+  await rewriteArtifact({ ...f, compressed: async (file, value) => {
+    const { gzipSync } = await import("node:zlib"), { digest } = await import("../evidence.mjs");
+    const bytes = gzipSync(JSON.stringify(value)); await writeFile(join(f.folder, file), bytes); return { file, sha256: digest(bytes) };
+  }, json: (file, value) => f.save(join(f.folder, file), value) }, "aspnet", 0, (a) => { delete a.capture; delete a.network; });
+  await f.save(join(f.phase, "native-manifest.json"), tree(f.folder));
+  const result = await f.inspect(); assert.equal(result.status, "blocked"); assert.equal(result.attemptComplete, false);
+  assert.equal(result.outcomes[0].outcome, "failed"); assert.equal(result.cleanupComplete, true);
 });
 
 test("native tree seal and external host evidence are mandatory, never plan receipt flags", async (t) => {

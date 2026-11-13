@@ -13,6 +13,8 @@ all nine fixed native entries, awaits the reviewed saved APIs and composes actua
 OS observations; missing native proof remains blocked, not skipped or fabricated. Read
 CAMPAIGN.md for the required delegated-unit layout and remaining integration dependencies.
 This does not make an unreviewed or incompletely integrated checkout campaign-ready.
+Current adapter/source-closure details are in CAMPAIGN.md under Remaining handoffs;
+standalone native summaries or unsigned review declarations do not clear OS cleanup.
 
 The binding evaluates the committed latest-stable policy against its exact saved manifest
 and lockfile bytes. Offline replay recomputes that result rather than trusting a saved flag.

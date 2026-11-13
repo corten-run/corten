@@ -299,6 +299,37 @@ inbox bytes and review records are sealed; no serialized receipt resumes a crash
 
 ## Remaining handoffs
 
+Current fixed-adapter integration composes mixed's actual
+`mixed-native-saved-verification/v1` and `mixed-native-saved-proof/v1` results. A native
+`failed` verdict is contradictory replay, not a target loss. Only a complete, source/resource/
+cleanup-closed attempt can retain native `target-failed` gates as observed app failures;
+qualification/calibration/steady gates keep their native dispositions and do not require
+timing after a functional failure. The operational audit path is exactly the staged inbox
+bundle path; the adapter cannot supply a validator, select apps or change native settings.
+
+Live and recovery still replay every native scenario/fanout through the fixed verifier.
+Standalone native folders cannot establish cleanup. In a current campaign phase, the adapter
+also replays the adjacent fixed command's kernel observations and before/after host boundary.
+It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
+manifest, positive terminal empty scope, observed browser renderer, inherited controls and
+empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;
+the live controller separately establishes their execution origin and exclusive ownership.
+This composes actual host cleanup instead of requiring the native app to assert it again.
+An error-only failure with no retained target HTTP/control observation is incomplete, even
+when its host process cleaned up. Startup failures without source proof remain blocked.
+
+The complete client source closure comes from native `contract.mjs::sourceRoots`, including
+tracked historical `bench/browser/results/**` bytes. These files are inputs to the native
+snapshot, not the current output and not evidence granting approval. The ordinary exclusion
+of unrelated result trees remains; untracked/dirty inputs and source substitutions fail closed.
+
+Cloud bootstrap uses the upstream stable Git Ubuntu PPA documented at
+https://git-scm.com/install/linux and records an actual
+`git --no-replace-objects --no-lazy-fetch --version` capability check before cloning. The
+immutable native flags are not removed for older distribution Git. Node/browser/Cargo and
+delegated supervisor preparation are unchanged. Local replay tests do not claim that a fresh
+cloud host or a complete native campaign has been executed.
+
 The read-only collector API is `campaign-verify.mjs::validateCampaign({folder,round,commit})`.
 `folder` is the saved campaign root containing `.host-attempt.json`, not the ID subdirectory.
 It rejects unsafe whole trees, foreign root members, wrong identity/binding, missing groups,
