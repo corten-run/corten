@@ -38,6 +38,7 @@ const keys = (value, expected) => equal(Object.keys(value).sort(), [...expected]
 const replayFiles = [
   "bench/catalog/contract.mjs", "bench/catalog/fixtures.mjs", "bench/catalog/group.mjs", "bench/catalog/stats.mjs",
   "bench/fullstack/conformance.mjs", "bench/fullstack/inventory.mjs", "bench/fullstack/passes.mjs", "bench/json-api/contract.mjs",
+  "bench/load-tool.mjs",
   "bench/marketplace/contract.mjs", "bench/marketplace/feature-contract.mjs", "bench/marketplace/fixtures.mjs", "bench/marketplace/records.mjs",
   "bench/mixed-production/capture.mjs", "bench/mixed-production/load-capture.mjs", "bench/mixed-production/metrics.mjs",
   "bench/mixed-production/resources.mjs", "bench/mixed-production/source-audit.mjs", "bench/mixed-production/upstream-ledger.mjs",

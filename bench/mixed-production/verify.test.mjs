@@ -874,6 +874,26 @@ test("closure replay dependencies are commit-bound, including a changed executab
     const result = probe(true); assert.equal(result.cpuMaxPct, 123456); assert.equal(result.sourceFailure, true);
     assert.equal(result.verdict, "failed"); assert.equal(result.measurement, null);
   });
+  await t.test("changed transitive load-tool bytes fail before replay", () => {
+    const result = probeChild(`
+      import fs from 'node:fs'; import {registerHooks,syncBuiltinESMExports} from 'node:module';
+      import {fileURLToPath} from 'node:url'; import {resolve} from 'node:path';
+      const target=${JSON.stringify(join(repo, "bench/load-tool.mjs"))}, url=${JSON.stringify(new URL("../load-tool.mjs", import.meta.url).href)};
+      const real=fs.readFileSync, original=real(target,'utf8'), changed=original.replace(/export const k6Version = "[^"]+";/,'export const k6Version = "0.0.0";');
+      if(changed===original)throw Error('mutation not installed');
+      fs.readFileSync=(path,...args)=>{const p=path instanceof URL?fileURLToPath(path):String(path);
+        if(resolve(p)===target)return typeof real(path,...args)==='string'?changed:Buffer.from(changed);
+        return real(path,...args);};syncBuiltinESMExports();
+      registerHooks({load(value,ctx,next){const result=next(value,ctx);return value===url?{...result,source:changed}:result;}});
+      const {validateSaved}=await import(${JSON.stringify(new URL("./verify.mjs", import.meta.url).href)});
+      const saved=await validateSaved({folder:${JSON.stringify(folder)},round:'w91',commit:${JSON.stringify(commit)}});
+      const {k6Version}=await import(url);
+      console.log(JSON.stringify({verdict:saved.verdict,measurement:saved.measurement,k6Version,
+        sourceFailure:saved.issues.some(i=>i.kind==='failed'&&i.at==='replay-source')}));
+    `);
+    assert.equal(result.k6Version, "0.0.0"); assert.equal(result.sourceFailure, true);
+    assert.equal(result.verdict, "failed"); assert.equal(result.measurement, null);
+  });
 });
 
 function rewriteWindowClocks(dir, mutate) {
