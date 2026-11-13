@@ -49,7 +49,9 @@ obtain that change; the app retains Topcoat's upstream defaults plus `sse,tower`
 
 ## Integration boundaries
 
-Authored from the requested `6d8272036d68e5c9a8a8af7bb0c2698094cd12fd`.
+Developed in an unpublished integration worktree; intermediate local commits are
+not public evidence citations. The directory object identities below bind the
+actual application source used for the recorded image checks.
 Upstream rules were also read at `f12d3daa3`; a main-checkout fast-forward was
 refused because preexisting local edits would be overwritten, and none were
 stashed or reverted. The exact REST issue bodies and all comments were read with
@@ -183,27 +185,32 @@ permits a normal load when the destination needs scripts not yet loaded. The
 driver counts actual document requests, not History API changes; a first attempt
 to count `framenavigated` events incorrectly included same-document navigation.
 
-Implementation slices: dependency update `5b9e9b798`, image/CLI pins
-`db311536e`, native Topcoat migration/local driver `fdeac068c`, strengthened warm
-navigation measurement `f9a10417e`, live Corten Dockerfile-only bases `197275f21`,
-native readback cache-policy repair/regression test `239fef840`.
+Implementation includes targeted dependency updates, image/CLI pins, the native
+Topcoat migration and local driver, strengthened warm-navigation measurement,
+live Corten Dockerfile-only bases, and the native readback cache-policy repair
+and regression test. Intermediate development history is not required to
+reproduce the final application directories below.
 The committed app Git-tree identities after the migration are:
 
 | Source directory | Git tree |
 |---|---|
-| `bench/fullstack/apps/axum-maud` | `fc5d18579258d47952d3f88852603decd5db2bad` |
-| `bench/fullstack/apps/leptos` | `e3147b26e9d51e2cceaeb4115c08267ca968af79` |
-| `bench/fullstack/apps/topcoat` | `68171323ecca77cb73d46aef2c3b57b46080ee03` |
-| `bench/catalog/corten` | `6206a1c50467f09e6a5cb7a700a628a610c6278e` |
-| `bench/marketplace/corten` | `d08bdaa998213e9b4ad89ae48a75a8c321c3e22b` |
-| `bench/nodelay/app` | `43eb1091b9b500ba77d2aab6c0bc2fdb62e48764` |
-| `bench/live/apps/corten` (only Dockerfile changed here) | `28cbd3e34189c5abe2f433d9ffa8a5ee4856dc22` |
+| `bench/fullstack/apps/axum-maud` | `git-tree-sha1:fc5d18579258d47952d3f88852603decd5db2bad` |
+| `bench/fullstack/apps/leptos` | `git-tree-sha1:e3147b26e9d51e2cceaeb4115c08267ca968af79` |
+| `bench/fullstack/apps/topcoat` | `git-tree-sha1:68171323ecca77cb73d46aef2c3b57b46080ee03` |
+| `bench/catalog/corten` | `git-tree-sha1:6206a1c50467f09e6a5cb7a700a628a610c6278e` |
+| `bench/marketplace/corten` | `git-tree-sha1:d08bdaa998213e9b4ad89ae48a75a8c321c3e22b` |
+| `bench/nodelay/app` | `git-tree-sha1:43eb1091b9b500ba77d2aab6c0bc2fdb62e48764` |
+| `bench/live/apps/corten` (only Dockerfile changed here) | `git-tree-sha1:28cbd3e34189c5abe2f433d9ffa8a5ee4856dc22` |
 
-These are source trees, not application image identities. The existing marketplace
-`tests/image-source.mjs` helper reports a clean relevant source set (661 files)
+These are Git SHA-1 tree objects, not commits or application image identities.
+The development context's existing marketplace `tests/image-source.mjs` helper
+recorded a clean relevant source set (661 files)
 and SHA-256 `b1c75c9094be1c41db8cdb99890303dc39f42855fc6f9be14baadff0a0ac44ec`.
-The shared `crates` Git tree remains the assigned base's
-`eee398b148c41c92805dac48cd83b90fa87eba74`; root Cargo inputs are unchanged.
+That original context's shared `crates` Git tree was
+`git-tree-sha1:eee398b148c41c92805dac48cd83b90fa87eba74`; its root Cargo inputs were
+unchanged by this refresh. Integration onto newer main changes whole-repository
+provenance even when these application directories are identical. A campaign
+must bind its own measured commit, source and images, not reuse this context hash.
 
 ### Actual Topcoat image checks and matched-profile failure
 
@@ -243,7 +250,7 @@ The pre-repair refreshed image is retained locally as
 `refresh-rust-topcoat-pre-no-store-fix` for reproduction, not qualification.
 
 The repaired production image was built from the Topcoat source tree
-`68171323ecca77cb73d46aef2c3b57b46080ee03` identified above, using the same
+`git-tree-sha1:68171323ecca77cb73d46aef2c3b57b46080ee03` identified above, using the same
 Dockerfile's installed CLI, optimized release build and actual asset bundling.
 Its image ID is
 `sha256:130b43a28a113b4fc28b3f4a165b253d931b7cefb29948eb6ae09dd2a6971a04`.
