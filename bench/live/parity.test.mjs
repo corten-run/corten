@@ -108,6 +108,36 @@ test("fresh Gin native delivery and all measured fan-out levels revalidate indep
   assert.equal(ledger.cells.find((r) => r.app === "gin").measurement, "complete");
 });
 
+test("earlier real Corten fault-construction timing failures retain their original identity and cannot qualify", async () => {
+  const directory = new URL("../recoverable-live/evidence/native-recovery-timing-limit/", import.meta.url);
+  const round = await verifyRound(directory);
+  assert.deepEqual(round.passed, []); assert.equal(round.readyForLoad, false);
+  for (const scenario of ["expired-cursor", "slow-reader"]) {
+    const a = await artifact(`corten-${scenario}`, directory);
+    assert.equal(a.schema, "native-live-failure/v1");
+    assert.equal(a.settings.maxRecoveryMs, 10000); assert.equal(a.settings.maxSlowMs, 10000);
+    assert.match(a.error, /recovery exceeded bound|unbounded slow-reader wait/);
+  }
+});
+
+test("real Express and ASP.NET native-feed profiles independently qualify before all measured levels", async () => {
+  const directory = new URL("./evidence/native-feed-peers/", import.meta.url);
+  const round = await verifyRound(directory);
+  assert.deepEqual(round.passed, ["aspnet", "express"]); assert.equal(round.readyForLoad, false);
+  const ledger = JSON.parse(await readFile(new URL("coverage.json", directory), "utf8"));
+  for (const app of ["aspnet", "express"]) assert.equal(ledger.cells.find((r) => r.app === app).measurement, "complete");
+});
+
+for (const [name, mutate] of [
+  ["missing native batch write", (a) => { const r = a.network.find((r) => r.kind === "request" && r.body?.includes('"events":')); const body = JSON.parse(r.body); body.events.pop(); r.body = JSON.stringify(body); }],
+  ["missing native batch acknowledgement", (a) => { const r = a.network.find((r) => r.kind === "response" && r.body?.includes('"acks":')); const body = JSON.parse(r.body); body.acks.pop(); r.body = JSON.stringify(body); }],
+  ["missing negative batch control", (a) => { a.controls.pop(); }],
+  ["native saturation concealed", (a) => { for (const r of a.capture.records) if (r.kind === "resources") r.queueEvents = 0; }],
+]) test(`rejects real native-feed capture with ${name}`, async () => {
+  const a = await artifact("express-slow-reader", new URL("./evidence/native-feed-peers/", import.meta.url));
+  mutate(a); assert.throws(() => verify(a));
+});
+
 for (const [name, mutate] of [
   ["lost fan-out browser", (a) => a.browsers.pop()],
   ["wrong qualification", (a) => a.qualification.pop()],

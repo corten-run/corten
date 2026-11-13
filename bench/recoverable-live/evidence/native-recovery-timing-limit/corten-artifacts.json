@@ -1,0 +1,30 @@
+{
+  "app": "corten",
+  "group": "recoverable-live",
+  "files": [
+    {
+      "file": "corten-normal.json.gz",
+      "sha256": "7453e3019f0758838b2fc938a2bcf6ae14ced9dd47765f5d07c25661efdf7e08"
+    },
+    {
+      "file": "corten-disconnect.json.gz",
+      "sha256": "ebc357e09d466b603ed0f1378f970c997f519cf06364702ebee61c561400ad11"
+    },
+    {
+      "file": "corten-missed-updates.json.gz",
+      "sha256": "03f7415889f85e7e90174ce425bff69a2e84b65f9de0ed9b27e63a5b697285a7"
+    },
+    {
+      "file": "corten-expired-cursor.json.gz",
+      "sha256": "99cde298e2611c78ea22d1b4d5c9542f73c0f1a2e99c64d68dfac04d2c799c06"
+    },
+    {
+      "file": "corten-gap.json.gz",
+      "sha256": "4cc63f800c1fcc3b6814ebf196915bbdd4bd4e0375a10e81f1088dd81938db92"
+    },
+    {
+      "file": "corten-slow-reader.json.gz",
+      "sha256": "5ce233c1dd998255693b30ccd12736a736f9cdeb0e430d7f4c91ae2e7a386a3d"
+    }
+  ]
+}
