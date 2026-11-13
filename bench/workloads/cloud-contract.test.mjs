@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { host, ownedDroplet, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { host, ownedDroplet, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
 const state = () => reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }, "2026-11-13T00:00:00.000Z");
@@ -18,6 +18,24 @@ test("campaign identity retains the complete current registry, without qualifyin
     (s) => s.id = "123\n", (s) => s.ip = "999.0.0.1", (s) => s.extractionAttempts = ["../x"]]) {
     const changed = state(); change(changed); assert.throws(() => validateState(changed, "r21"));
   }
+});
+
+test("remote job derives the whole campaign from exact committed source, with terminal-only packaging", () => {
+  const s = state(), files = remoteFiles(s), job = files["job.sh"], pack = files["pack.sh"];
+  assert.deepEqual(Object.keys(files).sort(), ["job.sh", "pack.sh", s.unit].sort());
+  assert.ok(job.includes(`git checkout --detach ${s.commit}`));
+  assert.ok(job.includes(`campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign`));
+  assert.ok(job.includes("GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1"));
+  assert.ok(job.indexOf("trap finish EXIT") < job.indexOf("cloud-init status"));
+  assert.ok(job.indexOf("> /bench/host.txt") < job.indexOf("trap finish EXIT"));
+  assert.match(pack, /test -f exit-code/);
+  assert.match(pack, /files=\(run.log host.txt exit-code\)/);
+  assert.match(pack, /test ! -d campaign \|\| files\+=\(campaign\)/);
+  assert.ok(!job.includes("--apps") && !job.includes("--passes") && !job.includes("--duration"));
+  assert.ok(!job.includes("DIGITALOCEAN_ACCESS_TOKEN"));
+  assert.match(files[s.unit], /Restart=no\n/);
+  assert.match(files[s.unit], /KillMode=control-group\n/);
+  for (const field of ["round", "commit", "unit"]) assert.throws(() => remoteFiles({ ...s, [field]: `${s[field]}\n` }));
 });
 test("owned host requires exact ID/name/tags/type/region and known IP", () => {
   const s = state(), d = droplet(s); assert.equal(ownedDroplet([d], s), d);

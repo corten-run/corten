@@ -134,3 +134,63 @@ export function safeArchive(entries, verbose) {
   }
   for (const name of ["run.log", "host.txt", "exit-code"]) assert.ok(seen.has(name), `missing ${name}`);
 }
+
+// Fixed source-bound entry point. No caller-provided command or adapter filtering.
+export function remoteFiles(s) {
+  validateState(s, s.round);
+  const pack = `#!/bin/bash
+set -euo pipefail
+cd /bench
+test -f exit-code
+files=(run.log host.txt exit-code)
+test ! -d campaign || files+=(campaign)
+tar -czf results.tgz.tmp "\${files[@]}"
+mv results.tgz.tmp results.tgz
+`;
+  const job = `#!/bin/bash
+set -Eeuo pipefail
+exec >>/bench/run.log 2>&1
+{ date -u --iso-8601=seconds; uname -a; lscpu; free -m; df -h /; } > /bench/host.txt
+finish() { code=$?; trap - EXIT; printf '%s\\n' "$code" > /bench/exit-code; timeout 600 /bin/bash /bench/pack.sh || true; exit "$code"; }
+trap finish EXIT
+timeout 900 cloud-init status --wait
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
+timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
+export DEBIAN_FRONTEND=noninteractive
+timeout 900 apt-get update -qq
+timeout 900 apt-get install -y -qq git curl ca-certificates build-essential
+timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
+timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_24.x | bash -'
+timeout 900 apt-get install -y -qq nodejs
+systemctl enable --now docker
+export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+timeout 600 git clone --quiet https://github.com/corten-run/corten.git /bench/repo
+cd /bench/repo
+git checkout --detach ${s.commit}
+test "$(git rev-parse HEAD)" = ${s.commit}
+test -z "$(git status --porcelain --untracked-files=all)"
+test "$(nproc)" -ge 8
+timeout 900 npm ci --no-audit --no-fund
+timeout 900 npx --no-install playwright install --with-deps chromium
+timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
+export PATH=/root/.cargo/bin:$PATH
+{ docker --version; node --version; npm --version; rustc --version; cargo --version; } >> /bench/host.txt
+# The entry derives all nine groups and their native settings from this measured source.
+# Popular/performance views reuse the same evidence; no second workload execution.
+unset BENCH_APPS BENCH_TIER PROFILE
+node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign
+`;
+  return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
+Description=Official grouped benchmark ${s.round}, pinned ${s.commit}
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=exec
+ExecStart=/bin/bash /bench/job.sh
+WorkingDirectory=/bench
+Restart=no
+RuntimeMaxSec=48h
+TimeoutStopSec=120
+KillMode=control-group
+` };
+}
