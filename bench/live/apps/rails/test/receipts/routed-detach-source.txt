@@ -1,0 +1,15 @@
+Runtime baseline: 268607edf2e500bca381dd9adc5f58e38b26fe42
+Runtime image: sha256:77f2877521d9f3f5f790c8d9f1f471bd53832f403fb9162de22384c56a2216b4
+335294aff38ba09db0152b4048ca43eb24997cefcbb0a178202517342b25138e  application.rb  checkout=image
+8c329145874a48b2085226e4a7618a832cebebec88f6a0585adb470ceba31e3f  store.rb  checkout=image
+364682541ac00c9e7bef04782e391264d218fe563f76fe1e93ec9d0c92e58bd1  client.js  checkout=image
+60ef13b1f87cb4b7012ef94a5eee48dbb5c27f618beff8bfb95e5154df575f88  config.ru  checkout=image
+147b64ed2468e693d6fcf4ff9dd64182a5e596bbf20764ccb280d6ff5583a73d  Gemfile  checkout=image
+3fe946b6c079c0e02e878c940d515d60a7d45ab39acad6bcc73cf484efabc8b4  Gemfile.lock  checkout=image
+e795c5fa0c8ffd473a5fd96c54c1ff6816bc026291e0486f9439a80aa26893d0  views/index.html.erb  checkout=image
+a2d0cf1a8380310089276701a509cf171bbe38fd41c3e53d45e68617a2d604ef  views/application/_screen.html.erb  checkout=image
+10f79df80d93577da9269cda227aaeedb8d913618a5018dd3681a8fb2a5b0914  views/application/_counter.html.erb  checkout=image
+e9f9c1ffc6653307dd14901898002a056a45d49ad1f4d8256def26979b3c483c  views/application/_change.html.erb  checkout=image
+763a88841d79b24c8e77653fc8b498fdcdcf359a4f4ba8b5f15539a80e3f56e2  views/application/_row.html.erb  checkout=image
+364682541ac00c9e7bef04782e391264d218fe563f76fe1e93ec9d0c92e58bd1  /app/public/native/client.js
+The final store test was mounted read-only from the checkout; the image has an older test copy.
