@@ -10,7 +10,7 @@ import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } f
 import { ResourceAudit, installResourceObserver } from "./resources.mjs";
 import { nativeDOM } from "./observe.mjs";
 
-test("real no-JS document replacement proves only platform retirement and journals parser failures", { timeout: 30000 }, async () => {
+test("real no-JS document replacement proves only platform retirement and journals parser failures", { timeout: 30000 }, async (t) => {
   const server = createServer((req, res) => {
     if (req.url === "/redirect") { res.writeHead(303, { location: "/before?secret=SECRET" }); res.end(); }
     else if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); }
@@ -49,6 +49,54 @@ test("real no-JS document replacement proves only platform retirement and journa
       assert.ok(classified.requests.some((r) => r.classification === "parser-asset" && r.dispatch.path === "/site.css"));
       assert.ok(classified.requests.some((r) => r.classification === "intentionally-disabled-preload" && r.dispatch.path === "/module.js" && r.terminal.event === "Network.loadingFailed"));
       assert.equal(JSON.stringify(snapshot), original); assert.ok(!original.includes("SECRET"));
+
+      const cssIds = new Set(snapshot.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Stylesheet").map((e) => e.request));
+      const deletionProbes = [
+        ["orphan-redirect", (j) => { j.events = j.events.filter((e) => !(e.event === "Network.requestWillBeSent" && e.path === "/redirect")); }],
+        ["empty-commits", (j) => { j.events = j.events.filter((e) => e.event !== "Page.frameNavigated"); }],
+        ["missing-css-dispatches", (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.") || !cssIds.has(e.request)); }],
+        ["null-document-method", (j) => { j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document").forEach((e) => { e.method = null; }); }],
+      ].map(([name, mutate]) => {
+        const altered = structuredClone(snapshot); mutate(altered);
+        return { name, retirement: validatePlatformRetirement(altered, options).outcome, noJS: classifyNoJSRequests(altered).outcome };
+      });
+      t.diagnostic(JSON.stringify({ intact: { retirement: proof.outcome, noJS: classified.outcome }, deletionProbes }));
+      for (const row of deletionProbes) {
+        assert.equal(row.retirement, "unknown", row.name);
+        assert.equal(row.noJS, "unknown", row.name);
+      }
+      for (const field of ["request", "frame", "loader", "type", "method", "scheme", "path", "document", "sameDocumentOrigin", "initiator", "at", "receivedAt", "redirectStatus"]) {
+        const altered = structuredClone(snapshot);
+        altered.events.find((e) => e.event === "Network.requestWillBeSent")[field] = null;
+        // A null redirect status is a real non-redirect receipt; remove it instead.
+        if (field === "redirectStatus") delete altered.events.find((e) => e.event === "Network.requestWillBeSent").redirectStatus;
+        assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown", `mandatory dispatch ${field}`);
+        assert.equal(classifyNoJSRequests(altered).outcome, "unknown", `mandatory parser dispatch ${field}`);
+      }
+      for (const [event, fields] of [
+        ["Network.responseReceived", ["request", "frame", "loader", "type", "status", "at", "receivedAt", "hasCsp", "mime"]],
+        ["Network.loadingFinished", ["request", "at", "receivedAt"]],
+        ["Network.loadingFailed", ["request", "at", "receivedAt", "canceled", "errorText"]],
+        ["Page.frameNavigated", ["frame", "loader", "scheme", "path", "navigationType", "receivedAt"]],
+      ]) for (const field of fields) {
+        const altered = structuredClone(snapshot); altered.events.find((e) => e.event === event)[field] = null;
+        assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown", `${event} ${field}`);
+        assert.equal(classifyNoJSRequests(altered).outcome, "unknown", `parser ${event} ${field}`);
+      }
+      for (const mutate of [
+        (j) => { j.documents = []; },
+        (j) => { j.documents = {}; },
+        (j) => { j.documents[0].assets = [null]; },
+        (j) => { j.documents[0].preloads = [null]; },
+        (j) => { j.documents[0].observedAt = null; },
+        (j) => { j.documents[0].path = "/unobserved"; },
+        (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.") && e.event !== "Page.frameNavigated"); j.documents = []; },
+        (j) => { j.events.find((e) => e.event === "Network.requestWillBeSent" && e.redirectStatus).loader = "unmatched"; },
+      ]) {
+        const altered = structuredClone(snapshot); mutate(altered);
+        assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown");
+        assert.equal(classifyNoJSRequests(altered).outcome, "unknown");
+      }
 
       for (const remove of [
         (e) => e.event.startsWith("Network."),

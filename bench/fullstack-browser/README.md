@@ -254,6 +254,10 @@ platform-destruction exemption is accepted here.
 Committed HTTP frame/loaders also require matched native document dispatch, response and
 terminal receipts. Both pure validators require successful assets' own response receipts;
 removing network coverage cannot become a positive empty-request proof.
+Completed HTTP documents and observed parser inventories must also match native commits in
+the reverse direction. Empty commit streams, orphan redirect continuations, missing mandatory
+native fields and declared assets without matching dispatch coverage remain unknown. These
+checks neither reconstruct deleted observations nor change the strict oracle or 240 profiles.
 
 For a retained same-realm root, `retired.mjs` freshly extracts text, rows, forms and component
 IDs from that actual detached node. It never reattaches the root or copies the previous page

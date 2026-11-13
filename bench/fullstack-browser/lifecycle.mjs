@@ -144,27 +144,65 @@ export class PlatformLifecycle {
 
 function networkCoverage(journal, requests) {
   const reasons = [], events = journal.events, b = journal.boundaries ?? {};
+  const text = (value) => typeof value === "string" && value.length > 0;
+  const path = (value) => text(value) && value.startsWith("/");
+  const finite = (value) => Number.isFinite(value) && value >= 0;
   if (journal.coverage?.pageFrames !== true || journal.coverage?.pageNetwork !== true
     || !["Page", "Network"].every((domain) => events.some((e) => e.event === "domain-enabled" && e.domain === domain && e.receivedAt <= b.startedAt))) reasons.push("Native Page/Network domain coverage unavailable");
   if (!Number.isFinite(b.startedAt) || !Number.isFinite(b.endedAt) || b.endedAt < b.startedAt
     || events.some((e, i) => !Number.isFinite(e.receivedAt) || i && e.receivedAt < events[i - 1].receivedAt)) reasons.push("Native network observation bounds/order unavailable");
   for (const { dispatch: d, response: r, terminal: t } of requests) {
-    if (!d.request || !d.frame || !d.loader || !Number.isFinite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt) reasons.push("Native request identity/observation coverage unavailable");
-    if (!t || t.receivedAt < d.receivedAt || t.receivedAt > b.endedAt) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
+    if (![d.request, d.frame, d.loader, d.type].every(text) || !text(d.method) || !/^[A-Z!#$%&'*+.^_`|~-]+$/.test(d.method)
+      || !["http:", "https:"].includes(d.scheme) || !path(d.path) || !["http:", "https:"].includes(d.document?.scheme) || !path(d.document?.path)
+      || typeof d.sameDocumentOrigin !== "boolean" || !text(d.initiator?.type) || typeof d.initiator?.sameDocumentOrigin !== "boolean"
+      || !finite(d.at) || !finite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt
+      || !(d.redirectStatus === null || Number.isInteger(d.redirectStatus) && d.redirectStatus >= 300 && d.redirectStatus < 400)) reasons.push(`Request ${d.request} lacks mandatory native dispatch fields`);
+    if (!t || !finite(t.receivedAt) || t.receivedAt < d.receivedAt || t.receivedAt > b.endedAt
+      || t.event !== "native-redirect" && (!finite(t.at) || t.at < d.at)) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
+    if (t?.event === "Network.loadingFailed" && (typeof t.canceled !== "boolean" || typeof t.errorText !== "string"
+      || !(t.blockedReason === null || text(t.blockedReason)))) reasons.push(`Request ${d.request} lacks native failure fields`);
     if (t?.event === "native-redirect" && !(t.status >= 300 && t.status < 400)) reasons.push(`Request ${d.request} lacks a valid redirect receipt`);
     if (t?.event === "Network.loadingFinished" && !r) reasons.push(`Request ${d.request} lacks its native response receipt`);
     if (r && (r.frame !== d.frame || r.loader !== d.loader || r.type !== d.type || !Number.isInteger(r.status) || r.status < 100 || r.status > 599
+      || !finite(r.at) || r.at < d.at || !finite(r.receivedAt) || typeof r.hasCsp !== "boolean" || typeof r.mime !== "string"
       || r.receivedAt < d.receivedAt || r.receivedAt > (t?.receivedAt ?? b.endedAt))) reasons.push(`Request ${d.request} has unmatched response identity/status/order`);
   }
   // Page commits are independent positive receipts: deleting the entire Network
   // stream cannot turn an observed HTTP navigation into empty-network success.
-  if (events.some((e) => e.event === "Page.frameNavigated" && (!e.frame || typeof e.loader !== "string" || typeof e.scheme !== "string"))) reasons.push("Native committed document identity/scheme unavailable");
-  for (const commit of events.filter((e) => e.event === "Page.frameNavigated" && ["http:", "https:"].includes(e.scheme)
-    && e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt)) {
+  if (events.some((e) => e.event === "Page.frameNavigated" && (![e.frame, e.loader, e.scheme, e.navigationType].every(text)
+    || ["http:", "https:"].includes(e.scheme) && !path(e.path)))) reasons.push("Native committed document identity/scheme unavailable");
+  const commits = events.filter((e) => e.event === "Page.frameNavigated" && ["http:", "https:"].includes(e.scheme)
+    && e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt);
+  if (!commits.length) reasons.push("No native HTTP document commits observed");
+  for (const commit of commits) {
     const matches = requests.filter(({ dispatch: d, terminal: t }) => t?.event !== "native-redirect" && d.type === "Document" && d.frame === commit.frame && d.loader === commit.loader
       && d.scheme === commit.scheme && d.path === commit.path);
     if (matches.length !== 1 || !matches[0].response || matches[0].terminal?.event !== "Network.loadingFinished"
       || matches[0].response.receivedAt > commit.receivedAt) reasons.push(`Committed HTTP loader ${commit.loader} lacks matched document/request/response/terminal receipts`);
+  }
+  for (const { dispatch: d, terminal: t } of requests.filter((r) => r.dispatch.type === "Document" && r.terminal?.event === "Network.loadingFinished")) {
+    const matches = commits.filter((c) => c.frame === d.frame && c.loader === d.loader && c.scheme === d.scheme && c.path === d.path
+      && c.receivedAt >= d.receivedAt && c.receivedAt <= t.receivedAt);
+    if (matches.length !== 1) reasons.push(`HTTP document ${d.request} lacks a unique matched native commit`);
+    if (!Array.isArray(journal.documents) || !journal.documents.some((doc) => doc?.frame === d.frame && doc.loader === d.loader && finite(doc.observedAt)
+      && doc.observedAt >= matches[0]?.receivedAt && doc.observedAt <= b.endedAt)) reasons.push(`HTTP document ${d.request} lacks an observed parser inventory`);
+  }
+  if (!Array.isArray(journal.documents)) reasons.push("Native parser inventory unavailable");
+  else for (const doc of journal.documents) {
+    if (![doc?.observer, doc?.realm, doc?.scope, doc?.frame, doc?.loader].every(text) || !path(doc?.path) || !finite(doc?.observedAt)
+      || doc.observedAt < b.startedAt || doc.observedAt > b.endedAt || typeof doc.hasMetaCsp !== "boolean"
+      || !Array.isArray(doc.assets) || !Array.isArray(doc.preloads)) { reasons.push("Incomplete native parser inventory fields"); continue; }
+    if (commits.filter((c) => c.frame === doc.frame && c.loader === doc.loader && c.path === doc.path && c.receivedAt <= doc.observedAt).length !== 1) reasons.push("Parser inventory lacks a unique matched native HTTP commit");
+    if (doc.preloads.some((p) => !p || typeof p.rel !== "string" || typeof p.as !== "string" || !path(p.path) || typeof p.sameOrigin !== "boolean")) reasons.push("Incomplete native preload declaration fields");
+    const declarations = [
+      ...doc.assets.map((a) => ({ ...a, valid: a && ["Stylesheet", "Image"].includes(a.type) })),
+      ...doc.preloads.filter((p) => p && typeof p.rel === "string" && typeof p.as === "string" && isScriptPreload(p)).map((p) => ({ ...p, type: "Script", valid: true })),
+    ];
+    for (const a of declarations) {
+      if (!a.valid || !path(a.path) || a.sameOrigin !== true) { reasons.push("Parser asset has unknown native request coverage"); continue; }
+      if (!requests.some(({ dispatch: d }) => d.frame === doc.frame && d.loader === doc.loader && d.path === a.path && d.type === a.type
+        && d.receivedAt <= doc.observedAt)) reasons.push(`Observed parser asset ${a.path} lacks a matched native dispatch`);
+    }
   }
   return reasons;
 }
@@ -278,7 +316,9 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
     if (e.event === "Network.requestWillBeSent") {
       if (!e.frame || !e.loader) unknown(`Request ${e.request} has unknown document ownership`);
       const prior = requests.get(e.request);
+      if (!prior && e.redirectStatus !== null) unknown("Orphan native redirect continuation lacks its predecessor dispatch");
       if (prior && (!e.redirectStatus || prior.terminal)) unknown("Reused request ID lacks native redirect binding");
+      if (prior && (prior.response || prior.dispatch.frame !== e.frame || prior.dispatch.loader !== e.loader || prior.dispatch.type !== e.type)) unknown("Native redirect predecessor identity/state differs from continuation");
       const row = { dispatch: e, response: null, terminal: null }; requests.set(e.request, row); result.requests.push(row);
       if (prior && e.redirectStatus) prior.terminal = { event: "native-redirect", status: e.redirectStatus, receivedAt: e.receivedAt };
       if (destruction && e.frame === old.frame && e.loader === old.loader && e.receivedAt > destruction.receivedAt) { failed = true; unknown("Old-loader request dispatched after realm destruction"); }
@@ -314,7 +354,8 @@ export function classifyNoJSRequests(journal) {
     scope: "Parser provenance classification, not functional qualification or a failed-request waiver" };
   if (journal?.schema !== "native-browser-platform-lifetimes/v2" || journal.contextConfiguration?.javaScriptEnabled !== false
     || journal.coverage?.pageNetwork !== true || !Array.isArray(journal.events) || !journal.events.length || !Array.isArray(journal.documents)
-    || journal.events.some((e) => !e || typeof e.event !== "string") || journal.documents.some((d) => !d || !Array.isArray(d.assets) || !Array.isArray(d.preloads))) {
+    || journal.events.some((e) => !e || typeof e.event !== "string") || journal.documents.some((d) => !d || !Array.isArray(d.assets) || !Array.isArray(d.preloads)
+      || d.assets.some((a) => !a || typeof a !== "object") || d.preloads.some((p) => !p || typeof p.rel !== "string" || typeof p.as !== "string"))) {
     result.reasons.push("Script-disabled context configuration and native page/parser journal required"); return result;
   }
   if (!Array.isArray(journal.observationFailures) || journal.observationFailures.length) result.reasons.push("Native observer coverage interrupted");
@@ -323,7 +364,9 @@ export function classifyNoJSRequests(journal) {
     if (event.event === "Network.requestWillBeSent") {
       if (typeof event.type !== "string") { result.reasons.push("Request resource type unavailable"); continue; }
       const previous = latest.get(event.request);
+      if (!previous && event.redirectStatus !== null) result.reasons.push("Orphan native redirect continuation lacks its predecessor dispatch");
       if (previous && (!event.redirectStatus || previous.terminal)) result.reasons.push("Reused request ID lacks native redirect binding");
+      if (previous && (previous.response || previous.dispatch.frame !== event.frame || previous.dispatch.loader !== event.loader || previous.dispatch.type !== event.type)) result.reasons.push("Native redirect predecessor identity/state differs from continuation");
       if (previous && event.redirectStatus) previous.terminal = { event: "native-redirect", status: event.redirectStatus, receivedAt: event.receivedAt };
       const row = { dispatch: event, response: null, terminal: null, classification: "unknown", proof: null };
       result.requests.push(row); latest.set(event.request, row);
