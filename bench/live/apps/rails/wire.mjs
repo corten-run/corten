@@ -8,3 +8,4 @@ function messages(network) {
 }
 export const wireEvents = network => messages(network).filter(message => message.kind === 'event').map(message => message.event);
 export const wireSnapshots = network => messages(network).filter(message => message.kind === 'snapshot').map(message => message.snapshot);
+export const wireResources = network => messages(network).filter(message => message.resources).map(message => message.resources);
