@@ -946,6 +946,16 @@ impl Shared {
 static DEFAULT: LazyLock<Arc<Shared>> =
     LazyLock::new(|| Arc::new(Shared::new(error_page_fn(default_error_page, ()), None, String::new())));
 
+/// The last size of a patch that ends with its area's stylesheet links, so the next one's buffer is
+/// allocated once with room for them, as a page's is. A patch with none starts from an empty
+/// string, as it did before areas had stylesheets.
+static LINKED_PATCH: AtomicUsize = AtomicUsize::new(256);
+
+#[inline(never)]
+fn linked_patch_buffer() -> String {
+    String::with_capacity(LINKED_PATCH.load(Ordering::Relaxed))
+}
+
 /// What draws the form's patch in [`Req::invalid_with`]: a patch and nothing else.
 pub struct FormPatch<'r>(&'r Req);
 
@@ -1847,10 +1857,18 @@ impl Req {
     }
 
     /// Whether this request's path is under an area with a stylesheet, so its patch links one.
-    #[inline]
+    #[inline(never)]
     fn links_section(&self) -> bool {
         let path = self.uri.path();
         self.shared.sections.iter().any(|(prefixes, _)| prefixes.iter().any(|prefix| crate::api::under(prefix, path)))
+    }
+
+    /// Ends a patch with the links of its handler's section stylesheets, and notes its size for
+    /// the next one's buffer ([`linked_patch_buffer`]).
+    #[inline(never)]
+    fn end_patch_with_links(&self, body: &mut String) {
+        self.section_links(body);
+        LINKED_PATCH.store(body.len() + body.len() / 8, Ordering::Relaxed);
     }
 
     /// A swapped-in page's preloads: what its handlers' modules import (sibling modules,
@@ -2035,11 +2053,9 @@ impl Req {
 
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
-        // The last size of a patch that links its area's stylesheets, so its buffer is allocated
-        // once with room for them, as a page's is. One with none renders as it did without areas.
-        static LINKED: AtomicUsize = AtomicUsize::new(256);
-        let linked = self.links_section();
-        let mut body = if linked { String::with_capacity(LINKED.load(Ordering::Relaxed)) } else { String::new() };
+        // In an app whose areas have stylesheets, a patch under one ends with their links.
+        let linked = !self.shared.sections.is_empty() && self.links_section();
+        let mut body = if linked { linked_patch_buffer() } else { String::new() };
         crate::form::DREW_KEY.set(false);
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
         #[cfg(debug_assertions)]
@@ -2059,8 +2075,7 @@ impl Req {
         // After the patch, where adding them moves nothing and the runtime takes them out before
         // it reads the patch's elements.
         if linked {
-            self.section_links(&mut body);
-            LINKED.store(body.len() + body.len() / 8, Ordering::Relaxed);
+            self.end_patch_with_links(&mut body);
         }
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
