@@ -472,6 +472,42 @@ pub(crate) fn reaches(route: &str, prefix: &str) -> bool {
     !under(prefix, route) && format!("{}/", prefix.trim_end_matches('/')).starts_with(&route[..at])
 }
 
+/// Whether `route` (as the router holds it), outside `prefix`, can match a path at `prefix` or
+/// under it, segment by segment: a parameter matches one segment that starts and ends with the
+/// text around it, a catch-all the rest of the path. A `prefix` that ends in `/` (Corten's own,
+/// `/corten/`) holds only the paths with a segment after it. Narrower than [`reaches`], which
+/// counts only the text before the first parameter: `/{slug}` reaches `/shop/desk` but cannot
+/// match under it. It may still say yes for a route that cannot (two parameters in one segment).
+pub(crate) fn can_match_under(route: &str, prefix: &str) -> bool {
+    if !route.contains('{') || under(prefix.strip_suffix('/').filter(|p| !p.is_empty()).unwrap_or(prefix), route) {
+        return false;
+    }
+    let (prefix, more) = match prefix.strip_suffix('/') {
+        Some(held) if !held.is_empty() => (held, true),
+        _ => (prefix, false),
+    };
+    let wanted: Vec<&str> = prefix.split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = route.split('/').skip(1).collect();
+    for (i, want) in wanted.iter().enumerate() {
+        let Some(segment) = segments.get(i) else { return false };
+        if let Some(at) = segment.find("{*") {
+            return want.starts_with(&segment[..at]);
+        }
+        let fits = match (segment.find('{'), segment.rfind('}')) {
+            (Some(open), Some(close)) if open < close => {
+                let (before, after) = (&segment[..open], &segment[close + 1..]);
+                want.len() > before.len() + after.len() && want.starts_with(before) && want.ends_with(after)
+            }
+            _ => segment == want,
+        };
+        if !fits {
+            return false;
+        }
+    }
+    // Every segment of the prefix can match: the route's paths are at it, or under it with one more.
+    segments.len() > wanted.len() || !more
+}
+
 /// True when `path` is `prefix` or below it (`/api` holds `/api` and `/api/items`, not `/apis`).
 pub(crate) fn under(prefix: &str, path: &str) -> bool {
     prefix == "/" || path.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))

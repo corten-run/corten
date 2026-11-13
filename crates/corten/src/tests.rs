@@ -4084,6 +4084,29 @@ fn a_route_reaches_an_api_through_a_parameter_before_it() {
     assert!(!reaches("/{*rest}", "/"), "nothing is outside the root");
 }
 
+/// Counted by segment, a route can match under a prefix only where each of its segments can
+/// match the prefix's: a parameter one segment, a catch-all the rest (#1213).
+#[test]
+fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
+    use crate::api::can_match_under;
+    let can = ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/{v}i/{b}", "/ap{*rest}"];
+    for route in can {
+        assert!(can_match_under(route, "/api/items"), "{route}");
+    }
+    let cannot = ["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/{a}x/{b}", "/api/items/{id}"];
+    for route in cannot.into_iter().chain(["/b{*rest}"]) {
+        assert!(!can_match_under(route, "/api/items"), "{route}");
+    }
+    // Corten's own `/corten/` holds only paths with a segment after it.
+    for route in ["/{a}/{b}", "/{*rest}", "/{a}/"] {
+        assert!(can_match_under(route, "/corten/"), "{route}");
+    }
+    for route in ["/{slug}", "/cor{x}", "/x/{a}", "/corten/{file}"] {
+        assert!(!can_match_under(route, "/corten/"), "{route}");
+    }
+    assert!(can_match_under("/{slug}", "/shop") && !can_match_under("/{*rest}", "/"), "the root holds every route");
+}
+
 /// A top-level API owns its prefix too: a page's catch-all does not answer a path under it (#539).
 #[cfg(feature = "json")]
 #[tokio::test]
@@ -4262,21 +4285,24 @@ struct CostQuote {
 }
 
 /// What a staged request costs where it is found: `SCOPE_REQUESTS` (200) requests in process,
-/// one at a time, for a page (`SCOPE_TARGET=page`) or an API's JSON (`SCOPE_TARGET=json`), in an
-/// app with two areas (one inside the other) and an API, each with a deadline, a body limit and
-/// middleware of its own and the areas a CSP source (`SCOPE_AREAS=1`), or in an app with none,
-/// where the same handlers are the app's own routes. Counting it under callgrind at two numbers of
-/// requests gives the instructions per request. Run in release:
+/// one at a time, in an app with two areas (one inside the other) and an API, each with a
+/// deadline, a body limit and middleware of its own and the areas a CSP source (`SCOPE_AREAS=1`),
+/// or in an app with none, where the same handlers are the app's own routes. `SCOPE_TARGET` is
+/// the request: `page` (the inner area's page), `json` (the API's JSON), `slug` (the same page at
+/// an app route `/{slug}`), or `routed` and `rest` (the same page outside every area, at an app
+/// route `/elsewhere/item` and through an app catch-all `/{*rest}` beside it). Counting it under
+/// callgrind at two numbers of requests gives the instructions per request. The test binary has
+/// no global allocator, so preload the one to count with. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
-/// `SCOPE_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_request_in_an_area_costs`
-/// and again at 200.
+/// `SCOPE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_request_in_an_area_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
 #[cfg(feature = "json")]
 #[test]
 #[ignore]
 fn what_a_request_in_an_area_costs() {
     let requests: usize = std::env::var("SCOPE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let areas = std::env::var("SCOPE_AREAS").is_ok_and(|v| v == "1");
-    let json = std::env::var("SCOPE_TARGET").is_ok_and(|v| v == "json");
+    let target = std::env::var("SCOPE_TARGET").unwrap_or_else(|_| "page".to_string());
     async fn cost_item(req: Req) -> HtmlResult {
         req.test_page("Item", html! { <p>"item"</p> })
     }
@@ -4285,8 +4311,14 @@ fn what_a_request_in_an_area_costs() {
     }
     let page = || get(cost_item);
     let quote = || get(cost_quote);
+    // The app's own routes a target adds.
+    let own = |table: Table| match target.as_str() {
+        "slug" => table.route("/{slug}", page()),
+        "routed" | "rest" => table.route("/elsewhere/item", page()).route("/{*rest}", page()),
+        _ => table,
+    };
     let router = if areas {
-        App::new(Routes::from(Table::new().route("/", page())))
+        App::new(Routes::from(own(Table::new().route("/", page()))))
             .deadline(Duration::from_secs(5))
             .area::<Shop>(|shop| {
                 shop.route::<ShopItem>(crate::Methods::reads(page()))
@@ -4310,10 +4342,16 @@ fn what_a_request_in_an_area_costs() {
             })
             .router()
     } else {
-        App::new(Routes::from(Table::new().route("/", page()).route("/shop/desk/item", page()).route("/api/quote", quote())))
+        App::new(Routes::from(own(Table::new().route("/", page()).route("/shop/desk/item", page()).route("/api/quote", quote()))))
             .router()
     };
-    let (path, answer) = if json { ("/api/quote", r#"{"id":7,"price":1250}"#) } else { ("/shop/desk/item", "<p>item</p>") };
+    let (path, answer) = match target.as_str() {
+        "json" => ("/api/quote", r#"{"id":7,"price":1250}"#),
+        "slug" => ("/item", "<p>item</p>"),
+        "routed" => ("/elsewhere/item", "<p>item</p>"),
+        "rest" => ("/elsewhere/other", "<p>item</p>"),
+        _ => ("/shop/desk/item", "<p>item</p>"),
+    };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         for _ in 0..requests {
@@ -4342,10 +4380,18 @@ struct ShopAny<'a> {
     id: &'a str,
 }
 
+/// A parameter route of the area `/shop/desk`, which no other prefix holds a path of.
+#[derive(crate::Route)]
+#[route("/shop/desk/{id}")]
+struct ShopDeskAny<'a> {
+    id: &'a str,
+}
+
 /// An app whose area `/shop`, and `/shop/desk` inside it, each set a CSP source and middleware,
 /// the outer one a deadline and both a body limit, over the app's shorter deadline and smaller
 /// limit; with `catch_all`, the app's `/{*rest}` answers every path no other route does, and with
-/// `shop_any`, the outer area's `/shop/{id}` every segment under `/shop`, `/shop/desk` among them.
+/// `shop_any`, the outer area's `/shop/{id}` every segment under `/shop`, `/shop/desk` among them,
+/// and the inner area's `/shop/desk/{id}` every segment under `/shop/desk`.
 /// Each route waits 200 ms for a `GET` with `x-slow`, and answers a `POST` with the length of
 /// its body.
 fn shop_app(catch_all: bool, shop_any: bool) -> Router {
@@ -4373,6 +4419,7 @@ fn shop_app(catch_all: bool, shop_any: bool) -> Router {
                 .middleware(Met("shop"))
         })
         .area::<ShopDesk>(|desk| {
+            let desk = if shop_any { desk.route::<ShopDeskAny>(crate::Methods::reads(answer())) } else { desk };
             desk.route::<ShopDeskItem>(crate::Methods::reads(answer()))
                 .body_limit(8 << 10)
                 .policy(|p| p.script_src("https://js.example"))
@@ -4465,6 +4512,41 @@ async fn an_outer_areas_parameter_route_at_an_inner_areas_prefix_meets_the_inner
     assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "shop app"));
     assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "the outer area's alone: {csp}");
     assert_eq!(shop_call(&router, "POST", "/shop/other", false, 6 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    // The inner area's own parameter route, which has its scope from when the router is built.
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/other", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "desk shop app"), "the outer area's deadline too");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/other", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/other", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// An app's catch-all that answers a path under Corten's own `/corten/` or the assets' prefix
+/// answers it with the app's settings alone, beside an area: no area's middleware and no tag, as
+/// Corten's own routes are answered; elsewhere a page is tagged, and under the area it meets the
+/// area's middleware (#1213).
+#[tokio::test]
+async fn a_catch_all_at_cortens_own_prefixes_answers_with_the_apps_settings() {
+    let router = App::new(Routes::from(Table::new().route("/{*rest}", get(|| async { "done" }))))
+        .middleware(Met("app"))
+        .assets(RefusedStatic)
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(|| async { "item" }))).middleware(Met("shop")))
+        .router();
+    let call = |path: &'static str| {
+        let req = Request::get(path).header("if-none-match", r#"W/"other""#).body(Body::empty()).unwrap();
+        let router = router.clone();
+        async move {
+            let res = router.oneshot(req).await.unwrap();
+            let met = res.headers().get_all("x-met").iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join(" ");
+            (res.status(), met, res.headers().contains_key(http::header::ETAG))
+        }
+    };
+    // (`/assets/{version}/{*path}` is the assets' own route, so the catch-all never sees a path
+    // with two segments under it.)
+    for path in ["/corten/nope", "/assets/nope"] {
+        assert_eq!(call(path).await, (StatusCode::OK, "app".to_string(), false), "{path}: Corten's own, untagged");
+    }
+    assert_eq!(call("/other").await, (StatusCode::OK, "app".to_string(), true), "the app's page, tagged");
+    assert_eq!(call("/shop/other").await, (StatusCode::OK, "shop app".to_string(), true), "the area's");
 }
 
 /// A middleware reads the client's address as a handler would, and the answer is then private.

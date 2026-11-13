@@ -1980,16 +1980,17 @@ impl Scopes {
     }
 
     /// The scope of every request the route at `pattern` (as the router holds it) answers, or none
-    /// when its parameter or catch-all can match a path under another prefix (a page's `/{*rest}`
-    /// under an area, `/api/{id}` at an inner API's prefix, either under `/corten/`), whose
-    /// requests find theirs by path.
+    /// when its parameter or catch-all can match a path under another prefix, counted segment by
+    /// segment (a page's `/{*rest}` beside an area, `/api/{id}` at an inner API's prefix,
+    /// `/{a}/{b}` under `/corten/`), whose requests find theirs by path. `/{slug}` matches one
+    /// segment, so beside `/corten/` and prefixes of two segments it has its scope.
     fn of_route(&self, pattern: &str) -> Option<&Arc<Scope>> {
         if !pattern.contains('{') {
             return Some(self.at(pattern));
         }
-        let own = self.own_paths.prefixes.iter().map(|prefix| prefix.trim_end_matches('/'));
+        let own = self.own_paths.prefixes.iter().map(String::as_str);
         let mut prefixes = own.chain(self.prefixed.iter().map(|(prefix, _)| prefix.as_str()));
-        if prefixes.any(|prefix| crate::api::reaches(pattern, prefix)) {
+        if prefixes.any(|prefix| crate::api::can_match_under(pattern, prefix)) {
             return None;
         }
         // Corten's exact paths are compared as written, so no request a parameter matches is one.
@@ -2516,9 +2517,19 @@ mod tests {
         assert_eq!(api.mount.as_ref().map(|mount| mount.prefix.as_str()), Some("/shop/api"));
         assert_eq!((api.deadline, api.body_limit, api.middleware.len(), api.shell), (eight, 16 << 10, 2, shop.shell));
         assert!(Arc::ptr_eq(scopes.of_route("/about/{id}").expect("outside every prefix"), &scopes.app));
-        for pattern in ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/cor{x}"] {
+        for pattern in ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}"] {
             assert!(scopes.of_route(pattern).is_none(), "{pattern} can match under another prefix");
         }
+        // One segment matches `/shop`, never a path under `/corten/`.
+        assert!(Arc::ptr_eq(scopes.of_route("/cor{x}").expect("one segment, not /shop"), &scopes.app));
+        assert!(Arc::ptr_eq(scopes.of_route("/item/{id}.json").expect("text before it"), &scopes.app));
+        // Without the one-segment area, a first-segment parameter has the app's scope (#1213).
+        let own = Own { exact: vec!["/health/live"], prefixes: vec!["/corten/".to_string()], companions: Vec::new() };
+        let deep = Scopes::new((Some(Duration::from_secs(5)), 1 << 10), own, &areas[1..], Vec::new(), &policy);
+        assert!(Arc::ptr_eq(deep.of_route("/{slug}").expect("one segment"), &deep.app));
+        assert!(Arc::ptr_eq(deep.of_route("/item/{page}").expect("neither prefix's first segment"), &deep.app));
+        let reach = ["/shop/{page}", "/{a}/{b}", "/{slug}/{page}", "/{slug}/item"];
+        assert!(reach.iter().all(|pattern| deep.of_route(pattern).is_none()), "each can match /shop/desk or under /corten/");
         // An unknown URL, by its path.
         assert!(Arc::ptr_eq(scopes.at("/shop/desk/nope"), desk) && Arc::ptr_eq(scopes.at("/shop/nope"), shop));
         assert!(Arc::ptr_eq(scopes.at("/shop/api/nope"), api) && Arc::ptr_eq(scopes.at("/nope"), &scopes.app));
