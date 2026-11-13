@@ -11,6 +11,7 @@ node --test --test-concurrency=1 bench/hardening/*.test.mjs
 node bench/hardening/run.mjs w1 --review approved-profile-reference --build
 node bench/hardening/verify.mjs bench/hardening/results/w1
 node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
+node bench/hardening/verify-network.mjs
 ```
 
 The dispatcher interface is `export async function run(args)`, where `args` is
@@ -41,6 +42,16 @@ Its alternatives list is empty until an actual native alternative has its own
 source/config/process-budget identity and passes the same complete gates. No
 alternative is presumed qualified and no default is weakened to fill that list.
 `nativeControlsVersion: 1` requires additional raw controls and replay validation.
+`semanticReceiptsVersion: 2` binds native client release to the reviewed release
+boundary (within the existing `maxWindowDriftMs`), requires full-duration trickle
+counts and cadence (within the existing `maxStartLagMs`), and rejects completed
+legitimate responses beyond the unchanged 600 ms deadline or their window.
+`lifecycleVersion: 2` requires terminal recovery of the application, edge proxy
+and API-source upstream, not only a successful earlier HTTP request. Verification
+rejects older producer versions explicitly; historical evidence is never backfilled.
+`review-regressions.mjs CELL` independently replays retained API/edge slow-body
+bytes and mutates them in memory to exercise these gates. It does not upgrade
+the old capture or establish fresh native qualification.
 
 Each phase starts fresh native application and upstream containers. Production
 qualification uses the unchanged `bench/marketplace/qualify.mjs` infrastructure.
@@ -172,6 +183,16 @@ Each invalid cell names its failed stage and distinguishes `parity-blocked` from
 `apparatus-invalid`, and controlled native API contract failures are explicitly
 `target-functional-failure` rather than broken apparatus. Build image ownership
 is persisted before the daemon can create its tag, including cancellation paths.
+Network names are likewise reserved and saved before creation. An in-flight
+network-create client is allowed to settle on interruption, within its 15 s
+operation deadline, before exact-name/ownership-label reconciliation removes the
+network by ID. Cleanup never removes differently named or owned resources and
+reports an attached or ownership-conflicting reserved network as a cleanup failure.
+`verify-network.mjs` is a finite, opt-in real-daemon cancellation control using
+two empty, labeled private networks; it starts no containers or benchmarks.
+Completed native baseline HTTP errors are `target-functional-failure`, including
+allowed-Host/liveness 503 responses. Incomplete/reset/timed-out baseline transport
+is apparatus-invalid; a negative-health transport failure is inconclusive, not live.
 Cleanup checks ownership and removes only generated tags that actually exist.
 Valid native captures separately classify `service-preserved`
 or `target-capacity-failure`. Loss of baseline service after successful preflight

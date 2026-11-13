@@ -46,13 +46,19 @@ export function assessNative(report, qualification, deployment = "direct") {
   assert.equal(report.schema, "native-hardening-controls/v1"); assert.equal(report.source, qualification.source);
   const { host, liveness } = report;
   receipt(host.allowed); receipt(host.denied); receipt(liveness.negative);
-  assert.ok(healthy(host.allowed), "native host control needs a healthy allowed-host request");
-  const hostState = host.denied.complete && !host.denied.error && !host.denied.timedOut && host.denied.status >= 400 && host.denied.status < 500 ? "observed"
+  const targetFunctionalFailures = [];
+  const baseline = (row, label) => {
+    assert.ok(row.complete && !row.error && !row.timedOut && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599,
+      `${label}: incomplete native control transport`);
+    if (!healthy(row)) targetFunctionalFailures.push({ control: label, status: row.status });
+  };
+  baseline(host.allowed, "allowed-host");
+  const hostState = !healthy(host.allowed) ? "inconclusive" : host.denied.complete && !host.denied.error && !host.denied.timedOut && host.denied.status >= 400 && host.denied.status < 500 ? "observed"
     : healthy(host.denied) ? "missing" : "inconclusive";
   const expectedLive = qualification.probes.live?.path ?? null;
   assert.equal(liveness.path, expectedLive);
-  if (expectedLive) { receipt(liveness.baseline); assert.ok(healthy(liveness.baseline), "native liveness baseline failed"); }
-  const livenessState = !expectedLive ? "missing" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
+  if (expectedLive) { receipt(liveness.baseline); baseline(liveness.baseline, "liveness-baseline"); }
+  const livenessState = !expectedLive ? "missing" : !healthy(liveness.baseline) ? "inconclusive" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
     && liveness.negative.status >= 400 && liveness.negative.status < 500 ? "observed" : "inconclusive";
   let sourceControl = "not-applicable";
   if (report.source === "api") {
@@ -76,13 +82,14 @@ export function assessNative(report, qualification, deployment = "direct") {
     sourceControl = valid ? "passed" : "target-functional-failure";
   } else assert.equal(report.api, null);
   const liveDuringFailure = expectedLive && report.source === "api" ? healthy(report.api.responses.find((r) => r.step === "live-503").response) ? "observed" : "not-live" : "unavailable";
-  const productionQualified = qualification.eligible && hostState === "observed" && livenessState === "observed" && sourceControl !== "target-functional-failure"
+  const productionQualified = !targetFunctionalFailures.length && qualification.eligible && hostState === "observed" && livenessState === "observed" && sourceControl !== "target-functional-failure"
     && (report.source !== "api" || liveDuringFailure === "observed");
   return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched", productionQualified,
     productionQualificationScope: deployment === "direct" ? "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence"
       : "effective TLS deployment production probes plus explicit deployment host/liveness/source controls; not inferred native/proxy mechanism attribution",
     missingProductionFeatures: qualification.missing,
     hostValidation: hostState, liveness: livenessState, sourceControl,
+    ...(targetFunctionalFailures.length ? { targetFunctionalFailures } : {}),
     livenessDuringUpstreamFailure: liveDuringFailure,
     qualificationPurpose: productionQualified ? "qualified-native-hardening-observation" : "explicit-native-defense-gap-observation-not-qualified-performance",
     alternatives: [] };

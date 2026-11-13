@@ -15,7 +15,7 @@ export function responseOk(row, expected, body) {
   return body.includes("marketplace__listings") && body.includes(expected.title) && body.includes("marketplace__offers");
 }
 
-export function validateLegitimate(row, expected) {
+export function validateLegitimate(row, expected, timeoutMs = 600) {
   assert.ok(typeof row.bodyBase64 === "string", "legacy receipt has no replayable response bytes; it cannot establish current semantic qualification");
   assert.equal(typeof row.ok, "boolean"); assert.equal(typeof row.bodyComplete, "boolean");
   const body = Buffer.from(row.bodyBase64, "base64");
@@ -26,6 +26,8 @@ export function validateLegitimate(row, expected) {
   assert.ok(row.timedOut === undefined || row.timedOut === true);
   assert.ok(finite(row.startedAtMs) && finite(row.endedAtMs) && row.endedAtMs >= row.startedAtMs);
   assert.equal(row.latencyMs, row.endedAtMs - row.startedAtMs);
+  assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0);
+  if (row.bodyComplete) assert.ok(row.latencyMs <= timeoutMs, "completed response escaped reviewed request deadline");
   assert.equal(row.ok, responseOk(row, expected, body), "success contradicts HTTP status, completion, error, timeout or response semantics");
   assert.ok(!localErrors.has(row.error), "local legitimate-client failure invalidates apparatus");
   return row;
@@ -45,6 +47,10 @@ export function validateAttack(row, plan, budget) {
   assert.equal([row.targetClosedAtMs, row.releasedAtMs].filter((n) => n !== null).length, 1, "missing/contradictory attack terminal receipt");
   const terminal = row.targetClosedAtMs ?? row.releasedAtMs;
   assert.ok(finite(terminal) && terminal >= row.startedAtMs && terminal <= row.endedAtMs);
+  if (row.releasedAtMs !== null) {
+    assert.ok(Math.abs(row.releasedAtMs - budget.attack.releaseAtMs) <= budget.timing.maxWindowDriftMs,
+      "client release differs from reviewed release deadline");
+  }
   if (!row.established) {
     assert.equal(row.bytesQueued, 0); assert.equal(row.writes, 0); assert.equal(row.drips, 0);
     assert.ok(row.targetClosedAtMs !== null && (row.error || row.connectTimedOut), "failed connection lacks refusal/timeout evidence");
@@ -63,7 +69,13 @@ export function validateAttack(row, plan, budget) {
     assert.equal(row.bytesQueued, row.firstBytes + row.drips * plan.dripBytes); assert.equal(row.writes, 1 + row.drips);
     assert.ok(Array.isArray(row.dripAtMs) && row.dripAtMs.length === row.drips, "missing actual trickle timestamps");
     assert.ok(row.dripAtMs.every((n, i, all) => finite(n) && n >= row.connectedAtMs && n <= terminal && (i === 0 || n > all[i - 1])));
-    if (terminal - row.connectedAtMs >= budget.attack.everyMs + budget.timing.maxStartLagMs) assert.ok(row.drips > 0, "retained slow connection emitted no trickles");
+    const interval = budget.attack.everyMs, lag = budget.timing.maxStartLagMs;
+    assert.ok(Number.isFinite(interval) && interval > 0);
+    assert.ok(row.drips >= Math.max(0, Math.floor((terminal - row.connectedAtMs - lag) / interval)), "retained slow connection lacks full-duration trickles");
+    for (const [i, at] of row.dripAtMs.entries()) {
+      const due = row.connectedAtMs + (i + 1) * interval;
+      assert.ok(at >= due - 1 && at <= due + lag, "trickle differs from reviewed cadence");
+    }
   } else if (plan.bodyBytes !== undefined) {
     assert.equal(row.bodyPrefixBytes, plan.bodyPrefixBytes); assert.equal(row.declaredBodyBytes, plan.declaredBodyBytes);
     assert.ok(count(row.bodyBytesQueued) && row.bodyBytesQueued <= plan.bodyBytes);

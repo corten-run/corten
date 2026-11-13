@@ -133,7 +133,18 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
         row.declaredBodyBytes = attack.bodyBytes;
         row.bodyPrefixBytes = Buffer.byteLength(form.prefix);
       }
-      if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; row.dripAtMs.push(now()); } }, attack.everyMs);
+      if (p.repeat) {
+        // Anchor each tick to the connected clock, not cumulative interval drift.
+        const schedule = () => {
+          const due = row.connectedAtMs + (row.drips + 1) * attack.everyMs;
+          dripTimer = setTimeout(() => {
+            if (socket.destroyed || now() >= releaseAtMs) return;
+            if (now() >= due) { write(p.drip); row.drips++; row.dripAtMs.push(now()); }
+            schedule();
+          }, Math.max(1, Math.ceil(due - now())));
+        };
+        schedule();
+      }
       const midpoint = now() + Math.max(0, releaseAtMs - now()) / 2;
       await wait(midpoint - now());
       const snapshotUnread = () => { const sample = unread(row.localPort, target.port); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
@@ -142,7 +153,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
       if (p.paused && !socket.destroyed) row.unreadEnd = snapshotUnread();
     }
   } finally {
-    clearTimeout(timer); clearInterval(dripTimer);
+    clearTimeout(timer); clearTimeout(dripTimer);
     if (!socket.destroyed) { row.releasedAtMs = now(); socket.destroy(); }
     await close;
     row.endedAtMs = now(); emit(row);
@@ -251,7 +262,10 @@ export function validateControl(result) {
     assert.equal(observed.length, count);
     for (let i = 0; i < count; i++) {
       const r = rows[i], receipt = observed.find((o) => o.sourcePort === r.localPort); assert.ok(receipt);
-      validateAttack(r, result.emissionPlan?.[i], budgets());
+      // Receiving controls deliberately release on delivery, not the native window.
+      // Their independent byte/backpressure receipts below prove that condition.
+      validateAttack(r, result.emissionPlan?.[i], { attack: { everyMs: 40, releaseAtMs: r.releasedAtMs }, timing: { maxStartLagMs: budgets().timing.maxStartLagMs, maxWindowDriftMs: 0 } });
+      assert.ok(r.endedAtMs <= 5000 + budgets().timing.maxStartLagMs, "receiving control exceeded its separate deadline");
       assert.equal(receipt.bytes, r.bytesQueued, "control receiver did not receive the emitted attack bytes");
       if (["slow-headers", "slow-bodies"].includes(phase)) {
         assert.ok(r.drips >= 2, "trickle timer did not run");
@@ -264,7 +278,7 @@ export function validateControl(result) {
       if (r.variant === "body-size") assert.equal(r.bodyBytesQueued + r.bodyPrefixBytes, 4 * 2 ** 20);
     }
     assert.equal(good.ok, true, "legitimate recorder control failed");
-    validateLegitimate(good, { id: "control", value: 37 });
+    validateLegitimate(good, { id: "control", value: 37 }, 1000);
     assert.equal(good.bodySha256, sha('{"id":"control","value":37}')); assert.equal(good.status, 200);
 }
 

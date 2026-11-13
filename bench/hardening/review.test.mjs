@@ -1,0 +1,110 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createServer } from "node:http";
+import { qualification } from "../marketplace/feature-contract.mjs";
+import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
+import { nativeControls, assessNative } from "./native.mjs";
+import { trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalRecovery } from "./lifecycle.mjs";
+import { budgets } from "./plan.mjs";
+import { validateAttack } from "./receipts.mjs";
+import { validateLegitimate } from "./receipts.mjs";
+import { createHash } from "node:crypto";
+
+test("completed native baseline HTTP failures remain target-functional, broken transport remains apparatus-invalid", async () => {
+  const q = qualification(qualificationProbes(), "fixture"), live = q.probes.live.path;
+  let mode = "healthy";
+  const app = createServer((req, res) => {
+    if (req.headers.host === "unrecognized.invalid") { res.writeHead(421); return res.end(); }
+    const baseline = req.url === live ? "liveness" : req.url.includes("item_1") ? "host" : "negative";
+    if (mode === `${baseline}-reset`) return req.socket.destroy();
+    res.writeHead(mode === `${baseline}-503` ? 503 : baseline === "negative" ? 404 : 200); res.end("native control");
+  });
+  await new Promise((r) => app.listen(0, "127.0.0.1", r));
+  try {
+    const base = `http://127.0.0.1:${app.address().port}`;
+    for (mode of ["host-503", "liveness-503", "host-reset", "liveness-reset", "negative-reset", "healthy"]) {
+      const raw = await nativeControls({ base, source: "fixture", qualification: q });
+      if (mode.endsWith("503")) {
+        const result = assessNative(raw, q);
+        assert.equal(result.productionQualified, false);
+        assert.equal(result.targetFunctionalFailures[0].status, 503);
+        assert.throws(() => requireSourceControl(result, "native"), (error) => failureKind("native-controls", error) === "target-functional-failure");
+        // The sidecar's JSON wire must preserve the classification for its caller.
+        assert.throws(() => requireSourceControl(JSON.parse(JSON.stringify(result)), "edge"), (error) => failureKind("edge-native-controls", error) === "target-functional-failure");
+      } else if (mode.endsWith("reset") && mode !== "negative-reset") {
+        assert.throws(() => assessNative(raw, q), (error) => failureKind("native-controls", error) === "apparatus-invalid");
+      } else {
+        const result = assessNative(raw, q);
+        assert.equal(result.productionQualified, mode === "healthy");
+        assert.equal(result.liveness, mode === "healthy" ? "observed" : "inconclusive");
+      }
+    }
+  } finally { app.closeAllConnections(); await new Promise((r) => app.close(r)); }
+});
+
+test("network ownership survives daemon success before cancelled acknowledgement; cleanup reconciles exact names and labels", async () => {
+  const summary = {}, name = "owned-net", calls = [], networks = new Map(); let persisted = false;
+  await assert.rejects(trackedNetworkCreate(summary, name, () => { persisted = summary.ownedNetworks.includes(name); }, async () => {
+    assert.equal(persisted, true);
+    networks.set("owned-id", { Id: "owned-id", Name: name, Labels: { "run.corten.hardening": "run", "agent.owner": "codex", "agent.task": "run" }, Containers: {} });
+    networks.set("unrelated-id", { Id: "unrelated-id", Name: "owned-net-other", Labels: {}, Containers: {} });
+    throw new Error("SIGINT before daemon acknowledgement");
+  }), /SIGINT/);
+  const docker = async (args, opts) => {
+    calls.push(args); assert.equal(opts.cleanup, true);
+    if (args[1] === "ls") return [...networks.keys()].join("\n");
+    if (args[1] === "inspect") return JSON.stringify([networks.get(args[2])]);
+    assert.equal(args[1], "rm"); networks.delete(args[2]); return "";
+  };
+  await removeOwnedNetwork(summary.ownedNetworks[0], "run", docker);
+  assert.equal(networks.has("owned-id"), false); assert.equal(networks.has("unrelated-id"), true);
+  assert.deepEqual(calls.filter((r) => r[1] === "rm"), [["network", "rm", "owned-id"]]);
+  // An absent reservation is safe; a name collision or attached service is not.
+  await removeOwnedNetwork(name, "run", async () => "");
+  const collide = networks.get("unrelated-id"); collide.Name = name;
+  await assert.rejects(removeOwnedNetwork(name, "run", docker), /unowned network/);
+  collide.Labels = { "run.corten.hardening": "run", "agent.owner": "codex", "agent.task": "run" }; collide.Containers = { foreign: {} };
+  await assert.rejects(removeOwnedNetwork(name, "run", docker), /attached processes/);
+  assert.equal(networks.has("unrelated-id"), true);
+});
+
+test("every service-critical terminal role is required; fixture upstream remains apparatus", () => {
+  const processes = ["application", "proxy", "upstream"].map((role) => ({ id: role, role }));
+  const resources = processes.map(({ id }) => ({ id, running: true }));
+  const lifecycle = Object.fromEntries(processes.map(({ id }) => [id, { after: { State: { Running: true, ExitCode: 0, OOMKilled: false } } }]));
+  for (const { id } of processes) {
+    const changed = structuredClone(lifecycle); Object.assign(changed[id].after.State, { Running: false, OOMKilled: true, ExitCode: 137 });
+    const result = terminalRecovery(true, processes, resources, changed, "api");
+    assert.equal(result.disposition, "not-recovered"); assert.equal(result.terminalServices.find((p) => p.id === id).oomKilled, true);
+    if (id === "upstream") assert.throws(() => terminalRecovery(true, processes, resources, changed, "fixture"), /apparatus upstream exited/);
+  }
+});
+
+test("release and drip validation use the unchanged reviewed deadline and full cadence", () => {
+  const b = budgets(), plan = { variant: "slow-headers", firstBytes: 1, firstSha256: "a".repeat(64), repeat: true, dripBytes: 1 };
+  const row = { variant: plan.variant, firstBytes: 1, firstSha256: plan.firstSha256, startedAtMs: 2600, connectedAtMs: 2600,
+    endedAtMs: 8501, releasedAtMs: 8500, targetClosedAtMs: null, established: true, emission: "emitted", responsePrefix: "",
+    drips: 23, dripAtMs: Array.from({ length: 23 }, (_, i) => 2600 + (i + 1) * 250), writes: 24, bytesQueued: 24, backpressure: 0 };
+  validateAttack(row, plan, b);
+  for (const delta of [-101, 101]) {
+    const changed = structuredClone(row); changed.releasedAtMs += delta; changed.endedAtMs = changed.releasedAtMs + 1;
+    assert.throws(() => validateAttack(changed, plan, b), /release deadline/);
+  }
+  for (const corrupt of [(r) => { r.drips = 1; r.dripAtMs.length = 1; r.writes = 2; r.bytesQueued = 2; },
+    (r) => r.dripAtMs[10] += 201, (r) => r.dripAtMs[0] -= 10]) {
+    const changed = structuredClone(row); corrupt(changed); assert.throws(() => validateAttack(changed, plan, b), /trickle/);
+  }
+  const refused = { ...row, endedAtMs: 2650, releasedAtMs: null, targetClosedAtMs: 2650, drips: 0, dripAtMs: [], writes: 1, bytesQueued: 1 };
+  validateAttack(refused, plan, b); // Real early target closure is not an injection failure.
+});
+
+test("completed legitimate HTTP responses cannot evade the 600 ms deadline with self-consistent timestamps", () => {
+  const body = Buffer.from('{"id":"native"}');
+  const row = { path: "/api/record", status: 200, bodyComplete: true, ok: true, bodyBase64: body.toString("base64"),
+    bodyBytes: body.length, bodySha256: createHash("sha256").update(body).digest("hex"), startedAtMs: 100, endedAtMs: 700, latencyMs: 600 };
+  validateLegitimate(row, { id: "native" });
+  for (const status of [200, 503]) {
+    const changed = { ...row, status, ok: status === 200, endedAtMs: 701, latencyMs: 601 };
+    assert.throws(() => validateLegitimate(changed, { id: "native" }), /request deadline/);
+  }
+});
