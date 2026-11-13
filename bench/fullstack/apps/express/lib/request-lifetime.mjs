@@ -26,5 +26,6 @@ export function requestLifetime(req, res, next) {
   res.once("finish", cleanup);
   res.once("close", disconnected);
   res.locals.requestSignal = controller.signal;
+  res.locals.marketplaceTraceparent = req.get("traceparent");
   next();
 }

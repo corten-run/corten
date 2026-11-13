@@ -1,6 +1,7 @@
 // Only the two record JSON endpoints own this read; page/profile behavior stays separate.
-export function recordJson(read) {
+export function recordJson(read, requestOptions) {
   return async (req, res) => {
+    const options = requestOptions?.(req);
     const controller = new AbortController();
     const disconnected = () => { if (!res.writableEnded) controller.abort(); };
     const timedout = () => controller.abort(new DOMException("Record read timed out", "TimeoutError"));
@@ -9,7 +10,7 @@ export function recordJson(read) {
     req.once("timeout", timedout);
     res.set("Cache-Control", "no-store");
     try {
-      const record = await read(req.params.id, { signal: controller.signal });
+      const record = await read(req.params.id, { ...options, signal: controller.signal });
       if (res.destroyed || res.headersSent || req.timedout) return;
       if (!record) return res.status(404).json({ error: "record not found" });
       res.json(record);

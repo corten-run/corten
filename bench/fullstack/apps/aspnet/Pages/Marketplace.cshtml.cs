@@ -23,7 +23,8 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
         if (alerts is not null && (Request.Headers["Sec-Fetch-Site"] == "cross-site"
             || (Request.Headers.ContainsKey("Origin") && Request.Headers.Origin != $"{Request.Scheme}://{Request.Host}")))
             return StatusCode(StatusCodes.Status403Forbidden);
-        var record = await source.Get(id, HttpContext.RequestAborted);
+        var traceParent = Request.Headers["traceparent"].ToString();
+        var record = await source.Get(id, HttpContext.RequestAborted, traceParent);
         if (record is null) return NotFound();
         Record = record;
         Locale = locale;

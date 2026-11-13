@@ -2,6 +2,7 @@ mod alerts;
 mod model;
 mod source;
 mod text;
+mod trace;
 mod views;
 
 use corten::i18n::Locale;
@@ -10,6 +11,7 @@ use model::Record;
 use source::Source;
 use std::sync::Arc;
 use text::Msg;
+use trace::TraceParent;
 
 #[derive(Clone, corten::FromRef)]
 struct AppState {
@@ -73,9 +75,14 @@ async fn home(req: Req) -> HtmlResult {
         },
     ))
 }
-async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Marketplace<'_>>) -> HtmlResult {
+async fn show(
+    req: Req,
+    State(source): State<Source>,
+    Params(at): Params<routes::Marketplace<'_>>,
+    trace: TraceParent,
+) -> HtmlResult {
     req.set_locale(at.locale);
-    let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+    let record = source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?;
     let at = routes::Marketplace { locale: at.locale, id: &at.id, query: at.query };
     req.page(views::document(&req, &record.title, views::detail(&req, &record, &at, "")))
 }
@@ -84,10 +91,11 @@ async fn create_alert(
     State(state): State<AppState>,
     Params(at): Params<routes::Marketplace<'_>>,
     session: alerts::Session,
+    trace: TraceParent,
     Form(form): Form<AlertForm>,
 ) -> HtmlResult {
     req.set_locale(at.locale);
-    let record = state.source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+    let record = state.source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?;
     let (message, accepted) = match text::alert(req.t(), &record, &form) {
         Ok((message, target_minor)) => {
             (message, Some(alerts::Alert { item_id: at.id.to_string(), email: form.email, target_minor }))
@@ -105,8 +113,8 @@ async fn create_alert(
 async fn read_alerts(State(alerts): State<alerts::Store>, session: alerts::Session) -> JsonResult<Vec<alerts::Alert>> {
     Ok(Json(alerts.read(&session)))
 }
-async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
-    Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?))
+async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>, trace: TraceParent) -> JsonResult<Arc<Record>> {
+    Ok(Json(source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?))
 }
 fn app(source: Source) -> App {
     let state = AppState { source, alerts: Default::default() };
