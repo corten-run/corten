@@ -8,6 +8,10 @@ use corten::{
 };
 use serde::{Deserialize, Serialize};
 
+mod parity;
+mod parity_row;
+mod parity_screen;
+
 /// A listing's price, with what the benchmark needs to time and order its delivery.
 #[derive(Clone, Serialize, Deserialize, Row, ToJson)]
 struct Tick {
@@ -27,6 +31,9 @@ struct Publish {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if std::env::var_os("LIVE_PARITY").is_some() {
+        return parity::serve().await;
+    }
     let feed: Feed<Tick> = Feed::new([]);
     corten::serve(App::new(url::router(feed.clone())).api(|routes| ingest::api(routes, feed))).await
 }

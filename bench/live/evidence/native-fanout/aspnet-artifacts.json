@@ -1,0 +1,14 @@
+{
+  "app": "aspnet",
+  "group": "live-delivery",
+  "files": [
+    {
+      "file": "aspnet-normal.json.gz",
+      "sha256": "e8d7c62e3eb529413668da24c70dda7c53f13a88cb1f1572d43a735422edfe1a"
+    },
+    {
+      "file": "aspnet-slow-reader.json.gz",
+      "sha256": "ee33d788b19e93b4978c4724a513948ec9cead712f46aff66f180200d3eec640"
+    }
+  ]
+}

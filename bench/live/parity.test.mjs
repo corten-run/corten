@@ -5,14 +5,23 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { selectedApps } from "../workloads/registry.mjs";
-import { inventory, nativePorts, scenarios } from "./native.mjs";
+import { inventory, nativePorts, portFor, recordedInventory, scenarios, settingsFor, workloadFor } from "./native.mjs";
+import { wireEvents, wireSnapshots } from "./wire.mjs";
+import { fanoutProfile, verifyFanout } from "./fanout.mjs";
 import { select, runRound, verifyArtifact } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
 
 const delivery = new URL("./evidence/native-delivery/", import.meta.url);
 const recovery = new URL("../recoverable-live/evidence/native-recovery/", import.meta.url);
+const fanout = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name = "express-normal", base = delivery) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
+async function measured() {
+  const a = await artifact("express-fanout-4", fanout), normal = await artifact("express-normal", fanout);
+  const qualification = JSON.parse(await readFile(new URL("express-artifacts.json", fanout), "utf8")).files;
+  return { a, expected: { app: "express", group: "live-delivery", provenance: normal.provenance,
+    qualification, settings: normal.settings } };
+}
 
 test("native inventory preserves every registry member and never borrows historical transport parity", () => {
   for (const group of ["live-delivery", "recoverable-live"]) {
@@ -34,6 +43,40 @@ test("entry imports have no historical load side effects; explicit round is mand
   }
 });
 
+test("native Feed limits require an explicit equal-work alternative, never a hidden default", () => {
+  assert.equal(workloadFor().eventCount, 24);
+  assert.equal(settingsFor("live-delivery", "slow-reader").queueLimit, 2);
+  assert.equal(portFor("corten"), undefined);
+  assert.match(inventory("live-delivery").find((r) => r.app === "corten").reason, /explicit --profile native-feed/);
+  assert.equal(workloadFor("native-feed").eventCount, 1044);
+  assert.equal(settingsFor("live-delivery", "slow-reader", "native-feed").queueLimit, 1024);
+  assert.equal(settingsFor("recoverable-live", "expired-cursor", "native-feed").historyLimit, 1025);
+  assert.equal(portFor("corten", "native-feed").wire, "corten-feed");
+  assert.throws(() => workloadFor("typo"), /unknown live profile/);
+});
+
+test("recorded missing implementations remain missing after native ports are added", () => {
+  const beforeCorten = inventory("live-delivery", "bounded", 1);
+  assert.equal(beforeCorten.find((r) => r.app === "corten").implementation, "not-implemented");
+  assert.equal(inventory("live-delivery").find((r) => r.app === "corten").implementation, "implemented");
+  assert.deepEqual(recordedInventory("live-delivery", beforeCorten, "bounded", 2), beforeCorten);
+  assert.throws(() => recordedInventory("live-delivery", beforeCorten.slice(1), "bounded", 2), /lost a candidate/);
+});
+
+test("Corten binding checks actual native keyed operations, not just event metadata", () => {
+  const event = workloadFor().events[0];
+  const data = { seq: event.seq, changes: [{ op: "upsert", id: event.key, value: event.row }], event };
+  const raw = [{ kind: "native-sse", eventName: "patch", data: JSON.stringify(data) }];
+  assert.deepEqual(wireEvents(raw, "corten-feed"), [event]);
+  data.changes[0].value = { ...event.row, quantity: 999 };
+  raw[0].data = JSON.stringify(data);
+  assert.throws(() => wireEvents(raw, "corten-feed"), /native keyed patch/);
+  assert.throws(() => wireEvents(raw, "unreviewed"), /unregistered/);
+  assert.deepEqual(wireSnapshots([{ kind: "response", status: 200, url: "http://local/parity/snapshot",
+    body: JSON.stringify({ epoch: "native", seq: 0, rows: [event.row] }) }], "corten-feed"),
+  [{ through: 0, rows: [event.row], work: { reads: 1, rows: 1 } }]);
+});
+
 test("actual native browser artifacts revalidate, including all recovery fault paths", async () => {
   for (const app of ["express", "aspnet", "gin"]) for (const scenario of scenarios("live-delivery")) verify(await artifact(`${app}-${scenario}`));
   for (const scenario of scenarios("recoverable-live")) verify(await artifact(`aspnet-${scenario}`, recovery));
@@ -41,6 +84,49 @@ test("actual native browser artifacts revalidate, including all recovery fault p
   assert.deepEqual(a.passed, ["aspnet", "express", "gin"]);
   assert.deepEqual(b.passed, ["aspnet"]);
   assert.equal(a.readyForLoad, false); assert.equal(b.readyForLoad, false);
+});
+
+test("actual qualified native fan-out retains CPU/memory, visible latency and honest failed candidates", async () => {
+  const round = await verifyRound(fanout);
+  assert.equal(round.readyForLoad, false);
+  const ledger = JSON.parse(await readFile(new URL("coverage.json", fanout), "utf8"));
+  assert.equal(ledger.cells.find((r) => r.app === "express").measurement, "complete");
+  assert.equal(ledger.cells.find((r) => r.app === "aspnet").measurement, "failed");
+  assert.equal(ledger.cells.find((r) => r.app === "gin").parity, "failed");
+  const { a, expected } = await measured();
+  assert.equal(verifyFanout(a, expected).deliveredEffects, 240);
+  assert.ok(a.summary.serverCpuUs > 0 && a.summary.serverMemoryCurrentBytes > 0 && a.summary.visibleLatencyP95Ms > 0);
+  assert.deepEqual(a.profile, fanoutProfile);
+});
+
+test("fresh Gin native delivery and all measured fan-out levels revalidate independently of its earlier build timeout", async () => {
+  const directory = new URL("./evidence/native-fanout-gin/", import.meta.url);
+  const round = await verifyRound(directory);
+  assert.deepEqual(round.passed, ["gin"]);
+  assert.equal(round.readyForLoad, false);
+  const ledger = JSON.parse(await readFile(new URL("coverage.json", directory), "utf8"));
+  assert.equal(ledger.cells.find((r) => r.app === "gin").measurement, "complete");
+});
+
+for (const [name, mutate] of [
+  ["lost fan-out browser", (a) => a.browsers.pop()],
+  ["wrong qualification", (a) => a.qualification.pop()],
+  ["wrong native image", (a) => { a.provenance.imageId = "wrong"; }],
+  ["forged CPU counter", (a) => { a.kernel.after.cpuUsageUs++; }],
+  ["forged memory peak", (a) => { a.kernel.after.memoryPeakBytes++; }],
+  ["missing visible frames", (a) => { a.browsers[0].frames = []; }],
+  ["publisher missed offered rate", (a) => { a.schedule[0].startedAt += 1000; }],
+  ["publisher offered cadence changed", (a) => { a.schedule[1].scheduledAt++; }],
+  ["missing raw fan-out acknowledgement", (a) => { a.browsers[0].network = a.browsers[0].network.filter((r) => r.kind !== "response" || !r.url.endsWith("/parity/publish")); }],
+  ["missing raw fan-out publication", (a) => { a.browsers[0].network = a.browsers[0].network.filter((r) => r.kind !== "request" || !r.url.endsWith("/parity/publish")); }],
+  ["impossible visible version", (a) => { a.browsers[0].frames[0].through = 10000; }],
+  ["duplicate effect", (a) => { a.browsers[0].records.find((r) => r.kind === "event").effectCount++; }],
+  ["native wire removed", (a) => { a.browsers[0].network = []; }],
+  ["lost reader cleanup", (a) => { a.resources.released.subscriptions = 1; }],
+  ["fabricated aggregate", (a) => { a.summary.deliveredEffects++; }],
+  ["larger unreviewed latency budget", (a) => { a.settings.cleanupObservationMs = 1; }],
+]) test(`rejects actual native fan-out mutated with ${name}`, async () => {
+  const { a, expected } = await measured(); mutate(a); assert.throws(() => verifyFanout(a, expected));
 });
 
 const mutations = [

@@ -34,6 +34,7 @@ type feed struct {
 	history                                      []change
 	readers                                      map[*reader]bool
 	through, queuePeak, historyPeak, reads, drop int
+	queueLimit, historyLimit                     int
 	bytes                                        int
 	hold                                         bool
 }
@@ -51,12 +52,12 @@ func (f *feed) counters() gin.H {
 	var usage syscall.Rusage
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
 	return gin.H{"subscriptions": len(f.readers), "connections": len(f.readers), "pendingTasks": len(f.readers),
-		"queueLimit": 2, "queueEvents": queued, "queuePeak": f.queuePeak,
-		"historyLimit": 4, "historyEvents": len(f.history), "historyPeak": f.historyPeak,
+		"queueLimit": f.queueLimit, "queueEvents": queued, "queuePeak": f.queuePeak,
+		"historyLimit": f.historyLimit, "historyEvents": len(f.history), "historyPeak": f.historyPeak,
 		"process": gin.H{"version": runtime.Version(), "heapBytes": memory.HeapAlloc, "heapPeakBytes": memory.HeapSys,
 			"userCpuUs": usage.Utime.Sec*1000000 + usage.Utime.Usec, "systemCpuUs": usage.Stime.Sec*1000000 + usage.Stime.Usec, "rssPeakKiB": usage.Maxrss},
 		"inventory": gin.H{"applicationQueues": len(f.readers), "overflowSlots": slots, "historyRows": len(f.rows),
-			"snapshotReads": f.reads, "transportPayloadBytes": f.bytes, "replayCopyLimitEvents": 4, "overflowSlotsLimit": 1, "timers": 0, "backgroundPublishers": 0,
+			"snapshotReads": f.reads, "transportPayloadBytes": f.bytes, "replayCopyLimitEvents": f.historyLimit, "overflowSlotsLimit": 1, "timers": 0, "backgroundPublishers": 0,
 			"nativeWriter": "one SSEvent plus Flush at a time; net/http write buffer and kernel socket outside queue"}}
 }
 func (f *feed) enqueue(r *reader, event change) {
@@ -85,13 +86,13 @@ func (f *feed) stream(c *gin.Context) {
 		c.Status(400)
 		return
 	}
-	r := &reader{queue: make(chan change, 2), wake: make(chan struct{}, 1)}
 	f.mu.Lock()
-	if len(f.readers) > 0 || query.From > f.through {
+	if len(f.readers) >= 16 || query.From > f.through {
 		f.mu.Unlock()
 		c.Status(409)
 		return
 	}
+	r := &reader{queue: make(chan change, f.queueLimit), wake: make(chan struct{}, 1)}
 	f.readers[r] = true
 	expired := query.From < f.through && (len(f.history) == 0 || query.From < f.history[0].Seq-1)
 	status := "accepted"
@@ -156,7 +157,7 @@ func (f *feed) stream(c *gin.Context) {
 	}
 }
 func main() {
-	f := &feed{rows: make(map[string]listing), readers: make(map[*reader]bool)}
+	f := &feed{rows: make(map[string]listing), readers: make(map[*reader]bool), queueLimit: 2, historyLimit: 4}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.GET("/", func(c *gin.Context) { c.File("index.html") })
@@ -179,7 +180,7 @@ func main() {
 			QueueLimit   int       `json:"queueLimit"`
 			HistoryLimit int       `json:"historyLimit"`
 		}
-		if c.ShouldBindJSON(&p) != nil || p.QueueLimit != 2 || p.HistoryLimit != 4 || len(p.Initial) > 1000 {
+		if c.ShouldBindJSON(&p) != nil || !((p.QueueLimit == 2 && p.HistoryLimit == 4) || (p.QueueLimit == 1024 && p.HistoryLimit == 1025)) || len(p.Initial) > 1000 {
 			c.Status(400)
 			return
 		}
@@ -190,6 +191,8 @@ func main() {
 			return
 		}
 		f.rows = make(map[string]listing)
+		f.queueLimit = p.QueueLimit
+		f.historyLimit = p.HistoryLimit
 		for _, row := range p.Initial {
 			f.rows[row.ID] = row
 		}
@@ -205,39 +208,58 @@ func main() {
 	})
 	r.POST("/parity/publish", func(c *gin.Context) {
 		var p struct {
-			Event change `json:"event"`
+			Event  *change  `json:"event"`
+			Events []change `json:"events"`
 		}
 		if c.ShouldBindJSON(&p) != nil {
 			c.Status(400)
 			return
 		}
-		e := p.Event
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if e.Seq != f.through+1 || (e.Op != "upsert" && e.Op != "remove") || e.Op == "upsert" && (e.Row == nil || e.Row.ID != e.Key) {
+		batch := p.Events != nil
+		events := p.Events
+		if !batch && p.Event != nil {
+			events = []change{*p.Event}
+		}
+		if batch && (f.queueLimit != 1024 || p.Event != nil) || len(events) < 1 || len(events) > 1044 {
 			c.Status(400)
 			return
 		}
-		f.through = e.Seq
-		if e.Op == "remove" {
-			delete(f.rows, e.Key)
-		} else {
-			f.rows[e.Key] = *e.Row
-		}
-		if len(f.history) == 4 {
-			copy(f.history, f.history[1:])
-			f.history = f.history[:3]
-		}
-		f.history = append(f.history, e)
-		if len(f.history) > f.historyPeak {
-			f.historyPeak = len(f.history)
-		}
-		if e.Seq != f.drop {
-			for reader := range f.readers {
-				f.enqueue(reader, e)
+		for i, e := range events {
+			if e.Seq != f.through+i+1 || e.EffectID == "" || e.Key == "" || (e.Op != "upsert" && e.Op != "remove") || e.Op == "upsert" && (e.Row == nil || e.Row.ID != e.Key) {
+				c.Status(400)
+				return
 			}
 		}
-		c.JSON(200, gin.H{"seq": f.through, "resources": f.counters()})
+		acks := make([]gin.H, 0, len(events))
+		for _, e := range events {
+			f.through = e.Seq
+			if e.Op == "remove" {
+				delete(f.rows, e.Key)
+			} else {
+				f.rows[e.Key] = *e.Row
+			}
+			if len(f.history) == f.historyLimit {
+				copy(f.history, f.history[1:])
+				f.history = f.history[:f.historyLimit-1]
+			}
+			f.history = append(f.history, e)
+			if len(f.history) > f.historyPeak {
+				f.historyPeak = len(f.history)
+			}
+			if e.Seq != f.drop {
+				for reader := range f.readers {
+					f.enqueue(reader, e)
+				}
+			}
+			acks = append(acks, gin.H{"seq": f.through, "resources": f.counters()})
+		}
+		if batch {
+			c.JSON(200, gin.H{"acks": acks})
+		} else {
+			c.JSON(200, acks[0])
+		}
 	})
 	r.POST("/parity/control", func(c *gin.Context) {
 		var p struct {
