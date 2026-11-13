@@ -7,6 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { safeArchive } from "./cloud-contract.mjs";
 
 export const archiveLimit = 256 * 1024 ** 2, expandedLimit = 512 * 1024 ** 2;
+const treeLimit = 100000, depthLimit = 64, pathLimit = 4096;
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function physical(path) {
   const stat = lstatSync(path);
@@ -34,7 +35,7 @@ export function durable(path, bytes) {
 export function treeHash(root) {
   const hash = createHash("sha256"); let count = 0, size = 0;
   function visit(path, key, depth) {
-    assert.ok(++count <= 100000 && depth <= 64, "evidence tree limit");
+    assert.ok(++count <= treeLimit && depth <= depthLimit, "evidence tree limit");
     const stat = lstatSync(path);
     assert.ok(!stat.isSymbolicLink(), "evidence link");
     if (stat.isDirectory()) {
@@ -62,6 +63,7 @@ export function archiveMembers(bytes) {
     return field.subarray(0, end).toString("ascii");
   };
   const octal = (field) => {
+    assert.ok(field.every((b) => b === 0 || b === 32 || b >= 48 && b <= 55), "tar numeric encoding");
     const value = field.toString("ascii"); assert.match(value, /^[0-7]+[\0 ]*$/, "tar numeric encoding");
     const n = Number.parseInt(value, 8); assert.ok(Number.isSafeInteger(n)); return n;
   };
@@ -90,12 +92,33 @@ export function archiveMembers(bytes) {
     members.push({ name, directory: type === "5", body });
   }
   assert.ok(ended && longName === null, "incomplete tar archive");
+  archiveTree(members);
   safeArchive(members.map((e) => e.name).join("\n") + "\n", members.map((e) => e.directory ? "d" : "-").join("\n") + "\n");
   return members;
 }
+
+function archiveTree(members, destination) {
+  // Include the extraction root and every implicit directory, not just tar headers.
+  const nodes = new Set([""]); let size = 0;
+  for (const entry of members) {
+    const parts = entry.name.replace(/\/$/, "").split("/");
+    assert.ok(parts.length <= depthLimit && entry.name.length <= pathLimit, "evidence path limit");
+    let path = "";
+    for (const part of parts) {
+      assert.ok(part.length <= 255, "evidence component limit");
+      path = path ? `${path}/${part}` : part;
+      if (destination) assert.ok(Buffer.byteLength(join(destination, path)) <= pathLimit, "extraction path limit");
+      nodes.add(path); assert.ok(nodes.size <= treeLimit, "evidence tree limit");
+    }
+    if (!entry.directory) size += entry.body.length;
+    assert.ok(size <= expandedLimit, "evidence size limit");
+  }
+}
+
 export function extractArchive(bytes, destination) {
   physical(destination); assert.deepEqual(readdirSync(destination), [], "fresh extraction required");
   const members = archiveMembers(bytes);
+  archiveTree(members, destination);
   // Parents are created only after validation of the entire archive.
   for (const entry of members) {
     const parts = entry.name.replace(/\/$/, "").split("/"); let parent = destination;

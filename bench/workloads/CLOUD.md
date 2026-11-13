@@ -26,9 +26,11 @@ Do not remove that guard merely because these tests pass.
 `collect()`, `deliverAudit()`, a defensive-copy `state` getter and the local round
 directory. `run(binary, argv, timeoutMs, allowFail)` is a synchronous process result
 boundary, not a shell or an adapter plugin. `inspect` is the read-only campaign
-validator seam for tests/integration. `interrupted()` is checked between operations
-and before deletion; it does not kill a remote unit or take over a live campaign.
-The fixed default validator is a lazy local import, never downloaded code:
+validator seam for tests/integration, not a production adapter override.
+`interrupted()` is checked between operations, during validation and before
+deletion; it does not kill a remote unit or take over a live campaign.
+The fixed default validator is a lazy local import in a local worker, never
+downloaded code. Its API remains exactly:
 
 ```js
 validateCampaign({ folder, round, commit })
@@ -39,6 +41,18 @@ function name. `folder` is the extracted `campaign/` root containing
 `.host-attempt.json`, not its campaign-ID subdirectory. This module is absent at
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
+
+Each inspection has a fixed 60-second deadline and a 25-millisecond cancellation
+check. The default worker is terminated on completion, timeout or cancellation;
+no successful report is consumed before its exit is confirmed. Worker stdout,
+stderr and exceptions are not forwarded. Termination confirmation gets at most
+one additional second. If stopping is uncertain, the operation fails while
+retaining the exclusive operation lock, state, archive and host. The injected
+in-process test seam cannot be killed: if still pending on timeout/cancellation,
+its durable lock is retained even after a late settlement. No late result resumes
+collection or authorizes deletion. Retained locks require operator inspection;
+there is no automatic takeover. A synchronous blocking injected test function
+cannot be interrupted by an event-loop timer; the default worker avoids that limit.
 
 Options are exact: `round` (`r17` onward), absolute local `stateDir`, and one mode:
 
@@ -113,9 +127,16 @@ collisions are rejected before any extraction write. Extraction never restores
 archive permissions or owners and uses exclusive file creation. Whole physical-tree
 hashes include directories and reject links, hardlinks and special files on reuse.
 The archive and extracted tree are rehashed around validation and before deletion.
+Raw exit-marker bytes must be ASCII before decoding, then match the exact decimal
+exit-code/newline grammar. Node's high-bit-clearing ASCII decoder is not evidence
+validation. Malformed terminal markers preserve the archive and host.
 
-Bounds are 256 MiB compressed, 512 MiB expanded/tree file bytes, 100,000 entries,
-64 path components and 4,096-byte names. Decompression is in memory, not streaming;
+Bounds are 256 MiB compressed, 512 MiB expanded/tree file bytes, 100,000 total
+physical nodes including the extraction root and every implicit parent directory,
+64 path components, 255-byte components and 4,096-byte names/absolute extraction
+paths. The entire tree, including shared parents counted only once, is preflighted
+before any filesystem write. The post-extraction tree hash checks the same node
+and depth limits again. Decompression is in memory, not streaming;
 larger honest native campaigns remain preserved/blocked, not silently truncated.
 SCP has a time bound, but its temporary download's size is checked after transfer,
 not enforced as an in-flight disk quota. The private same-user state directory and
@@ -170,11 +191,11 @@ The catalog raw work and client saved-verifier imports reported by the parent do
 not change this pinned base or remove those remaining producer/OS/native blockers.
 No real campaign, native benchmark, cost measurement or cloud resource was used.
 
-Focused tests (fake provider/process controls, local temporary files and one local
-lock-holder child only):
+Focused tests (fake provider/process controls, local temporary files, a local
+lock-holder child and synthetic local validator workers only):
 
 ```sh
-node --test --test-concurrency=1 bench/workloads/cloud-contract.test.mjs bench/workloads/cloud-controller.test.mjs bench/workloads/cloud-audit.test.mjs
+node --test --test-concurrency=1 bench/workloads/cloud-contract.test.mjs bench/workloads/cloud-controller.test.mjs bench/workloads/cloud-audit.test.mjs bench/workloads/cloud-validation.test.mjs
 ```
 
 The existing cloud-contract suite passed before implementation. The added suites
@@ -182,7 +203,18 @@ exercise lost/crashed creates, start loss, active/missing/foreign units, live an
 dead locks, concurrent collect, state/path aliases, hostile archives, hash/tree
 mutation, interrupted extraction, cancellation, uncertain deletion and audit races.
 The test fixtures are manufactured apparatus inputs, never passing native results.
-Measured focused result at this checkpoint: 30 passed, 0 failed, 0 skipped.
+The independent review of `616a8a245f7988d1505ec9e1c97cd0d144382e4a`
+identified high-bit exit-marker acceptance and implicit-directory expansion before
+the tree limit. Permanent tests reproduced both failures before these repairs;
+the original 30 tests still passed. A separate test reproduced the unbounded
+inspection cancellation. Added checks exercise the roughly 25 KiB compressed
+archive bomb (over 126,000 implied nodes) without writing it, the unchanged exact
+100,000-node boundary, pre-write component/depth/absolute-path bounds, stalled-inspection locks, late
+results, and cancellation/deadline termination of a synchronously busy fake native
+validator. These repairs require fresh independent review; they do not clear the
+native campaign findings above.
+
+Measured focused repair result: 40 passed, 0 failed, 0 skipped.
 
 No dependencies were added. No renderer, runtime or request path changed, so those
 performance measurements are inapplicable. Per the bounded ownership and fake-only

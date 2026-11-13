@@ -10,6 +10,7 @@ import { ownedDroplet, remoteFiles, reservation, tags, terminalUnit } from "./cl
 import { archiveMembers, digest, durable, extractArchive, physical, regular, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerState, full, parseDropletArgs, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditScript } from "./cloud-audit.mjs";
+import { inspectCampaign } from "./cloud-validation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -19,15 +20,9 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
   if (!allowFail && (r.error || r.status !== 0)) throw new Error(`${binary}: ${r.error?.code ?? r.status}`);
   return r;
 }
-async function validateCampaign(input) {
-  // Import only local reviewed integration code, never code from a downloaded archive.
-  const native = await import("./isolated/campaign-verify.mjs");
-  assert.equal(typeof native.validateCampaign, "function", "native campaign validator unavailable");
-  return native.validateCampaign(input);
-}
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect = validateCampaign, interrupted = () => false } = {}) {
+  inspect, interrupted = () => false } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   const requested = resolve(options.stateDir); let parent = requested;
   while (!existsSync(parent)) parent = dirname(parent);
@@ -36,7 +31,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state;
+  let state, preserveOperationLock = false;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
@@ -75,7 +70,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   async function locked(fn) {
     boundary(); const lock = join(local, "operation.lock");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
-    try { state = read(); check(); return await fn(); } finally { unlinkSync(lock); syncDirectory(local); }
+    preserveOperationLock = false;
+    try { state = read(); check(); return await fn(); }
+    finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
   }
   const verifyArchive = () => {
     const bytes = regular(archive); assert.equal(digest(bytes), state.archiveSha256, "archive changed; preserve host"); return bytes;
@@ -84,13 +81,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     state.fullGroupQualified = false;
     const extracted = join(local, state.evidence); physical(extracted);
     assert.equal(treeHash(extracted), state.evidenceSha256, "evidence changed; preserve host");
-    const marker = regular(join(extracted, "exit-code"), 16).toString("ascii");
+    const markerBytes = regular(join(extracted, "exit-code"), 16);
+    assert.ok(markerBytes.every((b) => b < 128), "invalid exit marker bytes");
+    const marker = markerBytes.toString("ascii");
     full(marker, /(?:0|[1-9]\d{0,2})\n/, "invalid exit marker");
     const exitCode = Number(marker.trim()); assert.ok(exitCode <= 255);
     let report;
     let outcome;
     try {
-      report = await inspect(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }));
+      report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
+        inspect, interrupted, preserveLock: () => { preserveOperationLock = true; },
+      });
+      check();
       outcome = campaignOutcome(report, state, exitCode);
     } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
     // Never retain/print native assertion messages: they may contain private raw values.
