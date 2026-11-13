@@ -270,7 +270,8 @@ Corten is pre-1.0, so any minor version may change the API.
   address or an IPv6 network of 64 bits) may ask nginx for 100 things at once and 20 a second
   after, have 100 answers on their way, and ask 100 times on a connection, and the machine's
   firewall lets it hold 256 connections and open 19 in a second; over the first two the
-  answer is 429, and a connection over the last is let in a second later. A request refused
+  answer is 429, and a connection over the last is let in when its sender tries again, a
+  second later at the soonest. A request refused
   for asking too fast is written to neither of nginx's logs, nor are the redirects of port 80
   and of other names. After an apply the `Site machine` workflow asks the machine for 300
   requests and for 40 connections at once and for 250 requests one after another, and fails

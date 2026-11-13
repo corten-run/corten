@@ -356,7 +356,7 @@ A reader is an IPv4 address or an IPv6 network of 64 bits, as for the streams.
 | live streams | 64, and 3,584 for all readers | 429 | `nginx.conf` (`limit_conn`) |
 | requests on one connection | 100 | the connection ends, and a browser opens another | `nginx.conf` (`keepalive_requests`) |
 | connections held | 256 | the next is reset | `provision.sh` (the firewall) |
-| connections opened | 19 in any one second | the next is let in a second later | `provision.sh` (the firewall) |
+| connections opened | 19 in any one second | the next is let in when its sender tries again, a second later at the soonest | `provision.sh` (the firewall) |
 
 A first visit asks for 14 things, 13 or 14 of them in one second, and twenty reloads one after
 another for 261, 26 or 27 in the busiest second (Chromium; 38 in one of eight runs): all
@@ -366,17 +366,25 @@ to 31.8 without them (four runs each, on a machine busy with other work). Firefo
 every one that reached nginx was answered, in 19 to 31 seconds through the limits and 14 to
 30 without (four runs each). In two of the four runs through the limits Firefox gave up two
 requests of its own, for the page's icons, as the next reload began, and in none of the four
-without; whether the limits have a part in that is not settled (a later try, on a machine
-with no CPU to spare, timed out with them and without). No limit keeps a request under it
-waiting: a refusal is what they add, and a connection opened for one request in a hundred
-(below).
+without. It was not seen again: later, on a machine with no CPU to spare, four more runs
+through the limits, four without and four through the limits with a connection kept for
+1,000 requests were made in turn, and Firefox gave up nothing in the eleven that finished
+(one through the limits timed out, as one without them had an hour before). That is 2 runs
+of 7 through the limits and none of 8 without, and whether the limits have a part in it is
+not settled. No limit keeps a request under it waiting: a refusal is what they add, and a
+connection opened for one request in a hundred (below).
 
 Readers behind one address share its limits: an office, a room of people, a phone
 company's address for many phones. Seven can make a first visit in the same instant and one
 or two a second after that, and the next is refused. Where more than 19 open a connection in
-the same second the rest are let in 19 a second: of 40 opened at once, 19 connected at once,
-19 a second later and 2 a second after that; of 100, the last 5 in the sixth second; all
-were answered. A reader over a limit is answered 429 by nginx, with its own plain page where
+the same second the rest are left unanswered, and each is let in when its sender's TCP tries
+again and fewer than 19 have been let in that second. From a sender that tries every second
+(Linux from 6.5, for its first four tries), of 40 opened at once 19 connected at once, 19 a
+second later and 2 a second after that, and of 100 the last 5 in the sixth second. From one
+that waits twice as long each time (Linux before 6.5, set so for the run), of 40 the last 2
+connected after 3 seconds, and of 100, 19 at 0, 1, 3, 7 and 15 seconds and the last 5 after
+32. All were answered; what Windows and macOS do between tries was not run. A reader over a
+limit of nginx's is answered 429, with nginx's own plain page where
 it was the page that was asked for; a stylesheet or script refused leaves the page without
 it until it is loaded again, and a stream refused leaves the page's readings still. The
 requests and the answers are two lines of `nginx.conf` (`rate=` and `burst=`, and the
@@ -464,10 +472,11 @@ to 23 ms and on a kept one within 6 (three runs of 75 each, with no one else ask
 round trips of TCP and TLS besides, which were not measured.
 
 On the machine itself the workflow asks after every apply (`site-machine.yml`): of 300
-requests at once about 100 are answered and the rest refused, of 40 connections at once
-about 21 wait a second or more, and 250 requests one after another take three connections
-from each of nginx's servers. It fails where nginx refuses too few, no connection waits, or
-a server keeps a connection, and the second is what says the firewall's lines were read
+requests at once about 100 are answered and the rest refused, of 40 connections at once to
+port 80 about 21 wait a second or more, and 250 requests one after another take three
+connections from each of nginx's servers. It fails where nginx refuses too few, no
+connection waits, or a server keeps a connection, and the second is what says the firewall's
+lines were read
 there: where the machine's kernel refuses them, `provision.sh` takes them out and the
 machine serves without the firewall's two counts. The answers on their way and the
 connections held are not asked for there: each takes hundreds of connections held open.
@@ -642,8 +651,9 @@ The limits on one address were checked in the containers that
 firewall's lines were run by ufw itself, as `provision.sh` has them from `ufw allow OpenSSH`
 to the `fi` that ends them: they are read into `ufw-before-input` and `ufw6-before-input`
 after the rule for connections already made and ahead of the rules that open the ports, and
-a second run leaves the same three in each file. The lines for IPv6 were read and never
-counted against, since every request was made over IPv4. The modules they need
+a second run leaves the same three in each file. The lines for IPv6 were counted against in
+a second review's run: of 40 connections at once over IPv6, 21 waited, counted under their
+network of 64 bits. The modules they need
 (`xt_connlimit`, `xt_recent`, `xt_multiport`, `xt_comment`, and `REJECT` for both families)
 are in `linux-modules-6.8.0-149-generic`, which Ubuntu 24.04's `linux-image-virtual` depends
 on; which kernel the droplet runs was not looked at. With one line made to name a match that
@@ -658,21 +668,29 @@ counted the ones it turned away, so an address that kept trying stayed out: of 1
 once, 19 were let in at 0, 7, 12, 20 and 36 seconds and 5 not within 40 (the review's run).
 As it is now, counting only those let in, 100 at once were let in 19 a second and the last 5
 in the sixth second, 60 at once in four seconds and 40 in three (two runs of 40 and of 100,
-one of 60). The same review found the server for the names that redirect keeping an HTTP/1.1
-connection for any number of requests, its `return` being outside a location; with it
-inside, 250 requests one after another took three connections from each server, over
-HTTP/1.1 and HTTP/2, and from port 80 for a redirect and for a challenge file.
+one of 60), from a sender that tries again every second; a second review ran one that waits
+twice as long each time, with the times given above. The first review also found the server
+for the names that redirect keeping an HTTP/1.1 connection for any number of requests, its
+`return` being outside a location; with it inside, 250 requests one after another took three
+connections from each server, over HTTP/1.1 and HTTP/2, and from port 80 for a redirect and
+for a challenge file.
 
 The workflow's step was run as it is written (bash, curl 8.5.0, jq 1.7), with the rig's
 address for the machine's: with the limits, the firewall's lines and one name that redirects
-it said 104 answered, 196 refused, 21 waited and three connections for each of the three
-servers, and passed in 13 seconds; with nginx's limits and not the firewall's it failed, none
-having waited; with the configuration as it was first written it failed for the name that
-redirects, one connection; with the one before the limits it failed on all three counts; and
-for an address that answers nothing it warned and passed after 24 seconds (as first written
-it asked that address 300 times, one after another, and was stopped after five minutes). It
-has not been run from one of GitHub's runners: it takes the runner's 40 connections to leave
-from one address.
+it said 103 answered, 197 refused, 21 waited and three connections for each of the three
+servers, and passed; with the configuration as it was first written it failed for the name
+that redirects, one connection; with the one before the limits it failed on all three
+counts; and for an address that answers nothing it warned and passed after 24 seconds (as
+first written it asked that address 300 times, one after another, and was stopped after five
+minutes). Those runs had curl take the rig's certificate unchecked. A second review ran the
+step with the certificate in the system's bundle, as a runner trusts a real one, on a
+machine whose firewall had none of the lines, and it passed, 35 of 40 having waited: the 40
+were then made over TLS, and curl reads the bundle for each connection in turn and times a
+connection long made as late. Run again that way, the step as it was said 28 and 31 had
+waited with no lines and 30 and 34 with them. The 40 are now made to port 80: 0 waited with
+no lines, and the step failed, and 21 with them, and it passed (two runs of each). It has
+not been run from one of GitHub's runners: it takes the runner's 40 connections to leave
+from one address, and a runner's TCP to try again within the 20 seconds a request is given.
 
 The site's smoke test, in Chromium and then Firefox on a machine held to one CPU, was run six
 times in turn against the limits as they are now, with two lines of `nginx.conf` changed so

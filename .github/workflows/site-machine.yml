@@ -212,9 +212,13 @@ jobs:
           codes=$(curl -s -Z --parallel-max 100 -o /dev/null -w '%{http_code}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-300]" || true)
           refused=$(grep -c '^429$' <<< "$codes" || true)
           answered=$(grep -c -v -e '^429$' -e '^000$' <<< "$codes" || true)
-          # The count of connections is over one second: these start after the ones above.
+          # The count of connections is over one second: these start after the ones above. They
+          # are made to port 80, which the firewall counts with 443: over TLS curl reads the
+          # runner's certificates for each connection in turn, and a connection long made is
+          # timed late for that alone (28 to 35 of 40 a second or more, with no line in the
+          # firewall).
           sleep 5
-          waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-40]" || true)
+          waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "http://$SITE_DOMAIN/robots.txt?[1-40]" || true)
           late=$(awk '$1 >= 0.9' <<< "$waits" | wc -l)
           echo "Of 300 requests at once, $answered were answered and $refused refused; of 40 connections at once, $late waited a second or more."
           lost=0
@@ -229,7 +233,8 @@ jobs:
           # Over HTTP/1.1, where nginx counts a connection's requests only once it has chosen a
           # location: the site's server, port 80, and the server for the names that redirect.
           urls=("https://$SITE_DOMAIN/robots.txt" "http://$SITE_DOMAIN/robots.txt")
-          for name in $(jq -r '.[]' <<< "$REDIRECTS"); do
+          names=$(jq -r '.[]' <<< "$REDIRECTS")   # read first, as in the step above
+          for name in $names; do
             at+=(--resolve "$name:443:$ADDRESS")
             urls+=("https://$name/robots.txt")
           done

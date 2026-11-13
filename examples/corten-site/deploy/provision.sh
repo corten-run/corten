@@ -106,9 +106,10 @@ ufw allow 443/tcp
 # memory, or open one after another and ask its hundred requests on each. So one reader (an
 # IPv4 address or an IPv6 network, as in nginx.conf) holds 256 connections to nginx at a
 # time, where the next is reset, and opens 19 in any one second, where the next is left
-# unanswered and its sender's TCP tries again a second later. Only a connection let in is
-# counted (the line that drops looks, and the line after it writes), so an address that
-# keeps trying is let in 19 a second and no fewer. The second count is `recent`'s, which
+# unanswered and its sender's TCP tries again: a second later, and after that every second
+# or twice as long each time, as that sender does. Only a connection let in is counted (the
+# line that drops looks, and the line after it writes), so an address that keeps trying is
+# let in 19 in each second it tries in. The second count is `recent`'s, which
 # remembers the last 100 addresses and forgets the oldest, so with more than 100 addresses
 # opening connections in a second it counts none of them for long. It is ufw's own for
 # `ufw limit`, and a table that refuses a new address when it is full (`hashlimit`'s) could
