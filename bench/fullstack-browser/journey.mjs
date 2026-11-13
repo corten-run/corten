@@ -9,7 +9,7 @@ import { labels } from "../marketplace/records.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
-import { PlatformLifecycle } from "./lifecycle.mjs";
+import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -96,19 +96,20 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
-    lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession()); await lifecycle.enable();
+    lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
     network.attachCDP(cdp);
     const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
-    await cdp.send("Runtime.enable");
-    await cdp.send("Network.enable"); await cdp.send("Page.enable"); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    await lifecycle.enableDomains(); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: environment.cpu });
+    await lifecycle.startObservation();
     // No native 404/error page is used as a start document: its late subresource
     // events would contaminate the next action's ledger. This is a diagnostic
     // about:blank arrival, not the historical cross-site timing profile.
     await page.goto("about:blank");
     evidence.resourceBaseline = await resources.checkpoint();
     await network.drain(); network.rows.length = 0; network.failures.length = 0; runtimeErrors.length = 0;
+    lifecycle.markApplicationStart();
     try {
       evidence.storeBefore = await readStore(base, readback, context.request);
       if (evidence.storeBefore.outcome === "read") assert.deepEqual(evidence.storeBefore.alerts, [], "fresh case must start with an empty independent alert store");
@@ -185,8 +186,12 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         } catch (e) { row.readback = e.readback ?? { outcome: "failed", reason: e.message, alerts: null }; row.failures.push(e.message); }
       }
       row.resources = await resources.checkpoint();
+      lifecycle.recordDocument(row.dom, row.resources);
       row.retired = resources.retired(previousResources, row.resources);
-      if (previousResources && previousResources.realm !== row.resources.realm) row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
+      if (previousResources && previousResources.realm !== row.resources.realm) {
+        row.platformRetirement = { realm: previousResources.realm, retiredAt: at };
+        row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
+      }
       if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
       if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
@@ -229,7 +234,17 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
   finally {
+    if (lifecycle) try { await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] }); }
+    catch (error) { evidence.failures.push(`Platform terminal observation: ${error.message}`); }
     evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
+    if (evidence.platformLifecycle) {
+      evidence.platformRetirementProofs = evidence.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id,
+        proof: validatePlatformRetirement(evidence.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));
+      if (evidence.nativeCleanup?.before?.realm !== evidence.nativeCleanup?.after?.realm && evidence.nativeCleanup?.navigation)
+        evidence.platformCleanupProof = validatePlatformRetirement(evidence.platformLifecycle, { realm: evidence.nativeCleanup.before.realm,
+          retiredAt: evidence.nativeCleanup.navigation.at, observationMs: settings.observationMs });
+      if (!profile.js) evidence.noJSRequestProof = classifyNoJSRequests(evidence.platformLifecycle);
+    }
     if (network) { await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows); }
     const beforeClose = performance.now();
     try {

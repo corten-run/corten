@@ -6,7 +6,7 @@ still has unknown retired DOM/probe results, never fabricated zero resource coun
 
 ## Receipts
 
-The runner saves `native-browser-platform-lifetimes/v1` before harness context closure.
+The runner saves `native-browser-platform-lifetimes/v2` before harness context closure.
 `harnessClosedLifecycle` is a separate journal after that closure and cannot certify native
 navigation cleanup. CDP sessions are local to the runner's owned Chromium browser.
 
@@ -40,6 +40,51 @@ Shared/service worker targets may outlive a document. Discovery is not proof of 
 ownership, and page Network events do not enumerate worker-owned sockets. No browser global,
 delegated framework listener or persistent worker is silently exempted from resource gates.
 
+## Owned pure validators
+
+`validatePlatformRetirement(journal, { realm, retiredAt, observationMs: 250, maxProbeMs: 1000 })`
+returns `native-platform-retirement-proof/v1` with `outcome: proved|unknown|failed` and exact
+binding/destruction/replacement/probe/request/socket receipts. `retiredAt` is an actual host
+navigation-dispatch observation in the journal's `node.performance.now` clock. This is a
+separate evidence predicate, not shared-oracle acceptance or native qualification.
+
+The v2 journal includes successful Runtime/Page/Network enable receipts, browser target
+discovery, initial and terminal `Target.getTargets` inventories and continuously observed
+execution contexts. CDP has no separate query for all live page execution contexts: the
+context inventory is explicitly derived from Runtime.enable enumeration and continuous
+created/destroyed/cleared events. The validator reconciles both inventories against those
+events. Coverage/session failures, missing unique identities, other same-context page/iframe
+targets, child-frame contexts or any application-context dedicated/shared/service worker
+target make proof unknown. Unknown browser-context ownership is not assumed unrelated.
+Targets explicitly assigned to another browser context are not charged to this consumer.
+
+The realm association itself reads the actual observer realm using `uniqueContextId`, not
+a recyclable numeric context ID. A matched destruction/clear plus a different committed
+loader and default context is required. BFCache/swap-only evidence cannot pass. The final
+constant-read probe records both start and completion times; exact context-not-found must
+complete within its declared bound in the terminal observation interval. Live execution
+fails; timeout, generic protocol/session errors and absent evidence are unknown.
+
+Every page-network dispatch retains native request/frame/loader IDs, parser initiator,
+document path, redirect status and terminal success/failure receipt. Failed requests remain
+in `nativeFailures`, never become successful work. The predicate requires terminal page
+requests and socket close receipts; an open page socket has unknown initiator ownership,
+not an infrastructure exemption. Old-loader dispatch after destruction fails. This proves
+neither native functional parity nor server peer closure, upstream cancellation, fresh
+retired DOM, zero resources or a retired event probe.
+
+`classifyNoJSRequests(journal)` returns `native-no-js-request-proof/v1`, retaining every
+request and native failure. It binds actual script-disabled context configuration, native
+document/frame/loader, CDP parser initiator, DOM stylesheet/image/preload declarations and
+observed header/meta CSP facts. Parser assets require direct parser provenance or a known
+stylesheet initiator. The existing strict intentional-disabled-preload predicate remains
+unchanged; Chromium can report its initiator as script/about:blank, which is retained, not
+relabeled parser. A real CSP, unbound request, unrelated abort or application transport is
+not classified away. Neither validator filters the strict export or changes qualification.
+
+Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
+and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
+
 ## Separately reviewed contract delta
 
 A proposed alternative retirement record should retain old realm/context/unique/frame/loader
@@ -68,8 +113,8 @@ browser context throughout the interval, could establish that worker-network cov
 applicable. That is different from assuming unknown workers are absent. Existing targets,
 unknown browser-context ownership, discovery gaps and targets without terminal receipts need
 an explicit outcome; a persistent framework worker is not an automatic exemption. A final
-target inventory and peer-side stream/socket receipts are additional evidence endpoints, not
-currently implemented journal coverage.
+target inventory is now captured and reconciled by the owned pure predicate above. Peer-side
+stream/socket receipts remain unimplemented, explicitly unclaimed evidence endpoints.
 
 ## No-JS request boundary
 
