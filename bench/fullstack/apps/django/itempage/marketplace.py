@@ -79,7 +79,9 @@ class MarketplaceSource:
     def get(self, record_id, traceparent=None):
         if self.fixture is not None:
             return self.fixture.get(record_id)
-        context = {} if traceparent is None else {"headers": {"traceparent": traceparent}}
+        # WSGI decodes header bytes as Latin-1; Requests validates str whitespace
+        # as Unicode, which would reject legal obs-text such as 0x85 and 0xa0.
+        context = {} if traceparent is None else {"headers": {"traceparent": traceparent.encode("latin-1")}}
         response = self.session.get(f"{self.base}/marketplace/records/{requests.utils.quote(record_id, safe='')}", allow_redirects=False, timeout=10, **context)
         if response.status_code == 404:
             return None

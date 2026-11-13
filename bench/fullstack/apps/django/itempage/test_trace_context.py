@@ -119,6 +119,38 @@ class TraceContextHttpTests(LiveServerTestCase):
 
 
 class TraceFixtureTests(SimpleTestCase):
+    def test_native_requests_preserve_wsgi_obs_text_header_bytes(self):
+        observed = []
+
+        class Upstream(BaseHTTPRequestHandler):
+            def do_GET(self):
+                observed.append(self.headers.get("traceparent"))
+                body = json.dumps(RECORDS["item_1"]).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+        thread = Thread(target=upstream.serve_forever)
+        thread.start()
+        with patch.dict(os.environ, MARKETPLACE_SOURCE="api", API_BASE=f"http://127.0.0.1:{upstream.server_port}"):
+            source = MarketplaceSource()
+        try:
+            for trace in ("\xa0", "\x85", "\xe9", FIRST, None):
+                with self.subTest(trace=trace):
+                    self.assertEqual(source.get("item_1", trace), RECORDS["item_1"])
+            self.assertEqual(observed, ["\xa0", "\x85", "\xe9", FIRST, None])
+            self.assertNotIn("traceparent", source.session.headers)
+        finally:
+            source.session.close()
+            upstream.shutdown()
+            upstream.server_close()
+            thread.join()
+
     def test_fixture_never_fetches_even_with_trace_context(self):
         with TemporaryDirectory() as directory:
             fixture = Path(directory) / "records.json"

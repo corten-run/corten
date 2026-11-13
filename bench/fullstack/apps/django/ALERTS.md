@@ -69,6 +69,9 @@ This is transparent forwarding, with no exporter, child span or identity repair.
 Missing headers stay absent. Malformed headers pass through unchanged so the
 mixed runner can retain invalid/orphan evidence, never silently charge the
 currently active operation. No parser, timeout or worker setting changes.
+At the Requests boundary the WSGI Latin-1 string is restored to its original
+header bytes. This avoids Requests treating legal non-ASCII bytes as Unicode
+leading whitespace and rejecting an otherwise accepted request.
 
 Run `python -m django test itempage.test_trace_context --noinput` in this directory
 in both profiles (matched: `PROFILE=matched HOSTS=127.0.0.1,localhost,testserver`).
@@ -76,6 +79,8 @@ The real native live HTTP server and upstream overlap distinct valid contexts,
 delay the first fetch until a newer request completes, hold an upstream body,
 and cover JSON, every locale's page and accepted POST/readback, missing/invalid
 headers, subsequent untraced requests and fixture bypass. This does not qualify
+the production server's header parser; a separate native Requests/upstream socket
+regression retains the exact `0x85`, `0xa0` and `0xe9` header bytes. It does not qualify
 the WSGI lifetime behavior documented below or measure performance. New source
 hashes still require an independent native source audit, not a self-issued receipt.
 

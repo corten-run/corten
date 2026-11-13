@@ -27,6 +27,12 @@ Corten is pre-1.0, so any minor version may change the API.
   session-isolated readback for accepted writes. Their adapters retain native
   LiveView, Turbo and Livewire behavior; group qualification remains separate.
 
+- Native FastAPI, Django and Spring marketplace page, JSON and alert source reads
+  forward trace headers per request, without changing shared client headers or
+  successful payloads. Concurrent, delayed and untraced native HTTP regressions
+  check isolation, including non-ASCII header bytes in FastAPI and Django. These observations
+  support source auditing; they do not qualify mixed-workload performance.
+
 - Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
   marketplace forms persist accepted alerts with session-isolated readback,
   preserve their framework's enhanced and plain-form paths, and reject writes
