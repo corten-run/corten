@@ -31,13 +31,15 @@ public sealed class MarketplaceSource
         }
     }
 
-    public async Task<MarketplaceRecord?> Get(string id)
+    public async Task<MarketplaceRecord?> Get(string id, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (fixture is not null) return fixture.GetValueOrDefault(id);
-        using var response = await http.GetAsync($"/marketplace/records/{Uri.EscapeDataString(id)}");
+        using var response = await http.GetAsync($"/marketplace/records/{Uri.EscapeDataString(id)}",
+            HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<MarketplaceRecord>(Json)
+        return await response.Content.ReadFromJsonAsync<MarketplaceRecord>(Json, cancellationToken)
             ?? throw new JsonException("Missing marketplace record");
     }
 }
