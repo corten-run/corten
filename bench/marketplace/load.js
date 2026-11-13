@@ -15,6 +15,9 @@ export const options = {
 };
 // Every answer but a 200 is a failed request (k6 would count a 3xx as served).
 http.setResponseCallback(http.expectedStatuses(200));
+export function handleSummary(data) {
+  return { "/tmp/marketplace-clock.json": JSON.stringify({ testRunDurationMs: data.state.testRunDurationMs }) };
+}
 export default function () {
   const id = 1 + Math.floor(500 * Math.pow(Math.random(), 2));
   const path = target === "json" ? "/api/marketplace/item_" : `/marketplace/${__ENV.LOCALE}/item_`;

@@ -19,6 +19,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
+
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
   the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`

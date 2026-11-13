@@ -245,6 +245,7 @@ npm run check:marketplace
 node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
 node bench/marketplace/run.mjs w2 --group production --build --passes 3
+node bench/marketplace/validate.mjs bench/marketplace/results/w2 w2 <measured-full-commit>
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
 
@@ -278,6 +279,134 @@ this way are schema `marketplace-results/v5`, with raw feature qualification for
 The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
 failed the round). Historical full-inventory results do not compare with qualified groups.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
+
+### Saved raw evidence
+
+New native runs retain `evidenceVersion: "marketplace-raw/v2"` alongside the unchanged
+`marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
+`validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
+above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
+the merged summary alone is not a producer folder. The historical summary reporter remains
+available, but its success is not raw-evidence validation. Old folders without the new
+receipts fail closed; do not backfill them with inferred observations.
+
+The replay checks both sources, every localized page and neutral JSON profile/pass/phase,
+exact per-pass metrics and aggregates, raw qualification and browser/content gate results,
+image IDs and clean source labels, the saved fixture bytes and local source commit tree,
+container configuration and capacity settings, cold probe output and Docker clock, cgroup
+CPU before/after counters, and Docker memory/CPU sample histories. Gate containers must
+finish before load. Runs must follow the native rotated serial pass plan without overlapping
+windows. Tool entrypoints/commands and exact, non-overlaid checkout/fixture/output mounts
+must match the native invocation. Stopped profiles use the existing stop/event rules, not invented zero
+measurements. Missing or malformed receipts (including deleted raw files) are invalid, not
+an absent-proof fallback. No capability requirement or nightly capacity policy is relaxed.
+
+API phases require at least one observed upstream record answer for each successful k6
+request (`http_reqs.count - failed`), rather than merely a nonzero read count. Failed or
+timed-out requests may also read upstream, so reads need not equal successful traffic.
+Stopped phases must retain the complete latency, failure, aggregate-check and named-check
+export even if every request failed; they never become numeric passing phases. Stop-sidecar
+states must be healthy and agree with their retained runtime snapshots. CPU observations
+are ordered by actual serial phase windows and must be cumulative per container ID, including
+the shared upstream across apps/profiles/passes. A stopped phase's pre-load counter remains
+a lower bound when its post-load counter is unavailable. Gates cannot start before the
+specific checked app's retained start time.
+
+The native script makes one HTTP request and two ordered named checks per iteration.
+Replay requires `iterations`, `vus_max`, the HTTP failure rate's actual true/false sample
+counts, and the aggregate check rate/counts, not just their ratios. Each named check must
+cover every completed iteration and at most every request; the content check cannot
+outnumber the preceding status check. Their pass/fail sums must equal the aggregate checks.
+Status passes/failures cannot exceed the corresponding HTTP success/failure counts.
+Only observed unfinished iterations (`http_reqs.count - iterations.count`), bounded by
+the observed maximum VUs and the native scenario's VU limit, can lack checks. There is no
+percentage-of-traffic cutoff waiver. Rate ratios allow only `1e-12` float64/JSON rounding.
+Fixed-rate drops and failed requests remain app outcomes, not a new admission test.
+All exported HTTP and iteration latency trends require nonnegative finite values, ordered
+percentiles below the maximum, and a mean bounded by the maximum and its contribution
+over at most the request count. These checks also apply to stopped phases.
+For each linear-interpolated nonnegative quantile `q(p)`, the mean must also lie
+between `(1-p)*q(p)` and `p*q(p) + (1-p)*max` (with relative `1e-12` rounding).
+For known request/iteration sample counts replay tightens these limits using the
+actual interpolated order-statistic position, including one- and two-sample cases.
+Every latency maximum must fit the retained engine elapsed clock, allowing only
+1 ns conversion rounding or relative `1e-12`, whichever is larger. Total HTTP and
+completed-iteration duration work cannot exceed maximum VUs times engine elapsed;
+HTTP work must fit completed iteration work plus the maximum duration of each
+unfinished request. These are feasibility checks, not latency admission thresholds.
+
+The generator receipt must retain the producer's **2 GiB** limit, not the app's
+1 GiB limit. Fixed requests plus dropped iterations cannot exceed the number of
+arrival slots in the actual engine elapsed window. Replay uses the executor's
+integer-nanosecond `floor(1e9 / RATE)` tick, slot zero and 1 ns clock conversion
+rounding. Using the whole elapsed window, including graceful stop, is conservative
+with respect to scheduling jitter; it is not a fixed percentage waiver. Real capacity
+drops within this bound remain app outcomes.
+
+CPU deltas must fit their enclosing retained phase window and the participant's
+quota and logical CPU count. Absolute counters must also fit the container lifetime;
+the pre-load counter precedes generator start, while the post-load counter precedes
+receipt completion. The upper bound allows 2 ms for the two wall-clock endpoints,
+two partial CFS periods and a conservative whole period per CPU for non-expiring
+CPU-local runtime slices, capped by physical CPU time. NanoCPU limits use Docker's
+default 100 ms period; explicit CFS periods must be within Linux's 1 ms to 1 s range.
+See [Linux CFS bandwidth and runtime-slice caveats](https://docs.kernel.org/scheduler/sched-bwc.html).
+Every pinned CPU in every role must belong to the retained host online-CPU set,
+not just have a plausible index or cardinality. The parsed inventory also bounds
+each Docker CPU sample to `100 * online logical CPUs` percent, with only `0.005`
+percentage points for Docker's two-decimal display rounding. Instantaneous samples
+are not capped at the role's quota; cumulative cgroup counters retain the separate
+phase/lifetime quota bounds above.
+Each raw Docker memory sample and its displayed limit must fit the participant's
+retained memory limit. The only display allowance is half a four-significant-digit
+step from [Docker's `BytesSize` formatter](https://github.com/docker/go-units/blob/master/size.go),
+including omitted trailing zeroes, not a percentage of the container's capacity.
+
+Upstream control snapshots retain both per-record requests and status answers. The native
+upstream increments both synchronously before serving a control GET, so their totals must
+match. Both counter maps must be monotonic locally and across serial observations of the
+same upstream container, including gaps between apps/profiles/passes; load never resets them.
+Every container start must fall within the round and precede the observations it supports,
+including upstream-backed gates/cold starts and shared CPU reads. Repeated identities must
+keep the same start time. A healthy phase cannot carry sidecar/event observations that the
+producer only reads on the stopped-app path.
+
+Each phase also retains `<phase>-clock.json`, written by the real load script's
+`handleSummary` callback. Its `state.testRunDurationMs` is k6's counter-rate denominator,
+including graceful completion, not the configured duration or Docker lifetime. The legacy
+metric export remains unchanged. Replay checks every exported counter's count/rate against that clock with relative
+`1e-12` float64/JSON rounding tolerance. The configured-duration lower bound allows only
+1 ns of conversion rounding. The Docker/engine window comparison allows 2 ms for
+sub-millisecond Docker timestamps truncated by `Date.parse`; engine startup,
+shutdown and graceful-stop jitter are not waived as rate error. Generator success and
+clock consistency are required even when the app stops. The producer-path mock executes
+the actual callback and copy helper with sub-ms and graceful-completion durations; it does
+not claim a real load measurement. Setting `MARKETPLACE_PRODUCER_MOCK=1` when running
+`node --test bench/marketplace/load-evidence.test.mjs` additionally exercises the pinned
+real k6 image against an isolated, delayed HTTP mock, then removes all test containers and
+temporary receipts. Both fully served and all-failed exports exercise the complete schema
+parser; the all-failed export still cannot qualify as a numeric measurement.
+It requires cached images, never pulls, publishes no ports, and has
+no external network. Saved replay itself never invokes this test or Docker.
+See [k6's summary clock and metric conversion](https://github.com/grafana/k6/blob/master/internal/js/summary.go).
+The check/iteration cutoff rules follow [k6's ordered check sample emission](https://github.com/grafana/k6/blob/master/internal/js/modules/k6/k6.go)
+and [completed iteration sample emission](https://github.com/grafana/k6/blob/master/internal/js/runner.go).
+Earlier raw versions without this independent clock remain historical and fail saved replay;
+do not synthesize clocks from their counts/rates.
+
+Cleanup retains the actually created/removed container, network and anonymous-volume
+identities, checks anonymous volumes after `docker rm -f -v`, and records the final owned
+container/network inventories. Empty failure arrays alone do not establish cleanup.
+These are replayable observations, not tamper-proof image/build attestations or a new
+qualification system; functional checks alone do not establish native implementation.
+
+Saved replay never runs Docker or a browser, contacts a service, writes files, or fetches
+Git objects. The exact source commit must already exist locally; Git replacement objects
+and lazy fetching are disabled. Supply a stationary local evidence folder, not a live
+runner output. UNC/device paths, symbolic links/junctions, multiply linked files and
+non-regular entries are rejected. Reads check file identity/size before and after opening,
+with bounds of 25,000 entries, depth 8, 32 MiB per read and 512 MiB total. The validator
+does not follow artifact-controlled paths or execute artifact content.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace
 fixture with a new label: normal records have 25 listings, 12 offers, images, badges, fields,
