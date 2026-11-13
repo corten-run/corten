@@ -56,6 +56,7 @@ try {
   for (const source of ['fixture', 'api']) {
     active = `compiled-alerts-${app}-${source}-${process.pid}`;
     docker('run', '-d', '--name', active, '--cpus', '1', '--memory', '512m',
+      ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
       '--label', 'agent.owner=codex', '--label', 'agent.task=compiled-alerts',
       '-e', `PROFILE=${profile}`,
       '-p', '127.0.0.1::8080', '-v', `${folder}:/fixtures:ro`,
