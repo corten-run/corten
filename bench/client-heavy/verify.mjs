@@ -114,7 +114,8 @@ async function snapshot(folder) {
 function committed(commit) {
   if (cachedCommit === commit) return cachedSources;
   const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
-    maxBuffer: limits.totalBytes, stdio: ["pipe", "pipe", "pipe"], timeout: 10000 });
+    maxBuffer: limits.totalBytes, stdio: ["pipe", "pipe", "pipe"], timeout: 10000,
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" } });
   need(git(["rev-parse", `${commit}^{commit}`]).toString().trim() === commit, "unknown-commit");
   const entries = git(["ls-tree", "-r", "-z", commit, "--", "crates", "bench/client-heavy", "bench/browser/gen",
     "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json"])
@@ -231,6 +232,8 @@ export async function validateSaved(request) {
     need(value.schema === "client-heavy-native/v1" && value.group === "client-heavy" && value.round === request.round, "wrong-run-identity");
     need(same(value.selectedApps, apps) && same(value.definition, definition("client-heavy")), "incomplete-or-changed-registry-inventory");
     need(object(value.cells) && same(Object.keys(value.cells).sort(), [...apps].sort()), "incomplete-cell-inventory");
+    need(value.builds === null || (object(value.builds) && same(Object.keys(value.builds).sort(), [...apps].sort())),
+      "incomplete-build-inventory");
     need(typeof value.passed === "boolean" && value.readyForLoad === false, "invalid-summary-readiness");
     const w = value.effectiveWorkload;
     need(object(w) && same(w, createClientWorkload({ seed: w.seed, rowCount: w.rowCount, largeRowCount: w.largeRowCount,
@@ -248,7 +251,7 @@ export async function validateSaved(request) {
       }
     } else report.blockers.push("missing-cleanup-failure-ledger");
     if (value.cleanupFailures?.length) report.blockers.push("recorded-terminal-cleanup-failure");
-    if (value.failure) {
+    if (Object.hasOwn(value, "failure")) {
       keys(value.failure, ["reason", "name", "diagnosticSha256"]);
       need(["runner-failed", "native-runner-interrupted"].includes(value.failure.reason)
         && typeof value.failure.name === "string" && digest(value.failure.diagnosticSha256), "invalid-runner-failure");
@@ -291,13 +294,17 @@ export async function validateSaved(request) {
   });
   let builds;
   if (output.builds === null) report.blockers.push("native-builds-not-saved");
-  else builds = await check("native/build.json", () => {
+  if (files.has("native/build.json")) builds = await check("native/build.json", () => {
     const value = json("native/build.json");
     need(same(value, output.builds), "raw-builds-differ-from-summary");
     need(object(value) && same(Object.keys(value).sort(), [...apps].sort()), "incomplete-build-inventory");
-    need(same(json("native/workload.json"), output.effectiveWorkload), "native-workload-differs-from-plan");
     return value;
   });
+  else report.blockers.push("missing-native-build-file");
+  if (files.has("native/workload.json")) await check("native/workload.json", () => {
+    need(same(json("native/workload.json"), output.effectiveWorkload), "native-workload-differs-from-plan");
+  });
+  else report.blockers.push("missing-native-workload-file");
   const allowed = new Set(["result.json", "native/build.json", "native/workload.json", ...apps.map((app) => `${app}.json`)]);
   for (const app of apps) {
     const names = app === "corten" ? ["index.html", "client.js", "runtime.js", "views.js", "screen.html", "client.footer.js", "views.d.ts", "build.log", "failure.log"]
@@ -364,7 +371,7 @@ export async function validateSaved(request) {
       need(q?.oracle.functionalPassed === true || cell.measurement === null, "measurement-before-qualification");
       const passed = q?.oracle.functionalPassed === true && m?.oracle.functionalPassed === true;
       need(cell.readyForMeasurement === passed && (cell.outcome === "passed") === passed, "cell-flags-differ-from-raw-replay");
-      if (passed) need(builds?.[app]?.outcome === "built", "passing-cell-without-native-build");
+      if (passed && builds) need(builds[app]?.outcome === "built", "passing-cell-without-native-build");
       report.cells[app].replayPassed = passed;
       if (!passed) report.blockers.push(`unqualified-cell:${app}`);
     });

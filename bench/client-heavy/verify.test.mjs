@@ -250,6 +250,89 @@ test("missing terminal ledger and actual cleanup failures never qualify a run", 
   r = await f.validate(); assert.equal(r.status, "blocked"); assert.ok(r.blockers.includes("recorded-terminal-cleanup-failure"));
 });
 
+async function unrunFixture(t) {
+  const f = await fixture(t);
+  f.result.builds = null; f.result.passed = false;
+  for (const app of apps) f.result.cells[app] = { outcome: "not-run", reason: "runner-failed-before-adapter",
+    qualification: null, measurement: null, readyForMeasurement: false };
+  await f.save();
+  await rm(join(f.folder, "native/build.json"));
+  return f;
+}
+
+test("null summary builds cannot hide a contradictory saved build manifest", async (t) => {
+  const f = await unrunFixture(t);
+  await f.json("native/build.json", { corten: { outcome: "built" } });
+  invalid(await f.validate(), "raw-builds-differ-from-summary");
+});
+
+test("null summary builds cannot hide a malformed saved workload", async (t) => {
+  const f = await unrunFixture(t); await f.write("native/workload.json", "{malformed");
+  const r = await f.validate(); invalid(r, "missing-unreadable-or-malformed-evidence");
+  assert.ok(r.errors.some((e) => e.at === "native/workload.json"));
+});
+
+test("null summary builds still compare a present valid workload with the plan", async (t) => {
+  const f = await unrunFixture(t); await f.json("native/workload.json", {});
+  invalid(await f.validate(), "native-workload-differs-from-plan");
+});
+
+test("missing native proof is blocked without contradicting complete not-run accounting", async (t) => {
+  const f = await unrunFixture(t); await rm(join(f.folder, "native/workload.json"));
+  const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+  assert.equal(r.diagnosticsPassed, true); assert.equal(r.valid, false);
+  assert.ok(r.blockers.includes("native-builds-not-saved"));
+  assert.ok(apps.every((app) => r.cells[app].outcome === "not-run" && r.cells[app].measurement === null));
+});
+
+test("present native manifests are checked independently even when both are malformed", async (t) => {
+  const f = await unrunFixture(t);
+  await f.write("native/build.json", "{malformed"); await f.write("native/workload.json", "{malformed");
+  const r = await f.validate(); assert.equal(r.status, "invalid");
+  assert.ok(["native/build.json", "native/workload.json"].every((at) => r.errors.some((e) => e.at === at)));
+});
+
+test("replayed captures without saved native manifests remain blocked, never ready", async (t) => {
+  const f = await fixture(t);
+  await rm(join(f.folder, "native/build.json")); await rm(join(f.folder, "native/workload.json"));
+  const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors));
+  assert.equal(r.diagnosticsPassed, true);
+  assert.ok(r.blockers.includes("missing-native-build-file")); assert.ok(r.blockers.includes("missing-native-workload-file"));
+  assert.ok(apps.every((app) => r.cells[app].replayPassed === true && r.cells[app].build === null));
+  for (const key of ["valid", "ready", "readyForLoad", "rankingEligible"]) assert.equal(r[key], false);
+});
+
+for (const failure of [false, 0, "", null]) test(`present falsy failure ${JSON.stringify(failure)} is malformed, not absent`, async (t) => {
+  const f = await fixture(t); f.result.failure = failure; await f.save();
+  invalid(await f.validate(), "missing-or-unexpected-fields");
+});
+
+test("offline Git disables inherited promisor lazy fetch for an absent commit", async (t) => {
+  const f = await fixture(t), scratch = await mkdtemp(join(tmpdir(), "client-heavy-git-"));
+  t.after(async () => {
+    const rel = relative(tmpdir(), scratch); assert.ok(rel && !rel.startsWith("..") && !isAbsolute(rel));
+    await rm(scratch, { recursive: true, force: true });
+  });
+  const repository = join(scratch, "repository"), trace = join(scratch, "git-trace.jsonl"), absent = "1".repeat(40);
+  git(["init", "--quiet", repository]);
+  await mkdir(join(scratch, "hooks"));
+  git(["-C", repository, "-c", "user.name=Verifier fixture", "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${join(scratch, "hooks")}`, "commit", "--quiet", "--allow-empty", "-m", "Fixture"]);
+  f.result.provenance.commit = absent; await f.save();
+  const result = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder,
+    "--round", "test-round", "--commit", absent], { encoding: "utf8", timeout: 30000, env: { ...process.env,
+    GIT_DIR: join(repository, ".git"), GIT_WORK_TREE: repository, GIT_TRACE2_EVENT: trace,
+    GIT_NO_LAZY_FETCH: "0", GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "extensions.partialClone", GIT_CONFIG_VALUE_0: "missing",
+    GIT_CONFIG_KEY_1: "remote.missing.promisor", GIT_CONFIG_VALUE_1: "true",
+    GIT_CONFIG_KEY_2: "remote.missing.url", GIT_CONFIG_VALUE_2: join(scratch, "nonexistent-local-remote") } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, "invalid");
+  const events = (await readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const fetches = events.filter((e) => (e.event === "child_start" && e.argv?.some((arg) => ["fetch", "fetch-pack"].includes(arg)))
+    || (e.event === "cmd_name" && ["fetch", "fetch-pack"].includes(e.name)));
+  assert.deepEqual(fetches, [], "read-only Git object queries must not launch a lazy fetch");
+});
+
 test("rejects unknown files and malformed JSON", async (t) => {
   const f = await fixture(t); await f.write("injected.js", "throw new Error('never run');");
   invalid(await f.validate(), "unexpected-artifact-file");
