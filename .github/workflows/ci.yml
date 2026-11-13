@@ -179,6 +179,8 @@ jobs:
           image="corten-playwright-tools"
           run="docker run --rm --network host --ipc host -v $PWD:/src -w /src"
           echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
+          # Saved-source replay must run as the checkout owner, not root over another UID's Git tree.
+          echo "PLAYWRIGHT_SOURCE=$run --user $(id -u):$(id -g) -e HOME=/tmp $image" >> "$GITHUB_ENV"
           # For a test that restarts its server: the runner's docker CLI and socket as well.
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: Marketplace browser oracle
@@ -186,7 +188,7 @@ jobs:
         run: $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
       - name: Native workload group apparatus
         if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
+        run: $PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
       - name: watchlist
         if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |

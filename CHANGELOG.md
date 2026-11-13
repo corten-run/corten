@@ -32,6 +32,7 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Prepare current Git in the browser CI image so native immutable-source checks run
   with replacement objects and lazy fetching disabled, instead of failing on an older CLI.
+  Run source-replay checks as the checkout owner, retaining Git's ownership protection.
 
 - Register the native Rails, Phoenix and Laravel live ports without promoting
   historical captures. Retain Livewire/Reverb wire and DOM evidence, including
