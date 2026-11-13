@@ -121,7 +121,7 @@ const reset = () => {
   }
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
-    "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
+    "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
   if (r.status !== 0) throw new Error(`could not start the item API: ${r.stderr || r.error?.message}`);
 };
 

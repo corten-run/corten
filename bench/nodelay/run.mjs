@@ -50,7 +50,7 @@ try {
   docker("run", "-d", "--rm", "--name", "nodelay-nginx", "--network", network, ...labels, "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, "nginx:1.29-alpine");
   const urls = gaps.flatMap((gap) => apps.map((app) => `http://nodelay-nginx/${app}/burst/${gap}`));
   const client = (rounds, repeat) =>
-    docker("run", "--rm", "--network", network, ...labels, "-v", `${here}:/nodelay:ro`, "node:24-alpine", "node", "/nodelay/client.mjs", String(rounds), String(repeat), ...urls);
+    docker("run", "--rm", "--network", network, ...labels, "-v", `${here}:/nodelay:ro`, "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "node", "/nodelay/client.mjs", String(rounds), String(repeat), ...urls);
   // The first round warms up the apps and opens nginx's connections to them; it also waits for them.
   for (let tries = 0; ; tries += 1) {
     try { client(1, 1); break; } catch (error) { if (tries === 30) throw error; await new Promise((r) => setTimeout(r, 1000)); }
