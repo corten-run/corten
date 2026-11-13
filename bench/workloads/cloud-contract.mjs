@@ -195,7 +195,13 @@ systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
 timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
 export DEBIAN_FRONTEND=noninteractive
 timeout 900 apt-get update -qq
-timeout 900 apt-get install -y -qq git curl ca-certificates build-essential
+timeout 900 apt-get install -y -qq software-properties-common curl ca-certificates build-essential
+# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
+# Distribution Git may lack --no-lazy-fetch; never weaken immutable native queries.
+timeout 900 add-apt-repository --yes ppa:git-core/ppa
+timeout 900 apt-get update -qq
+timeout 900 apt-get install -y -qq git
+timeout 30 git --no-replace-objects --no-lazy-fetch --version >> /bench/host.txt
 timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
 timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash -'
 timeout 900 apt-get install -y -qq nodejs

@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { remoteFiles, reservation, supervisorBootstrap } from "./cloud-contract.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
+test("bootstrap prepares upstream stable Git and proves required immutable-query flags before clone", () => {
+  const job = remoteFiles(state)["job.sh"], clone = job.indexOf("git clone");
+  const ppa = job.indexOf("add-apt-repository --yes ppa:git-core/ppa");
+  const capability = job.indexOf("git --no-replace-objects --no-lazy-fetch --version");
+  assert.ok(ppa >= 0 && capability > ppa && clone > capability);
+  assert.match(job.slice(ppa, capability), /apt-get update -qq[\s\S]*apt-get install -y -qq git/);
+  assert.match(job.slice(0, ppa), /apt-get install -y -qq[^\n]*software-properties-common/);
+  assert.match(job, /git --no-replace-objects --no-lazy-fetch --version >> \/bench\/host\.txt/);
+  assert.match(execFileSync("git", ["--no-replace-objects", "--no-lazy-fetch", "--version"],
+    { encoding: "utf8", windowsHide: true, timeout: 10000, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }), /^git version /);
+});
 test("bootstrap prepares the actual client dependency roots and Node 26 before the fixed entry", () => {
   const job = remoteFiles(state)["job.sh"];
   assert.match(job, /nodesource.com\/setup_26\.x/);
