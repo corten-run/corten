@@ -86,7 +86,7 @@ export function harness(t, flags = {}) {
     }
     assert.fail(`unexpected fake process ${binary}; allowFail=${allowFail}`);
   };
-  return { temp, repo, base, local, statePath, flags, calls, report,
+  return { temp, repo, base, local, statePath, flags, calls, report, run,
     get creates() { return creates; }, get deletes() { return deletes; }, get units() { return units; }, get inspections() { return inspections; },
     seed() { mkdirSync(local); writeFileSync(statePath, JSON.stringify(s)); droplets = [d()]; },
     saved() { return JSON.parse(readFileSync(statePath)); },

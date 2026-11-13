@@ -23,6 +23,19 @@ test("native worker returns only after stopping validator-owned lasting work", {
   assert.equal(retained, false);
 });
 
+test("native worker awaits the fixed asynchronous read-only API without adding authority context", { timeout: 5000 }, async (t) => {
+  const h = await fakeNative(t, 'export async function validateCampaign(input) { await new Promise((r) => setTimeout(r, 25)); return { keys: Object.keys(input).sort(), input, frozen: Object.isFrozen(input) }; }');
+  assert.deepEqual(await h.inspect(h.input), { keys: ["commit", "folder", "round"], input: h.input, frozen: true });
+});
+
+test("asynchronous native rejection is sanitized, settled and cannot become a report", { timeout: 5000 }, async (t) => {
+  const h = await fakeNative(t, 'export async function validateCampaign() { await new Promise((r) => setTimeout(r, 25)); throw new Error("synthetic-private-value"); }');
+  let retained = false;
+  await assert.rejects(h.inspect(h.input, { preserveLock: () => { retained = true; } }), (error) =>
+    /validation unavailable/.test(error.message) && !error.message.includes("synthetic-private-value"));
+  assert.equal(retained, false);
+});
+
 test("native worker cancellation terminates synchronous validator work before lock release", { timeout: 5000 }, async (t) => {
   const h = await fakeNative(t, 'import {writeFileSync} from "node:fs"; export function validateCampaign({folder}) { writeFileSync(folder + "/started", "fake"); while (true) {} }');
   let cancelled = false, retained = false;

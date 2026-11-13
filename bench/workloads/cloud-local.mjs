@@ -1,14 +1,28 @@
 // Physical, bounded local evidence. No provider or campaign execution here.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { safeArchive } from "./cloud-contract.mjs";
 
 export const archiveLimit = 256 * 1024 ** 2, expandedLimit = 512 * 1024 ** 2;
 const treeLimit = 100000, depthLimit = 64, pathLimit = 4096;
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export function resolveStateRoot(path) {
+  const requested = resolve(path); let parent = requested;
+  for (;;) {
+    try {
+      assert.ok(statSync(parent).isDirectory());
+      return resolve(realpathSync(parent), relative(parent, requested));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw new Error("state path missing or inaccessible");
+      const next = dirname(parent);
+      assert.notEqual(next, parent, "state path missing or inaccessible");
+      parent = next;
+    }
+  }
+}
 export function physical(path) {
   const stat = lstatSync(path);
   assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), "physical directory required");

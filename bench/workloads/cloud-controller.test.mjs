@@ -10,7 +10,7 @@ import { archiveMembers, extractArchive } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
 import { validationLimit } from "./cloud-validation.mjs";
 
-test("production cloud execution is disabled, grammar has no tuning/adapter override", (t) => {
+test("core default and unapproved CLI never execute cloud; grammar has no tuning/adapter override", (t) => {
   const h = harness(t), args = ["r21", "--state-dir", h.base, "--collect"];
   assert.equal(parseDropletArgs(args).collect, true);
   for (const tail of [["--apps", "corten"], ["--duration", "15"], ["--provider", "fake"], ["--collect"], ["--commit", commit], ["--detach"]])
@@ -25,7 +25,7 @@ test("detach reserves before one create, reconciles a lost response, uploads fix
   assert.equal(h.calls.filter((c) => c[0] === "ssh" && c.at(-1).startsWith("systemctl start")).length, 1);
   assert.equal(h.calls.filter((c) => c[0] === "scp").length, 3);
   const job = readFileSync(join(h.local, "job.sh"), "utf8");
-  assert.ok(job.includes(`campaign-entry.mjs r21 --commit ${commit} --state-dir /bench/campaign`));
+  assert.ok(job.includes(`campaign-entry.mjs' 'r21' --commit '${commit}' --state-dir '/bench/campaign'`));
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
 });
 test("ambiguous/missing/crashed create and start acknowledgement loss never launch again", async (t) => {
@@ -269,6 +269,7 @@ test("fixed validation deadline preserves archive/host and lock despite late rej
   const h = harness(t); h.seed(); let rejectInspection;
   const pending = h.task({ inspect: () => new Promise((_, reject) => { rejectInspection = reject; }) }).collect();
   const observed = assert.rejects(pending, /validation unavailable/);
+  while (!rejectInspection) await new Promise((r) => setImmediate(r));
   assert.equal(typeof rejectInspection, "function");
   t.mock.timers.tick(validationLimit - 1); await Promise.resolve();
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.equal(h.deletes, 0);
