@@ -335,6 +335,10 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 	alerts := &alertStore{}
 	r.GET("/api/alerts", alerts.read)
 	page := func(c *gin.Context) {
+		var form struct {
+			Email  string `form:"email"`
+			Target string `form:"target_price"`
+		}
 		locale := c.Param("locale")
 		if marketplaceLabels[locale] == nil {
 			c.Status(http.StatusBadRequest)
@@ -356,6 +360,11 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 				c.Status(http.StatusUnsupportedMediaType)
 				return
 			}
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+			if err := c.ShouldBindWith(&form, binding.FormPost); err != nil {
+				c.Status(http.StatusBadRequest)
+				return
+			}
 		}
 		record, err := s.load(c.Request.Context(), c.Param("id"), c.Request.Method == http.MethodPost)
 		if err != nil {
@@ -372,15 +381,6 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 		}
 		view := newMarketplaceView(record, locale, c.Request.URL.Query())
 		if c.Request.Method == http.MethodPost {
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
-			var form struct {
-				Email  string `form:"email"`
-				Target string `form:"target_price"`
-			}
-			if err := c.ShouldBindWith(&form, binding.FormPost); err != nil {
-				c.Status(http.StatusBadRequest)
-				return
-			}
 			message, minor := view.Format.alert(record.Title, form.Email, form.Target)
 			view.Message = message
 			var row *storedAlert
