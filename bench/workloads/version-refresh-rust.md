@@ -98,8 +98,8 @@ cancelled while still compiling to bound the initial check. That attempt did
 not report an installation or application-build success and is not qualification.
 The subsequent existing-Dockerfile production build completed installation of
 cargo-leptos 0.3.12 (`Finished release ... in 109m 31s`, then `Installed package`).
-At the bounded handoff, its optimized WASM compile also completed (`wasm-release`
-in 17m 41s); the CLI installed wasm-bindgen 0.2.130 selected from the locked app
+At the frozen implementation handoff, its optimized WASM compile also completed
+(`wasm-release` in 17m 41s); the CLI installed wasm-bindgen 0.2.130 selected from the locked app
 and started installing its requested wasm-opt `version_123`. The CLI advertised
 newer wasm-opt `version_133`, but no override or opportunistic upgrade was made.
 Its existing `metadata.leptos.env` key is reported as ignored; the Dockerfile
@@ -274,6 +274,59 @@ above 2^53 and i64 bounds, cookie/session isolation, rejected inputs, guards,
 source errors and concurrent writes. In particular, its previously failing
 matched `Cache-Control: no-store` assertion now passes. The original failure is
 not reclassified as a passing run.
+
+### Actual Leptos production image qualification
+
+The existing production build subsequently completed with exit 0, without a
+replacement build or changes to the frozen application source. Its optimized
+WASM compile reported 17m 41s and the SSR release compile reported 32m 40s. The
+CLI completed actual front-end JS/WASM generation with wasm-bindgen 0.2.130 and
+its requested wasm-opt `version_123`, then the Dockerfile copied the server and
+generated site into the pinned trixie runtime. These are diagnostic build times,
+not benchmark throughput measurements. The earlier cancellation and incomplete
+checkpoint above remain historical, not retrospectively passing checks.
+
+The built Leptos source tree is
+`git-tree-sha1:e3147b26e9d51e2cceaeb4115c08267ca968af79`, unchanged between the
+build's initial image-pin revision and the frozen implementation. The immutable
+image ID is
+`sha256:4ef5422fed98c25751c2fb4b3e5f2ed79350f3ad8f3cf029fcdd9b9c0b25a681`.
+Its runtime reports Debian 13.7 and glibc 2.41. SHA-256 identities measured
+inside that image are:
+
+| Built file | SHA-256 |
+|---|---|
+| `/app/server` | `88d15587c80d5cd636bd882ed94e2a1525227c625bd1dda785959a241de5752b` |
+| `/app/site/pkg/item_page.wasm` | `574547d5dab4e80b6cce28888c5bfc812c8be860d42703ac98b66ed9d97ebb4b` |
+| `/app/site/pkg/item_page.js` | `1bd840656b25e9eb39a9efaafcd168df601611b33a013893ca5aafaa67631600` |
+| `/app/site/pkg/item_page.css` | `b8ef1f53bd08c2da9526e39a3656fc01849bd2d85d35f6b88267a0a610f91881` |
+
+The same temporary native driver used for the old-image baseline passes against
+this exact new image in both `defaults` and `matched` profiles. It observes actual
+nonempty JS/WASM/CSS responses and successful browser hydration, checks native
+sorting/show-all, the hydrated server action and related-item navigation without
+document reloads, and checks JS/no-JS routes and fallback navigation. The shared
+catalog smoke contract passes, including byte-identical catalog CSS, escaping,
+prefix filtering, retained form input, empty containers, related links, fixture
+JSON and 404s. Item JSON/404 and native SSE publication checks also pass. The
+temporary driver's SHA-256 is
+`c76722287214ed23cd2184ccd1536a25e5a116f58ca51906d57986234649079e`;
+it is removed after verification rather than becoming an additional benchmark
+runner or a change to the frozen Leptos source.
+
+The existing unchanged command also exits 0 in each profile:
+
+```sh
+node bench/fullstack/apps/gin/check-alerts.mjs leptos IMAGE PROFILE all
+```
+
+It passes both fixture/API sources and JS/no-JS modes, all three locales, paired
+exact money confirmation/readback including values above 2^53 and i64 bounds,
+native forms and server action, session ordering/isolation and cookie attributes,
+rejected inputs, origin guards, malformed/source errors and concurrent writes.
+This completes the new-image Leptos production/assets checks that were missing
+at the frozen handoff; it does not substitute for the parent's integrated review
+or qualify any separately owned live Topcoat image.
 
 This note is not an official grouped-run receipt or a performance measurement.
 Independent review and the parent's integrated checks remain required before
