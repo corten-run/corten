@@ -7,11 +7,13 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
-import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, targetOutcome } from "./evidence.mjs";
+import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, targetOutcome,
+  savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage } from "./evidence.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { payload } from "./probe.mjs";
 import { emissionIdentity } from "./receipts.mjs";
-import { trackedImageBuild, removeOwnedImage, trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalHealthPaths, collectTerminalHealth } from "./lifecycle.mjs";
+import { trackedImageBuild, trackedNetworkCreate, requireSourceControl, failureKind, terminalHealthPaths, collectTerminalHealth, ownedCleanupObservation, ownedContainerRecorder, ownedResourceCleanup } from "./lifecycle.mjs";
+import { nativeBuildContext } from "../mixed-production/build-context.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -27,18 +29,21 @@ export async function run(args) {
   assert.ok(scoped && !scoped.startsWith(".."), "output must be a new directory under bench/hardening/results");
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   const runId = `hardening-${randomBytes(6).toString("hex")}`, label = "run.corten.hardening";
-  const network = `${runId}-net`, active = new Set(), children = new Set(), settling = new Set();
+  const network = `${runId}-net`, children = new Set(), settling = new Set();
+  let currentCell = null, inputFiles, sourceRoot;
   let interrupted = false;
   const interrupt = () => { interrupted = true; for (const child of children) if (!settling.has(child)) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 4, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, savedProofVersion, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 4, cells: matrix(), failures: [], cleanupFailures: [], builds: {}, originalFolder: folder, host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
-  async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false } = {}) {
+  async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false, input, receipt } = {}) {
     timeout ??= cleanup ? budget.cleanup.timeoutMs : 30000;
     if (interrupted && !cleanup) throw new Error("run interrupted");
-    const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+    const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" } }); children.add(child);
+    if (input) { child.stdin.on("error", () => {}); child.stdin.end(input); }
     if (settleOnInterrupt) settling.add(child);
     let output = "", error = "", timedOut = false;
     child.stdout.on("data", (c) => { output = (output + c).slice(-16 * 2 ** 20); if (file) appendFileSync(file, c); });
@@ -46,6 +51,8 @@ export async function run(args) {
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeout);
     try {
       const code = await new Promise((res, rej) => { child.once("error", rej); child.once("close", res); });
+      if (receipt) Object.assign(receipt, { stdout: output.trim(), stderr: error.trim(), exitCode: code, timedOut, interrupted, finishedAt: new Date().toISOString() });
+      if (settleOnInterrupt && (timedOut || code !== 0)) summary.daemonOutcomeUnknown = true;
       if (!(code === 0 && !timedOut && (cleanup || !interrupted))) {
         const failure = new Error(`${binary} ${args.slice(0, 2).join(" ")}: ${timedOut ? "deadline" : code}\n${error || output}`);
         if (settleOnInterrupt && (timedOut || code !== 0)) failure.daemonOutcomeUnknown = true;
@@ -54,31 +61,15 @@ export async function run(args) {
       return output.trim();
     } finally { clearTimeout(timer); children.delete(child); settling.delete(child); }
   }
-  const docker = (args, opts) => command("docker", args, opts);
+  const containers = ownedContainerRecorder({ folder, runId, command: (args, opts) => command("docker", args, opts), cell: () => currentCell, tools: () => tools });
+  const { docker, owned, remove, active } = containers;
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const labels = ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`];
-  async function owned(name, args) {
-    active.add(name);
-    await docker([args[0], "--name", name, ...labels, ...args.slice(1)]);
-    return inspect(name);
-  }
-  async function remove(name) {
-    const ids = await docker(["ps", "-aq", "--filter", `name=^/${name}$`], { cleanup: true });
-    if (ids) { const info = await inspect(name); assert.equal(info.Config.Labels?.[label], runId, "refusing unowned cleanup"); await docker(["rm", "-f", "-v", info.Id], { cleanup: true }); }
-    active.delete(name);
-  }
   const limits = (role) => ["--cpus", String(role.cpu), "--memory", String(role.memory), "--memory-swap", String(role.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536"];
-  const mounted = ["-v", `${repo}:/repo:ro`];
+  let mounted, checkMounts;
   // Mount leaves separately: a missing node_modules mountpoint cannot be created
   // beneath a read-only repository mount in an otherwise clean worktree.
-  const checkMounts = ["-v", `${join(repo, "bench")}:/repo/bench:ro`, "-v", `${join(repo, "scripts")}:/repo/scripts:ro`,
-    "-v", `${join(repo, "package.json")}:/repo/package.json:ro`];
-  const dependencies = resolve(repo, options.nodeModules);
-  assert.ok(existsSync(join(dependencies, "@playwright/test/package.json")), "--node-modules must name an installed pinned dependency tree");
-  assert.equal(JSON.parse(readFileSync(join(dependencies, "@playwright/test/package.json"))).version,
-    JSON.parse(readFileSync(join(repo, "package.json"))).devDependencies["@playwright/test"], "installed browser driver version mismatch");
-  const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
-  const toolRefs = { node: "node:24-bookworm-slim", checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
+  const installedDependencies = resolve(repo, options.nodeModules), dependencies = join(folder, "dependencies");
   const tools = {};
   const images = new Map();
   const fixtureDir = join(folder, "fixtures"); mkdirSync(fixtureDir); json(join(fixtureDir, "marketplace.json"), records());
@@ -86,20 +77,21 @@ export async function run(args) {
   const checkout = async () => ({ commit: await command("git", ["rev-parse", "HEAD"]), dirty: await command("git", ["status", "--porcelain", "--untracked-files=all"]) });
   async function sourceHash(app) {
     const paths = app === "corten" ? ["bench/marketplace/corten", "crates", "Cargo.toml", "Cargo.lock"] : [`bench/fullstack/apps/${app}`];
-    const files = (await command("git", ["ls-files", "--", ...paths])).split("\n").filter(Boolean).sort();
-    return digest(JSON.stringify(files.map((p) => [p, digest(readFileSync(join(repo, p)))])));
+    return digest(JSON.stringify(inputFiles.filter((f) => paths.some((p) => f.path === p || f.path.startsWith(p + "/")))
+      .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map((f) => [f.path, f.sha256])));
   }
   async function appImage(app) {
     if (images.has(app)) return images.get(app);
     const source = await sourceHash(app), tag = `${runId}-${app}`;
     let image;
     if (options.build) {
-      const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
-      const dockerfile = app === "corten" ? join(repo, "bench/marketplace/corten/Dockerfile") : join(context, "Dockerfile");
-      await trackedImageBuild(summary, tag, save, () => docker(["build", ...labels, "--label", `run.corten.marketplace.commit=${summary.commit}`, "--label", "run.corten.marketplace.dirty=false",
-        "--label", `run.corten.marketplace.profile=${featureProfile}`, "--label", `run.corten.hardening.source=${source}`,
-        "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`, "-t", tag, "-f", dockerfile, context], { timeout: 20 * 60 * 1000, file: join(folder, `build-${app}.log`) }));
-      image = JSON.parse(await docker(["image", "inspect", tag]))[0];
+      const expected = inputFiles.filter((f) => app === "corten" || f.path.startsWith(`bench/fullstack/apps/${app}/`));
+      const context = app === "corten" ? rootContext : await nativeBuildContext({ command }, folder, summary.commit, app,
+        expected.map(({ path, sha256 }) => ({ path, sha256 })));
+      const build = await trackedImageBuild(summary, tag, save, () => buildNativeImage(docker, {
+        context, runId, commit: summary.commit, source, tag, files: expected, log: join(folder, `build-${app}.log`),
+      }));
+      image = build.image; summary.builds[app] = build; save();
     } else image = JSON.parse(await docker(["image", "inspect", `cb-marketplace-production-${app}`]))[0];
     assert.equal(image.Config.Labels?.["run.corten.marketplace.commit"], summary.commit, "image source commit mismatch; build current native adapter");
     assert.equal(image.Config.Labels?.["run.corten.marketplace.dirty"], "false", "dirty source image cannot establish provenance");
@@ -120,12 +112,13 @@ export async function run(args) {
   async function ready(namespace, out, image) {
     const name = `${runId}-ready`;
     await owned(name, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), tools.node.Id, "node", "--input-type=module", "-e",
-      'const end=Date.now()+45000; while(true){try{const r=await fetch("http://127.0.0.1:8080/marketplace/en-US/item_1",{signal:AbortSignal.timeout(1000)});await r.arrayBuffer();if(r.status===200)break;}catch{}if(Date.now()>end)throw Error("native startup timeout");await new Promise(r=>setTimeout(r,100));}']);
+      readyScript]);
     try { await docker(["start", "-a", name], { timeout: 50000, file: join(out, "ready.log") }); }
     finally { await remove(name); }
     assert.equal((await inspect(namespace)).Image, image, "native image changed");
   }
   async function cellRun(cell) {
+    currentCell = cell;
     const out = join(folder, cell.key); mkdirSync(out, { recursive: true });
     const prefix = `${runId}-cell`, appName = `${prefix}-app`, upstreamName = `${prefix}-upstream`, edgeName = `${prefix}-edge`, probeName = `${prefix}-probe`;
     let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, error, stage = "image-provenance";
@@ -277,9 +270,22 @@ export async function run(args) {
         json(join(out, "failure.json"), { error: error.stack, startedWall, stage, kind: cell.failureKind }); summary.failures.push({ key: cell.key, stage, kind: cell.failureKind, error: error.message }); }
     }
   }
+  let rootContext;
   try {
     const state = await checkout(); assert.equal(state.dirty, "", "commit scoped runner and native sources before capturing exact provenance");
     summary.commit = state.commit; summary.fixtureSha256 = digest(readFileSync(join(fixtureDir, "marketplace.json")));
+    inputFiles = committedInputs(repo, summary.commit);
+    rootContext = await nativeBuildContext({ command }, folder, summary.commit, "corten", inputFiles.map(({ path, sha256 }) => ({ path, sha256 })));
+    sourceRoot = join(folder, "corten-build-context");
+    const version = JSON.parse(readFileSync(join(sourceRoot, "package.json"))).devDependencies["@playwright/test"];
+    const toolRefs = { node: "node:24-bookworm-slim", checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
+    assert.ok(existsSync(join(installedDependencies, "@playwright/test/package.json")), "--node-modules must name an installed pinned dependency tree");
+    assert.equal(JSON.parse(readFileSync(join(installedDependencies, "@playwright/test/package.json"))).version, version, "installed browser driver version mismatch");
+    mounted = ["-v", `${sourceRoot}:/repo:ro`];
+    checkMounts = ["-v", `${join(sourceRoot, "bench")}:/repo/bench:ro`, "-v", `${join(sourceRoot, "scripts")}:/repo/scripts:ro`,
+      "-v", `${join(sourceRoot, "package.json")}:/repo/package.json:ro`];
+    const dependencyFiles = snapshotDependencies(installedDependencies, dependencies);
+    json(join(folder, "inputs.json"), { schema: "native-hardening-inputs/v1", commit: summary.commit, files: inputFiles, dependencies: dependencyFiles });
     for (const [key, ref] of Object.entries(toolRefs)) tools[key] = JSON.parse(await docker(["image", "inspect", ref]))[0];
     summary.tools = tools; save();
     await trackedNetworkCreate(summary, network, save, () => docker(["network", "create", ...labels, network],
@@ -295,11 +301,17 @@ export async function run(args) {
   } catch (e) { summary.failures.push({ stage: "apparatus", error: e.stack }); }
   finally {
     for (const name of [...active]) try { await remove(name); } catch (e) { summary.cleanupFailures.push(e.message); }
-    for (const name of summary.ownedNetworks ?? []) try { await removeOwnedNetwork(name, runId, docker); } catch (e) { summary.cleanupFailures.push(e.message); }
-    for (const image of summary.ownedImages ?? []) try { await removeOwnedImage(image, runId, docker); } catch (e) { summary.cleanupFailures.push(e.message); }
+    const resourceCleanup = [];
+    for (const [kind, names] of [["network", summary.ownedNetworks ?? []], ["image", summary.ownedImages ?? []]])
+      for (const name of names) try { resourceCleanup.push(await ownedResourceCleanup(kind, name, runId, docker)); } catch (e) { summary.cleanupFailures.push(e.message); }
+    json(join(folder, "resource-cleanup.json"), resourceCleanup);
+    try { json(join(folder, "final-cleanup.json"), await ownedCleanupObservation(docker, runId, children.size, active.size)); }
+    catch { summary.cleanupFailures.push("final owned inventory unavailable"); }
     if (summary.cleanupFailures.length) summary.groupReady = false;
+    containers.seal();
     summary.finishedAt = new Date().toISOString(); save();
-    process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
+    try { json(join(folder, "run-manifest.json"), savedFiles(folder, ["run-manifest.json"])); }
+    finally { process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt); }
   }
   console.log(JSON.stringify({ output: folder, groupReady: summary.groupReady, observed: summary.cells.filter((c) => c.status === "observed").length, invalid: summary.cells.filter((c) => c.status === "invalid").length, notRun: summary.cells.filter((c) => c.status === "not-run").length, cleanupFailures: summary.cleanupFailures.length }));
   return summary;
