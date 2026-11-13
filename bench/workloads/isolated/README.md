@@ -14,6 +14,13 @@ OS observations; missing native proof remains blocked, not skipped or fabricated
 CAMPAIGN.md for the required delegated-unit layout and remaining integration dependencies.
 This does not make an unreviewed or incompletely integrated checkout campaign-ready.
 
+The binding evaluates the committed latest-stable policy against its exact saved manifest
+and lockfile bytes. Offline replay recomputes that result rather than trusting a saved flag.
+A blocked or invalid dependency target prevents comparison eligibility for that group,
+without filtering contenders, suppressing native failures or cancelling the campaign.
+Native replay and cleanup can still complete; the policy status remains beside the results.
+An unrelated target's `not-applicable` status does not replace any native qualification gate.
+
 ## Use
 
 Run from a clean, committed checkout containing this module:

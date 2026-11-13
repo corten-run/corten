@@ -43,6 +43,13 @@ for (const group of groupNames) test(`${group}: binds complete registry, fixed n
   assert.deepEqual(binding.selection.apps, selectedApps(group));
   assert.deepEqual(binding.selection.definition, definition(group));
   assert.equal(binding.selection.contractSha256, contractSha256(group));
+  assert.equal(binding.latestStable.group, group);
+  assert.equal(binding.latestStable.valid, true);
+  assert.equal(binding.latestStable.status, group === "client-heavy" ? "blocked" : "not-applicable");
+  assert.equal(binding.latestStable.groupComparisonEligible, group === "client-heavy" ? false : null);
+  for (const source of Object.values(binding.latestStable.sources)) {
+    assert.equal(binding.sources.files.find((file) => file.path === source.path)?.sha256, source.sha256);
+  }
   assert.equal(binding.coverage.cells.length, selectedApps(group).length * definition(group).cases.length);
   assert.ok(binding.coverage.cells.every((c) => c.implementation === "unknown" && c.parity === "not-run" && c.measurement === "not-run" && c.metrics === undefined));
   assert.equal(e.invocation.executable, "node");
@@ -192,6 +199,9 @@ test("self-rehashed mutations cannot change frozen selection, sources, commands,
     (b) => { b.sources.files[0].sha256 = "0".repeat(64); b.sources.sha256 = deploymentSha256(b.sources.files); },
     (b) => { b.sources.files.pop(); b.sources.sha256 = deploymentSha256(b.sources.files); },
     (b) => { b.sources.files.push({ path: "outside/secret", mode: "100644", sha256: "0".repeat(64) }); },
+    (b) => { delete b.latestStable; },
+    (b) => { b.latestStable.groupComparisonEligible = true; },
+    (b) => { b.latestStable.sources.policy.sha256 = "0".repeat(64); },
     (b) => { b.execution.invocation.executable = "sh"; },
     (b) => { b.execution.invocation.argv.push("--apps", "corten"); },
     (b) => { b.execution.effectiveOptions.duration = 1; },

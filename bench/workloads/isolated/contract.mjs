@@ -8,6 +8,7 @@ import { contractSha256, definition, groupNames, registrySchema, retainedFamilie
 import { runnerFor } from "../run.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { coverage } from "../evidence.mjs";
+import { evaluateLatestStable, latestStableSources } from "../latest-stable.mjs";
 import { cpuSettings, parseArgs as catalogOptions } from "../../catalog/contract.mjs";
 import { host } from "../../catalog/droplet-contract.mjs";
 import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
@@ -121,7 +122,13 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
   definition: clone(definition(group)), apps: selectedApps(group), retainedFamilies: clone(retainedFamilies) });
 
 function subjectFor(r, sources) {
+  const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
+    const bytes = git(["show", `${r.commit}:${path}`]);
+    assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
+    return [key, bytes];
+  }));
   return { schema, request: r, selection: selection(r.group), sourceSha256: sources.sha256,
+    latestStable: evaluateLatestStable({ group: r.group, ...inputs }),
     host: { ...host, allocation: "not-created", isolation: "unverified" } };
 }
 export function reviewSubject(value) {

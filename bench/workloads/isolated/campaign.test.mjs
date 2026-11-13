@@ -138,6 +138,7 @@ function setup(policy = () => true) {
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
     bindings: groupNames.map((group) => ({ request: { group, round: `test${round}`, commit: "a".repeat(40) }, selection: { apps: ["corten", "selected-failure"] },
+      latestStable: { schema: "benchmark-latest-stable-evaluation/v1", group, valid: true, status: "not-applicable", groupComparisonEligible: null },
       execution: { invocation: { executable: "node", argv: [`bench/${group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group}/run.mjs`, `test${round}`] } },
       preparation: { fixtures: [{ executable: "node", argv: ["bench/catalog/fixtures.mjs"] }] }, resources: { requestedCpuEnv: {}, expectedCpus: cpu },
       validation: { artifactRoot: relative(repo, join(temporary, `native-r${round}`, group)).replaceAll("\\", "/") },

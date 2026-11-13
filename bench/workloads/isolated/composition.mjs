@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { latestStableSchema } from "../latest-stable.mjs";
 
 export const commandResult = (record) => Object.fromEntries(["terminal", "code", "signal", "cancelled", "forced", "error", "success"].map((key) => [key, record[key]]));
 
@@ -14,8 +15,11 @@ export function composePhase(binding, native, host, commands, timingAudit = true
     && (native.resources === "verified" || host.resources === "verified")
     && ["verified", "failed"].includes(native.status) && lifecycle && timingAudit;
   assert.deepEqual(native.outcomes.map((r) => r.app), binding.selection.apps);
+  const policy = binding.latestStable;
+  const policyAllowsComparison = policy?.schema === latestStableSchema && policy.group === binding.request.group && policy.valid === true
+    && policy.status === "not-applicable" && policy.groupComparisonEligible === null;
   return { outcome: complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
     nativeStatus: native.status,
-    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && r.outcome === "passed" })),
-    report: { qualification: complete ? "native-replay-passed" : "blocked" } };
+    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison && r.outcome === "passed" })),
+    report: { qualification: complete ? "native-replay-passed" : "blocked", latestStable: policy ?? null } };
 }

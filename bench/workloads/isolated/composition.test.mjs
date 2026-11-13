@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { composePhase } from "./composition.mjs";
-const binding = { request: { group: "live-delivery" }, preparation: { fixtures: [] }, selection: { apps: ["a", "b", "c"] } };
+import { latestStableSchema } from "../latest-stable.mjs";
+const policy = (group, status = "not-applicable") => ({ schema: latestStableSchema, group, valid: true, status, groupComparisonEligible: status === "not-applicable" ? null : false });
+const binding = { request: { group: "live-delivery" }, latestStable: policy("live-delivery"), preparation: { fixtures: [] }, selection: { apps: ["a", "b", "c"] } };
 const native = { status: "failed", attemptComplete: true, cleanupComplete: true, resources: "verified",
   outcomes: [{ app: "a", outcome: "passed" }, { app: "b", outcome: "failed" }, { app: "c", outcome: "unsupported" }] };
 const command = { terminal: true, code: 1, error: null, cancelled: false, forced: false, success: false };
@@ -21,7 +23,22 @@ test("native flags, partial commands, missing OS proof, abort or invalid audit c
   ]) assert.notEqual(composePhase(binding, n, h, c, audit).outcome, "native-validated");
 });
 test("client's real diagnostic exit two is not fabricated failure or exit zero", () => {
-  const b = { ...binding, request: { group: "client-heavy" } }, n = { ...native, status: "verified", outcomes: native.outcomes.map((r) => ({ ...r, outcome: "passed" })) };
+  const b = { ...binding, request: { group: "client-heavy" }, latestStable: policy("client-heavy", "blocked") }, n = { ...native, status: "verified", outcomes: native.outcomes.map((r) => ({ ...r, outcome: "passed" })) };
   assert.equal(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 2 }]).outcome, "native-validated");
   assert.notEqual(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 0, success: true }]).outcome, "native-validated");
+});
+
+test("latest-stable blockers preserve complete native outcomes but never qualify comparisons", () => {
+  const b = { ...binding, request: { group: "client-heavy" }, latestStable: policy("client-heavy", "blocked") };
+  const result = composePhase(b, native, { cleanupComplete: true, resources: "verified" }, [command]);
+  assert.equal(result.outcome, "native-validated");
+  assert.deepEqual(result.appOutcomes.map(({ comparisonEligible, ...row }) => row), native.outcomes);
+  assert.ok(result.appOutcomes.every((row) => !row.comparisonEligible));
+  assert.deepEqual(result.report.latestStable, b.latestStable);
+  for (const latestStable of [undefined, null, { ...binding.latestStable, valid: false },
+    { ...binding.latestStable, group: "json-api" }, { ...binding.latestStable, groupComparisonEligible: true },
+    { ...binding.latestStable, schema: "untrusted" }, { ...binding.latestStable, status: "blocked" }]) {
+    const invalid = composePhase({ ...binding, latestStable }, native, { cleanupComplete: true, resources: "verified" }, [command]);
+    assert.ok(invalid.appOutcomes.every((row) => !row.comparisonEligible));
+  }
 });

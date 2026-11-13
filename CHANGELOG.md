@@ -19,6 +19,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Bind grouped comparison eligibility to the committed offline latest-stable dependency
+  policy while preserving every contender's native outcomes and failed evidence.
+
 - Reconcile grouped deployment manifests with the checked-in Node 26 and .NET 11
   launch paths and native Corten/Topcoat/Leptos live ports. Source registration remains
   separate from qualification; no older captures qualify changed images.
