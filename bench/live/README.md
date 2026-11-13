@@ -53,6 +53,9 @@ source-instance/interval-bound kernel receipts, raw host resource HTTP responses
 and host/browser publication clock alignment. Native frame request IDs must match
 recorded CDP connection requests on the inspected instance's origin. Every resource
 acknowledgement is bounded; resources cannot resurrect after post-detach zero.
+Raw host responses also retain cumulative queue/history peaks in receipt order;
+missing or regressing peaks fail verification. EventSource request timestamps
+are mandatory, so omitting one cannot disable source-before-frame chronology.
 Paint callbacks must follow actual state application, and record order rejects all
 post-detach event processing, including duplicates at the detach timestamp.
 Historical v1/v2 measurements lack required receipts and are not currently
