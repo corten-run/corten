@@ -135,3 +135,9 @@ test("review: measured reader resources cannot borrow an application zero over a
   const body = JSON.parse(r.body); body.pendingTasks = 1; r.body = JSON.stringify(body);
   assert.throws(() => verifyFanout(a, expected), /resource/);
 });
+
+for (const scenario of ["normal", "disconnect", "missed-updates", "gap"]) test(`review: retain unqualified old Corten ${scenario} capture without upgrading controls`, async () => {
+  const a = await artifact(`corten-${scenario}`, new URL("../recoverable-live/evidence/native-recovery-timing-limit/", import.meta.url));
+  assert.equal(a.schema, "native-live-evidence/v1");
+  assert.throws(() => verify(a), /negative native publication control missing/);
+});
