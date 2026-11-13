@@ -1399,9 +1399,14 @@ async fn unknown_urls_and_methods_get_the_error_page_and_the_app_can_replace_it(
     let (status, _, body) = call_with(app(routes(), Some("ada")), "GET", "/nope", None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("<title>Not found</title>") && body.contains(">home</a>"), "in the shell: {body}");
-    let (status, headers, body) = call_with(app(routes(), None), "DELETE", "/", None, None).await;
+    // A method the app implements and the route lacks keeps the route's `Allow`; one no route has
+    // is a 501 with none (RFC 9110 9.1). Both are drawn in the error page.
+    let (status, headers, body) = call_with(app(routes(), None), "OPTIONS", "/", None, None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert!(headers.contains_key("allow") && body.contains("Something went wrong"));
+    let (status, headers, body) = call_with(app(routes(), None), "DELETE", "/", None, None).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(!headers.contains_key("allow") && body.contains("Something went wrong"));
     let custom = App::new(Routes::from(routes())).error_page(oops, ()).router();
     let (_, _, body) = call_with(custom, "GET", "/nope", None, None).await;
     assert!(body.contains("<title>Oops 404</title>") && body.contains("<h1>Lost?</h1>"));
@@ -3932,7 +3937,7 @@ async fn an_upgrade_under_a_nested_api_takes_its_origins() {
             router.oneshot(req).await.unwrap().status()
         }
     };
-    assert_eq!(status("https://inner.example").await, StatusCode::UPGRADE_REQUIRED, "allowed: a oneshot cannot switch");
+    assert_eq!(status("https://inner.example").await, StatusCode::BAD_REQUEST, "allowed: a oneshot cannot switch");
     assert_eq!(status("https://outer.example").await, StatusCode::FORBIDDEN, "the outer API's origin is not the inner's");
     // An inner API that allows no site: the outer's partner may not switch under it either.
     let router = App::new(Routes::new())
@@ -4728,9 +4733,13 @@ async fn api_routes_answer_every_failure_as_json_whatever_the_client_accepts() {
             body.starts_with(r#"{"title":"Bad Request","status":400,"detail":"Invalid URL"#),
             "an extractor's rejection: {body}"
         );
-        let (status, headers, body) = call_with(router.clone(), "DELETE", "/api/post", None, accept).await;
+        let (status, headers, body) = call_with(router.clone(), "GET", "/api/post", None, accept).await;
         assert_eq!((status, &headers["allow"]), (StatusCode::METHOD_NOT_ALLOWED, &"POST".parse().unwrap()));
         assert_eq!(body, r#"{"title":"Method Not Allowed","status":405}"#);
+        // No route has a `DELETE`: the server implements it for no resource.
+        let (status, headers, body) = call_with(router.clone(), "DELETE", "/api/post", None, accept).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert_eq!(body, r#"{"title":"Not Implemented","status":501}"#);
         let (status, _, body) = get("/api/slow").await;
         assert_eq!((status, &body[..]), (StatusCode::SERVICE_UNAVAILABLE, r#"{"title":"Service Unavailable","status":503}"#));
         let (status, _, body) = get("/api/teapot").await;
@@ -5786,8 +5795,9 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "raw"), "a 4xx is sent as it is, not as the error page");
     assert_eq!(headers.get("x-raw").unwrap(), "GET 7");
     assert!(!headers.contains_key("cache-control") && headers["x-content-type-options"] == "nosniff", "{headers:?}");
-    // It answers no write, so another site's is the router's plain 405; another host's read is
-    // the 421 every route gives it, with the headers an unstaged answer gets.
+    // It answers no write, so another site's is the router's plain answer, not the stages' 403: a
+    // 501, since no route in this app takes a `POST`; another host's read is the 421 every route
+    // gives it, with the headers an unstaged answer gets.
     let (status, _, body) = call_with_any(
         router.clone(),
         "POST",
@@ -5795,7 +5805,7 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
         &[("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")],
     )
     .await;
-    assert_eq!((status, body.as_str()), (StatusCode::METHOD_NOT_ALLOWED, ""));
+    assert_eq!((status, body.as_str()), (StatusCode::NOT_IMPLEMENTED, ""));
     let (status, headers, body) =
         call_with_any(router.clone(), "GET", "/ping", &[("host", "rebound.attacker.example:3917")]).await;
     assert_eq!((status, body.as_str()), (StatusCode::MISDIRECTED_REQUEST, "Misdirected request."));
@@ -5844,9 +5854,14 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "not the error page's policy");
     // A method it has no handler for is a plain 405 with the router's `Allow` and the headers
-    // every unstaged answer gets, not the error page.
-    let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
+    // every unstaged answer gets, not the error page; one no route in the app has (`PUT` here) a
+    // plain 501 with no `Allow`, the same way.
+    let (status, headers, body) = call_with(router.clone(), "OPTIONS", "/ping", None, Some("text/html")).await;
     assert_eq!((status, headers["allow"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "GET,HEAD"));
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
+    assert!(!body.contains("<html"), "{body}");
+    let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
+    assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
     assert!(!body.contains("<html"), "{body}");
     // A segment without the route's suffix is a plain 404, not the error page.
@@ -5895,7 +5910,7 @@ async fn the_stages_hold_beside_an_unstaged_route() {
     let (status, _, _) = call_with_any(router.clone(), "POST", "/page", &cross).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
     let (status, _, _) = call_with_any(router, "POST", "/raw/7", &cross).await;
-    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the unstaged one answers no write");
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "the unstaged one answers no write, and no route here takes one");
 }
 
 /// An unstaged JSON route's failure outside an API's prefix is sent as its handler made it: plain
@@ -6130,9 +6145,13 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
     assert_eq!(headers["content-security-policy"], "sandbox");
     let (status, headers, _) = call_with_any(router.clone(), "GET", "/lane/items/seven", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::BAD_REQUEST, problem));
-    let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
+    let (status, headers, _) = call_with_any(router.clone(), "OPTIONS", "/lane/items/7", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, problem));
     assert_eq!(headers["allow"], "GET,HEAD");
+    // One no route in the app has, with no `Allow`.
+    let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_IMPLEMENTED, problem));
+    assert!(!headers.contains_key("allow") && headers["content-security-policy"] == "sandbox", "{headers:?}");
     // A segment without the route's suffix.
     let (status, _, body) = call_with_any(router.clone(), "GET", "/lane/files/a.txt", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "a"));
@@ -6167,9 +6186,14 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
             })
         })
         .router();
-    let (status, headers, body) = call_with_any(shaped, "GET", "/lane/items/0", &[]).await;
+    let (status, headers, body) = call_with_any(shaped.clone(), "GET", "/lane/items/0", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, "application/json"));
     assert_eq!(body, r#"{"type":"error","error":{"code":404,"message":"Not Found"}}"#);
+    // The router's 501, for a method no route in the app has, is in the API's shape too.
+    let (status, headers, body) = call_with_any(shaped, "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_IMPLEMENTED, "application/json"));
+    assert_eq!(body, r#"{"type":"error","error":{"code":501,"message":"Not Implemented"}}"#);
+    assert!(!headers.contains_key("allow"), "{headers:?}");
 
     // A panic there is the API's 500.
     let router = App::new(Routes::new()).api(unstaged_api::api).router();
@@ -6421,8 +6445,10 @@ async fn a_parameter_followed_by_text_is_read_without_it() {
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
         }
     }
-    let (status, _, _) = call_with(router.clone(), "DELETE", "/sitemap/items/3.xml", None, None).await;
+    let (status, _, _) = call_with(router.clone(), "OPTIONS", "/sitemap/items/3.xml", None, None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "a path the route serves, by another method");
+    let (status, _, _) = call_with(router.clone(), "DELETE", "/sitemap/items/3.xml", None, None).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "matched, by a method no route here has");
     // A value that is not the parameter's type is refused as any path parameter is.
     let (status, _, body) = call_with(router.clone(), "GET", "/sitemap/items/x.xml", None, Some("text/plain")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -10574,7 +10600,7 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
 
 /// A route that takes `Upgrade` switches the connection: a WebSocket handshake from the page's own
 /// origin or from a client that is not a browser gets its 101 and then the bytes, one from another
-/// site is refused as a cross-site write is, and a request that does not ask to switch is a 426,
+/// site is refused as a cross-site write is, and a request that does not ask to switch is a 400,
 /// or, where the route takes `Option<Upgrade>`, its other answer.
 #[tokio::test]
 async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() {
@@ -10590,6 +10616,16 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     }
     let routes = Table::new()
         .route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(echo) }))
+        .route(
+            "/ws-400",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::BAD_REQUEST)) }),
+        )
+        .route(
+            "/ws-404",
+            get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(|e| e.with_status(StatusCode::NOT_FOUND)) }),
+        )
+        // `Error::new` on a `corten::Error` keeps its source, here a wrong version, at 500.
+        .route("/ws-500", get(|upgrade: Upgrade| async move { upgrade.websocket(echo).map_err(crate::Error::new) }))
         .route(
             "/tunnel",
             get(|upgrade: Upgrade| async move {
@@ -10610,7 +10646,7 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let app = App::new(Routes::from(routes)).api::<ApiRoot>(|api| {
+    let app = App::new(Routes::from(routes)).error_page(test_error_page, ()).api::<ApiRoot>(|api| {
         api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(echo) })))
             .allow_origin("https://partner.example")
     });
@@ -10658,8 +10694,90 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     let (head, _) = handshake("/ws", "chat", "").await;
     assert!(head.starts_with("http/1.1 400"), "only a WebSocket handshake is accepted as one: {head}");
 
-    let plain = raw_get(addr, "/ws", "").await;
-    assert!(plain.starts_with("HTTP/1.1 426"), "{plain}");
+    // Another version, or none (taken as one it does not support): a 426 that says which.
+    for version in ["sec-websocket-version: 8\r\n", ""] {
+        for path in ["/ws", "/either", "/api/ws"] {
+            for accept in ["text/html", "application/json"] {
+                let refused = raw_get(
+                    addr,
+                    path,
+                    &format!("connection: upgrade\r\nupgrade: websocket\r\n{version}sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\naccept: {accept}\r\n"),
+                )
+                .await;
+                let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+                assert!(head.starts_with("http/1.1 426"), "{refused}");
+                assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+                assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+                assert!(connection_upgrade(&head), "{refused}");
+                if path == "/api/ws" || accept == "application/json" {
+                    assert!(head.contains("content-type: application/problem+json"), "{refused}");
+                }
+                if path == "/ws" && accept == "text/html" {
+                    assert!(refused.contains("Something went wrong"), "the custom error page keeps the headers: {refused}");
+                }
+            }
+        }
+    }
+    // A handler that answers it at another status still says which version (RFC 6455, 4.2.2),
+    // but only a 426 names a protocol to switch to.
+    let refused = raw_get(
+        addr,
+        "/ws-400",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 400"), "{refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    // Any other status says nothing of the socket: a 404 that hides it, or a 500.
+    for (path, status) in [("/ws-404", "404"), ("/ws-500", "500")] {
+        let refused = raw_get(
+            addr,
+            path,
+            "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+        )
+        .await;
+        let head = refused.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+        assert!(head.starts_with(&format!("http/1.1 {status}")), "{refused}");
+        assert!(!head.contains("\r\nsec-websocket-version:"), "{refused}");
+        assert!(!head.contains("\r\nupgrade:") && !connection_upgrade(&head), "{refused}");
+    }
+
+    // The connection a 426 went out on (with `Connection: upgrade`) serves the next request.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: keep-alive, upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let (head, _) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 426") && connection_upgrade(&head), "{head}");
+    stream.write_all(b"GET /either HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("http/1.1 200") && body == "not a socket", "{head}{body}");
+
+    // HTTP/1.0 cannot switch, so its `Upgrade` is ignored (RFC 9110, 7.8): `/either` answers its
+    // page, and a route that only switches a plain 400.
+    let http10 = |path: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET {path} HTTP/1.0\r\nhost: localhost\r\nconnection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+    let answer = http10("/either").await;
+    assert!(answer.starts_with("HTTP/1.") && answer.contains(" 200 ") && answer.ends_with("not a socket"), "{answer}");
+    let answer = http10("/ws").await;
+    assert!(answer.contains(" 400 ") && !answer.to_ascii_lowercase().contains("\r\nupgrade:"), "{answer}");
+
+    for path in ["/ws", "/tunnel"] {
+        let plain = raw_get(addr, path, "").await;
+        assert!(plain.starts_with("HTTP/1.1 400"), "{plain}");
+        assert!(!plain.to_ascii_lowercase().contains("\r\nupgrade:"), "the route's protocol is not known: {plain}");
+    }
 
     let (head, stream) = handshake("/either", "websocket", "").await;
     assert!(head.starts_with("http/1.1 101"), "{head}");
@@ -10692,14 +10810,114 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
     server.await.unwrap().unwrap();
 }
 
+/// Whether a lowercased response head has `upgrade` among its `Connection` tokens.
+fn connection_upgrade(head: &str) -> bool {
+    head.lines()
+        .filter_map(|line| line.strip_prefix("connection: "))
+        .flat_map(|line| line.split(','))
+        .any(|token| token.trim() == "upgrade")
+}
+
+/// One answer read from a kept-alive connection: its lowercased head and its body, which must
+/// have a `Content-Length`.
+async fn read_answer(stream: &mut tokio::net::TcpStream) -> (String, String) {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        assert_eq!(stream.read(&mut byte).await.unwrap(), 1, "the connection closed: {}", String::from_utf8_lossy(&head));
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+    let length: usize = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length: "))
+        .unwrap_or_else(|| panic!("no content-length: {head}"))
+        .trim()
+        .parse()
+        .unwrap();
+    let mut body = vec![0u8; length];
+    stream.read_exact(&mut body).await.unwrap();
+    (head, String::from_utf8(body).unwrap())
+}
+
+/// An API's own error shape (`Api::errors`) keeps a 426's headers.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_wrong_websocket_version_keeps_its_headers_in_an_apis_error_shape() {
+    use crate::upgrade::Upgrade;
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::new()).api::<ApiRoot>(|api| {
+        api.route::<ApiWs>(crate::Methods::reads(get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })))
+            .errors(|status, message| ShapedError {
+                r#type: "error",
+                error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+            })
+    });
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let refused = raw_get(
+        addr,
+        "/api/ws",
+        "connection: upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 8\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+    )
+    .await;
+    let (head, body) = refused.split_once("\r\n\r\n").unwrap();
+    let head = head.to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 426"), "{refused}");
+    assert!(head.lines().any(|line| line == "content-type: application/json"), "{refused}");
+    assert!(body.starts_with(r#"{"type":"error","error":{"code":426,"#), "the API's own shape: {refused}");
+    assert!(head.lines().any(|line| line == "sec-websocket-version: 13"), "{refused}");
+    assert!(head.lines().any(|line| line == "upgrade: websocket"), "{refused}");
+    assert!(connection_upgrade(&head), "{refused}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 #[derive(crate::Route)]
 #[route("/api/ws")]
 struct ApiWs;
 
+#[tokio::test]
+async fn an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade() {
+    use crate::upgrade::Upgrade;
+    let routes =
+        || Routes::from(Table::new().route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(|_, _| async {}) })));
+    let router = App::new(routes()).router();
+    for version in [http::Version::HTTP_11, http::Version::HTTP_2] {
+        let req = Request::get("/ws")
+            .version(version)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(!res.headers().contains_key(header::UPGRADE));
+        assert!(!res.headers().contains_key(header::CONNECTION));
+    }
+    let client = App::new(routes()).test();
+    let res = client
+        .get(&crate::Local::parse("/ws").unwrap())
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, "websocket")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(!res.headers().contains_key(header::UPGRADE));
+    assert!(!res.headers().contains_key(header::CONNECTION));
+}
+
 /// A handshake with no `Sec-Fetch-Site` (what Chromium and Firefox send) is held to its `Origin`
 /// against `Host`, scheme included once the app says it is HTTPS only: a plain-http page on the
 /// app's host cannot open a socket to the HTTPS app with the user's `Secure` cookies (#1212).
-/// Allowed, a oneshot answers 426, since it cannot switch; refused, 403.
+/// Allowed, a oneshot answers 400, since it cannot switch; refused, 403.
 #[tokio::test]
 async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     use crate::security::Policy;
@@ -10722,7 +10940,7 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
             .unwrap();
         router.oneshot(req).await.unwrap().status()
     };
-    let (open, refused) = (StatusCode::UPGRADE_REQUIRED, StatusCode::FORBIDDEN);
+    let (open, refused) = (StatusCode::BAD_REQUEST, StatusCode::FORBIDDEN);
     let https_only = app(Policy::new().hsts());
     let either = app(Policy::new());
     assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");
@@ -13355,6 +13573,148 @@ mod layout_reads {
         let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/nowhere", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A middleware that answers `/soon` itself with a bare `501`, as one for a part of the app not
+    /// built yet would, and rewrites a `501` when the query asks: `?to=418` changes only the
+    /// status, `?to=418-page` gives it a page of its own too, and `?to=501-page` keeps the `501`
+    /// and gives it a page of its own.
+    struct NotBuilt;
+
+    impl crate::Middleware for NotBuilt {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            if req.uri().path() == "/soon" {
+                return crate::response::IntoResponse::into_response(StatusCode::NOT_IMPLEMENTED);
+            }
+            let to = req.uri().query().map(str::to_owned);
+            let mut res = next.run(req).await;
+            if res.status() == StatusCode::NOT_IMPLEMENTED {
+                match to.as_deref() {
+                    Some("to=418") => *res.status_mut() = StatusCode::IM_A_TEAPOT,
+                    Some("to=418-page") => {
+                        *res.status_mut() = StatusCode::IM_A_TEAPOT;
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>teapot</p>");
+                    }
+                    Some("to=501-page") => {
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>not here yet</p>");
+                    }
+                    _ => {}
+                }
+            }
+            res
+        }
+    }
+
+    /// An app with no `any` route, so `PROPFIND` is a method no route has, and with `501`s of its
+    /// own: a handler's `Error::status` (`/said`), a handler's bare status (`/bare`) and a
+    /// middleware's (`/soon`). Its error page names the failure it got.
+    fn not_built(count: CartCount) -> Router {
+        let routes = Table::new()
+            .route(
+                "/",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+            )
+            .route("/said", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::NOT_IMPLEMENTED)) }))
+            .route("/bare", get(|_req: Req| async move { StatusCode::NOT_IMPLEMENTED }));
+        App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    let kind = match &failure {
+                        Failure::UnknownMethod => "unknown method",
+                        Failure::Failed { .. } => "failed",
+                        _ => "other",
+                    };
+                    req.page::<ForOne>(Layout {
+                        req: &req,
+                        children: html! {
+                            <p>{failure.status().as_u16()}</p>
+                            <p>{kind}</p>
+                        },
+                    })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), NotBuilt))
+            .router()
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_the_routers_501_starts_the_reads_and_waits_for_them() {
+        // A method no route in the app has: the request's fault, as a 405 is.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, headers, body) = call_with(not_built(count.clone()), "PROPFIND", "/", None, None).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>501</p>"), "{body}");
+        assert!(body.contains("<p>unknown method</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_501_the_app_answers_is_failed_and_waits_for_none() {
+        // A part of the app not built yet, not a method no route has: `Failure::Failed`, as any
+        // 5xx, whether the handler said so with `Error::status`, with the bare status, or a
+        // middleware answered it.
+        for path in ["/said", "/bare", "/soon"] {
+            let at = std::time::Instant::now();
+            let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+            let (status, _, body) = call_with(not_built(slow), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{path}");
+            assert!(!body.contains("count") && body.contains("<p>501</p>") && body.contains("<p>failed</p>"), "{path}: {body}");
+            assert!(at.elapsed() < Duration::from_secs(1), "{path}: {:?}", at.elapsed());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_middleware_that_turns_the_routers_501_into_another_status_keeps_it() {
+        // Only the status changed: the error page for that status, not for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418", None, None).await;
+        assert_eq!(status, StatusCode::IM_A_TEAPOT, "{body}");
+        assert!(body.contains("<p>418</p>") && body.contains("<p>failed</p>"), "{body}");
+        // With a page of its own, which goes out as it wrote it.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=418-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "<p>teapot</p>"));
+    }
+
+    #[tokio::test]
+    async fn a_middleware_that_gives_the_routers_501_a_body_keeps_it() {
+        // Still a 501, now with the middleware's own page: sent as it wrote it, not replaced by the
+        // error page for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=501-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_IMPLEMENTED, "<p>not here yet</p>"));
+    }
+
+    /// Corten logs an `Error` a handler returns, not a status: the router's `501` (a refusal, as
+    /// its `405` is) logs nothing as an error, nor does a handler's bare `501`, which the error
+    /// page counts as a failure all the same; a handler's `Error::status(NOT_IMPLEMENTED)` is
+    /// logged.
+    #[cfg(feature = "log")]
+    #[tokio::test]
+    async fn a_501_status_alone_is_not_logged_as_an_error() {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let _logging = tracing::subscriber::set_default(subscriber);
+        let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+        for accept in [None, Some("application/json")] {
+            let (status, _, _) = call_with(not_built(CartCount::default()), "PROPFIND", "/", None, accept).await;
+            assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+            let logged = text();
+            assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "{accept:?}: {logged}");
+        }
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/bare", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "/bare: {logged}");
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/said", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(logged.contains("ERROR") && logged.contains("corten: request failed"), "{logged}");
     }
 
     #[tokio::test(start_paused = true)]

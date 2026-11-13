@@ -113,6 +113,11 @@ preserve the public authority and configure a narrowly trusted scheme/forwarding
 contract before deployed-edge forms can qualify. This change does not edit that
 proxy or claim TLS deployment compatibility.
 
+## Production Install
+
+The production image installs the committed npm dependency lock with `npm ci`; the build
+recipe uses the same command. Framework defaults and direct package pins are unchanged.
+
 ## Marketplace Trace Context
 
 Marketplace page/form middleware captures its own incoming traceparent before

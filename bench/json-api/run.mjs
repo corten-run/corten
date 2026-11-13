@@ -6,6 +6,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { commands } from "./process.mjs";
+import { describeK6 } from "../load-tool.mjs";
 
 export async function run(args) {
   const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
@@ -205,7 +206,9 @@ export async function run(args) {
         summary.checksPassed = qualified; save();
         if (!qualified) log("Full JSON matrix unqualified: no timing runs will start; all selected rows retained.");
         else if (!options.checkOnly) {
-          summary.tools.k6 = await imageTool(c.k6Image);
+          summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`],
+            { pullLog: join(folder, "pull-k6.log") });
+          save();
           await own(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host",
             "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount, summary.tools.node.imageId, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
         }

@@ -1,8 +1,8 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . .
 # The matched tier builds its own image with --build-arg PROFILE=matched (apps.mjs, buildArgs):
 # Next.js fixes its config when it builds (next.config.mjs), which reads both arguments from the

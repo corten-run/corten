@@ -77,8 +77,8 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    `#[route("/cart", get = cart, gives(CartCount))]`, so the read is not started for it (never
    check the path in `start` to skip it). The view is display markup (no component
    script, no `style={..}`), and a `Public` page draws nothing there. The error page draws it
-   too for a failure the request is at fault for (a 404, a 405, a refusal other than a 429, a
-   request that does not parse): never read it again in the error page. Its `start` returns
+   too for a failure the request is at fault for (a 404, a 405, the router's 501 for a method no
+   route has, a refusal other than a 429, a request that does not parse): never read it again in the error page. Its `start` returns
    `None` when there is nothing to read (no session), so an unknown URL costs no read. Never pass
    it through handlers with an extractor, never read it after the page's own reads (a full load then waits for both), and do
    not fetch it from a script on every load to draw it the first time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
@@ -264,9 +264,13 @@ A WebSocket is a route whose handler takes `corten::upgrade::Upgrade` and return
 `signal.aborted()` and on a deadline from the last frame heard, with pings so a client that only
 listens answers (as `examples/watchlist`'s `socket.rs` does): an open socket counts against
 `App::max_connections` until the route drops it. Its handshake is checked as a write (another
-site's page gets a 403), so do
-not add an `Origin` check of your own. A URL that is also a page or a relayed answer takes
-`Option<Upgrade>` and returns `corten::Result<SwitchOr<A>>`. A route that passes another server's answer on returns
+site's page gets a 403), so do not add an `Origin` check of your own. A request that does not
+ask to switch (HTTP/1.0 never does), or a connection that cannot switch (HTTP/2,
+`app.test()`), gets a 400 without `Upgrade`. A WebSocket handshake of another version, or of
+none, gets a 426 with `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and
+`Connection: upgrade`, including on an error page or JSON failure. A URL that is also a page or
+a relayed answer takes `Option<Upgrade>` and returns `corten::Result<SwitchOr<A>>`. A route
+that passes another server's answer on returns
 `corten::Relay::new(status, headers, body)`, never a `Response`; never merge a router after
 `app.router()` for either. A JSON route that answers some requests itself and relays the rest
 returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`. One

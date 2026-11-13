@@ -5,12 +5,30 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
+  is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
+  Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left
+  its idle watch permanently busy. Its partial-header probe with an open stream did not show
+  a regression from HTTP/1.1. Publish the partial evidence and follow-up criteria, and put
+  the proxy caveat beside the README's production-defaults claim.
+
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
   other native group integrations remain pending, not measured results.
 
 ### Added
+
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure. Livewire saves must
+  match the native component, item, locale and submitted values.
+
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
 
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
@@ -271,6 +289,54 @@ Corten is pre-1.0, so any minor version may change the API.
   send a browser without JavaScript back to the watchlist with a notice
   ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
 
+- A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
+  or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
+  where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
+  server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
+  it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
+  where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
+  CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+  `HandleTransientHttpError`, .NET's standard resilience handler) retries it. The app does not
+  log it as an error. CloudFront's `5xxErrorRate` and Cloudflare's error-rate notifications
+  cannot leave it out, since neither filters by method (Cloudflare's Monitors may, not verified
+  here); the deploy guide says how to build one from access logs that leaves out
+  `status = 501 AND method not in the app's served methods`, which hides neither the app's own
+  501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
+  to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
+  some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
+  route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
+  501; an unknown URL is still a 404 whatever the method, and so is a `CONNECT` to a host and port
+  (the authority form a client sends), which names no path. A browser gets the error page as the
+  new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
+  page waits for the layout's reads (only the router's 501 is, while it is still its empty 501: a
+  middleware that turns it into another status, or gives it a body that is not plain text, keeps
+  what it wrote, a plain-text body is `Failure::Rejected` with status 501 for a browser and JSON
+  for an API's client, and an empty body of unknown size is sent as a bare 501; a 501 a handler
+  or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
+  `Failure::Failed`), and
+  an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
+  `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
+  405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
+  within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
+  fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
+  355 to 481 more as a 501, which allocates the router's marker
+  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
+  ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+- Pin the benchmark suites to one verified k6 release and record its actual
+  executable, immutable image and platform. Native saved replay requires this
+  identity, and legacy continuation/trends refuse incompatible or unidentified
+  tool boundaries instead of assigning new metadata to old measurements.
+
+- Refresh the JavaScript benchmark framework/compiler dependencies and retain
+  committed package locks in their production builds and build recipes. React
+  Router uses its current native Express dispatcher. Previous rounds are not
+  relabeled; version choices, checks and remaining transitive audit findings are
+  recorded in `bench/fullstack/refresh-js.md`.
+
+- Lock Express's existing production dependency tree and use the same `npm ci`
+  command in its image and build recipe. Historical full-stack results retain
+  their original dependency-reproducibility caveat.
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
@@ -337,6 +403,21 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A WebSocket handshake of a version other than 13, or of none, is answered 426 with
+  `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
+  RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,
+  where it was a 400 that named no version; a handler that gives it a 400 keeps
+  `Sec-WebSocket-Version: 13`, and any other status (a 404 that hides the socket) none of them.
+  An HTTP/1.0 request's `Upgrade` is ignored (RFC 9110, 7.8), so an `Option<Upgrade>` route gives
+  its other answer, and a proxy that passes `Upgrade` on over HTTP/1.0 gets that answer too.
+  Corten needs hyper 1.12, the first that keeps a 426's `Connection: upgrade` when it adds
+  `close`. **Breaking:** a handshake of a wrong or missing version gets a 426 where it got a 400,
+  a request to an `Upgrade` route that does not ask to switch, and a handshake on a
+  connection that cannot switch (HTTP/2, `app.test()`), get a 400 where they got a 426 without
+  the `Upgrade` header a 426 must have, and an HTTP/1.0 request with `Upgrade` to an
+  `Option<Upgrade>` route gets that route's page where it got a 426 (RFC 9110, 7.8), so a client,
+  health check or app test that expects the old status sees the new one
+  ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
 - A typed link no longer writes a path value that would open another page: `.` or `..`, which a
   browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
   `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
