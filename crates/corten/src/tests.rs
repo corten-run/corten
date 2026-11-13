@@ -13318,8 +13318,9 @@ mod layout_reads {
     }
 
     /// A middleware that answers `/soon` itself with a bare `501`, as one for a part of the app not
-    /// built yet would, and turns a `501` into a `418` when the query asks: `?to=418` changes only
-    /// the status, `?to=418-page` gives it a page of its own too.
+    /// built yet would, and rewrites a `501` when the query asks: `?to=418` changes only the
+    /// status, `?to=418-page` gives it a page of its own too, and `?to=501-page` keeps the `501`
+    /// and gives it a page of its own.
     struct NotBuilt;
 
     impl crate::Middleware for NotBuilt {
@@ -13337,6 +13338,11 @@ mod layout_reads {
                         res.headers_mut()
                             .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
                         *res.body_mut() = Body::from("<p>teapot</p>");
+                    }
+                    Some("to=501-page") => {
+                        res.headers_mut()
+                            .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+                        *res.body_mut() = Body::from("<p>not here yet</p>");
                     }
                     _ => {}
                 }
@@ -13417,8 +13423,18 @@ mod layout_reads {
         assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "<p>teapot</p>"));
     }
 
-    /// The router's `501` is a refusal, as its `405` is, not a failure of the app's: nothing is
-    /// logged as an error, where a handler's `Error::status(NOT_IMPLEMENTED)` is.
+    #[tokio::test]
+    async fn a_middleware_that_gives_the_routers_501_a_body_keeps_it() {
+        // Still a 501, now with the middleware's own page: sent as it wrote it, not replaced by the
+        // error page for a method no route has.
+        let (status, _, body) = call_with(not_built(CartCount::default()), "PROPFIND", "/?to=501-page", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_IMPLEMENTED, "<p>not here yet</p>"));
+    }
+
+    /// Corten logs an `Error` a handler returns, not a status: the router's `501` (a refusal, as
+    /// its `405` is) logs nothing as an error, nor does a handler's bare `501`, which the error
+    /// page counts as a failure all the same; a handler's `Error::status(NOT_IMPLEMENTED)` is
+    /// logged.
     #[cfg(feature = "log")]
     #[tokio::test]
     async fn the_routers_501_is_not_logged_as_an_error() {
@@ -13433,6 +13449,10 @@ mod layout_reads {
             let logged = text();
             assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "{accept:?}: {logged}");
         }
+        let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/bare", None, None).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        let logged = text();
+        assert!(!logged.contains("ERROR") && !logged.contains("WARN"), "/bare: {logged}");
         let (status, _, _) = call_with(not_built(CartCount::default()), "GET", "/said", None, None).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         let logged = text();

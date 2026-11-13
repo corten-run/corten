@@ -1103,8 +1103,10 @@ rules something out.
        fault for as it is for a `405`, so the page waits for the layout's reads; the router marks
        its `501` (a response extension), so a `501` a handler or a middleware answers for a part
        not built yet stays `Failure::Failed`, a failure of the app's; the mark counts only while
-       the answer is still a `501`, so a middleware that turned it into another status keeps that
-       status and its body on the error page's path, as it does on an API's.
+       the answer is still the router's empty `501`, so a middleware that turned it into another
+       status, or gave it a body of its own, keeps what it wrote on the error page's path, as it
+       does on an API's. `CONNECT` is a `501` only in origin form (`CONNECT /items/7`); the
+       authority form a client sends (`CONNECT host:443`) names no path, so it is a `404`.
        The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
        `OPTIONS` always among them (`OPTIONS` because its caller asks what a resource allows,
        which the `405`'s `Allow` tells it, where a `501` would tell it nothing), and every method
@@ -1114,11 +1116,15 @@ rules something out.
        A `501` is a 5xx, so a scanner's `PROPFIND` or `TRACE` raises a proxy's or a CDN's 5xx
        rate, where a `405` did not; RFC 9110 9.1 says a server SHOULD answer it so, a client
        reads from it that no resource here takes the method, and Corten does not log it as an
-       error. Nothing on the wire tells the router's `501` from a handler's, so the deploy guide
-       tells operators to leave these out of 5xx alerting by the request's method, one the app's
-       routes do not serve, and not by status, which would hide the app's own `501`s too
-       ([Deploying](guide/deploy.md#monitoring)), rather than Corten keeping the `405` the
-       standard does not ask for.
+       error. Nothing on the wire tells the router's `501` from a handler's, and a CDN's stock
+       5xx alert filters by no method (Stands on), so leaving them out takes an alert built from
+       access logs or the app's own metrics: the deploy guide gives the filter,
+       `status = 501 AND method not in the app's served methods`
+       ([Deploying](guide/deploy.md#monitoring)). That cost is accepted rather than keeping the
+       `405` the standard does not ask for: Standards first (Value 2) comes before Good defaults
+       (Value 7) in the order the Values give, the cost falls on alerting rather than on what a
+       client is told, and the `405` would tell every client a wrong thing (that this resource
+       lacks a method the server implements) to spare an operator's alert.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:
@@ -1281,9 +1287,21 @@ rules something out.
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
     for a method the server knows that the target resource does not support, and MUST carry
     `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
-    case-sensitive; step 1); reasoned (step 1: an operator can tell the router's `501` from the
-    app's own by the request's method, since the app's routes serve a short list of methods and a
-    scanner's are outside it, which is the premise behind accepting the higher 5xx rate; RFC 9110
+    case-sensitive; step 1); platform, an accepted cost (step 1, the docs as read on 2026-11-13: a
+    CDN's stock 5xx alert cannot leave the router's `501` out, since CloudFront's `5xxErrorRate`
+    has no dimension but `DistributionId` and `Region`
+    ([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
+    Cloudflare's Origin Error Rate alert filters only by domain and sensitivity and its Advanced
+    Error Rate alert by status code and IP address
+    ([Platform Notifications](https://developers.cloudflare.com/notifications/notification-available/));
+    the method is in their access logs, CloudFront's `cs-method`
+    ([Standard logging reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logs-reference.html))
+    and Cloudflare Logpush's `ClientRequestMethod`
+    ([HTTP requests](https://developers.cloudflare.com/logs/logpush/logpush-job/datasets/zone/http_requests/)),
+    so an operator who wants these out builds the alert from logs or from the app's metrics);
+    reasoned (step 1: with the request's method and status, as access logs and an app's metrics
+    carry them, an operator can tell the router's `501` from the app's own, since the app's
+    routes serve a short list of methods and a scanner's are outside it; RFC 9110
     sets no order among its errors, so the path is matched first and an unknown URL keeps the
     app's `404` page, which says more about a mistyped address than a `501`; and `OPTIONS` is
     always one the app implements because its caller asks what a resource allows, which the
@@ -1360,9 +1378,11 @@ rules something out.
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
     ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
-    The `501` itself (step 1) is reopened when operators or CDNs cannot in practice tell it from
-    the app's own `501`s by the request's method (the premise behind its higher 5xx rate), or a
-    client that handled the `405` breaks on the `501`.
+    The `501` itself (step 1) is reopened when a widely used client or monitoring product breaks
+    on these `501`s where it handled the `405` (a client that retries a 5xx, a monitor that pages
+    on any 501), or when users report alert noise from them that an alert built from access logs
+    cannot remove; a stock CDN alert's lack of a method filter is already known and accepted
+    (Stands on), so it alone does not reopen it.
 
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
@@ -1381,7 +1401,8 @@ rules something out.
     the `laned` variant of `fa0b1525`; 2026-11-12, the dispatch suite with its one case changed
     for RFC 9110 9.1 (the `501`), on `794e6c7f` and on it with that change; 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
     them, and the seven requests Stands on counts for the `501`, on `8b02835d` and on it with
-    the `501` and its marker.
+    the `501` and its marker; 2026-11-13, CloudFront's and Cloudflare's metric, alert and log
+    pages as Stands on cites them, read for step 1 with main at `c3d455a1`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a

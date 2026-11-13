@@ -422,8 +422,9 @@ pub enum Failure {
     /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
     /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): the router's
     /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this, and only while a middleware
-    /// has not turned it into another status; a `501` a handler or a middleware answers
-    /// (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is [`Failure::Failed`].
+    /// has not turned it into another status or given it a body of its own; a `501` a handler or
+    /// a middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the bare status) is
+    /// [`Failure::Failed`].
     UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
@@ -2692,14 +2693,15 @@ async fn page_or_error<S: crate::app::Steps>(
     // more value every request's future holds across the await below.
     #[cfg(debug_assertions)]
     let keeps_detail = res.extensions().get::<KeepsDetail>().is_some();
-    // The router's mark counts only while its `501` is still the answer: a middleware that turned
-    // it into another answered it itself, and that answer is kept as on the JSON path.
+    let empty_error = res.body().size_hint().exact() == Some(0);
+    // The router's mark counts only while its empty `501` is still the answer: a middleware that
+    // turned it into another status, or wrote a body of its own, answered it itself, and that
+    // answer is kept as on the JSON path.
     let cause = res
         .extensions()
         .get::<Cause>()
         .copied()
-        .filter(|cause| !matches!(cause, Cause::UnknownMethod) || status == StatusCode::NOT_IMPLEMENTED);
-    let empty_error = res.body().size_hint().exact() == Some(0);
+        .filter(|cause| !matches!(cause, Cause::UnknownMethod) || (status == StatusCode::NOT_IMPLEMENTED && empty_error));
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
     // plain text written for a developer. A browser gets the error page instead, with the text
     // under it in dev mode; any other client (probes, webhooks) still gets the text.

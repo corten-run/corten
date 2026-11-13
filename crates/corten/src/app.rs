@@ -1171,7 +1171,8 @@ impl<M: Middleware> App<M> {
         let prefixes: Vec<&str> =
             self.areas.iter().map(|area| area.prefix).chain(self.apis.iter().map(|(mount, ..)| mount.prefix.as_str())).collect();
         // Nor is its path routed again elsewhere (the app's routes and an area's share a path as
-        // one route): a method the unstaged route lacks would get its 405 there, with no stage.
+        // one route): a method the unstaged route lacks would get its 405 (or the router's 501)
+        // there, with no stage.
         let all_written: Vec<&str> = (self.pages.iter().map(|(p, _)| *p))
             .chain(self.areas.iter().flat_map(|area| area.pages.iter().map(|(p, _)| *p)))
             .chain(self.api_paths.iter().copied())

@@ -403,7 +403,8 @@ async fn a_method_the_route_has_no_handler_for_is_a_405_that_says_which_it_has()
 #[tokio::test]
 async fn a_method_no_route_in_the_app_has_is_a_501_with_no_allow() {
     // RFC 9110 9.1: the server implements it for no resource, so this one's `Allow` is not the
-    // answer. `TRACE` and `CONNECT` are HTTP's own, and no route here names either.
+    // answer. `TRACE` and `CONNECT` are HTTP's own, and no route here names either (`CONNECT`
+    // in origin form here; the authority form a proxy client sends is below).
     // Methods are case-sensitive (9.1): `get` is not `GET` but an extension method no route has.
     for method in ["PROPFIND", "QUERY", "TRACE", "CONNECT", "get"] {
         let refused = send(method, "/items/7", &[]).await;
@@ -426,6 +427,9 @@ async fn a_method_no_route_in_the_app_has_is_a_501_with_no_allow() {
     // The path is matched before the method: an unknown URL is a 404, whatever the method.
     assert_eq!(send("PROPFIND", "/nowhere", &[]).await.status, 404);
     assert_eq!(send("PROPFIND", "/v1/nowhere", &[]).await.status, 404);
+    // `CONNECT` as a client sends it, to a host and port (RFC 9110 9.3.6), names no path a
+    // route has: a 404, as any unknown URL.
+    assert_eq!(send("CONNECT", "localhost:443", &[]).await.status, 404);
 }
 
 #[tokio::test]

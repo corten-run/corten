@@ -195,10 +195,28 @@ not for speed.
 The router answers a request whose method no route in the app has (`PROPFIND`, `TRACE`, a
 scanner's made-up method) with `501 Not Implemented`, as RFC 9110 9.1 says, at any URL a route has
 ([Error pages](app.md#error-pages)). It is a refusal, not a failure: the app does not log it as an
-error. A scan therefore raises a proxy's or a CDN's 5xx rate. To keep it out of a 5xx alert, leave
-out requests by their method: the methods the app's routes serve are its own (`GET`, `HEAD` and
-`POST` for most apps, with `OPTIONS` and whatever else its API routes take), and a 5xx to any other
-method is one of these. Nothing on the wire marks the router's `501` apart from another, and a
-handler's or a middleware's `501` has no `Allow` either, so leaving out every `501`, or every
-`501` without `Allow`, would also hide the app's own: a handler's `Error` at 501 is a failure,
-logged as an error as any 5xx `Error` is.
+error. A scan therefore raises a proxy's or a CDN's 5xx rate.
+
+A CDN's stock 5xx alert cannot leave these out. CloudFront's `5xxErrorRate` metric has no
+dimension but `DistributionId` and `Region`
+([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
+and Cloudflare's Origin Error Rate alert filters only by domain and sensitivity, its Advanced
+Error Rate alert by status code and IP address
+([Platform Notifications](https://developers.cloudflare.com/notifications/notification-available/));
+none of them filters by method. An alert that leaves these out is built from the access logs,
+which carry the method and the status (CloudFront's `cs-method` and `sc-status`,
+[Standard logging reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logs-reference.html);
+Cloudflare Logpush's `ClientRequestMethod` and `EdgeResponseStatus` or `OriginResponseStatus`,
+[HTTP requests](https://developers.cloudflare.com/logs/logpush/logpush-job/datasets/zone/http_requests/)),
+or from a proxy's own logs or the app's own metrics.
+
+The filter to leave out is `status = 501 AND method not in the app's served methods`, where the
+served methods are the ones its routes name, with `GET`, `HEAD` and `OPTIONS` always among them.
+Both halves matter. Nothing on the wire marks the router's `501` apart from another, and a
+handler's or a middleware's `501` has no `Allow` either, so leaving out every `501` would also
+hide the app's own: a handler's `Error` at 501 is a failure, logged as an error as any 5xx
+`Error` is. And leaving out every 5xx to a method outside the list would hide more than the
+router's answer, such as a middleware's `503` given before routing. With both, the filter hides
+only a `501` to a method no route serves, which only the router or a middleware answers; a list
+that falls behind a new route hides that route's `501`s, never its `500`s. An app with a route
+that takes every method (`any`, a relay) answers no such `501`, so it leaves nothing out.

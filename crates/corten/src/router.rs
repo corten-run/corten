@@ -361,7 +361,8 @@ impl<S> Clone for Placed<S> {
     }
 }
 
-/// What a route's requests go through on the way to its handler, its `404` and its `405`.
+/// What a route's requests go through on the way to its handler, its `404`, its `405` and the
+/// router's `501` at its path.
 #[derive(Clone)]
 enum Through {
     /// The app's stages, given to [`Router::new`].
@@ -395,7 +396,7 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
 
     /// `methods` at `path`, written `written`, going through `lane` in place of the app's stages
     /// (a route that says `unstaged`): its handler's answer, its `404` for a segment without the
-    /// text after a parameter and its `405` all meet it.
+    /// text after a parameter, its `405` and the router's `501` at its path all meet it.
     pub(crate) fn unstaged(
         self,
         path: &str,
