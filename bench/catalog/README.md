@@ -87,6 +87,22 @@ output larger than the command's bounded in-memory diagnostic tail. Command dead
 log-collection failures remain explicit failures; incomplete logs are not silently accepted.
 This does not disable native access logging or change measured application settings.
 
+Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
+`catalog-saved-evidence/v1` observations without running Docker, Git or a browser.
+The native producer preserves the fixture, checker receipts, native build/image
+receipts, cold probe and container identity, k6 summaries, before/after cgroup
+counters, raw Docker memory/CPU samples and a final owned-resource query. The
+validator checks the complete registry matrix, phase clock windows, cumulative
+counter and upstream-container identity continuity, and recomputes every saved metric
+and aggregate. Truncated stats framing fails in the producer as well as replay,
+preserving its raw bytes.
+Exit 0 means native evidence replay passed; exit 2 means required
+observations are missing; exit 1 means malformed or contradictory evidence.
+This is not host-isolation or independent source-audit approval. Those remain
+separate campaign gates. Old summaries remain reportable, but cannot acquire the
+new raw proof retroactively; images not built in the native run are not qualified
+by this validator.
+
 The proposed [marketplace v2 contract](../marketplace/README.md) retains a richer app workload
 while requiring equivalent request-time localization. It is groundwork, not a measured or
 ready-to-run replacement for catalog or the historical marketplace suite.

@@ -1,0 +1,99 @@
+marketplace parity api en-US JS=false mobile=false
+marketplace parity api en-US JS=false mobile=true
+marketplace parity api en-US JS=true mobile=false
+marketplace parity api en-US JS=true mobile=true
+marketplace parity api fr-FR JS=false mobile=false
+marketplace parity api fr-FR JS=false mobile=true
+marketplace parity api fr-FR JS=true mobile=false
+marketplace parity api fr-FR JS=true mobile=true
+marketplace parity api de-DE JS=false mobile=false
+marketplace parity api de-DE JS=false mobile=true
+marketplace parity api de-DE JS=true mobile=false
+marketplace parity api de-DE JS=true mobile=true
+{
+  "workload": "marketplace-v2",
+  "source": "api",
+  "jsonRecords": 500,
+  "pages": 264,
+  "profiles": [
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "en-US",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "fr-FR",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": false,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": false,
+      "mobile": true,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": true,
+      "mobile": false,
+      "passed": true
+    },
+    {
+      "locale": "de-DE",
+      "javaScriptEnabled": true,
+      "mobile": true,
+      "passed": true
+    }
+  ],
+  "upstream": {
+    "readsPerRequest": 1,
+    "uncachedPage": true,
+    "uncachedJson": true,
+    "jsonReserialized": true,
+    "errors": true
+  }
+}

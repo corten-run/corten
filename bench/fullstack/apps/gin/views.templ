@@ -58,6 +58,12 @@ templ notFoundPage() {
 }
 }
 
+templ sourceErrorPage(message string) {
+@layout(message + " | Card Market") {
+<h1>{ message }</h1><p>The record could not be loaded.</p>
+}
+}
+
 templ alertMessageView(message string) {
 <p class="alert-form__message" id="alert-message" aria-live="polite">{ message }</p>
 }

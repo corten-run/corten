@@ -1,0 +1,27 @@
+INFO:     172.18.0.1:49100 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34258 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34274 - "GET /api/marketplace/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34284 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34298 - "GET /api/marketplace/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34308 - "GET /api/marketplace/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34318 - "GET /marketplace/en-US/missing HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34328 - "GET /api/marketplace/missing HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34340 - "DELETE /api/marketplace/item_1 HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:34346 - "HEAD /api/marketplace/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34348 - "GET /marketplace/en-US/item_1 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:34364 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34374 - "POST /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34388 - "POST /marketplace/en-US/item_1 HTTP/1.1" 403 Forbidden
+INFO:     127.0.0.1:34390 - "POST /marketplace/en-US/item_1 HTTP/1.1" 413 Content Too Large
+INFO:     127.0.0.1:34392 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34396 - "GET /health/live HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34398 - "GET /healthz HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34404 - "GET /livez HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34414 - "GET /up HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34426 - "GET /health HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34436 - "GET /actuator/health/liveness HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:34440 - "GET /actuator/health HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57406 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48672 - "GET /marketplace/en-US/item_1 HTTP/1.1" 503 Service Unavailable
+INFO:     127.0.0.1:48684 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48696 - "GET /marketplace/en-US/item_1 HTTP/1.1" 200 OK

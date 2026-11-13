@@ -1,0 +1,237 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 908B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/node:24-bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 59B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 78.93kB done
+#4 DONE 0.0s
+
+#5 [build 1/6] FROM docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+#5 resolve docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 0.0s done
+#5 extracting sha256:22a7c5e442cd30f0c37eb73f2f6d91be1c6b63bd1c4278641b042fe77b260f33 done
+#5 extracting sha256:5030a48eb5b08bea228f0db8440fed216cf91b5ca4d999bc2a692c2eb0a60114
+#5 extracting sha256:5030a48eb5b08bea228f0db8440fed216cf91b5ca4d999bc2a692c2eb0a60114 1.2s done
+#5 DONE 1.2s
+
+#5 [build 1/6] FROM docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+#5 extracting sha256:e727da478d47d626146e734dd426cad789beb1fe49c55a06a175621d30f31064 0.0s done
+#5 extracting sha256:c34f02d00fde0767e1607c15d336cb71414e607acb0b4e63680a37c007b76204 done
+#5 DONE 1.3s
+
+#6 [build 2/6] WORKDIR /app
+#6 DONE 0.1s
+
+#7 [build 3/6] COPY package.json ./
+#7 DONE 0.0s
+
+#8 [build 4/6] RUN npm install --no-audit --no-fund
+#8 9.936 
+#8 9.936 added 28 packages in 10s
+#8 9.939 npm notice
+#8 9.939 npm notice New major version of npm available! 11.19.1 -> 12.2.2
+#8 9.939 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2
+#8 9.939 npm notice To update run: npm install -g npm@12.2.2
+#8 9.939 npm notice
+#8 DONE 10.3s
+
+#9 [build 5/6] COPY . .
+#9 DONE 0.1s
+
+#10 [build 6/6] RUN npm run build
+#10 0.245 
+#10 0.245 > build
+#10 0.245 > next build
+#10 0.245 
+#10 0.663 ▲ Next.js 16.4.2 (Turbopack)
+#10 0.684 ✓ Running next.config.mjs took 19ms
+#10 0.709 - Experiments (use with caution):
+#10 0.709   · serverActions
+#10 0.709 
+#10 0.739   Creating an optimized production build ...
+#10 4.047 ✓ Compiled successfully in 3.3s
+#10 4.063   Running TypeScript ...
+#10 4.085 
+#10 4.085   We detected TypeScript in your project and reconfigured your tsconfig.json file for you.
+#10 4.085   The following suggested values were added to your tsconfig.json. These values can be changed to fit your project's needs:
+#10 4.085 
+#10 4.085   	- allowJs was set to true
+#10 4.085   	- include was updated to add '.next/dev/types/**/*.ts'
+#10 4.085 
+#10 4.085   The following mandatory changes were made to your tsconfig.json:
+#10 4.085 
+#10 4.086   	- esModuleInterop was set to true (requirement for SWC / babel)
+#10 4.086 
+#10 6.805   Finished TypeScript in 2.7s ...
+#10 6.807   Collecting page data using 7 workers ...
+#10 7.578   Generating static pages using 7 workers (0/4) ...
+#10 7.694   Generating static pages using 7 workers (1/4) 
+#10 7.758   Generating static pages using 7 workers (2/4) 
+#10 7.758   Generating static pages using 7 workers (3/4) 
+#10 7.779 ✓ Generating static pages using 7 workers (4/4) in 200ms
+#10 7.782 Turbopack build encountered 3 warnings:
+#10 7.782 ./lib/api.ts:12:35
+#10 7.782 Warning: Dynamic filesystem access causes tracing of the whole project
+#10 7.782   [90m10 |[0m ...=== [32m"fixture"[0m
+#10 7.782   [90m11 |[0m ...
+#10 7.782 [33m[1m>[0m [90m12 |[0m ...[33mN[0m.parse(readFileSync(process.env.[33mFIXTURE_PATH[0m ?? [32m"fixtures/items.json"[0m, [32m"utf8"[0m))).map(
+#10 7.782   [90m   |[0m            [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+#10 7.782   [90m13 |[0m ... [id, toItemView(value)] [36mas[0m [36mconst[0m,
+#10 7.782   [90m14 |[0m ...
+#10 7.782   [90m15 |[0m ...
+#10 7.782 
+#10 7.782 Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+#10 7.782 This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+#10 7.782 This can slow down deployments or lead to failures when size limits are exceeded.
+#10 7.782 To resolve this, you can
+#10 7.782 - make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+#10 7.782 - only use them in development, or
+#10 7.782 - opt out by adding an ignore comment to the highlighted call: fs.readFileSync(/*turbopackIgnore: true*/ ...), or
+#10 7.782 - remove them.
+#10 7.782 
+#10 7.782 Import traces:
+#10 7.782   App Route:
+#10 7.782     ./lib/api.ts
+#10 7.782     ./app/api/items/[id]/route.ts
+#10 7.782 
+#10 7.782   Server Component:
+#10 7.782     ./lib/api.ts
+#10 7.782     ./app/items/[id]/page.tsx
+#10 7.782 
+#10 7.782   SSR:
+#10 7.782     ./lib/api.ts
+#10 7.782     ./lib/marketplace-server.ts
+#10 7.782     ./pages/marketplace/[locale]/[id].tsx
+#10 7.782 
+#10 7.782 
+#10 7.782 ./lib/catalog.ts:34:68
+#10 7.782 Warning: Dynamic filesystem access causes tracing of the whole project
+#10 7.782   [90m32 |[0m [36mconst[0m startup = globalThis [36mas[0m [36mtypeof[0m globalThis & { __catalogFixture?: [33mMap[0m<string, [33mCatalog...[0m
+#10 7.782   [90m33 |[0m [36mconst[0m fixture: [33mMap[0m<string, [33mCatalogRecord[0m> | [36mnull[0m = process.env.[33mCATALOG_SOURCE[0m === [32m"fixture"[0m
+#10 7.782 [33m[1m>[0m [90m34 |[0m   ? startup.__catalogFixture ??= [36mnew[0m [33mMap[0m([33mObject[0m.entries([33mJSON[0m.parse(readFileSync(
+#10 7.782   [90m   |[0m                                                                    [33m[1m^^^^^^^^^^^^[0m
+#10 7.782 [33m[1m>[0m [90m35 |[0m       process.env.[33mCATALOG_FIXTURE_PATH[0m ?? [32m"/fixtures/catalog.json"[0m, [32m"utf8"[0m,
+#10 7.782   [90m   |[0m [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+#10 7.782 [33m[1m>[0m [90m36 |[0m     ))).map(([id, value]) => [id, parseCatalogRecord(value)]))
+#10 7.782   [90m   |[0m [33m[1m^^^^^[0m
+#10 7.782   [90m37 |[0m   : [36mnull[0m;
+#10 7.782   [90m38 |[0m
+#10 7.782   [90m39 |[0m [36mexport[0m [36masync[0m [36mfunction[0m fetchCatalogRecord(id: string): [33mPromise[0m<[33mCatalogRecord[0m | [36mnull[0m> {
+#10 7.782 
+#10 7.782 Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+#10 7.782 This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+#10 7.782 This can slow down deployments or lead to failures when size limits are exceeded.
+#10 7.782 To resolve this, you can
+#10 7.782 - make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+#10 7.782 - only use them in development, or
+#10 7.782 - opt out by adding an ignore comment to the highlighted call: fs.readFileSync(/*turbopackIgnore: true*/ ...), or
+#10 7.782 - remove them.
+#10 7.782 
+#10 7.782 Import traces:
+#10 7.782   App Route:
+#10 7.782     ./lib/catalog.ts
+#10 7.782     ./app/api/catalog/[id]/route.ts
+#10 7.782 
+#10 7.782   Instrumentation:
+#10 7.782     ./lib/catalog.ts
+#10 7.782     ./instrumentation.ts
+#10 7.782 
+#10 7.782   Server Component:
+#10 7.782     ./lib/catalog.ts
+#10 7.782     ./app/catalog/[id]/page.tsx
+#10 7.782 
+#10 7.782   SSR:
+#10 7.782     ./lib/catalog.ts
+#10 7.782     ./lib/marketplace-server.ts
+#10 7.782     ./pages/marketplace/[locale]/[id].tsx
+#10 7.782 
+#10 7.782 
+#10 7.782 ./lib/marketplace-server.ts:33:72
+#10 7.782 Warning: Dynamic filesystem access causes tracing of the whole project
+#10 7.782   [90m31 |[0m [36mconst[0m startup = globalThis [36mas[0m [36mtypeof[0m globalThis & { __marketplaceFixture?: [33mMap[0m<string, [33mMar...[0m
+#10 7.782   [90m32 |[0m [36mconst[0m fixture = process.env.[33mMARKETPLACE_SOURCE[0m === [32m"fixture"[0m
+#10 7.782 [33m[1m>[0m [90m33 |[0m   ? startup.__marketplaceFixture ??= [36mnew[0m [33mMap[0m([33mObject[0m.entries([33mJSON[0m.parse(readFileSync(
+#10 7.782   [90m   |[0m                                                                        [33m[1m^^^^^^^^^^^^[0m
+#10 7.782 [33m[1m>[0m [90m34 |[0m       process.env.[33mMARKETPLACE_FIXTURE_PATH[0m ?? [32m"/fixtures/marketplace.json"[0m, [32m"utf8"[0m,
+#10 7.782   [90m   |[0m [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+#10 7.782 [33m[1m>[0m [90m35 |[0m     ))).map(([id, value]) => [id, parseMarketplaceRecord(value)]))
+#10 7.782   [90m   |[0m [33m[1m^^^^^[0m
+#10 7.782   [90m36 |[0m   : [36mnull[0m;
+#10 7.782   [90m37 |[0m
+#10 7.782   [90m38 |[0m [36mexport[0m [36masync[0m [36mfunction[0m fetchMarketplaceRecord(id: string): [33mPromise[0m<[33mMarketplaceRecord[0m | [36mnull[0m> {
+#10 7.782 
+#10 7.782 Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+#10 7.782 This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+#10 7.782 This can slow down deployments or lead to failures when size limits are exceeded.
+#10 7.782 To resolve this, you can
+#10 7.782 - make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+#10 7.782 - only use them in development, or
+#10 7.782 - opt out by adding an ignore comment to the highlighted call: fs.readFileSync(/*turbopackIgnore: true*/ ...), or
+#10 7.782 - remove them.
+#10 7.782 
+#10 7.782 Import traces:
+#10 7.782   Instrumentation:
+#10 7.782     ./lib/marketplace-server.ts
+#10 7.782     ./instrumentation.ts
+#10 7.782 
+#10 7.782   Route:
+#10 7.782     ./lib/marketplace-server.ts
+#10 7.782     ./pages/api/marketplace/[id].ts
+#10 7.782 
+#10 7.782   SSR:
+#10 7.782     ./lib/marketplace-server.ts
+#10 7.782     ./pages/marketplace/[locale]/[id].tsx
+#10 7.782 
+#10 7.782 
+#10 7.782   Finalizing page optimization ...
+#10 7.936 
+#10 7.939 Route (app)
+#10 7.939 ┌ ƒ /
+#10 7.939 ├ ○ /_not-found
+#10 7.939 ├ ƒ /api/catalog/[id]
+#10 7.939 ├ ƒ /api/items/[id]
+#10 7.939 ├ ƒ /catalog/[id]
+#10 7.939 ├ ƒ /items/[id]
+#10 7.939 ├ ƒ /live/prices
+#10 7.939 └ ƒ /live/publish
+#10 7.939 
+#10 7.939 Route (pages)
+#10 7.939 ┌   /_app
+#10 7.939 ├ ƒ /api/marketplace/[id]
+#10 7.939 └ ƒ /marketplace/[locale]/[id]
+#10 7.939 
+#10 7.939 ƒ Proxy (Middleware)
+#10 7.939 
+#10 7.939 ○  (Static)   prerendered as static content
+#10 7.939 ƒ  (Dynamic)  server-rendered on demand
+#10 7.939 
+#10 DONE 8.1s
+
+#11 [stage-1 3/5] COPY --from=build /app/.next/standalone ./
+#11 DONE 0.2s
+
+#12 [stage-1 4/5] COPY --from=build /app/.next/static ./.next/static
+#12 DONE 0.0s
+
+#13 [stage-1 5/5] COPY --from=build /app/public ./public
+#13 DONE 0.0s
+
+#14 exporting to image
+#14 exporting layers
+#14 exporting layers 1.5s done
+#14 exporting manifest sha256:4fc8f994acd2aa4185774963558854442c965a9073af693350d73462ae6638d8 done
+#14 exporting config sha256:ec27bd4dbc15056df18cddf314c7857ad358cae2e7a13fe5dbe694504385a871 done
+#14 exporting attestation manifest sha256:6ffffd27140c0e11675077bab7fa5339eb7f3bdb327acec92993f440c97a51fa 0.0s done
+#14 exporting manifest list sha256:8a3219e5900952755f339adc705ff6e0c893ede86b7bc127aca2e98d1968814b done
+#14 naming to docker.io/library/cb-marketplace-production-nextjs:latest done
+#14 unpacking to docker.io/library/cb-marketplace-production-nextjs:latest
+#14 unpacking to docker.io/library/cb-marketplace-production-nextjs:latest 0.4s done
+#14 DONE 2.0s

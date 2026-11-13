@@ -1,0 +1,57 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 462B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/node:24-bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 53B done
+#3 DONE 0.0s
+
+#4 [1/6] FROM docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+#4 resolve docker.io/library/node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 57.49kB done
+#5 DONE 0.0s
+
+#6 [2/6] WORKDIR /app
+#6 CACHED
+
+#7 [6/6] ADD --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+#7 CACHED
+
+#8 [3/6] COPY package.json ./
+#8 DONE 0.2s
+
+#9 [4/6] RUN npm install --no-audit --no-fund
+#9 2.099 
+#9 2.099 added 102 packages in 2s
+#9 2.101 npm notice
+#9 2.101 npm notice New major version of npm available! 11.19.1 -> 12.2.2
+#9 2.101 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2
+#9 2.101 npm notice To update run: npm install -g npm@12.2.2
+#9 2.101 npm notice
+#9 DONE 2.2s
+
+#10 [5/6] COPY . .
+#10 DONE 0.0s
+
+#11 [6/6] ADD --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+#11 DONE 0.0s
+
+#12 exporting to image
+#12 exporting layers
+#12 exporting layers 0.4s done
+#12 exporting manifest sha256:048b50d82263e2c41d4c69b2a68f00f1977864315aa88e2e5217665ec160b013 done
+#12 exporting config sha256:fcc193bf3473ba8a03e0f008b569ae8d8a3cd18db901e4673ac0ce8a1581b938 done
+#12 exporting attestation manifest sha256:ee63585b2c96a4ee5aebc6affa3b0ac28c2e500dd8360ad0a838c0aa477e168f done
+#12 exporting manifest list sha256:43f6c0d02ecd6d04d5fbd8cef5e96d18abbcab34f52ff25ef72baee529419f4b done
+#12 naming to docker.io/library/cb-marketplace-production-express:latest done
+#12 unpacking to docker.io/library/cb-marketplace-production-express:latest
+#12 unpacking to docker.io/library/cb-marketplace-production-express:latest 0.3s done
+#12 DONE 0.8s
