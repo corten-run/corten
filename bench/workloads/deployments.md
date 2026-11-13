@@ -84,7 +84,7 @@ historical transport images. Each concrete live manifest includes its own Docker
 server/client source, native transport, middleware and bounded reader topology. Corten's
 native Feed/subscribe/keyed-view manifest uses the root-context `Dockerfile.parity`
 (`/app/server`, `LIVE_PARITY=1`) and requires explicit `native-feed` profile for the entire
-round. Its app lockfile and shared crate inputs are part of the source references; it is not
+round. Its app lockfile, shared crate entry points and embedded runtime assets are part of the source references; it is not
 a bounded-profile substitute or a qualified performance baseline. Phoenix, Rails and
 Laravel remain pending native handovers. Drogon, Leptos and Topcoat have concrete native
 source manifests, not qualification. Partial scenarios and old fullstack images do not

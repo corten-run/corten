@@ -186,6 +186,12 @@ test("live representatives use dispatched native ports and missing recovery port
   assert.ok(corten.configuration.sourceRefs.includes("Cargo.lock"));
   assert.ok(corten.configuration.sourceRefs.includes("bench/live/apps/corten/Cargo.lock"));
   assert.ok(corten.configuration.sourceRefs.includes("crates/corten-feed/Cargo.toml"));
+  for (const crate of ["corten", "corten-feed", "corten-protocol", "corten-macros"]) {
+    assert.ok(corten.configuration.sourceRefs.includes(`crates/${crate}/src/lib.rs`));
+  }
+  for (const asset of ["dev.js", "dist/corten.js", "dist/view.js", "dist/format.js", "dist/keys.js", "dist/upload.js"]) {
+    assert.ok(corten.configuration.sourceRefs.includes(`crates/corten/js/${asset}`));
+  }
   assert.ok(!corten.configuration.sourceRefs.includes("bench/live/apps/corten/Dockerfile"));
 });
 
