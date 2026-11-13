@@ -1,8 +1,9 @@
 # Native marketplace alerts
 
 `GET /api/alerts` returns the current session's native JSON array in insertion
-order: `[{item_id,email,target_minor}]`. A new cookie jar sees `[]`; repeated reads
-do not consume or reset alerts. Readback is independent of the form response.
+order: `[{item_id,email,target_minor}]`. A new cookie jar sees `[]` and receives
+an alert session cookie; repeated reads do not consume or reset alerts.
+Readback is independent of the form response.
 
 An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site
@@ -11,6 +12,9 @@ Vue enhances the form through Nuxt's native server API. The ordinary POST still 
 Enhanced submission clears the previous message while pending and shows a
 localized request failure when the native API rejects or transport fails.
 It does not present the earlier success as the result of the failed request.
+While the native API request is pending, the form disables its submit button
+and ignores additional submit events. After completion or failure, submission
+is available again. No page-GET session allocation or custom transport is added.
 
 Targets are ungrouped locale-decimal inputs. Fractional cents round half away
 from zero using decimal digits, not binary-float dollar arithmetic. The rounded
@@ -44,8 +48,10 @@ global idempotency guarantee.
 The cross-app native write-boundary regression is
 `node --test --test-concurrency=1 ../nextjs/alerts-boundary.test.mjs`.
 Build all six apps first. It checks malformed links and retries in every locale,
-and fresh Next/TanStack JS forms without a readback prewarm against a delayed
-synthetic HTTP upstream, including failure recovery and independent readback.
+and fresh Next/TanStack/Nuxt/SvelteKit JS forms without a readback prewarm against
+a delayed synthetic HTTP upstream, including failure recovery and independent
+readback. Nuxt and SvelteKit cover pending implicit submissions in all three
+locales, followed by another accepted submission with the established cookie.
 
 ## Checks
 
