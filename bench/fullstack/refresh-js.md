@@ -1,6 +1,6 @@
 # JavaScript benchmark dependency refresh
 
-Checked 2026-11-13. Implementation base: `6d8272036d68e5c9a8a8af7bb0c2698094cd12fd`.
+Checked 2026-11-13. Authored on the unpublished grouped integration branch.
 Fetched and compared upstream: `f12d3daa324644c1fc882a5d994408d774cbb58e`.
 These are new comparison inputs, not a rewrite or requalification of historical rounds.
 
@@ -120,6 +120,13 @@ outside the authorized lane. The root tooling, tests and registry are not altere
 The rest of CONTRIBUTING's framework/Rust/example-image battery and before/after performance
 measurements were not run by this dependency lane. Fresh independent review is still required.
 The staged change also passed the Markdown documentation and design-reference checks.
+
+The release branch now aligns the shared six-app recipe with the committed Dockerfiles:
+it uses `npm ci`, not `npm install`. All 19 build-recipe tests pass after that change.
+The earlier failed check above remains the author-lane result, not a passing run.
+On the narrow release branch based on merged main, root `npm run check` then passed:
+209 tests passed, one platform skip, zero failures. No prior native qualification
+receipt is relabeled as evidence for this release commit.
 
 ## Audit Limits
 
