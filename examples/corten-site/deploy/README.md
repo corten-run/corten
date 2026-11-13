@@ -165,9 +165,9 @@ workflow starts has built its release; a Site run the merge started itself can h
 its own by then, as on `cd3f67f43`, where it shipped within half a minute of the machine
 taking `www` on, and passed. After an apply the workflow asks the machine for each name, for
 twenty minutes in all where it made the machine, and fails where one does not send its
-visitors to the site. Twenty minutes is by reckoning a little more than one new try takes, not a time that was
-waited out: a run can end red for a name the machine takes on minutes later, and the machine
-goes on trying either way. Changing the list replaces the droplet on the next apply.
+visitors to the site. Twenty minutes is by reckoning a little more than one new try takes,
+not a time that was waited out: a run can end red for a name the machine takes on minutes
+later, and the machine goes on trying either way. Changing the list replaces the droplet on the next apply.
 
 The state holds no secret: of what a droplet is handed the provider keeps a hash. The bucket
 keeps each version of the state, and nothing locks it but the workflow running one apply at a
