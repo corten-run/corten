@@ -154,11 +154,26 @@ export async function alertResponse(response, action, fields) {
   if (url.pathname.includes("/marketplace/")) return true;
   // Enhanced forms can post to native server-function endpoints, not the page action.
   const headers = request.headers();
+  const [, section, locale, id] = target.pathname.split("/");
+  if (section !== "marketplace" || !locale || !id) return false;
+  if (/^\/livewire(?:-[a-f0-9]+)?\/update$/.test(url.pathname)) {
+    if (!Object.hasOwn(headers, "x-livewire") || headers["content-type"]?.split(";", 1)[0] !== "application/json") return false;
+    try {
+      const payload = JSON.parse(request.postDataBuffer().toString("utf8"));
+      if (!Array.isArray(payload.components) || payload.components.length !== 1) return false;
+      const component = payload.components[0], snapshot = JSON.parse(component.snapshot), updates = component.updates;
+      if (!updates || typeof updates !== "object" || Array.isArray(updates) || Object.keys(updates).some((key) => !["email", "target"].includes(key))) return false;
+      if (!Array.isArray(component.calls) || component.calls.length !== 1 || component.calls[0].method !== "save"
+        || !Array.isArray(component.calls[0].params) || component.calls[0].params.length !== 0) return false;
+      return snapshot.memo?.name === "marketplace-alert" && snapshot.data?.itemId === decodeURIComponent(id)
+        && snapshot.data?.locale === decodeURIComponent(locale)
+        && (Object.hasOwn(updates, "email") ? updates.email : snapshot.data.email) === fields.email
+        && (Object.hasOwn(updates, "target") ? updates.target : snapshot.data.target) === fields.target_price;
+    } catch { return false; }
+  }
   const leptos = url.pathname === "/api/marketplace-alert"
     && headers["content-type"]?.split(";", 1)[0] === "application/x-www-form-urlencoded";
   if (!leptos && (headers["x-tsr-serverfn"] !== "true" || !headers["content-type"]?.startsWith("multipart/form-data;"))) return false;
-  const [, section, locale, id] = target.pathname.split("/");
-  if (section !== "marketplace" || !locale || !id) return false;
   try {
     const data = await new Response(request.postDataBuffer(), { headers: { "content-type": headers["content-type"] } }).formData();
     const localeField = leptos ? "tag" : "locale";

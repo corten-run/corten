@@ -352,6 +352,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- The marketplace browser gate recognizes Livewire's native enhanced alert response
+  only for the same origin, matching component, item, locale, save call and submitted
+  values. Native transport and plain-form behavior remain unchanged.
+
 - A WebSocket handshake of a version other than 13, or of none, is answered 426 with
   `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
   RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,

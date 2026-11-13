@@ -43,6 +43,39 @@ test("Leptos alert responses require the native endpoint and exact URL-encoded f
   }
 });
 
+test("Livewire alert responses require the native component, save call and submitted fields", async () => {
+  const fields = { email: "native@example.test", target_price: "1234,50" }, action = "http://localhost/marketplace/fr-FR/item_1";
+  const component = () => ({ snapshot: JSON.stringify({ memo: { name: "marketplace-alert" }, data: { itemId: "item_1", locale: "fr-FR", email: "", target: "" } }),
+    updates: { email: fields.email, target: fields.target_price }, calls: [{ method: "save", params: [], metadata: {} }] });
+  const candidate = (change = () => {}, url = "http://localhost/livewire-bf5bed75/update", marked = true, type = "application/json", method = "POST") => {
+    const payload = { components: [component()] }; change(payload);
+    return { url: () => url, request: () => ({ method: () => method, headers: () => ({ "content-type": type, ...(marked ? { "x-livewire": "" } : {}) }),
+      postDataBuffer: () => Buffer.from(JSON.stringify(payload)) }) };
+  };
+  assert.equal(await alertResponse(candidate(), action, fields), true);
+  assert.equal(await alertResponse(candidate(() => {}, "http://localhost/livewire/update"), action, fields), true);
+  assert.equal(await alertResponse(candidate((p) => {
+    const snapshot = JSON.parse(p.components[0].snapshot);
+    Object.assign(snapshot.data, { email: fields.email, target: fields.target_price });
+    p.components[0].snapshot = JSON.stringify(snapshot); p.components[0].updates = {};
+  }), action, fields), true, "unchanged native properties can remain in the component snapshot");
+  for (const change of [
+    (p) => { p.components[0].updates.email = "other@example.test"; },
+    (p) => { p.components[0].updates.target = "1"; },
+    (p) => { p.components[0].updates.itemId = "item_2"; },
+    (p) => { p.components[0].snapshot = JSON.stringify({ memo: { name: "other" }, data: { itemId: "item_1", locale: "fr-FR" } }); },
+    (p) => { p.components[0].snapshot = JSON.stringify({ memo: { name: "marketplace-alert" }, data: { itemId: "item_2", locale: "fr-FR" } }); },
+    (p) => { p.components[0].snapshot = JSON.stringify({ memo: { name: "marketplace-alert" }, data: { itemId: "item_1", locale: "en-US" } }); },
+    (p) => { p.components[0].calls[0].method = "other"; },
+    (p) => { p.components[0].calls[0].params.push("unexpected"); },
+    (p) => { p.components.push(component()); },
+    (p) => { p.components[0].snapshot = "{"; },
+  ]) assert.equal(await alertResponse(candidate(change), action, fields), false);
+  for (const response of [candidate(() => {}, "http://foreign.example/livewire/update"), candidate(() => {}, "http://localhost/other/update"),
+    candidate(() => {}, undefined, false), candidate(() => {}, undefined, true, "text/plain"), candidate(() => {}, undefined, true, undefined, "GET")])
+    assert.equal(await alertResponse(response, action, fields), false);
+});
+
 test("native Leptos enhanced alert response is observed without changing the page action", async () => {
   const browser = await chromium.launch({ headless: true });
   try {

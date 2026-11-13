@@ -282,6 +282,11 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
+The browser gate observes native enhanced form transports without replacing them.
+Livewire alert updates must identify the same-origin marketplace alert component,
+item, locale, save call and submitted values. The complete rendered-page and
+valid/invalid alert assertions still run, as do JavaScript-disabled plain forms.
+
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the unchanged
 `marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
