@@ -53,6 +53,11 @@ node bench/fullstack-browser/run.mjs w2 --targets bench/fullstack-browser/work/t
 node bench/fullstack-browser/run.mjs w3 --build --out bench/fullstack-browser/work/w3 --apps nextjs --cases fixture-en-US-desktop-js,api-fr-FR-mobile-no-js
 ```
 
+Apparatus cleanup fixtures await their real cleanup response body before retiring the root;
+retirement is not a network-idle promise. The observer takes a fresh resource snapshot after
+observing detachment, and still rejects an unowned in-flight request at that boundary.
+The ledger apparatus test retains full failed cleanup snapshots in `work/diagnostics/`.
+
 The explicit development round is `wN`; official/nightly rounds are not accepted. Every
 output directory must be new; missing parents are created. `--apps` and `--cases` bound
 development execution, not group membership. Missing images are failed cells; unconfigured

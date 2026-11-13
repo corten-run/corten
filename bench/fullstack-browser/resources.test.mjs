@@ -1,8 +1,75 @@
 // Browser-primitive apparatus tests only, never native contender captures.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { chromium } from "@playwright/test";
-import { installResourceObserver } from "./resources.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { observeNetwork } from "./observe.mjs";
+
+test("cleanup snapshots the retired scope after observing native detachment", { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(); await context.addInitScript(installResourceObserver);
+    const page = await context.newPage(), network = observeNetwork(page);
+    await page.goto(`data:text/html,<header><a href="/">Away</a></header><article class="marketplace"></article><script>
+      document.querySelector('a').addEventListener('click', e => e.preventDefault(), { once: true });
+    </script>`);
+    const resources = new ResourceAudit(page, await context.newCDPSession(page), true);
+    const checkpoint = resources.checkpoint.bind(resources); let samples = 0;
+    resources.checkpoint = async () => {
+      const snapshot = await checkpoint();
+      // Native detachment falls between the snapshot and the separate handle read.
+      if (++samples === 2) await page.evaluate(() => document.querySelector('article').remove());
+      return snapshot;
+    };
+    const cleanup = await resources.cleanup({ timeoutMs: 5000, observationMs: 25, network, runtimeErrors: [] });
+    assert.equal(cleanup.outcome, "observed", JSON.stringify(cleanup));
+    assert.notEqual(cleanup.before.scope, cleanup.after.scope);
+    assert.equal(cleanup.after.scopes.find((s) => s.scope === cleanup.before.scope).connected, false);
+    await context.close();
+  } finally { await browser.close(); }
+});
+
+test("early root retirement cannot hide an unowned in-flight cleanup fetch", { timeout: 30000 }, async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const server = createServer(async (req, res) => {
+    if (req.url === "/cleanup") { await pending; res.end("Away"); return; }
+    res.setHeader("content-type", "text/html");
+    res.end(`<!doctype html><header><a href="/">Away</a></header><article class="marketplace"></article><script>
+      document.querySelector('header a').addEventListener('click', event => {
+        event.preventDefault(); document.querySelector('article').remove(); fetch('/cleanup');
+      }, { once: true });
+    </script>`);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext(); await context.addInitScript(installResourceObserver);
+    const page = await context.newPage(), network = observeNetwork(page);
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    const resources = new ResourceAudit(page, await context.newCDPSession(page), true);
+    // Release only after a snapshot actually observes detachment and pending work.
+    // A later completion must not erase that first complete retirement receipt.
+    const checkpoint = resources.checkpoint.bind(resources);
+    resources.checkpoint = async () => {
+      const snapshot = await checkpoint();
+      if (snapshot.scopes.some((s) => !s.connected)) release();
+      return snapshot;
+    };
+    const cleanup = await resources.cleanup({ timeoutMs: 5000, observationMs: 25, network, runtimeErrors: [] });
+    assert.equal(cleanup.outcome, "failed", JSON.stringify(cleanup));
+    assert.equal(cleanup.after.unattributed.pendingTasks, 1, JSON.stringify(cleanup));
+    assert.match(cleanup.failures.join("; "), /Unattributed native resources/);
+    assert.ok(cleanup.after.unattributedDetails.some((e) => e.kind === "pendingTasks" && e.source.some((s) => s.includes("fetch"))));
+    await context.close();
+  } finally {
+    release(); if (browser) await browser.close();
+    server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+  }
+});
 
 test("obsolete AbortSignal registrations cannot erase a replacement listener binding", { timeout: 30000 }, async () => {
   const browser = await chromium.launch({ headless: true });

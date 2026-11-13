@@ -227,7 +227,12 @@ export class ResourceAudit {
       while (performance.now() < deadline) {
         try {
           after = await this.checkpoint();
-          if (after.realm !== evidence.before.realm || !await handle.evaluate((root) => root.isConnected)) break;
+          if (after.realm !== evidence.before.realm) break;
+          if (!await handle.evaluate((root) => root.isConnected)) {
+            // The root can detach between the snapshot and the handle read.
+            if (after.scopes.find((s) => s.scope === evidence.before.scope)?.connected !== false) after = await this.checkpoint();
+            break;
+          }
         } catch (e) { if (!e.message.includes("Execution context was destroyed")) throw e; }
         await new Promise((r) => setTimeout(r, 25));
       }
