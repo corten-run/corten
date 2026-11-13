@@ -183,13 +183,85 @@ export async function alertResponse(response, action, fields) {
   } catch { return false; }
 }
 
+function liveViewFrame(payload) {
+  if (typeof payload !== "string") return null;
+  try {
+    const frame = JSON.parse(payload);
+    return Array.isArray(frame) && frame.length === 5
+      && frame.slice(0, 3).every((value) => typeof value === "string" && value.length > 0)
+      && frame[4] && typeof frame[4] === "object" && !Array.isArray(frame[4]) ? frame : null;
+  } catch { return null; }
+}
+export function liveViewAlertEvent(payload, socketUrl, action, fields, rootId) {
+  try {
+    const url = new URL(socketUrl), target = new URL(action);
+    if (url.protocol !== (target.protocol === "https:" ? "wss:" : "ws:") || url.host !== target.host
+      || url.pathname !== "/live/websocket" || url.searchParams.getAll("vsn").length !== 1 || url.searchParams.get("vsn") !== "2.0.0"
+      || !/^\/marketplace\/[^/]+\/[^/]+$/.test(target.pathname) || typeof rootId !== "string" || !rootId) return null;
+    const frame = liveViewFrame(payload);
+    if (!frame || frame[2] !== `lv:${rootId}` || frame[3] !== "event" || frame[4].type !== "form"
+      || frame[4].event !== "save" || typeof frame[4].value !== "string") return null;
+    const data = new URLSearchParams(frame[4].value), expected = new URLSearchParams(fields);
+    if ([...data].length !== [...expected].length || !expected.has("email") || !expected.has("target_price")
+      || [...expected].some(([key, value]) => expected.getAll(key).length !== 1 || data.getAll(key).length !== 1 || data.get(key) !== value)) return null;
+    return { joinRef: frame[0], ref: frame[1], topic: frame[2] };
+  } catch { return null; }
+}
+export function liveViewAlertReply(payload, sent) {
+  const frame = liveViewFrame(payload);
+  return !!(sent && frame && frame[0] === sent.joinRef && frame[1] === sent.ref && frame[2] === sent.topic
+    && frame[3] === "phx_reply" && frame[4].status === "ok" && frame[4].response
+    && typeof frame[4].response === "object" && !Array.isArray(frame[4].response));
+}
+
+const liveViewObservers = new WeakMap();
+export function observeAlertTransport(page) {
+  if (liveViewObservers.has(page)) return;
+  // Attach before goto: LiveView opens its socket while loading the document.
+  // Retain only the current submission, not handshake payloads or frame history.
+  let pending;
+  page.on("websocket", (socket) => {
+    socket.on("framesent", ({ payload }) => {
+      if (!pending || pending.sent) return;
+      const sent = liveViewAlertEvent(payload, socket.url(), pending.action, pending.fields, pending.rootId);
+      if (sent) Object.assign(pending, { sent, socket });
+    });
+    socket.on("framereceived", ({ payload }) => {
+      if (pending?.socket === socket && liveViewAlertReply(payload, pending.sent)) pending.resolve();
+    });
+  });
+  page.once("close", () => pending?.reject(new Error("Page closed waiting for LiveView alert reply")));
+  liveViewObservers.set(page, (expected) => {
+    assert.ok(!pending, "one alert submission at a time");
+    let timer;
+    const promise = new Promise((resolve, reject) => {
+      pending = { ...expected, resolve, reject };
+      timer = setTimeout(() => reject(new Error("LiveView alert phx_reply: Timeout 15000ms exceeded")), 15000);
+    });
+    return { promise, dispose: () => { clearTimeout(timer); pending = null; } };
+  });
+}
+
 export async function submitAlert(page, form, javaScriptEnabled) {
   const fields = await form.evaluate((f) => {
     const data = new FormData(f);
     return { email: data.get("email"), target_price: data.get("target_price") };
   });
   const action = await form.evaluate((f) => f.action);
-  const [response] = await Promise.all([
+  const liveView = javaScriptEnabled && await form.evaluate((f) => {
+    const root = f.closest("[data-phx-session]");
+    return f.matches('.marketplace__alert form[phx-submit="save"]') && root?.id
+      ? { rootId: root.id, fields: [...new FormData(f)] } : null;
+  });
+  let response;
+  if (liveView) {
+    const observe = liveViewObservers.get(page);
+    assert.ok(observe, "observeAlertTransport must run before goto for LiveView");
+    await page.waitForFunction((id) => document.getElementById(id)?.classList.contains("phx-connected"), liveView.rootId);
+    const wait = observe({ action, ...liveView });
+    try { await Promise.all([wait.promise, form.locator('[type="submit"]').click()]); }
+    finally { wait.dispose(); }
+  } else [response] = await Promise.all([
     page.waitForResponse((r) => alertResponse(r, action, fields)),
     form.locator('[type="submit"]').click(),
   ]);
@@ -199,10 +271,11 @@ export async function submitAlert(page, form, javaScriptEnabled) {
   } catch (error) {
     let timer;
     const diagnostic = await Promise.race([
-      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response.text().catch(() => "unavailable")]),
+      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response ? response.text().catch(() => "unavailable") : "matching phx_reply received"]),
       new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
     ]).finally(() => clearTimeout(timer));
-    throw new Error(`Alert POST ${response.status()} ${response.url()}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response.request().isNavigationRequest()}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
+    const transport = response ? `POST ${response.status()} ${response.url()}` : `LiveView ${action}`;
+    throw new Error(`Alert ${transport}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response ? response.request().isNavigationRequest() : false}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
   }
 }
 async function control(upstream, value) {
@@ -233,6 +306,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
     context.setDefaultNavigationTimeout(20000);
     try {
       const page = await context.newPage();
+      observeAlertTransport(page);
       const errors = []; page.on("pageerror", (e) => errors.push(e.message));
       const visit = async (id, query = "", options = {}) => {
         const response = await page.goto(`${base}/marketplace/${locale}/${id}${query}`, { waitUntil: "load" });

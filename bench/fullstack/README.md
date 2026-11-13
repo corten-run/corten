@@ -2084,9 +2084,11 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and the Python
-   apps' (Django, FastAPI) in `requirements.txt`, which pins only the packages it names, so
-   transitive versions can drift between builds; the other apps have lockfiles.
+3. These historical JavaScript builds pinned each `package.json` without lockfiles, so
+   transitive versions could drift. The current JavaScript apps use committed npm lockfiles
+   and `npm ci`; see the [refresh record](refresh-js.md). This does not requalify old results.
+   Python's `requirements.txt` pins only the packages it names, so its transitive versions
+   can still drift; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
 5. Each framework runs its production defaults with the worker count its docs give for one CPU, in
