@@ -55,3 +55,13 @@ test("archive keeps raw campaign and required host metadata but rejects hostile 
   for (const type of ["l", "h", "b", "c", "p", "s"]) assert.throws(() => check(names, names.map((p, i) => `${i === 4 ? type : p.endsWith("/") ? "d" : "-"}rwx entry`)));
   assert.throws(() => check(names.slice(1))); assert.throws(() => safeArchive(names.join("\n"), "-one"));
 });
+test("listing terminators cannot erase hostile member bytes and implicit parents retain casing", () => {
+  const check = (names) => safeArchive(names.join("\n") + "\n", names.map(() => "-rwxr-xr-x entry").join("\n") + "\n");
+  for (const last of ["exit-code ", "exit-code\t", "exit-code\v", "exit-code\f"])
+    assert.throws(() => check(["run.log", "host.txt", last]));
+  for (const paths of [["campaign/A/x.json", "campaign/a/y.json"], ["campaign/A/x.json", "campaign/a/"],
+    ["campaign/a/", "campaign/A/y.json"]]) {
+    const names = ["run.log", "host.txt", "exit-code", ...paths];
+    assert.throws(() => safeArchive(names.join("\n") + "\n", names.map((p) => `${p.endsWith("/") ? "d" : "-"}rwx entry`).join("\n") + "\n"));
+  }
+});

@@ -98,7 +98,9 @@ export function terminalUnit(output, s) {
 export function safeArchive(entries, verbose) {
   assert.equal(typeof entries, "string"); assert.equal(typeof verbose, "string");
   assert.ok(entries.length <= 16 * 1024 ** 2 && verbose.length <= 32 * 1024 ** 2, "archive listing size limit");
-  const names = entries.trimEnd().split(/\r?\n/), types = verbose.trimEnd().split(/\r?\n/), seen = new Set(), files = new Set(), parents = new Set();
+  // Remove only one listing terminator, never whitespace belonging to a filename.
+  const lines = (value) => value.replace(/\r?\n$/, "").split(/\r?\n/);
+  const names = lines(entries), types = lines(verbose), seen = new Set(), files = new Set(), parents = new Set(), spelling = new Map();
   assert.ok(names.length <= 100000, "archive entry limit");
   assert.equal(names.length, types.length, "archive listings differ");
   for (let i = 0; i < names.length; i++) {
@@ -108,6 +110,12 @@ export function safeArchive(entries, verbose) {
     const parts = path.split("/");
     assert.ok(parts.length <= 64 && parts.every((p) => p && p !== "." && p !== ".." && !p.endsWith(".")
       && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p)), "unsafe archive path");
+    // Tar may omit directory entries: every implicit parent has the same casing rule.
+    for (let j = 1; j <= parts.length; j++) {
+      const prefix = parts.slice(0, j).join("/"), key = prefix.toLowerCase();
+      assert.ok(!spelling.has(key) || spelling.get(key) === prefix, "archive path casing differs");
+      spelling.set(key, prefix);
+    }
     assert.ok(!seen.has(path.toLowerCase()), "duplicate archive path"); seen.add(path.toLowerCase());
     assert.ok(/^[d-]/.test(types[i]), "archive link or special file");
     assert.equal(types[i][0] === "d", name.endsWith("/"), "archive path/type mismatch");
