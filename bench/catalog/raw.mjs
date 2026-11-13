@@ -61,11 +61,17 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
           assert.equal(instance.cpuset, summary.measurement.cpus.app.cpuset ?? "");
           assert.equal(instance.memoryBytes, summary.measurement.appMemoryBytes);
           readText(`${raw}/app.log`);
+          let previousCounters = {};
+          let previousFinishedAt = Date.parse(cold.first200At);
           for (const phase of ["warmup", ...phases]) {
             const metrics = readLoad(readJson(`${raw}/${phase}.json`));
             readText(`${raw}/${phase}.log`);
             if (phase !== "warmup") {
               const proof = readJson(`${raw}/${phase}-cpu-counters.json`);
+              assert.ok(Number.isSafeInteger(proof.startedAt) && Number.isSafeInteger(proof.finishedAt)
+                && proof.startedAt >= previousFinishedAt && proof.finishedAt >= proof.startedAt
+                && proof.startedAt >= Date.parse(summary.startedAt) && proof.finishedAt <= Date.parse(summary.finishedAt), "invalid measured phase clock");
+              previousFinishedAt = proof.finishedAt;
               const deltas = readJson(`${raw}/${phase}-cpu.json`);
               const appName = `${summary.runId}-${app}`;
               const upstreamName = `${summary.runId}-upstream`;
@@ -76,7 +82,9 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
               const stats = readJson(`${raw}/${phase}-stats.log.json`);
               assert.deepEqual(Object.keys(stats.samples).sort(), [...names].sort());
               const rawStats = Object.fromEntries(names.map((name) => [name, []]));
-              for (const line of readText(`${raw}/${phase}-stats.log`).split("\n").filter((line) => line.trim())) {
+              const statsText = readText(`${raw}/${phase}-stats.log`);
+              assert.ok(statsText.endsWith("\n"), "incomplete stats record");
+              for (const line of statsText.split("\n").filter((line) => line.trim())) {
                 const s = JSON.parse(line);
                 assert.ok(Object.hasOwn(rawStats, s.Name), "unexpected raw stats container");
                 rawStats[s.Name].push({ cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
@@ -86,14 +94,16 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
                 assert.match(proof.ids[name], /^[a-f0-9]{64}$/);
                 assert.ok(Number.isSafeInteger(proof.before[name]) && proof.before[name] >= 0);
                 assert.ok(Number.isSafeInteger(proof.after[name]) && proof.after[name] > proof.before[name]);
+                assert.ok(previousCounters[name] === undefined || proof.before[name] >= previousCounters[name], "cumulative CPU counter moved backwards between phases");
                 assert.deepEqual(deltas[name], { usec: proof.after[name] - proof.before[name] });
                 const samples = stats.samples[name];
                 assert.ok(samples.every((s) => s.cpu >= 0 && s.mem >= 0), "negative native sample");
                 assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), rawStats[name], "raw memory/CPU samples differ");
-                assert.ok(samples.every((s, i) => Number.isSafeInteger(s.t) && s.t >= 0 && (!i || s.t >= samples[i - 1].t)));
+                assert.ok(samples.every((s, i) => Number.isSafeInteger(s.t) && s.t >= proof.startedAt && s.t <= proof.finishedAt && (!i || s.t >= samples[i - 1].t)), "native sample outside measured clock window");
                 derived[name] = summarizeSamples(samples);
               }
               assert.deepEqual(stats.summary, derived, "sample aggregates differ");
+              previousCounters = proof.after;
               Object.assign(metrics, derived[appName], { cpuUsec: deltas[appName].usec,
                 perCpuSecond: metrics.requests / (deltas[appName].usec / 1e6),
                 upstream: source === "api" ? { ...derived[upstreamName], cpuUsec: deltas[upstreamName].usec,
