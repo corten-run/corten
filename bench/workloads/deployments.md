@@ -84,9 +84,10 @@ historical transport images. Each concrete live manifest includes its own Docker
 server/client source, native transport, middleware and bounded reader topology. Corten's
 active native Feed/subscribe/keyed-view work is retained only as a non-binding root-context
 `Dockerfile.parity` template (`/app/server`, `LIVE_PARITY=1`) requiring explicit `native-feed`
-profile for the entire round; the port still needs integration/review. Phoenix, Rails, Laravel,
-Drogon, Leptos and Topcoat remain pending native handovers. Draft files, partial scenarios and old fullstack
-images do not change those statuses. Known port files absent from this checkout remain
+profile for the entire round; the port still needs integration/review. Phoenix, Rails and
+Laravel remain pending native handovers. Drogon, Leptos and Topcoat have concrete native
+source manifests, not qualification. Partial scenarios and old fullstack images do not
+establish parity. Known port files absent from this checkout remain
 `pending-integration`; file presence does not establish registration, scenario correctness,
 measurement eligibility or certification.
 
