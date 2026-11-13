@@ -48,9 +48,18 @@ Node >=22.22 and React >=19.2.7; Remix requires Node >=24.3. The selected config
 those constraints. Nitro remains a prerelease because this app already uses the `nitro/vite`
 integration, whose published current version remains an RC. This is not a new stable-Nitro claim.
 
-Every full-stack app now has an npm v3 lockfile. All seven app Dockerfiles, including the
+The six refreshed full-stack apps now have npm v3 lockfiles. All seven Dockerfiles for them, including the
 separate SvelteKit marketplace Dockerfile, copy that lock and use `npm ci`. The existing browser
 lock is refreshed with npm; no lock entries or integrity values were invented by hand.
+
+Express's already-current direct pins are unchanged. A follow-up also commits its npm v3
+lock and uses `npm ci` in its Dockerfile and build recipe. Its fresh production image passed
+all 35 existing marketplace, request-lifetime and trace-context tests on one CPU and 1 GiB,
+with no skipped cases. The locked npm audit reported zero advisories. The image's lock hash
+matched the committed file: `978b8b4d1b09bc61f5cfdafafa33ab104c3e3ae3ffe5525cd022583b7d4eff09`.
+Its measured runtime was Node 24.22.2, with Express 5.3.0 and EJS 7.0.2. An auxiliary
+metadata probe first failed because EJS does not export its package.json; reading that file
+directly then confirmed the versions and lock hash. Neither probe is benchmark timing.
 
 The [Babel advisory](https://github.com/babel/babel/security/advisories/GHSA-4x5r-pxfx-6jf8)
 is fixed in 7.29.6 and later; current-line 7.29.13 is selected without a Babel 8 migration.
