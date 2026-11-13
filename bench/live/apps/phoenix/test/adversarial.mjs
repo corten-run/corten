@@ -150,6 +150,37 @@ try {
     const empty = await resources();
     for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueEvents']) assert.equal(empty[key], 0);
   });
+  await run('unknown per-consumer counters cannot prove cleanup', async context => {
+    const page = await context.newPage();
+    await page.goto(base); await page.waitForFunction(() => !!window.liveApp);
+    await call(page, 'setup', settings);
+    const id = await page.evaluate(() => window.liveApp.consumerId);
+    let intercepted;
+    const seen = new Promise(resolve => { intercepted = resolve; });
+    let unknown = true;
+    await page.route('**/parity/resources', async route => {
+      if (!unknown) { await route.continue(); return; }
+      const response = await route.fetch();
+      const value = await response.json();
+      assert.ok(value.inventory.consumers[id], 'native consumer remains active');
+      value.inventory.consumers[id] = {
+        subscriptions: null, connections: null, pendingTasks: null, queueEvents: null,
+      };
+      await route.fulfill({ response, json: value });
+      intercepted();
+    });
+    let released = false;
+    const pending = call(page, 'released').then(() => { released = true; });
+    try {
+      await bounded(seen, 5000);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.equal(released, false, 'unknown counters are not observed zero');
+    } finally {
+      unknown = false;
+      await call(page, 'detach');
+      await pending;
+    }
+  });
   await run('overlapping publications cannot bypass the earlier native acknowledgement', async context => {
     const page = await context.newPage();
     let written, releaseHttp, releaseFrame;
