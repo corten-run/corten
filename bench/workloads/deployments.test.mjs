@@ -175,16 +175,22 @@ test("live representatives use dispatched native ports and missing recovery port
     assert.equal(entry.evidence.length, 0);
   }
   const corten = manifest("recoverable-live", "corten");
-  assert.equal(corten.configuration, null); assert.equal(corten.implementation, "pending-implementation");
-  assert.equal(corten.configurationTemplate.dockerfile, "bench/live/apps/corten/Dockerfile.parity");
-  assert.equal(corten.configurationTemplate.context, ".");
-  assert.deepEqual(corten.configurationTemplate.command, ["/app/server"]);
-  assert.equal(corten.configurationTemplate.environment.LIVE_PARITY, "1");
-  assert.match(corten.configurationTemplate.requiredProfile, /native-feed/);
+  assert.equal(corten.implementation, "source-present");
+  assert.equal(corten.qualification, "pending");
+  assert.deepEqual(corten.evidence, []);
+  assert.equal(corten.configuration.builds.app.dockerfile, "bench/live/apps/corten/Dockerfile.parity");
+  assert.equal(corten.configuration.builds.app.context, ".");
+  assert.deepEqual(corten.configuration.command, ["/app/server"]);
+  assert.equal(corten.configuration.environment.LIVE_PARITY, "1");
+  assert.match(corten.configuration.profile, /^native-feed;/);
+  assert.ok(corten.configuration.sourceRefs.includes("Cargo.lock"));
+  assert.ok(corten.configuration.sourceRefs.includes("bench/live/apps/corten/Cargo.lock"));
+  assert.ok(corten.configuration.sourceRefs.includes("crates/corten-feed/Cargo.toml"));
+  assert.ok(!corten.configuration.sourceRefs.includes("bench/live/apps/corten/Dockerfile"));
 });
 
 test("every required native live input gates source registration independently", () => {
-  for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"]]) {
+  for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"], ["corten", "src/parity_screen.js"]]) {
     const original = manifest("recoverable-live", app);
     assert.ok(original.configuration.sourceRefs.includes(`bench/live/apps/${app}/${bridge}`));
     for (const ref of original.configuration.sourceRefs) {

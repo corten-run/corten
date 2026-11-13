@@ -38,6 +38,14 @@ const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${p
 
 // These are the dispatched keyed live applications, not historical price transports.
 const liveNative = freeze({
+  corten: { framework: "Corten native keyed feed application", runtime: "Rust 1.100.0 native release",
+    build: "cargo build --release --locked", server: "corten_feed::Feed / native subscribe and generated keyed views / browser EventSource",
+    workers: "one native process; Tokio runtime; no broker", command: ["/app/server"], context: ".", dockerfile: "Dockerfile.parity",
+    profile: "native-feed; must be explicitly selected for every app under the same work and bounds",
+    environment: { HOST: "0.0.0.0", PORT: "8080", LIVE_PARITY: "1" },
+    refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/parity.rs", "src/parity_row.rs", "src/parity_screen.rs", "src/parity_screen.js"],
+    sharedRefs: ["Cargo.toml", "Cargo.lock", "crates/corten/Cargo.toml", "crates/corten-feed/Cargo.toml", "crates/corten-protocol/Cargo.toml", "crates/corten-macros/Cargo.toml"],
+    middleware: "native /parity controls, corten_feed::Feed replay/subscribe and generated keyed views; not the historical price stream" },
   drogon: { framework: "Drogon native keyed WebSocket application", runtime: "Drogon 1.9.14 / C++17 native release",
     build: "CMake Release; pinned Drogon SDK; native CTest before runtime image", server: "Drogon WebSocketController / browser WebSocket",
     workers: "one native process; one Drogon event-loop thread; acknowledged bounded per-reader queues", command: ["/app/server"],
@@ -71,20 +79,14 @@ const liveNative = freeze({
 function liveRepresentative(app) {
   const base = `bench/live/apps/${app}`, n = liveNative[app];
   if (!n) return { id: `${app}-live-native`, app, role: "representative", implementation: "pending-implementation", configuration: null,
-    expectedSourceRoot: base, reason: "Native keyed live/recovery port is pending catalog integration and review. Historical fullstack/transport-only code is not this application's implementation; no binding launch topology is asserted.",
-    ...(app === "corten" ? { configurationTemplate: { context: ".", dockerfile: `${base}/Dockerfile.parity`, command: ["/app/server"],
-      server: "corten_feed::Feed / native subscribe and generated keyed views / browser EventSource", workers: "one native process; Tokio runtime; no broker",
-      environment: { HOST: "0.0.0.0", PORT: "8080", LIVE_PARITY: "1" },
-      sourceRefs: [`${base}/Cargo.toml`, `${base}/src/main.rs`, `${base}/src/parity.rs`, `${base}/src/parity_row.rs`, `${base}/src/parity_screen.rs`, `${base}/src/parity_screen.js`],
-      requiredProfile: "native-feed; must be explicitly selected for every app under the same work and bounds",
-      scope: "Native corten_feed::Feed, subscribe and generated keyed views port under active integration; not the historical /live price stream and not a qualified recovery baseline",
-    } } : {}) };
-  const sourceRefs = ["bench/live/native.mjs", "bench/live/parity.mjs", `${base}/Dockerfile`, ...n.refs.map((ref) => `${base}/${ref}`)];
+    expectedSourceRoot: base, reason: "Native keyed live/recovery port is pending catalog integration and review. Historical fullstack/transport-only code is not this application's implementation; no binding launch topology is asserted." };
+  const dockerfile = `${base}/${n.dockerfile ?? "Dockerfile"}`;
+  const sourceRefs = ["bench/live/native.mjs", "bench/live/parity.mjs", dockerfile, ...n.refs.map((ref) => `${base}/${ref}`), ...(n.sharedRefs ?? [])];
   return { id: `${app}-live-native`, app, role: "representative", implementation: sourceState(sourceRefs), configuration: {
     framework: n.framework, runtime: n.runtime, build: n.build, server: n.server, workers: n.workers, command: n.command,
-    profile: "bounded; explicit runner profile must be identical for all apps in the round", environment: n.environment,
+    profile: n.profile ?? "bounded; explicit runner profile must be identical for all apps in the round", environment: n.environment,
     edge: "direct native container; no proxy or external broker configured", middleware: n.middleware,
-    builds: { app: { context: base, dockerfile: `${base}/Dockerfile`, args: {} } }, sourceRefs,
+    builds: { app: { context: n.context ?? base, dockerfile, args: {} } }, sourceRefs,
   } };
 }
 

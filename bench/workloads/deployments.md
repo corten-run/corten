@@ -68,7 +68,7 @@ The machine-readable inventory is authoritative for each app/group mapping. Exam
 
 | App | Named current native configuration | Important boundary |
 |---|---|---|
-| Corten | workload-specific catalog/marketplace Dockerfiles and native client-heavy generator | Live remains an explicit pending native port/template; legacy price transport is not a recovery application. |
+| Corten | workload-specific catalog/marketplace Dockerfiles, native client-heavy generator and root-context live `Dockerfile.parity` | The live Feed/subscribe/keyed-view port requires explicit `native-feed` selection. Source registration is not performance qualification; legacy price transport is not a recovery application. |
 | Express | Node 26.13.1, Express + EJS, one process; matched production middleware where selected | Express remains Express. `Bun.serve` is not a replacement contender for it. |
 | ASP.NET Core | ordinary Razor Pages/Kestrel/.NET JIT | Never silently replaced by the separate AOT row. |
 | ASP.NET Native AOT | existing `aspnet-aot` minimal API/Kestrel native binary | JSON-only representative in `json-api`, not an HTML/Razor qualification. |
@@ -82,9 +82,10 @@ The machine-readable inventory is authoritative for each app/group mapping. Exam
 Live selection follows the new dispatched native inventory, not `bench/live/apps.mjs`'s
 historical transport images. Each concrete live manifest includes its own Dockerfile,
 server/client source, native transport, middleware and bounded reader topology. Corten's
-active native Feed/subscribe/keyed-view work is retained only as a non-binding root-context
-`Dockerfile.parity` template (`/app/server`, `LIVE_PARITY=1`) requiring explicit `native-feed`
-profile for the entire round; the port still needs integration/review. Phoenix, Rails and
+native Feed/subscribe/keyed-view manifest uses the root-context `Dockerfile.parity`
+(`/app/server`, `LIVE_PARITY=1`) and requires explicit `native-feed` profile for the entire
+round. Its app lockfile and shared crate inputs are part of the source references; it is not
+a bounded-profile substitute or a qualified performance baseline. Phoenix, Rails and
 Laravel remain pending native handovers. Drogon, Leptos and Topcoat have concrete native
 source manifests, not qualification. Partial scenarios and old fullstack images do not
 establish parity. Known port files absent from this checkout remain

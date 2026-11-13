@@ -20,7 +20,7 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - Reconcile grouped deployment manifests with the checked-in Node 26 and .NET 11
-  launch paths and native Topcoat/Leptos live ports. Source registration remains
+  launch paths and native Corten/Topcoat/Leptos live ports. Source registration remains
   separate from qualification; no older captures qualify changed images.
 
 - Align the native Corten parity and Leptos live Dockerfiles with the reviewed
