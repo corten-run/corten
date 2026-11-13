@@ -15,6 +15,12 @@ export function k6Provenance(image, output) {
   return { image: k6Image, imageId: image.Id, repoDigests: image.RepoDigests, platform: k6Platform, version, versionOutput };
 }
 
+export function verifyK6Provenance(value) {
+  assert.equal(value?.platform, k6Platform, "missing/wrong retained k6 platform");
+  assert.deepEqual(value, k6Provenance({ Id: value.imageId, RepoDigests: value.repoDigests,
+    Os: "linux", Architecture: "amd64" }, value.versionOutput), "retained k6 provenance differs");
+}
+
 // The caller's Docker command keeps its timeout, cancellation and logging policy.
 export async function describeK6(docker, labels = [], { pullLog } = {}) {
   let image;

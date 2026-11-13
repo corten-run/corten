@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { describeK6, k6Image, k6Platform, k6Provenance, k6Version } from "./load-tool.mjs";
+import { describeK6, k6Image, k6Platform, k6Provenance, k6Version, verifyK6Provenance } from "./load-tool.mjs";
 import { readLoad } from "./catalog/contract.mjs";
 
 const image = { Id: `sha256:${"a".repeat(64)}`, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" };
@@ -38,6 +38,19 @@ test("resolution pulls a missing immutable image and probes its resolved ID with
     ["run", "--rm", "--network", "none", "--label", "test=owned", image.Id, "version"]]);
   await assert.rejects(describeK6(async () => { throw new Error("offline"); }), /offline/);
   await assert.rejects(describeK6(async (args) => args[0] === "image" ? JSON.stringify([image]) : "k6 v1.8.2"), /selected release/);
+});
+
+test("saved tool provenance replays the exact pin, platform and executable version", () => {
+  const value = k6Provenance(image, versionOutput);
+  verifyK6Provenance(value);
+  for (const field of Object.keys(value)) {
+    const absent = { ...value }; delete absent[field];
+    assert.throws(() => verifyK6Provenance(absent), field);
+  }
+  for (const change of [{ version: "2.3.0" }, { versionOutput: "k6 v2.3.0" },
+    { platform: "linux/arm64" }, { repoDigests: [] }, { extra: true }]) {
+    assert.throws(() => verifyK6Provenance({ ...value, ...change }));
+  }
 });
 
 test("all four suites import the shared pin, and legacy cleanup follows it", () => {

@@ -1,7 +1,7 @@
 # Load-tool refresh
 
-Source read: `6d8272036d68e5c9a8a8af7bb0c2698094cd12fd`, after fetching origin/main
-(`f12d3daa324644c1fc882a5d994408d774cbb58e`). Scope is load tooling only, for
+Source read: unpublished grouped integration atop fetched origin/main
+`f12d3daa324644c1fc882a5d994408d774cbb58e`. Scope is load tooling only, for
 [#1380 bench/fullstack runs its load with grafana/k6:latest and records no image, while catalog, marketplace and json-api pin one digest, so its rounds cannot say which k6 measured them](https://github.com/corten-run/corten/issues/1380),
 including its triage comment, read through the GitHub REST API on 2026-11-13.
 
@@ -44,12 +44,15 @@ image's executable version has not been established here, so this is not a measu
 speed delta from that image or from an earlier floating-tag fullstack round.
 
 Marketplace's existing comparison already treats the resolved k6 image ID as an
-input. Parent integration owns the current marketplace raw validator/schema and
-historical comparison decisions. The JSON API contract exports the new shared pin;
-its runner still needs the narrow `describeK6` integration in `imageTool` to record
-the actual version/RepoDigests (outside this lane's assigned paths). Fullstack's
-historical `trend.mjs` also needs parent-owned compatibility handling before any
-cross-tool trend claim. These are integration requirements, not completed work.
+input. Integration with the newer marketplace raw validator remains a separate
+requirement. JSON API records the actual probe and strictly replays every retained
+provenance field before qualifying a measurement. Fullstack's trend report refuses
+a baseline-to-current range containing mixed or missing tool identity once any
+round records it. Catalog's native saved-evidence v2 also requires that provenance;
+v1 files are preserved but cannot qualify as newly verified v2 evidence.
+Entirely historical unknown-tool ranges keep their original
+behavior, not a retroactively verified identity. An explicitly accepted later
+baseline can begin a new compatible range; this change does not move baselines.
 
 ## Checks
 
