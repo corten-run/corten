@@ -16,7 +16,7 @@ config :phoenix, :json_library, Jason
 config :logger, level: :warning
 
 config :esbuild,
-  version: "0.25.4",
+  version: "0.28.2",
   native_live: [
     args: ~w(client.js --bundle --target=es2022 --outfile=priv/static/client.js),
     cd: Path.expand("..", __DIR__),

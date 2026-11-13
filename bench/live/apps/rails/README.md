@@ -6,8 +6,13 @@ operations and the installed Turbo runtime applies every keyed DOM change. The
 browser bridge only invokes native actions, observes actual DOM/effects, and
 records the runner contract. There is no EventSource or shared renderer/store.
 
-The Gemfile and lockfile retain the fullstack Rails application's existing native
-dependency versions. No new library or broker is required. One Puma process uses
+Runtime inputs were refreshed on 2026-11-13 against the official Ruby release,
+RubyGems metadata and Docker image manifests: Ruby 4.0.9, Rails 8.1.4.1,
+Puma 8.0.3 and Bundler 4.0.24. The Ruby image is digest-pinned and the independent
+native lock was regenerated with Bundler's full index on that Ruby image. Rails'
+Active Storage dependency constrains Marcel to `~> 1.0`, retaining 1.2.1 rather
+than the incompatible latest major. No new library or
+broker is required. One Puma process uses
 Action Cable's native asynchronous adapter, in one container. Multiple application
 processes or instances are not supported by this synthetic in-memory store.
 
@@ -93,5 +98,10 @@ retained-client inventory before closing its browser context. Its injected close
 uses application code 3001: the upstream is a browser WebSocket, whose `close()`
 rejects reserved code 1001. The test retains both close-forwarding callbacks and
 requires an actual upstream close notification, not just a page-side close.
-Raw before/after receipts are in `test/receipts/`. These are bounded correctness
-observations, not throughput measurements or load admission.
+Raw before/after receipts are in `test/receipts/`. Those receipts are historical
+and do not qualify refreshed runtime images. New runtime checks retain separate
+local, hashed raw attempts bound to exact sources and images, including failures.
+All six bounded journeys retain their 45-second whole-journey deadline; the
+adversarial/recovery controls retain their two-second recovery and five-second
+cleanup gates. These are bounded correctness observations, not throughput
+measurements, native-feed qualification or load admission.

@@ -61,9 +61,13 @@ cleanup requires explicit numeric zeroes or absence from the complete native
 consumer inventory; unknown counters cannot prove release. This does not establish
 TCP slow-reader bounds, restart durability, distributed operation or load readiness.
 
-Dependencies retain the fullstack Phoenix lock's existing versions. No new
-library is introduced; unrelated fullstack CLDR/HTTP-client dependencies are not
-runtime dependencies of this app. The Dockerfile builds a normal production OTP
+Runtime inputs were refreshed on 2026-11-13 against official Elixir/OTP releases,
+Hex package metadata, esbuild metadata and Docker image manifests: Elixir 1.20.5,
+OTP 29.1.2, Phoenix 1.8.16, LiveView 1.2.13, Phoenix HTML 4.4.0, Bandit 1.14.1
+and esbuild 0.28.2. Builder and runtime bases are digest-pinned. The independent
+native lock was regenerated with Mix on that Elixir image, removing unused
+inherited fullstack entries. No new library is introduced.
+The Dockerfile builds a normal production OTP
 release, serves standard esbuild-bundled installed Phoenix/LiveView clients, and
 runs as a non-root user. `ERL_FLAGS` bounds VM scheduler threads in both build and
 runtime, without changing publication, rendering or recovery semantics.
@@ -101,5 +105,10 @@ counters/cursors/row counts fail before snapshot reads or state mutation.
 `node bench/live/apps/phoenix/test/recovery.mjs <base>` drops actual native
 event/ACK frames, overflows the bounded queue, checks source rows and visible
 effects, and verifies duplicate suppression and subsequent progress.
-Raw before/after receipts are in `test/receipts/`. These are bounded correctness
-observations, not throughput measurements or load admission.
+Raw before/after receipts are in `test/receipts/`. Those receipts are historical
+and do not qualify refreshed runtime images. New runtime checks retain separate
+local, hashed raw attempts bound to exact sources and images, including failures.
+All six bounded journeys retain their 45-second whole-journey deadline; the
+adversarial/recovery controls retain their two-second recovery and five-second
+cleanup gates. These are bounded correctness observations, not throughput
+measurements, native-feed qualification or load admission.
