@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import fs, { existsSync, readFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import { contractSha256, definition, groupNames, retainedFamilies, selectedApps } from "./registry.mjs";
 import { groupApps, scheduledGroup } from "../marketplace/groups.mjs";
@@ -180,6 +181,29 @@ test("live representatives use dispatched native ports and missing recovery port
   assert.deepEqual(corten.configurationTemplate.command, ["/app/server"]);
   assert.equal(corten.configurationTemplate.environment.LIVE_PARITY, "1");
   assert.match(corten.configurationTemplate.requiredProfile, /native-feed/);
+});
+
+test("every required native live input gates source registration independently", () => {
+  for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"]]) {
+    const original = manifest("recoverable-live", app);
+    assert.ok(original.configuration.sourceRefs.includes(`bench/live/apps/${app}/${bridge}`));
+    for (const ref of original.configuration.sourceRefs) {
+      const absent = new URL(`../../${ref}`, import.meta.url).href;
+      const originalExists = fs.existsSync;
+      try {
+        fs.existsSync = (path) => path instanceof URL && path.href === absent ? false : originalExists(path);
+        syncBuiltinESMExports();
+        const entry = manifest("recoverable-live", app);
+        assert.equal(entry.implementation, "pending-integration", `${app}: missing ${ref}`);
+        assert.equal(entry.qualification, "pending");
+        assert.deepEqual(entry.evidence, []);
+      } finally {
+        fs.existsSync = originalExists;
+        syncBuiltinESMExports();
+      }
+      assert.equal(manifest("recoverable-live", app).implementation, "source-present");
+    }
+  }
 });
 
 test("client-heavy manifests describe the current native builder, driver and generator", () => {

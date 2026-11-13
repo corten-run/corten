@@ -58,13 +58,13 @@ const liveNative = freeze({
   topcoat: { framework: "Topcoat native keyed live components", runtime: "Rust 1.100.0 / Topcoat 0.12.1 native release",
     build: "cargo build --release --locked; topcoat asset bundle --release", server: "Topcoat live! / emit! / runtime WebSocket",
     workers: "one native process; Tokio runtime; bounded per-reader queues", command: ["/app/server"],
-    environment: { HOST: "0.0.0.0", PORT: "8080" }, refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/store.rs", "wire.mjs"],
+    environment: { HOST: "0.0.0.0", PORT: "8080" }, refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/store.rs", "static/bridge.js", "wire.mjs"],
     middleware: "native /parity controls, generated keyed components and runtime WebSocket; no fullstack marketplace renderer" },
   leptos: { framework: "Leptos hydrated keyed For application", runtime: "Rust 1.100.0 native server / browser WASM",
     build: "cargo leptos build --release --cargo-locked; cargo-leptos 0.3.12", server: "Axum SSE / Tokio bounded mpsc / hydrated Leptos For",
     workers: "one native process; Tokio runtime; bounded per-reader queues", command: ["/app/server"],
     environment: { LEPTOS_OUTPUT_NAME: "live_parity", LEPTOS_SITE_ROOT: "site", LEPTOS_SITE_PKG_DIR: "pkg", LEPTOS_SITE_ADDR: "0.0.0.0:8080", LEPTOS_ENV: "PROD" },
-    refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/lib.rs", "src/server.rs", "wire.mjs"],
+    refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/lib.rs", "src/server.rs", "public/bridge.js", "wire.mjs"],
     middleware: "native /parity controls, SSR keyed rows, WASM hydration and Axum SSE; no replacement renderer" },
 });
 
