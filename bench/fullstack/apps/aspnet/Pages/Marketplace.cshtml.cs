@@ -33,7 +33,8 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
         AllOffers = Request.Query["offers"] == "all";
         if (alerts is not null)
         {
-            var form = await Request.ReadFormAsync(HttpContext.RequestAborted);
+            // The first, cancellation-aware read precedes MVC antiforgery validation.
+            var form = Request.Form;
             var email = form["email"].FirstOrDefault() ?? "";
             Message = Format.Alert(email, form["target_price"].FirstOrDefault() ?? "", record.Title, out var targetMinor);
             Response.Headers.CacheControl = "no-store";

@@ -75,6 +75,12 @@ removed when the response finishes or closes. A disconnected or timed-out form
 cannot append an alert after the fetch or the EJS render callback. Normal native
 form, money, JSON and upstream-error contracts are unchanged.
 
+For an unfinished native URL-encoded POST, the same deadline writes the timeout
+response without waiting for the rest of the body, then destroys the incoming
+request after response finish. This closes the socket and causes body-parser's
+native raw-body reader to abort and clean up. Its callback cannot resume routing
+after cancellation. Existing parser limits and matched middleware remain intact.
+
 The [native socket checks](../../../marketplace/corten/README.md#request-lifetime)
 exercise both profiles and all locales against the actual image, including
 stalled bodies, real aborts, deadline status/cancellation and POST non-mutation.

@@ -7,10 +7,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { deadlineContract } from "./deadline-contract.mjs";
+import { sourceIdentity } from "./image-source.mjs";
 
 const [app, image, label = "after", mode = "full"] = process.argv.slice(2);
 assert.ok(["corten", "aspnet", "express"].includes(app) && image);
-assert.ok(["full", "baseline", "posts", "deadlines"].includes(mode));
+assert.ok(["full", "baseline", "posts", "deadlines", "uploads", "upload-baseline"].includes(mode));
 const output = fileURLToPath(new URL(`./results/${label}-${app}-${Date.now()}/`, import.meta.url));
 mkdirSync(output, { recursive: true });
 const record = JSON.parse(readFileSync(new URL("./marketplace.json", import.meta.url)));
@@ -81,13 +83,92 @@ function send(base, path, { method = "GET", headers = {}, body: data } = {}) {
 const observations = [];
 let current;
 let failures = 0;
-const identity = { app, image, imageId: docker("image", "inspect", image, "--format", "{{.Id}}"),
-  commit: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim(),
+const inspected = JSON.parse(docker("image", "inspect", image))[0];
+const source = sourceIdentity(app);
+const labelledSource = inspected.Config.Labels?.["bench.source.sha256"];
+if (labelledSource) assert.equal(labelledSource, source.sha256, "native image source differs from current source inputs");
+const identity = { app, image, imageId: inspected.Id, imageLabels: inspected.Config.Labels,
+  source, sourceInputsVerified: labelledSource === source.sha256,
+  driverCommit: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim(),
+  driverSha256: createHash("sha256").update(readFileSync(fileURLToPath(import.meta.url))).digest("hex"),
+  driverHelpers: Object.fromEntries(["deadline-contract.mjs", "image-source.mjs"].map((name) =>
+    [name, createHash("sha256").update(readFileSync(new URL(name, import.meta.url))).digest("hex")])),
+  // Host HEAD identifies the driver, not the source from which an image was built.
+  imageSourceCommit: inspected.Config.Labels?.["bench.source.commit"] ?? null,
   recordSha256: createHash("sha256").update(body).digest("hex"), mode };
+async function upload(profile, path, transport, kind) {
+  const op = arm("normal");
+  const start = performance.now();
+  const row = { profile, path, method: "POST", kind: `upload-${kind}`, bytesPerSecond: 1000,
+    nativePolicyMs: app === "corten" ? 30000 : 10000, bytesSent: 0 };
+  let client, drip, closedAt, responseAt, result, endedByDriver = false;
+  const prefix = transport.body + "&padding=";
+  const padding = 40000;
+  const response = new Promise((resolve) => {
+    client = request(current.base + path, { method: "POST", agent: false,
+      headers: { ...transport.headers, "content-length": Buffer.byteLength(prefix) + padding } }, (res) => {
+      responseAt = performance.now();
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => text += chunk);
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text }));
+      res.on("error", () => resolve({ status: 0 }));
+    });
+    client.on("error", () => resolve({ status: 0 }));
+    client.once("close", () => { closedAt = performance.now(); });
+    client.flushHeaders();
+    client.write(prefix);
+    row.bytesSent += Buffer.byteLength(prefix);
+    drip = setInterval(() => { if (!client.destroyed) { client.write("x".repeat(100)); row.bytesSent += 100; } }, 100);
+  });
+  try {
+    if (kind === "cancel") {
+      await sleep(250);
+      row.abortAtMs = performance.now() - start;
+      client.destroy();
+    }
+    // Keep sending at 1000 B/s, below body limits but above Kestrel's minimum rate.
+    const boundMs = kind === "cancel" ? 500 : row.nativePolicyMs + 2500;
+    result = await Promise.race([response, sleep(boundMs).then(() => ({ status: null }))]);
+    row.statusAtBound = result.status;
+    row.elapsedAtBoundMs = performance.now() - start;
+    row.bodyUnfinishedAtBound = !client.writableEnded;
+    row.upstreamAtBound = { requests: op.requests, completed: op.completed, cancelled: op.cancelled, pending: op.pending };
+    if (result.status === null) {
+      // Reproduce the old late timeout: finishing the body must not be necessary to answer.
+      clearInterval(drip);
+      endedByDriver = true;
+      client.end("x".repeat(Buffer.byteLength(prefix) + padding - row.bytesSent));
+      result = await Promise.race([response, sleep(1500).then(() => ({ status: null }))]);
+    }
+    row.status = result.status;
+    row.contentType = result.headers?.["content-type"] ?? null;
+    row.connection = result.headers?.connection ?? null;
+    row.responseAtMs = responseAt ? responseAt - start : null;
+    row.responseText = result.text ?? null;
+    await wait(() => closedAt !== undefined, 500);
+    row.socketClosedAtMs = closedAt ? closedAt - start : null;
+    row.driverFinishedBody = endedByDriver;
+    assert.equal(row.bodyUnfinishedAtBound, true);
+    assert.equal(endedByDriver, false, "native deadline did not answer until the driver finished the body");
+    assert.equal(op.requests, 0, "unfinished upload started source work");
+    if (kind === "cancel") assert.equal(result.status, 0);
+    else assert.ok([408, 503, 504].includes(result.status), `unfinished body returned ${result.status}`);
+    assert.ok(closedAt, "native upload socket remained open after response");
+    row.passed = true;
+  } catch (error) { row.passed = false; row.error = error.message; failures++; }
+  finally {
+    clearInterval(drip);
+    client.destroy();
+    observations.push(row);
+    writeFileSync(output + "/summary.json", JSON.stringify({ ...identity, observations, failures }, null, 2));
+    console.log(`${row.passed ? "PASS" : "FAIL"} ${app} ${profile} ${path} ${row.kind} status=${row.status} at-bound=${row.statusAtBound} ${Math.round(row.elapsedAtBoundMs)}ms${row.error ? " " + row.error : ""}`);
+  }
+}
 async function check(profile, path, kind, sourceMode, transport = {}) {
   const op = arm(sourceMode);
   const start = performance.now();
-  const client = send(current.base, path, transport);
+  const client = send(current.base, path, path.startsWith("/api/") ? { ...transport, headers: { ...transport.headers, accept: "application/json" } } : transport);
   let abortAt;
   let bound;
   const row = { profile, path, method: transport.method ?? "GET", kind, sourceMode };
@@ -98,14 +179,14 @@ async function check(profile, path, kind, sourceMode, transport = {}) {
     clearTimeout(bound);
     row.status = result.status;
     row.contentType = result.headers?.["content-type"]?.split(";", 1)[0] ?? null;
+    row.responseSha256 = typeof result.text === "string" ? createHash("sha256").update(result.text).digest("hex") : null;
     row.elapsedMs = performance.now() - start;
     await wait(() => op.pending === 0, 500);
     row.upstream = { requests: op.requests, completed: op.completed, cancelled: op.cancelled, pending: op.pending, paths: op.paths };
     if (abortAt && op.endedAt) row.cancelMs = op.endedAt - abortAt;
     if (kind === "cancel") assert.equal(result.status, 0, "real client did not abort");
     else if (kind === "deadline") {
-      assert.ok([408, 503, 504].includes(result.status), `native deadline returned ${result.status}`);
-      assert.ok(["text/html", "text/plain", "application/json", "application/problem+json"].includes(row.contentType), "deadline response has no contract content type");
+      row.errorPayload = deadlineContract(result, path.startsWith("/api/"));
     }
     else assert.equal(result.status, 200);
     assert.equal(op.requests, 1);
@@ -136,13 +217,13 @@ try {
       "--cpus", "1", "--memory", "1g", "-p", "127.0.0.1::8080",
       ...(process.platform === "linux" ? ["--add-host", "host.docker.internal=host-gateway"] : []),
       "-e", `PROFILE=${profile}`, "-e", "MAX_CONNECTIONS=256", "-e", "HOSTS=localhost,127.0.0.1",
-      "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, image);
+      "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, identity.imageId);
     current.base = `http://127.0.0.1:${docker("port", name, "8080/tcp").split(":").at(-1)}`;
     assert.ok(await wait(async () => {
       try { const result = await fetch(current.base, { signal: AbortSignal.timeout(500) }); return result.status === 200; } catch { return false; }
     }, 30000), "native app startup failed");
-    const locales = mode === "baseline" ? ["en-US"] : ["en-US", "fr-FR", "de-DE"];
-    const paths = mode === "posts" ? [] : locales.map((locale) => `/marketplace/${locale}/item_1`);
+    const locales = ["baseline", "upload-baseline"].includes(mode) ? ["en-US"] : ["en-US", "fr-FR", "de-DE"];
+    const paths = ["posts", "uploads", "upload-baseline"].includes(mode) ? [] : locales.map((locale) => `/marketplace/${locale}/item_1`);
     if (["full", "deadlines"].includes(mode)) paths.push("/api/marketplace/item_1");
     for (const path of paths) {
       for (const sourceMode of ["baseline", "deadlines"].includes(mode) ? ["hold"] : ["hold", "body"]) {
@@ -151,7 +232,7 @@ try {
       }
       await check(profile, path, "complete", "slow");
     }
-    if (["full", "posts"].includes(mode)) for (const locale of locales) {
+    if (["full", "posts", "uploads", "upload-baseline"].includes(mode)) for (const locale of locales) {
       const path = `/marketplace/${locale}/item_1`;
       arm("normal");
       const page = await send(current.base, path).result;
@@ -188,10 +269,17 @@ try {
       const before = JSON.parse(state.text);
       assert.equal(before.length, 1);
       for (const kind of ["cancel", "deadline"]) {
-        await check(profile, path, kind, "hold", transport);
+        if (["uploads", "upload-baseline"].includes(mode)) await upload(profile, path, transport, kind);
+        else await check(profile, path, kind, "hold", transport);
         const readback = await send(current.base, "/api/alerts", { headers: { cookie } }).result;
         assert.equal(readback.status, 200);
         assert.deepEqual(JSON.parse(readback.text), before, "unfinished POST committed an alert");
+        if (mode === "full") {
+          await upload(profile, path, transport, kind);
+          const uploaded = await send(current.base, "/api/alerts", { headers: { cookie } }).result;
+          assert.equal(uploaded.status, 200);
+          assert.deepEqual(JSON.parse(uploaded.text), before, "unfinished upload committed an alert");
+        }
       }
       await check(profile, path, "complete", "slow", transport);
       const recovered = await send(current.base, "/api/alerts", { headers: { cookie } }).result;

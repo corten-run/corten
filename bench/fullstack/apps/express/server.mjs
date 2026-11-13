@@ -143,7 +143,12 @@ async function marketplace(req, res, next) {
   });
 }
 app.get("/marketplace/:locale/:id", requestLifetime, marketplace);
-app.post("/marketplace/:locale/:id", requestLifetime, ...parsed(form), marketplace);
+app.post("/marketplace/:locale/:id", requestLifetime, (req, res, next) => {
+  form(req, res, (error) => {
+    // The timeout response owns the socket; a cancelled parser must not resume routing.
+    if (!res.locals.requestSignal.aborted && !res.destroyed && !req.timedout) next(error);
+  });
+}, marketplace);
 
 app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord)).all(recordMethod);
 app.get("/api/alerts", readAlerts);
