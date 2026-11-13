@@ -385,6 +385,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
+  (`<app>-target`), so a build waits only for another build of the same app, where every app on a
+  Docker host built from the template shared one locked `/src/target` cache and waited for every
+  other app's build. Downloaded crates are cached as cargo's whole home
+  (`CARGO_HOME=/var/cache/cargo`) instead of its `registry` directory, since cargo's lock on them
+  is in the home: two builds that run at once wait for each other's download, where with
+  `registry` alone one of them could fail to unpack a crate the other was unpacking. Apps no longer
+  share compiled dependencies, so two apps with the same ones compile them once each. The examples'
+  Dockerfiles take one `id` for the workspace they share, so each example still builds on the
+  crates the last one compiled, and keep their `registry` cache, since they still build one at a
+  time. An app made before keeps its Dockerfile; one that takes the change starts its next build
+  with empty caches
+  ([#1345 The Dockerfile template's target cache has no id, so every app's build on a host waits for every other's](https://github.com/corten-run/corten/issues/1345)).
 - A WebSocket handshake of a version other than 13, or of none, is answered 426 with
   `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
   RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,
