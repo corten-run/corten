@@ -69,7 +69,7 @@ The machine-readable inventory is authoritative for each app/group mapping. Exam
 | App | Named current native configuration | Important boundary |
 |---|---|---|
 | Corten | workload-specific catalog/marketplace Dockerfiles and native client-heavy generator | Live remains an explicit pending native port/template; legacy price transport is not a recovery application. |
-| Express | Node 24, Express + EJS, one process; matched production middleware where selected | Express remains Express. `Bun.serve` is not a replacement contender for it. |
+| Express | Node 26.13.1, Express + EJS, one process; matched production middleware where selected | Express remains Express. `Bun.serve` is not a replacement contender for it. |
 | ASP.NET Core | ordinary Razor Pages/Kestrel/.NET JIT | Never silently replaced by the separate AOT row. |
 | ASP.NET Native AOT | existing `aspnet-aot` minimal API/Kestrel native binary | JSON-only representative in `json-api`, not an HTML/Razor qualification. |
 | Django | checked-in matched Granian WSGI launch, one worker, three blocking request threads | Gunicorn's three preloaded sync workers and the existing Uvicorn ASGI override remain visible alternatives, not borrowed production passes. |

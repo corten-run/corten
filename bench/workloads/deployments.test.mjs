@@ -109,7 +109,8 @@ test("actual launch topologies stay distinct, without a framework replacement or
   const n = manifest("catalog-page", "express").configuration;
   const dockerfile = readFileSync(new URL("../fullstack/apps/express/Dockerfile", import.meta.url), "utf8");
   assert.ok(dockerfile.includes(JSON.stringify(n.command).replaceAll(",", ", ")));
-  assert.equal(n.framework, "Express + EJS"); assert.equal(n.runtime, "Node 24");
+  assert.equal(n.framework, "Express + EJS"); assert.equal(n.runtime, "Node 26.13.1");
+  assert.equal(n.environment.NODE_ENV, "production");
 });
 
 test("native profile facts and pending alternatives are concrete and group-scoped", () => {
@@ -163,7 +164,15 @@ test("live representatives use dispatched native ports and missing recovery port
   assert.match(gin.runtime, /Go 1\.27\.3/);
   assert.equal(manifest("recoverable-live", "laravel").implementation, "pending-implementation");
   assert.throws(() => deploymentDescriptor("recoverable-live", "laravel", "laravel-frankenphp-jit", binding(manifest("fullstack-browser", "laravel").configuration)), /implementation.*source-present/);
-  assert.equal(manifest("recoverable-live", "topcoat").configuration, null);
+  for (const app of ["topcoat", "leptos"]) {
+    const entry = manifest("recoverable-live", app);
+    assert.equal(entry.implementation, "source-present");
+    assert.equal(entry.qualification, "pending");
+    assert.deepEqual(entry.configuration.command, ["/app/server"]);
+    assert.equal(entry.configuration.builds.app.context, `bench/live/apps/${app}`);
+    assert.ok(entry.configuration.sourceRefs.includes(`bench/live/apps/${app}/wire.mjs`));
+    assert.equal(entry.evidence.length, 0);
+  }
   const corten = manifest("recoverable-live", "corten");
   assert.equal(corten.configuration, null); assert.equal(corten.implementation, "pending-implementation");
   assert.equal(corten.configurationTemplate.dockerfile, "bench/live/apps/corten/Dockerfile.parity");
