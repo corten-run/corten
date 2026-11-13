@@ -160,7 +160,8 @@ jobs:
         run: |
           npm run check
           npm run check:workloads
-          npm run check:marketplace
+          mapfile -t marketplace_tests < <(find bench/marketplace -maxdepth 1 -name '*.test.mjs' ! -name check.test.mjs -print | sort)
+          node --test --test-concurrency=1 "${marketplace_tests[@]}"
           node --test bench/client-heavy/verify.test.mjs
           echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system
@@ -176,6 +177,9 @@ jobs:
           echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
           # For a test that restarts its server: the runner's docker CLI and socket as well.
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
+      - name: Marketplace browser oracle
+        if: contains(env.PARTS, ' npm-check ')
+        run: $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
       - name: Client-heavy observer and runner
         if: contains(env.PARTS, ' npm-check ')
         run: $PLAYWRIGHT node --test --test-concurrency=1 bench/client-heavy/observer.test.mjs bench/client-heavy/run.test.mjs
