@@ -90,8 +90,8 @@ and this guide alone. A merge that also changes the site starts both, and that S
 ship to the machine being replaced or fail against the new one while it sets itself up: the
 run the `Site machine` workflow starts afterwards ships whatever became of the first (where
 the first reached the new machine, as on `cd3f67f43`, the second ships the same commit again
-and the service restarts once more). A droplet is never
-changed in place. A change to anything it is handed, a comment in one
+and the service restarts once more). A droplet is never changed in place. A change to
+anything it is handed, a comment in one
 of those files included, makes a new droplet, moves the address to it once it exists, and
 removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
 the workflow asks the machine at the address for the site, and starts the Site workflow when a
@@ -112,17 +112,17 @@ for about two of those six minutes, and that by chance. The merge had changed th
 so a Site run of its own had started; it waited 2 min 54 s for a runner, finished building 3 s
 before the workflow first saw the machine answer, and was answered by its release 2 min 7 s
 after the address began to move and 1 min 51 s after it had moved. With the 4 s wait of the
-first machine's run it would have shipped to the old machine before the move. So reckon on
-the machine's minute and a half and a Site run, of which the wait for a runner is the part
-that moves. The old machine
-and its certificate are gone by then, and Let's Encrypt issues the same names five
-certificates a week: a sixth replacement inside a week leaves the site down until its limit
-allows another (with names that redirect, a machine asks for two, one for the site's name and
-one for all of them, and each set of names has its own five). So gather changes to those files
-into one merge. When an apply fails, run the
-workflow again (`gh workflow run site-machine.yml`): what it made is in the state, and the
-run ships the site to a machine that answers 502. With deploys on, a run fails when the
-machine does not answer.
+first machine's run it would by reckoning have shipped to the old machine before the move.
+So reckon on what is left of the apply after the move (39 s here, from its beginning), the
+machine's minute and a half and a Site run, of which the wait for a runner is the part that
+moves. The old machine and its certificate are gone by then, and Let's Encrypt issues the
+same names five certificates a week: a sixth replacement inside a week leaves the site down
+until its limit allows another (with names that redirect, a machine asks for two, one for the
+site's name and one for all of them, and each set of names has its own five). So gather
+changes to those files into one merge. When an apply fails, run the workflow again
+(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
+site to a machine that answers 502. With deploys on, a run fails when the machine does not
+answer.
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
 when it moves it.
@@ -165,8 +165,7 @@ workflow starts has built its release; a Site run the merge started itself can h
 its own by then, as on `cd3f67f43`, where it shipped within half a minute of the machine
 taking `www` on, and passed. After an apply the workflow asks the machine for each name, for
 twenty minutes in all where it made the machine, and fails where one does not send its
-visitors to the site.
-Twenty minutes is by reckoning a little more than one new try takes, not a time that was
+visitors to the site. Twenty minutes is by reckoning a little more than one new try takes, not a time that was
 waited out: a run can end red for a name the machine takes on minutes later, and the machine
 goes on trying either way. Changing the list replaces the droplet on the next apply.
 
@@ -499,7 +498,8 @@ The same day the merge of `cd3f67f43` replaced that droplet, with `SITE_REDIRECT
 `www.corten.run` (one run, read from the workflows' logs). The plan was two to add, one to
 change and one to destroy. By tofu's own count the new droplet was made in 33 seconds, the
 address moved to it in the 15 after, the record for `www` was made, and the old droplet was
-gone 22 seconds after the move; the apply ended 39 seconds after the address began to move.
+gone 22 seconds after the move; by the log's times, which keep the fractions tofu drops, the
+apply ended 39 seconds after the address began to move.
 The step saw the machine answer 502 under the site's name 1 min 22 s after the apply ended
 (it asks each 20 seconds, so the machine may have answered sooner). The Site run the merge
 itself had started was shipping then and was answered by the page as that commit 6 seconds
@@ -508,10 +508,11 @@ after the first answer. The Site run the workflow started shipped the same commi
 was answered as it 4 min 6 s after the machine's first answer; the times above say where
 those minutes went.
 
-Still not run on a real machine, among what this guide describes: an apply that fails once
-begun or a droplet that cannot be made, a put-back of the release before, a machine that
-freezes during a ship, a name that reaches the machine late or is refused its certificate, a
-renewal, and `hold.mjs` and nginx's limits. Which of `boot.sh`'s two ways ended its wait on either droplet
-was not looked at, so whether a droplet can reach its own reserved address from inside is
-still not known, nor whether the two metadata paths (`reserved_ip/ipv4/active` and
-`ip_address`) answer as `boot.sh` reads them.
+Among what has still not run on a real machine: an apply that fails once begun or a droplet
+that cannot be made, a first deploy that fails, a put-back of the release before, a machine
+that freezes during a ship or never answers the workflow, a name that reaches the machine
+late or is refused its certificate, a renewal, `hold.mjs` and nginx's limits, the optional
+variables other than `SITE_REDIRECTS`, and the steps by hand. Which of `boot.sh`'s two ways
+ended its wait on either droplet was not looked at, so whether a droplet can reach its own
+reserved address from inside is still not known, nor whether the two metadata paths
+(`reserved_ip/ipv4/active` and `ip_address`) answer as `boot.sh` reads them.
