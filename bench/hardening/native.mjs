@@ -39,18 +39,20 @@ const receipt = (row) => {
   assert.equal(row.bytes, Buffer.byteLength(row.body)); assert.equal(row.sha256, hash(row.body));
 };
 
-export function assessNative(report, qualification) {
+export function assessNative(report, qualification, deployment = "direct") {
+  assert.ok(["direct", "deployed-edge"].includes(deployment));
   validateQualification(qualification);
   assert.equal(report.schema, "native-hardening-controls/v1"); assert.equal(report.source, qualification.source);
   const { host, liveness } = report;
   receipt(host.allowed); receipt(host.denied); receipt(liveness.negative);
   assert.ok(healthy(host.allowed), "native host control needs a healthy allowed-host request");
-  const hostState = host.denied.complete && [400, 403, 421].includes(host.denied.status) ? "observed"
+  const hostState = host.denied.complete && !host.denied.error && !host.denied.timedOut && host.denied.status >= 400 && host.denied.status < 500 ? "observed"
     : healthy(host.denied) ? "missing" : "inconclusive";
   const expectedLive = qualification.probes.live?.path ?? null;
   assert.equal(liveness.path, expectedLive);
   if (expectedLive) { receipt(liveness.baseline); assert.ok(healthy(liveness.baseline), "native liveness baseline failed"); }
-  const livenessState = !expectedLive ? "missing" : liveness.negative.status === 200 ? "inconclusive" : "observed";
+  const livenessState = !expectedLive ? "missing" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
+    && liveness.negative.status >= 400 && liveness.negative.status < 500 ? "observed" : "inconclusive";
   let sourceControl = "not-applicable";
   if (report.source === "api") {
     const api = report.api; assert.ok(api); assert.match(api.nonce, /^[a-f0-9]{24}$/);
@@ -77,7 +79,8 @@ export function assessNative(report, qualification) {
   const productionQualified = qualification.eligible && hostState === "observed" && livenessState === "observed" && sourceControl !== "target-functional-failure"
     && (report.source !== "api" || liveDuringFailure === "observed");
   return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched", productionQualified,
-    productionQualificationScope: "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence",
+    productionQualificationScope: deployment === "direct" ? "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence"
+      : "effective TLS deployment production probes plus explicit deployment host/liveness/source controls; not inferred native/proxy mechanism attribution",
     missingProductionFeatures: qualification.missing,
     hostValidation: hostState, liveness: livenessState, sourceControl,
     livenessDuringUpstreamFailure: liveDuringFailure,
@@ -126,10 +129,10 @@ export async function nativeControls({ base, source, upstream, qualification, or
   return report;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [base, source, upstream, qualificationFile, output] = process.argv.slice(2);
+  const [base, source, upstream, qualificationFile, output, deployment = "direct"] = process.argv.slice(2);
   const qualification = validateQualification(JSON.parse(readFileSync(qualificationFile)));
   const original = JSON.parse(readFileSync("/fixtures/marketplace.json")).item_1;
   const raw = await nativeControls({ base, source, upstream, qualification, original });
   writeFileSync(output, JSON.stringify(raw, null, 2));
-  console.log(JSON.stringify(assessNative(raw, qualification)));
+  console.log(JSON.stringify(assessNative(raw, qualification, deployment)));
 }

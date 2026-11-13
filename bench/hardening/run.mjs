@@ -29,7 +29,7 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, nativeControlsVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, deploymentQualificationVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false } = {}) {
@@ -146,6 +146,7 @@ export async function run(args) {
       stage = "native-parity";
       await sidecar(`${prefix}-parity`, appName, ["/repo/bench/hardening/parity.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/parity.json"], out, "parity.log", 10 * 60000);
       parity = JSON.parse(readFileSync(join(out, "parity.json"), "utf8")); verifyParity(parity, cell.source); cell.parity = "passed";
+      json(join(out, "native-parity.json"), parity);
       let target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "http://localhost:8080", tls: false }, namespace = appName;
       if (cell.mode === "deployed-edge") {
         stage = "edge-deployment";
@@ -158,13 +159,17 @@ export async function run(args) {
         const edge = await owned(edgeName, ["run", "-d", "--network", network, ...limits(budget.resources.proxy), "-v", `${cert}:/cert:ro`, "-v", `${join(out, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, tools.edge.Id]);
         targets.push({ id: "proxy", role: "proxy", name: edgeName, info: edge, source: summary.commit + ":bench/fullstack/edge.mjs:nginxConf" });
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;
+        stage = "edge-production-qualification";
+        await sidecar(`${prefix}-edge-qualification`, edgeName, ["/repo/bench/hardening/tls-qualification.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json"], out, "edge-qualification.log", 8 * 60000);
+        const edgeQualification = validateQualification(JSON.parse(readFileSync(join(out, "edge-qualification.json"), "utf8")));
+        cell.edgeMissingFeatures = edgeQualification.missing;
         // The edge is a distinct deployment and must itself pass the complete content/browser gate.
         stage = "edge-parity";
         await sidecar(`${prefix}-edge-parity`, edgeName, ["/repo/bench/hardening/parity.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/parity.json"], out, "edge-parity.log", 10 * 60000);
         parity = JSON.parse(readFileSync(join(out, "parity.json"), "utf8")); verifyParity(parity, cell.source);
         stage = "edge-native-controls";
-        await sidecar(`${prefix}-edge-controls`, edgeName, ["/repo/bench/hardening/native.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json", "/results/edge-native-controls.json"], out, "edge-native-controls.log", 90000);
-        cell.edgeAssessment = assessNative(JSON.parse(readFileSync(join(out, "edge-native-controls.json"))), qualification);
+        await sidecar(`${prefix}-edge-controls`, edgeName, ["/repo/bench/hardening/native.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json", "/results/edge-native-controls.json", "deployed-edge"], out, "edge-native-controls.log", 90000);
+        cell.edgeAssessment = assessNative(JSON.parse(readFileSync(join(out, "edge-native-controls.json"))), edgeQualification, "deployed-edge");
         assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure", "edge API-source controls failed");
       }
       // Native form metadata is discovered in the measured namespace, never supplied by an oracle.

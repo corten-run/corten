@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,6 +15,7 @@ import { nativeControls, assessNative, assessTimedSource, observe } from "./nati
 import { resourceAsync } from "./probe.mjs";
 import { matrix, nativeGroup, groupReady, budgets } from "./plan.mjs";
 import { targetOutcome, verifyNativeLimits } from "./evidence.mjs";
+import { tlsRequest, tlsHold, tlsProbe } from "./tls-qualification.mjs";
 
 const listen = async (server) => { await new Promise((r) => server.listen(0, "127.0.0.1", r)); return `http://127.0.0.1:${server.address().port}`; };
 const close = async (server) => { server.closeAllConnections(); await new Promise((r) => server.close(r)); };
@@ -80,8 +82,42 @@ test("missing native host and liveness remain observed gaps, while a catch-all 2
     assert.equal(assessment.qualificationPurpose, "explicit-native-defense-gap-observation-not-qualified-performance");
   } finally { await close(app); }
   const catchAll = createServer((req, res) => res.end("same page")), url = await listen(catchAll), qualified = qualification(qualificationProbes(), "fixture");
-  try { const raw = await nativeControls({ base: url, source: "fixture", qualification: qualified }); assert.equal(assessNative(raw, qualified).liveness, "inconclusive"); }
+  try {
+    const raw = await nativeControls({ base: url, source: "fixture", qualification: qualified });
+    assert.equal(assessNative(raw, qualified).liveness, "inconclusive");
+    for (const mutate of [(r) => r.liveness.negative.error = "ECONNRESET", (r) => r.liveness.negative.timedOut = true, (r) => r.liveness.negative.complete = false]) {
+      const bad = structuredClone(raw); bad.liveness.negative.status = 404; mutate(bad);
+      assert.equal(assessNative(bad, qualified).liveness, "inconclusive", "failed negative health receipt is not observed liveness");
+      assert.equal(assessNative(bad, qualified).productionQualified, false);
+    }
+    raw.liveness.negative.status = 404; raw.host.denied.status = 404;
+    assert.equal(assessNative(raw, qualified, "deployed-edge").hostValidation, "observed");
+    assert.match(assessNative(raw, qualified, "deployed-edge").productionQualificationScope, /^effective TLS deployment production probes/);
+    raw.host.denied.error = "ECONNRESET"; assert.equal(assessNative(raw, qualified).hostValidation, "inconclusive");
+  }
   finally { await close(catchAll); }
+});
+
+test("TLS qualification never falls back to plaintext or counts TCP handshake as a completed TLS connection", async () => {
+  const connections = new Set(), received = [];
+  const server = createTcpServer((socket) => {
+    connections.add(socket); socket.once("close", () => connections.delete(socket));
+    socket.on("data", (chunk) => received.push(chunk)); socket.on("error", () => {});
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const r = { host: "127.0.0.1", port: server.address().port, method: "GET", path: "/marketplace/en-US/item_1", headers: { host: "localhost" }, timeoutMs: 100, connectMs: 100 };
+  try {
+    for (const input of [r, { ...r, method: "POST", body: "native=body" }]) {
+      const answer = await tlsRequest(input); assert.equal(answer.timedOut, true); assert.equal(answer.status, undefined);
+    }
+    assert.equal((await tlsHold({ ...r, mode: "head" })).error, "could not connect");
+    assert.ok(received.length >= 3);
+    assert.ok(received.every((chunk) => chunk[0] === 22), "only TLS handshake records, never an unverified HTTP request");
+    assert.throws(() => tlsProbe("made-up-probe", r), /AssertionError/);
+  } finally {
+    for (const socket of connections) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("capacity failure is an observed target outcome, not apparatus success or numeric service evidence", () => {
