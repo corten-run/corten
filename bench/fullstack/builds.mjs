@@ -212,7 +212,7 @@ export const recipes = {
     edit: "Pages/Item.cshtml",
   },
   spring: {
-    tools: "maven:3.9-eclipse-temurin-25",
+    tools: "maven:3.10-eclipse-temurin-27@sha256:3175c44b207d6698aecb9bbb5bf285b5b4efcf7f567d6f65d88cd218276a6ab2",
     context: "",
     workdir: "/src",
     add: htmx("src/main/resources/static/htmx.min.js"),
@@ -221,7 +221,7 @@ export const recipes = {
     edit: "src/main/resources/templates/item.html",
   },
   django: {
-    tools: "python:3.14-slim",
+    tools: "python:3.15.2-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928",
     context: "",
     workdir: "/app",
     env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", DJANGO_SETTINGS_MODULE: "itempage.settings" },
@@ -240,7 +240,7 @@ export const recipes = {
     edit: "views/item.ejs",
   },
   fastapi: {
-    tools: "python:3.14-slim",
+    tools: "python:3.15.2-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928",
     context: "",
     workdir: "/app",
     env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1" },

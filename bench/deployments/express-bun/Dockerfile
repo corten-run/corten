@@ -13,7 +13,7 @@ COPY bench/fullstack/apps/express/server.mjs ./
 COPY bench/fullstack/apps/express/lib ./lib
 COPY bench/fullstack/apps/express/views ./views
 COPY bench/fullstack/apps/express/static ./static
-ADD --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+ADD --checksum=sha256:a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130 https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js static/htmx.min.js
 COPY bench/deployments/express-bun/identity.mjs /qualification/identity.mjs
 EXPOSE 8080
 CMD ["node", "server.mjs"]

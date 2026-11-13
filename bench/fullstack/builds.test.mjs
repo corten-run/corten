@@ -67,6 +67,15 @@ test("a recipe built from a Dockerfile stage names one its Dockerfile has", () =
   }
 });
 
+test("server recipes use the refreshed production toolchain", () => {
+  for (const name of ["spring", "django", "fastapi"]) {
+    const dockerfile = readFileSync(join(repo, "bench/fullstack/apps", name, "Dockerfile"), "utf8");
+    const image = /^FROM (\S+)/m.exec(dockerfile)?.[1];
+    assert.equal(recipes[name].tools, image, `${name}: recipe and production image differ`);
+    assert.match(image, /@sha256:[a-f0-9]{64}$/, `${name}: immutable image required`);
+  }
+});
+
 test("the source image starts from the toolchain and copies the context", () => {
   assert.equal(sourceDockerfile("nextjs"), 'FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\nENV NEXT_TELEMETRY_DISABLED="1"\nWORKDIR /app\nCOPY . .\n');
   assert.equal(contextOf("corten"), ".");

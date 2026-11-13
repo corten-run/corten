@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { options, summarize, cellKeys, expectedChecks } from "./run.mjs";
 import { verifyIdentity, pins } from "./build.mjs";
 import { invalidRecords, requireJsonError } from "./checks.mjs";
@@ -8,6 +9,11 @@ import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
 import { validateRecord as catalogRecord } from "../../catalog/contract.mjs";
 import { validateRecord as marketplaceRecord } from "../../marketplace/records.mjs";
+
+test("Node and Bun alternative uses the production htmx artifact", () => {
+  const asset = (url) => readFileSync(url, "utf8").split("\n").find((line) => line.startsWith("ADD ") && line.includes("htmx.min.js"));
+  assert.equal(asset(new URL("Dockerfile", import.meta.url)), asset(new URL("../../fullstack/apps/express/Dockerfile", import.meta.url)));
+});
 
 test("explicit round, no runtime/source/profile filtering or load mode", () => {
   assert.equal(options(["bounded"]).round, "bounded");
@@ -29,12 +35,13 @@ test("missing/failed native cells never qualify, even identical failures", () =>
 });
 test("identity gate rejects runtime, source, dependency and artifact substitutions", () => {
   const sources = [{ path: "server.mjs", sha256: "source" }], manifest = { dependencies: { express: "5.3.0" } };
-  const node = { versions: { node: pins.nodeImage.match(/^node:(\d+\.\d+\.\d+)-/)[1] }, installed: manifest.dependencies, sources: [...sources, { path: "static/htmx.min.js", sha256: "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717" }], dependenciesSha256: "deps", lockSha256: "lock" };
+  const node = { versions: { node: pins.nodeImage.match(/^node:(\d+\.\d+\.\d+)-/)[1] }, installed: manifest.dependencies, sources: [...sources, { path: "static/htmx.min.js", sha256: "a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130" }], dependenciesSha256: "deps", lockSha256: "lock" };
   const bun = { ...structuredClone(node), versions: { bun: pins.bunVersion, node: "24.3.0" } };
   verifyIdentity(node, bun, sources, manifest);
   for (const modify of [
     (n, b) => b.versions.bun = "0.0.0", (n) => n.versions.bun = pins.bunVersion,
     (n) => n.versions.node = "24.22.2", (n) => n.versions.node = "26.0.0",
+    (n, b) => { for (const identity of [n, b]) identity.sources.find((entry) => entry.path === "static/htmx.min.js").sha256 = "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"; },
     (n, b) => b.installed.express = "other", (n, b) => b.sources[0].sha256 = "stale",
     (n, b) => b.sources.push({ path: "replacement-renderer.js", sha256: "extra" }),
     (n, b) => b.dependenciesSha256 = "other", (n, b) => b.lockSha256 = "other",

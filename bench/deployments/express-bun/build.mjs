@@ -55,7 +55,7 @@ export function verifyIdentity(node, bun, sources, manifest) {
     assert.deepEqual(identity.installed, manifest.dependencies, "native Express dependency versions differ");
     for (const source of sources) assert.equal(identity.sources.find((entry) => entry.path === source.path)?.sha256, source.sha256, `stale native source: ${source.path}`);
     assert.deepEqual(identity.sources.map((entry) => entry.path).sort(), [...new Set([...sources.map((entry) => entry.path), "static/htmx.min.js"])].sort(), "unexpected image source files");
-    assert.equal(identity.sources.find((entry) => entry.path === "static/htmx.min.js")?.sha256, "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717");
+    assert.equal(identity.sources.find((entry) => entry.path === "static/htmx.min.js")?.sha256, "a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130");
   }
   assert.deepEqual(node.sources, bun.sources, "runtime source trees differ");
   assert.equal(node.dependenciesSha256, bun.dependenciesSha256, "runtime dependency trees differ");
