@@ -85,7 +85,7 @@ class RecordJsonRoute(APIRoute):
         return handle
 
 
-async def read_record(request: Request, source, record_id: str):
+async def read_record(request: Request, source, record_id: str, traceparent=None):
     if _tracing:
         if _trace_httpx not in source.client.event_hooks["request"]:
             source.client.event_hooks["request"].append(_trace_httpx)
@@ -96,7 +96,7 @@ async def read_record(request: Request, source, record_id: str):
             pass
         _trace("caller.disconnect")
 
-    read = asyncio.create_task(source.get(record_id))
+    read = asyncio.create_task(source.get(record_id) if traceparent is None else source.get(record_id, traceparent))
     gone = asyncio.create_task(disconnected())
     try:
         done, _ = await asyncio.wait({read, gone}, timeout=10, return_when=asyncio.FIRST_COMPLETED)

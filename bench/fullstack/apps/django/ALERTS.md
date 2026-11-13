@@ -44,6 +44,9 @@ documented in that app's README.
 
 ## Unreleased
 
+- Forward marketplace `traceparent` explicitly from the native request to each
+  Requests call, retaining the request's identity across delayed source reads.
+
 - Return a generic native 504 for the existing marketplace page Requests timeout,
   without mutating alerts. The WSGI disconnect limitation below remains unresolved.
 
@@ -53,6 +56,33 @@ documented in that app's README.
   tolerated by Django templates.
 - Enforce the record contract's numeric bounds, requested ID and per-list unique
   row IDs before writes, retaining read-only page and JSON behavior.
+
+## Request-scoped Trace Propagation
+
+Page/POST and JSON views capture the incoming W3C `traceparent` in an immutable
+local string and pass it to `MarketplaceSource.get` as an optional argument.
+Only the individual Requests call gets that header. The session defaults are
+never mutated, there is no ambient current operation, and one-argument source
+calls remain compatible. Fixture reads still do no HTTP work.
+
+This is transparent forwarding, with no exporter, child span or identity repair.
+Missing headers stay absent. Malformed headers pass through unchanged so the
+mixed runner can retain invalid/orphan evidence, never silently charge the
+currently active operation. No parser, timeout or worker setting changes.
+At the Requests boundary the WSGI Latin-1 string is restored to its original
+header bytes. This avoids Requests treating legal non-ASCII bytes as Unicode
+leading whitespace and rejecting an otherwise accepted request.
+
+Run `python -m django test itempage.test_trace_context --noinput` in this directory
+in both profiles (matched: `PROFILE=matched HOSTS=127.0.0.1,localhost,testserver`).
+The real native live HTTP server and upstream overlap distinct valid contexts,
+delay the first fetch until a newer request completes, hold an upstream body,
+and cover JSON, every locale's page and accepted POST/readback, missing/invalid
+headers, subsequent untraced requests and fixture bypass. This does not qualify
+the production server's header parser; a separate native Requests/upstream socket
+regression retains the exact `0x85`, `0xa0` and `0xe9` header bytes. It does not qualify
+the WSGI lifetime behavior documented below or measure performance. New source
+hashes still require an independent native source audit, not a self-issued receipt.
 
 ## Page Request Lifetime Limit
 

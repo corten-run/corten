@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,48 @@ async function serving(env, body) {
     if (child.exitCode === null) await once(child, "exit");
   }
 }
+
+test("matched HOSTS and liveness are native, bounded and independent of the record source", async () => {
+  // Node's fetch replaces Host. Use an actual HTTP request for authority/forwarding probes.
+  const native = (url, options = {}, body) => new Promise((resolve, reject) => {
+    const req = request(url, { ...options, signal: AbortSignal.timeout(2000) }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => text += chunk);
+      res.on("error", reject);
+      res.on("end", () => resolve(new Response(text, { status: res.statusCode, headers: res.headers })));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+  await serving({ PROFILE: "matched", HOSTS: "app.example.test,.shop.example.test,fsw-target", API_BASE: "http://127.0.0.1:1" }, async (base) => {
+    const get = (path, host, extra = {}) => native(base + path, { headers: { host, ...extra } });
+    assert.equal((await get("/", "unknown.invalid")).status, 400);
+    assert.equal((await get("/health/live", "unknown.invalid")).status, 400);
+    for (const host of ["APP.example.test", "app.example.test:8443", "shop.example.test", "a.shop.example.test:8080", "localhost", "127.0.0.1:8080", "[::1]:8080", "fsw-target:8080"]) {
+      const response = await get("/health/live", host);
+      assert.equal(response.status, 200, host);
+      assert.equal(await response.text(), "OK");
+      assert.ok(response.headers.get("content-security-policy"));
+    }
+    for (const host of ["evilshop.example.test", "shop.example.test.evil.invalid", "unknown.invalid:8080", "app.example.test@evil.invalid", "app.example.test/path"]) {
+      assert.equal((await get("/health/live", host)).status, 400, host);
+    }
+    assert.equal((await get("/health/not-a-real-check", "app.example.test")).status, 404);
+    assert.equal((await get("/", "unknown.invalid", { "x-forwarded-host": "app.example.test" })).status, 400);
+    assert.equal((await get("/", "app.example.test", { "x-forwarded-host": "unknown.invalid" })).status, 200);
+    // The edge's rewritten Host is allowed, but it conveys no authenticated public origin.
+    const response = await native(base + "/marketplace/en-US/item_1", { method: "POST",
+      headers: { host: "fsw-target:8080", origin: "https://app.example.test", "x-forwarded-host": "app.example.test", "x-forwarded-proto": "https",
+        "content-type": "application/x-www-form-urlencoded" } }, new URLSearchParams({ email: "a@example.test", target_price: "1" }).toString());
+    assert.equal(response.status, 403, "untrusted forwarding headers must not bypass origin protection");
+    assert.equal((await fetch(base + "/health/live", { method: "POST" })).status, 404);
+  });
+  await serving({ PROFILE: "", HOSTS: "app.example.test" }, async (base) => {
+    assert.equal((await native(base, { headers: { host: "unknown.invalid" } })).status, 200);
+    assert.equal((await fetch(base + "/health/live")).status, 404);
+  });
+});
 
 test("Intl formats signed money, half-up ratings, grouped counts and the listing plural", async () => {
   const model = await import("./lib/marketplace.mjs");
