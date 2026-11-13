@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Record both sides of the HTTP/2 proxy requirement in design Limit 14: an opt-in TLS
+  prototype removed the eight-tab live-stream cap but did not preserve header and stream-send
+  timeouts. Keep HTTP/1.1, publish the measurements and reopening criteria, and put the proxy
+  caveat beside the README's production-defaults claim.
+
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;

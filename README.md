@@ -43,6 +43,8 @@ AI agents.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
+  Apps with live streams also need an HTTP/2 proxy or CDN in front
+  ([Deploying](docs/guide/deploy.md)), even when the app ends TLS itself.
 - **One binary.** No JavaScript build step or bundler in the app; `static/` is compiled into the
   program.
 

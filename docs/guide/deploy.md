@@ -8,6 +8,13 @@ in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
 the release profile an app builds with.
 
+For an app with live streams this is a requirement, not just a choice of where to end TLS.
+It costs a second server to configure, update and operate, and the rules below still apply when
+HTTP/2 is the only reason to have it. TLS in `serve_wrapped` alone does not remove the browser's
+HTTP/1.1 connection cap. An opt-in HTTP/2 prototype removed that cap in eight-tab checks, but
+did not preserve the header and stalled-send timeouts; it is not shipped. The
+[measurement and decision](../evidence/http2.md) record both costs and what remains to verify.
+
 ## What the proxy must do
 
 | | What | Why |

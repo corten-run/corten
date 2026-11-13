@@ -391,8 +391,6 @@ pub struct App<M = ()> {
 /// long they may go on once shutdown begins.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Connections {
-    #[cfg(feature = "http2")]
-    pub http2: bool,
     pub header_timeout: Option<Duration>,
     pub head: usize,
     pub send_timeout: Option<Duration>,
@@ -477,8 +475,6 @@ const HYPER_BUFFER: usize = 8192 + 4096 * 100;
 impl Default for Connections {
     fn default() -> Self {
         Connections {
-            #[cfg(feature = "http2")]
-            http2: false,
             header_timeout: Some(Duration::from_secs(30)),
             head: REQUEST_HEAD,
             send_timeout: Some(Duration::from_secs(60)),
@@ -1536,12 +1532,6 @@ where
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_wrapped: no listeners to serve on"));
     }
-    #[cfg(feature = "http2")]
-    let app = {
-        let mut app = app;
-        app.connections.http2 = true;
-        app
-    };
     run(listeners, wrap, app, crate::shutdown_signal()).await
 }
 
@@ -1672,8 +1662,6 @@ where
     // When shutdown begins: when it began, and how long connections may go on from then.
     let (stopped, watch) = tokio::sync::watch::channel(None);
     let held = Held {
-        #[cfg(feature = "http2")]
-        http2: connections.http2.then_some(connections.head),
         clock: crate::watch::Clock::start(connections.header_timeout, connections.send_timeout),
         open: connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max))),
         bounds: connections.drain.each,
@@ -1710,8 +1698,6 @@ where
 /// What each connection on a listener is held to.
 #[derive(Clone)]
 struct Held {
-    #[cfg(feature = "http2")]
-    http2: Option<usize>,
     /// For [`App::header_timeout`] and [`App::send_timeout`].
     clock: Option<Arc<crate::watch::Clock>>,
     /// For [`App::max_connections`].
@@ -1786,8 +1772,6 @@ where
         let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
         let service = hyper_util::service::TowerToHyperService::new(connection);
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
-        #[cfg(feature = "http2")]
-        let http2 = held.http2;
         tokio::spawn(async move {
             // `permit` is held by the task until the step is done, then by the IO (`Watched`).
             // The step, until it is done, the clock expires the connection or shutdown begins.
@@ -1806,29 +1790,6 @@ where
                 }
             };
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
-            #[cfg(feature = "http2")]
-            if let Some(head) = http2 {
-                // Measurement prototype, not a replacement for the connection limits:
-                // incomplete h2 heads and flow-control waits have no timeout here.
-                let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
-                builder.http1().max_headers(100).max_buf_size(head.max(8192));
-                builder.http2().max_concurrent_streams(100)
-                    .max_pending_accept_reset_streams(20)
-                    .max_local_error_reset_streams(1024)
-                    .max_header_list_size(head.min(u32::MAX as usize) as u32);
-                let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, service));
-                let closing = tokio::select! {
-                    result = conn.as_mut() => { if let Err(error) = result { eprintln!("prototype: {error}"); } return; },
-                    closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
-                };
-                conn.as_mut().graceful_shutdown();
-                if let Some(closing) = closing {
-                    if tokio::time::timeout_at(closing.began + closing.drain.most, conn.as_mut()).await.is_err() {
-                        let _ = alive.send(()).await;
-                    }
-                }
-                return;
-            }
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
                 _ = conn.as_mut() => return,
@@ -1889,15 +1850,6 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
     }
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
-        #[cfg(feature = "http2")]
-        if req.version() == http::Version::HTTP_2 {
-            // The HTTP/1 watch cannot track concurrent streams. Keep the socket's
-            // send watch, but do not let the last response mark live siblings idle.
-            if let Some(watch) = self.watch.take() {
-                watch.busy();
-            }
-            self.bound = None;
-        }
         // Marks a read of the body that waits for the client, for the deadline (#1061).
         let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));

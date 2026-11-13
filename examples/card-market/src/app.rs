@@ -888,24 +888,6 @@ mod tests {
         assert!(body.contains("<html") && body.contains("Show all 7 offers") && body.contains("alert-form-target_price-error"));
     }
 
-    #[tokio::test]
-    #[ignore]
-    async fn http2_request_cost() {
-        use corten::http::{Body, Request};
-        use http_body_util::BodyExt;
-        use tower::ServiceExt;
-        let source = Source::fixture(include_str!("../fixtures/smoke.json")).unwrap();
-        let router = super::app(source).router();
-        let count: usize = std::env::var("REQUESTS").unwrap().parse().unwrap();
-        for _ in 0..count {
-            let request = Request::get("/items/item_5").header("host", "localhost")
-                .header("accept-encoding", "identity").body(Body::empty()).unwrap();
-            let response = router.clone().oneshot(request).await.unwrap();
-            assert_eq!(response.status(), corten::http::StatusCode::OK);
-            std::hint::black_box(response.into_body().collect().await.unwrap());
-        }
-    }
-
     /// Where the time for one item page goes. Release build, benchmark fixture:
     /// `CORTEN_FIXTURE=/path/items.json cargo test --release -p card-market -- --ignored render_cost --nocapture`
     #[tokio::test]

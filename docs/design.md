@@ -3085,16 +3085,56 @@ by design; where it is known, a limit says what would lift it or why it is so.
     guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
     connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
     the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
-    `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
-    answer to each per-connection rule (a concurrent-streams limit beside
-    `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
-    WebSockets over extended `CONNECT`, [Limit 13](#limit-protocol-switch)), which the proxy handles or makes unnecessary,
-    and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
+    `http2`) was weighed again on 2026-11-13, in the opt-in prototype at `1a8adcb5f`, against
+    `ecbef5eb`. The proxy requirement is not free: it makes a second server necessary for a
+    headline feature, with the twelve forwarding, buffering, caching and timeout rules in
+    [Deploying](guide/deploy.md#what-the-proxy-must-do). One is already a measured failure:
+    nginx's `$host` loses the port and an app's own WebSocket gets 403. TLS and certificates can
+    already be the app's, so HTTP/2 alone can force that second server. How much operator time,
+    money and memory it costs has not been measured here; it is not counted as zero.
+
+    Measured: with the feature off the template still has 59 dependency crates, with the same
+    tree, and the item-page test's executable code section is byte-for-byte the baseline's.
+    Callgrind counted a median 74,531 instructions per item request against 74,751, with
+    overlapping ranges, not a speed difference (three alternating pairs, 1,200 requests less
+    200, divided by 1,000). Enabling it adds eight crates, 67 total (`h2`, `tokio-util`,
+    `indexmap`, `hashbrown`, `equivalent`, `fnv`, `futures-sink`, `futures-channel`). The TLS
+    library is separate and still the app's choice. Without a proxy, eight watchlist tabs each
+    loaded and received live updates over `h2` in Chromium and Firefox; WebKit failed at TLS
+    setup and is unverified. A small TLS transport probe counted 58,724 instructions per page
+    request over HTTP/2 against 40,519 over HTTP/1.1, and 5,174 per SSE event against 2,806
+    (medians of three differential runs). These are not the item page, throughput, or a
+    production HTTP/2 server's cost: the prototype lacks the timeouts below. The
+    [evidence](evidence/http2.md) gives the workloads, ranges, versions and reproduction.
+
+    The bounded prototype does not ship. Correctness comes before convenience: with header
+    and send timeouts set to 100 ms, an unfinished head beside an open stream and a response
+    blocked by zero stream credit both remained live after 500 ms, then completed when the
+    client continued. Hyper 1.12 exposes a concurrent-stream limit, reset limits and GOAWAY,
+    but no hook to time an unfinished stream head or a response's wait for stream credit.
+    Corten's socket watch cannot see the latter, and its one-request watch cannot represent
+    concurrent streams. Shipping needs tested answers to both, stream-aware shutdown deadlines,
+    a reset-flood test and decoded-header bounds, not just a different connection builder.
+    WebSockets may stay HTTP/1.1 with extended CONNECT explicitly unsupported
+    ([Limit 13](#limit-protocol-switch)); the prototype did not advertise RFC 8441.
+    Reading the connection preface after the TLS step chose the protocol without a new trait,
+    but cannot itself check the TLS library's ALPN choice: that library must enforce agreement.
+    Plain `serve` stayed HTTP/1.1. A future feature must keep that distinction.
+
+    Keep this limit for now, recording both costs (option 2), rather than call the prototype
+    production-ready. Option 1 remains the preferred direction once the missing bounds are
+    implemented and tested, with the off build unchanged; the proxy then becomes optional for
+    live streams. One stream per page (option 3) would still exhaust the cap at about six tabs
+    and add a multiplexing format where HTTP/2 is the standard answer, so it is not taken.
+    [Choice 25](#choice-axum-router)'s protocol remains hyper's HTTP/1.1; the prototype is
+    evidence for its next reopening, not an HTTP/2 implementation shipped under that Choice.
     HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
     fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
-    the user gives better than an origin. Either reopens for an app that must serve browsers or
-    native apps' platform clients with no proxy at all and has live streams; HTTP/3 also waits
-    for a stable `h3`.
+    the user gives better than an origin. HTTP/2 reopens when its unfinished heads and
+    flow-controlled sends can be bounded without implementing HTTP/2 framing in Corten, and
+    the connection tests and no-proxy smokes in the evidence pass. An app with live streams
+    that must serve browsers or native platform clients without a proxy remains a reason to
+    do that work, not a premise that no such app exists. HTTP/3 also waits for a stable `h3`.
 15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
