@@ -138,7 +138,7 @@ mod tests {
     #[route(GET "/trace")]
     async fn delayed(cx: &Cx) -> topcoat::Result<()> {
         let trace = TraceContext::from_request(cx);
-        let gates = topcoat::context::request_context::<Arc<Gates>>(cx);
+        let gates = topcoat::context::context::<Arc<Gates>>(cx);
         if trace.parent.as_ref().is_some_and(|value| value == FIRST) {
             gates.entered.notify_one();
             gates.release.notified().await;
