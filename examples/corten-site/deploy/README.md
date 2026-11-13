@@ -452,6 +452,17 @@ one record for each name (none with the zone elsewhere), and is refused for a na
 the zone, the site's own name, a name given twice, and a URL. The site's smoke test was not
 run again through this nginx: the server that answers the site is as it was.
 
+At `279fdf3c0`, for what a second review changed, in the same containers: `provision.sh` took
+names with spaces around and between them as the same names, took only spaces as none, and
+refused a name with a dot at either end or two together and `-n`. `boot.sh`, started on a
+machine that held the site's certificate and nothing else of the site (as after a first step
+that ended early), set the site up without asking for a certificate, answered for it while it
+waited for a late name, and then went on as above; run again after it had finished, it asked
+for none. The workflow's step gave up on a name after a minute where the machine was not made
+in that run, and passed after a minute where it was and the name was taken on half a minute
+in; its twenty minutes were not waited out. A renewal of a certificate that had replaced the
+site's (`certbot renew --dry-run`, against Pebble) passed for all three names.
+
 On 2026-11-13 the `Site machine` workflow made the machine for corten.run from `infra/`, on
 `a7bbe4cc9` (one run): `bootstrap.sh` had set the repository up on GitHub, the state went to
 a Spaces bucket, the step that plans and applies made the eight things in 42 seconds, and the
