@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps } from "../fullstack/inventory.mjs";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 import { aggregate, cpuSettings as catalogCpus, phases, readLoad } from "../catalog/contract.mjs";
 import { records as catalogRecords } from "../catalog/fixtures.mjs";
