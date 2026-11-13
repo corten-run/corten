@@ -4,7 +4,7 @@
 // Usage: node native-trace-cost.mjs MANIFEST.json OUTPUT_DIRECTORY [gin,drogon,topcoat]
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { Agent, createServer, request } from 'node:http';
 import { join, resolve } from 'node:path';
@@ -42,7 +42,7 @@ export function dumpInstructions(text) {
 
 // Resolve the child outcome immediately, even when it fails before the first
 // wake request. Throwing only after awaiting it lets the caller's finally run.
-export async function controlProcess(child, wake, pause = sleep) {
+export async function controlProcess(child, wake, pause = sleep, signal) {
   let done = false, error, stderr = '', wakes = 0;
   child.stdout.resume();
   child.stderr.on('data', chunk => { stderr += chunk; });
@@ -55,25 +55,58 @@ export async function controlProcess(child, wake, pause = sleep) {
   });
   try {
     for (let i = 0; !done && i < 100; i++) {
-      await pause(100);
+      await pause(100, undefined, { signal });
+      signal?.throwIfAborted();
       if (!done) { await wake(); wakes++; }
     }
     assert.ok(done, 'callgrind control timeout');
     await exited;
     if (error) throw error;
     return wakes;
+  } catch (failure) {
+    error = signal?.aborted && failure?.name === 'AbortError' && failure.cause === signal.reason ? signal.reason : failure;
+    throw error;
   } finally {
-    if (!done) { child.kill(); await exited; }
+    if (!done) {
+      child.kill('SIGKILL');
+      let timer;
+      try {
+        await Promise.race([exited, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new AggregateError([error, new Error('controller did not exit after SIGKILL')].filter(Boolean),
+            'Native trace controller cleanup failed', { cause: error })), 2000);
+        })]);
+      } finally { clearTimeout(timer); }
+    }
   }
 }
 
-export async function cleanupResources(active, remove, agents, upstream, original) {
+export function createOwnedContainer(docker, active, name, args) {
+  const token = randomUUID();
+  try {
+    const id = docker('create', '--name', name, '--label', 'agent.run=' + token, ...args);
+    assert.match(id, /^[0-9a-f]{64}$/, 'docker create must return an immutable container ID');
+    active.add(id);
+    return id;
+  } catch (original) {
+    // A daemon may create the container before the client reports a failure.
+    // A name alone (even with our usual task labels) never proves ownership.
+    let container;
+    try { container = JSON.parse(docker('inspect', '--format', '{{json .}}', name)); } catch {}
+    if (container?.Name === '/' + name && container.Config?.Labels?.['agent.run'] === token && /^[0-9a-f]{64}$/.test(container.Id)) {
+      active.add(container.Id);
+    }
+    throw original;
+  }
+}
+
+export async function cleanupResources(active, remove, agents, upstream, original, finalizers = []) {
   const errors = [];
   const attempt = async work => { try { await work(); } catch (error) { errors.push(error); } };
   for (const name of active) await attempt(async () => { await remove(name); active.delete(name); });
   for (const agent of agents) await attempt(() => agent.destroy());
   await attempt(() => upstream.closeAllConnections());
   await attempt(() => new Promise((resolve, reject) => upstream.close(error => error ? reject(error) : resolve())));
+  for (const finalize of finalizers) await attempt(finalize);
   if (errors.length) throw new AggregateError(original === undefined ? errors : [original, ...errors],
     'Native trace cost cleanup failed', { cause: original });
 }
@@ -90,7 +123,7 @@ export function perRequest(small, large, smallN, largeN) {
   return (large - small) / (largeN - smallN);
 }
 
-async function run() {
+export async function run() {
   const [manifestPath, outputPath, selection = 'gin,drogon,topcoat'] = process.argv.slice(2);
   assert.ok(manifestPath && outputPath, 'MANIFEST.json OUTPUT_DIRECTORY [apps] required');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -115,12 +148,19 @@ async function run() {
   });
   const agents = new Map();
   const active = new Set();
+  const shutdown = new AbortController();
+  const signals = new Map(['SIGINT', 'SIGTERM'].map((signal, index) => [signal, () => {
+    if (!shutdown.signal.aborted) {
+      process.exitCode = index === 0 ? 130 : 143;
+      shutdown.abort(new Error('Native trace cost interrupted by ' + signal));
+    }
+  }]));
   const bodyHashes = new Map();
   async function send(base, path, traced) {
     let agent = agents.get(base);
     if (!agent) { agent = new Agent({ keepAlive: true, maxSockets: 1 }); agents.set(base, agent); }
     return new Promise((resolve, reject) => {
-      const req = request(base + path, { agent, headers: traced ? { traceparent: parent, tracestate: state } : {} }, res => {
+      const req = request(base + path, { agent, signal: shutdown.signal, headers: traced ? { traceparent: parent, tracestate: state } : {} }, res => {
         const chunks = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('error', reject);
@@ -140,12 +180,14 @@ async function run() {
   // capabilities to the container. These control requests are not source reads.
   async function control(name, base, command) {
     const child = spawn('docker', ['exec', name, 'callgrind_control', command, '1']);
-    return controlProcess(child, () => send(base, '/api/alerts', false));
+    return controlProcess(child, () => send(base, '/api/alerts', false), sleep, shutdown.signal);
   }
   const results = [];
   let original;
+  for (const [signal, handler] of signals) process.on(signal, handler);
   try {
     await new Promise(resolve => upstream.listen(0, '0.0.0.0', resolve));
+    shutdown.signal.throwIfAborted();
     record({ kind: 'identity', manifest, driverSha256: createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex'),
       runtimeImageId: docker('image', 'inspect', '--format', '{{.Id}}', manifest.runtimeImage),
       node: process.version, method: `callgrind Ir, (${largeN} - ${smallN}) / ${largeN - smallN} after warmup; three alternating rounds`,
@@ -158,10 +200,10 @@ async function run() {
         for (const version of ['before', 'after']) {
           const directory = resolve(manifest.apps[app][version]);
           const binarySha256 = createHash('sha256').update(readFileSync(join(directory, 'server'))).digest('hex');
-          const name = `native-trace-cost-${process.pid}-${app}-${source}-${version}`;
-          active.add(name);
+          shutdown.signal.throwIfAborted();
+          const label = `native-trace-cost-${process.pid}-${app}-${source}-${version}`;
           const prefix = `${app}-${source}-${version}`;
-          docker('run', '-d', '--name', name, '--cpus', '1', '--label', 'agent.owner=codex', '--label', 'agent.task=native-trace-cost',
+          const name = createOwnedContainer(docker, active, label, ['--cpus', '1', '--label', 'agent.owner=codex', '--label', 'agent.task=native-trace-cost',
             ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
             '-p', '127.0.0.1::8080', '-v', `${directory}:/app:ro`, '-v', `${output}:/counts`, '-w', '/app',
             '-e', 'PORT=8080', '-e', 'HOST=0.0.0.0', '-e', 'GIN_MODE=release', '-e', 'GOMAXPROCS=1',
@@ -171,13 +213,15 @@ async function run() {
             '-e', `MARKETPLACE_SOURCE=${source}`, '-e', 'MARKETPLACE_FIXTURE_PATH=/counts/marketplace.json',
             '-e', `API_BASE=http://host.docker.internal:${upstream.address().port}`,
             '--entrypoint', 'valgrind', manifest.runtimeImage, '--tool=callgrind', '--instr-atstart=no', '--cache-sim=no', '--branch-sim=no',
-            `--callgrind-out-file=/counts/${prefix}.%p`, `--log-file=/counts/${prefix}.valgrind.log`, '/app/server');
+            `--callgrind-out-file=/counts/${prefix}.%p`, `--log-file=/counts/${prefix}.valgrind.log`, '/app/server']);
+          docker('start', name);
           const base = 'http://127.0.0.1:' + docker('port', name, '8080/tcp').split(':').at(-1);
           let ready = false;
           for (let i = 0; i < 600; i++) {
             try { await send(base, '/api/alerts', false); ready = true; break; } catch {}
+            shutdown.signal.throwIfAborted();
             if (docker('inspect', '--format', '{{.State.Running}}', name) !== 'true') break;
-            await sleep(100);
+            await sleep(100, undefined, { signal: shutdown.signal });
           }
           assert.ok(ready, `${name} failed startup: ${docker('logs', name)}`);
           await control(name, base, '--instr=on');
@@ -233,11 +277,16 @@ async function run() {
     }
     writeFileSync(join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
   } catch (error) {
-    original = error;
-    throw error;
+    original = shutdown.signal.aborted && error?.name === 'AbortError' && error.cause === shutdown.signal.reason ? shutdown.signal.reason : error;
+    throw original;
   } finally {
-    await cleanupResources(active, name => docker('rm', '-f', '-v', name), agents.values(), upstream, original);
+    try { await cleanupResources(active, name => docker('rm', '-f', '-v', name), agents.values(), upstream, original); }
+    finally { for (const [signal, handler] of signals) process.off(signal, handler); }
   }
+  shutdown.signal.throwIfAborted();
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await run();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try { await run(); }
+  catch (error) { console.error(error); if (!process.exitCode) process.exitCode = 1; }
+}

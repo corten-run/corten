@@ -5,7 +5,7 @@ import { Agent, createServer, request } from 'node:http';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
-import { cleanupResources, controlProcess, dumpInstructions, instructions, perRequest, summarize } from './native-trace-cost.mjs';
+import { cleanupResources, controlProcess, createOwnedContainer, dumpInstructions, instructions, perRequest, summarize } from './native-trace-cost.mjs';
 
 const dump = 'positions: line\nevents: Ir\nsummary: 12345\nfn=(1) handler\n0 10000\ncalls=1 0\n0 99999\n+1 2345\ntotals: 12345\n';
 
@@ -55,6 +55,19 @@ test('wake failure terminates and awaits the controller before propagating', asy
   assert.equal(process.killed, true);
 });
 
+test('an unresponsive controller has a bounded kill wait and retains the interruption', async () => {
+  const process = child(), shutdown = new AbortController(), original = new Error('SIGTERM interruption');
+  process.kill = signal => { assert.equal(signal, 'SIGKILL'); return true; };
+  shutdown.abort(original);
+  await assert.rejects(controlProcess(process, () => assert.fail('must not wake'), async () => {}, shutdown.signal), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.cause, original);
+    assert.equal(error.errors[0], original);
+    assert.match(error.errors[1].message, /did not exit after SIGKILL/);
+    return true;
+  });
+});
+
 test('driver attempts both container removals and retains the original controller failure', async () => {
   const fixture = `
     import assert from 'node:assert/strict';
@@ -79,7 +92,8 @@ test('driver attempts both container removals and retains the original controlle
     cp.execFileSync = (file, args) => {
       assert.equal(file, 'docker');
       if (args[0] === 'image') return 'id';
-      if (args[0] === 'run') { const name = args[args.indexOf('--name') + 1]; live.add(name); return name; }
+      if (args[0] === 'create') { const id = (live.size + 1).toString(16).padStart(64, '0'); live.add(id); return id; }
+      if (args[0] === 'start') return args[1];
       if (args[0] === 'port') return '127.0.0.1:' + app.address().port;
       if (args[0] === 'logs') return '';
       if (args[0] === 'rm') {
@@ -99,9 +113,10 @@ test('driver attempts both container removals and retains the original controlle
     };
     syncBuiltinESMExports();
     const target = ${JSON.stringify(new URL('./native-trace-cost.mjs', import.meta.url).href)};
-    process.argv = [process.execPath, fileURLToPath(target), '/virtual/manifest.json', '/virtual/output', 'gin'];
+    process.argv = [process.execPath, 'fixture', '/virtual/manifest.json', '/virtual/output', 'gin'];
     try {
-      await assert.rejects(import(target), error => {
+      const { run } = await import(target);
+      await assert.rejects(run(), error => {
         assert.equal(removals.length, 2, 'every started container needs a removal attempt');
         assert.equal(live.size, 1, 'only the deliberately failed removal may remain');
         assert.ok(error instanceof AggregateError);
@@ -156,7 +171,7 @@ test('native Docker cleanup controls remove both containers and close live HTTP 
       const names = ['before', 'after'].map(version => `native-cost-cleanup-${process.pid}-${Number(failFirst)}-${version}`);
       const active = new Set(), server = createServer((req, res) => res.end('ready'));
       const agent = new Agent({ keepAlive: true });
-      const removed = [], original = new Error('native control operation failed');
+      const removed = [], ids = [], original = new Error('native control operation failed');
       try {
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         await new Promise((resolve, reject) => {
@@ -168,13 +183,13 @@ test('native Docker cleanup controls remove both containers and close live HTTP 
         assert.equal(sockets.length, 1, 'control must retain a real keep-alive socket');
         const closed = Promise.all(sockets.map(socket => once(socket, 'close')));
         for (const name of names) {
-          active.add(name);
-          docker('run', '-d', '--pull=never', '--name', name, '--network', 'none',
-            '--label', 'agent.owner=codex', '--label', 'agent.task=native-trace-cost-cleanup-test', 'alpine:3', 'sleep', '120');
+          const id = createOwnedContainer(docker, active, name, ['--pull=never', '--network', 'none',
+            '--label', 'agent.owner=codex', '--label', 'agent.task=native-trace-cost-cleanup-test', 'alpine:3', 'sleep', '120']);
+          ids.push(id); docker('start', id);
         }
         const cleanup = cleanupResources(active, name => {
           removed.push(name);
-          if (failFirst && name === names[0]) throw new Error('injected first removal failure');
+          if (failFirst && name === ids[0]) throw new Error('injected first removal failure');
           docker('rm', '-f', '-v', name);
         }, [agent], server, original);
         if (failFirst) await assert.rejects(cleanup, error => {
@@ -184,12 +199,12 @@ test('native Docker cleanup controls remove both containers and close live HTTP 
         });
         else await cleanup;
         await closed;
-        assert.deepEqual(removed, names);
+        assert.deepEqual(removed, ids);
         assert.equal(server.listening, false);
         assert.equal(Object.values(agent.freeSockets).flat().length, 0);
-        assert.deepEqual([...active], failFirst ? [names[0]] : []);
-        const remaining = docker('ps', '-a', '--format', '{{.Names}}').split(/\r?\n/).filter(name => names.includes(name));
-        assert.deepEqual(remaining, failFirst ? [names[0]] : []);
+        assert.deepEqual([...active], failFirst ? [ids[0]] : []);
+        const remaining = docker('ps', '-a', '--no-trunc', '--format', '{{.ID}}').split(/\r?\n/).filter(id => ids.includes(id));
+        assert.deepEqual(remaining, failFirst ? [ids[0]] : []);
       } finally {
         const errors = [];
         for (const name of active) try { docker('rm', '-f', '-v', name); } catch (error) { errors.push(error); }

@@ -10,7 +10,16 @@ import { basename, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { records } from '../../../marketplace/fixtures.mjs';
+import { cleanupResources, createOwnedContainer } from '../../native-trace-cost.mjs';
 
+export async function cleanupProbe(active, remove, upstream, temp, original) {
+  await cleanupResources(active, remove, [], upstream, original, [() => {
+    assert.ok(resolve(temp).startsWith(resolve(tmpdir()) + sep));
+    rmSync(temp, { recursive: true, force: true });
+  }]);
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
 const [image, suite = 'flags'] = process.argv.slice(2);
 assert.ok(image && ['flags', 'repeated-state', 'parser-controls'].includes(suite), 'usage: node check-trace-flags.mjs IMAGE [flags|repeated-state|parser-controls]');
 const app = basename(fileURLToPath(new URL('.', import.meta.url)));
@@ -20,12 +29,13 @@ const parent = '00-11111111111111111111111111111111-1111111111111111-00';
 const state = 'vendor=\x80\xe9\xff';
 const temp = mkdtempSync(join(tmpdir(), 'row7-' + app + '-'));
 const results = new URL(app === 'drogon' ? './tests/results/' : './results/trace-proof/', import.meta.url);
-mkdirSync(results, { recursive: true });
 const raw = new URL('row7-' + suite + '-' + Date.now() + '.ndjson', results);
 const record = row => appendFileSync(raw, JSON.stringify(row) + '\n');
 const digest = body => createHash('sha256').update(body).digest('hex');
 const events = [], failures = [];
 let active;
+const owned = new Set();
+let original;
 const upstream = createServer((req, res) => {
   events.push({ path: req.url, parent: req.headers.traceparent ?? null, state: req.headers.tracestate ?? null });
   res.writeHead(200, { 'content-type': 'application/json' });
@@ -67,20 +77,22 @@ function check(label, row, callback) {
   catch (error) { failures.push(label + ': ' + error.message); record({ label, ...row, pass: false, error: error.message }); }
 }
 try {
+  mkdirSync(results, { recursive: true });
   await new Promise(resolve => upstream.listen(0, '0.0.0.0', resolve));
   writeFileSync(join(temp, 'items.json'), '{}');
   writeFileSync(join(temp, 'catalog.json'), '{}');
   writeFileSync(join(temp, 'marketplace.json'), JSON.stringify(fixture));
   record({ image, imageId: docker('image', 'inspect', '--format', '{{.Id}}', image), suite, qualification: false });
   for (const profile of ['defaults', 'matched']) for (const source of ['fixture', 'api']) {
-    active = 'row7-' + app + '-' + process.pid + '-' + profile + '-' + source;
-    docker('run', '-d', '--name', active, '--label', 'agent.owner=codex', '--label', 'agent.task=row7-' + app,
+    const name = 'row7-' + app + '-' + process.pid + '-' + profile + '-' + source;
+    active = createOwnedContainer(docker, owned, name, ['--label', 'agent.owner=codex', '--label', 'agent.task=row7-' + app,
       ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
       '-p', '127.0.0.1::8080', '-v', temp + ':/fixtures:ro',
       '-e', 'PROFILE=' + profile, '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json',
       '-e', 'CATALOG_SOURCE=fixture', '-e', 'CATALOG_FIXTURE_PATH=/fixtures/catalog.json',
       '-e', 'MARKETPLACE_SOURCE=' + source, '-e', 'MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json',
-      '-e', 'API_BASE=http://host.docker.internal:' + upstream.address().port, image);
+      '-e', 'API_BASE=http://host.docker.internal:' + upstream.address().port, image]);
+    docker('start', active);
     const base = 'http://127.0.0.1:' + docker('port', active, '8080/tcp').split(':').at(-1);
     let ready = false;
     for (let i = 0; i < 100; i++) {
@@ -138,15 +150,15 @@ try {
       });
     }
     console.log('CHECKED ' + app + ' ' + suite + ' ' + profile + '/' + source);
-    docker('rm', '-f', '-v', active); active = undefined;
+    docker('rm', '-f', '-v', active); owned.delete(active); active = undefined;
   }
   assert.equal(failures.length, 0, failures.length + ' regression failures; first: ' + failures[0]);
   console.log('PASS: release native HTTP, exact body bytes and source headers');
+} catch (error) {
+  original = error;
+  throw error;
 } finally {
-  if (active) docker('rm', '-f', '-v', active);
-  upstream.closeAllConnections();
-  await new Promise(resolve => upstream.close(resolve));
-  assert.ok(resolve(temp).startsWith(resolve(tmpdir()) + sep));
-  rmSync(temp, { recursive: true, force: true });
-  console.log('Raw observations: ' + fileURLToPath(raw));
+  try { await cleanupProbe(owned, id => docker('rm', '-f', '-v', id), upstream, temp, original); }
+  finally { console.log('Raw observations: ' + fileURLToPath(raw)); }
+}
 }
