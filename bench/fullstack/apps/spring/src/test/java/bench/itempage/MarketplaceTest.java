@@ -41,6 +41,44 @@ class MarketplaceTest {
                 List.of(new MarketplaceRecord.Line("line", "item_2", "Other", 1000)), List.of());
     }
     static MarketplaceRecord.Listing row(String id, String seller, Long price) { return new MarketplaceRecord.Listing(id, seller, 425, 1000, "NM", "US", 2, price); }
+    @Test void writeInvariantsAreCheckedOnTheParsedRecord() {
+        var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
+        var valid = json.writeValueAsString(sample());
+        sample().validateForWrite("item_1");
+        assertThrows(IllegalStateException.class, () -> sample().validateForWrite("item_2"));
+        for (String key : List.of("listings", "offers", "contents")) {
+            var bad = (tools.jackson.databind.node.ObjectNode) json.readTree(valid);
+            var rows = (tools.jackson.databind.node.ArrayNode) bad.get(key);
+            rows.add(rows.get(0).deepCopy());
+            var record = json.treeToValue(bad, MarketplaceRecord.class);
+            assertThrows(IllegalStateException.class, () -> record.validateForWrite("item_1"));
+        }
+        for (long count : List.of(-1L, 1000000001L)) {
+            var bad = (tools.jackson.databind.node.ObjectNode) json.readTree(valid);
+            ((tools.jackson.databind.node.ObjectNode) bad.get("summary")).put("count", count);
+            var record = json.treeToValue(bad, MarketplaceRecord.class);
+            assertThrows(IllegalStateException.class, () -> record.validateForWrite("item_1"));
+        }
+    }
+
+    @Test void fixtureParsingCannotEraseMissingOrCoercedWriteFields() throws Exception {
+        var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
+        var file = java.nio.file.Files.createTempFile("marketplace-write", ".json");
+        try {
+            java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", sample())));
+            new MarketplaceSource(json, "http://unused", file.toString()).getForWrite("item_1").validateForWrite("item_1");
+            for (String key : List.of("description", "subtitle", "summary")) {
+                var bad = (tools.jackson.databind.node.ObjectNode) json.valueToTree(sample());
+                bad.remove(key);
+                java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", bad)));
+                assertThrows(RuntimeException.class, () -> new MarketplaceSource(json, "http://unused", file.toString()));
+            }
+            var bad = (tools.jackson.databind.node.ObjectNode) json.valueToTree(sample());
+            bad.put("id", 1);
+            java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", bad)));
+            assertThrows(RuntimeException.class, () -> new MarketplaceSource(json, "http://unused", file.toString()));
+        } finally { java.nio.file.Files.delete(file); }
+    }
     @Test void stableSortPrefixAndNumericJson() {
         var record = sample();
         assertEquals(List.of("a", "c"), MarketplaceFormat.listings(record, "Alice", "desc").stream().map(MarketplaceRecord.Listing::id).toList());

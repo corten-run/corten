@@ -66,16 +66,39 @@ response. A render exception or error status cannot append or expose partial HTM
 GET and rejected form rendering retain the ordinary MVC lifecycle. This does not
 promise rollback when a client disconnects after an alert has committed.
 
+POST source reads use a native Jackson `ObjectReader` that rejects missing creator
+properties (including nullable ones), unknown keys, null primitive numbers and
+scalar coercions. The fetched record is parsed once, then checked before rendering:
+required strings/lists/row members, requested ID, per-list unique row IDs and the
+numeric bounds in `bench/marketplace/records.mjs` (counts 0..1e9, signed minor units
+-1e9..1e9, ratings 0..500). No extra HTTP read or source pass is added. API-backed
+GET pages and JSON retain their existing mapper and serialization.
+
+The fixture map remains parsed once at startup and reused by reads. Its parser now
+uses the same strict Jackson settings: missing properties, unknown keys and scalar
+coercions fail startup rather than being silently normalized. This is necessary
+because missing nullable properties and coerced primitive types cannot be recovered
+from the resulting typed record. Fixture POSTs still check the record's required
+non-null members, ID, uniqueness and numeric invariants before rendering; healthy
+fixture GET behavior is unchanged.
+
 `mvn -B test` includes native validation/concurrent-session tests. Real HTTP,
 isolation, concurrent writes, and JS/no-JS browser checks for the built image are
 documented in `../fastapi/README.md`. They retain the same browser/request cookie
 jar between each POST and its separate readback, with no reset/oracle endpoint.
 `AlertsHttpTest` runs a real upstream and embedded Tomcat HTTP server: a malformed
-`fields: [null]` record that fails inside Thymeleaf, after a large output prefix,
+`fields: [null]` record with a large title that previously failed inside Thymeleaf
 must return 500 with unchanged readback for existing and fresh cookie jars. A valid
 subsequent write must still append exactly once.
+`../fastapi/alert-contract.test.mjs` additionally exercises the full malformed-record
+matrix over real HTTP in both profile environments; setup is in that app's README.
 
 ## Unreleased
+
+- Validate complete marketplace POST source records with strict native Jackson
+  parsing, requested-ID/unique-row checks and existing numeric contract bounds.
+  Reject structurally unparseable fixtures at startup rather than losing evidence
+  needed to validate later writes.
 
 - Persist native servlet-session marketplace alerts with independent JSON readback,
   atomic appends and cross-site write rejection.

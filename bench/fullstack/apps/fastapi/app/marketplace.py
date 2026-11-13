@@ -83,6 +83,23 @@ class MarketplaceRecord(Record):
     contents: list[Line]
     included_in: list[Line]
 
+    def validate_for_write(self, requested_id):
+        """The remaining marketplace record invariants, on the already parsed model."""
+        if self.id != requested_id:
+            raise ValueError("Marketplace record ID mismatch")
+        if self.summary is not None:
+            values = [(self.summary.lowest_minor, -10**9), (self.summary.count, 0), (self.summary.quantity, 0)]
+        else:
+            values = []
+        for rows in (self.listings, self.offers, self.contents, self.included_in):
+            if len({row.id for row in rows}) != len(rows):
+                raise ValueError("Duplicate marketplace row ID")
+            values.extend((row.quantity, 0) for row in rows)
+        values.extend((row.reviews, 0) for row in self.listings)
+        values.extend((row.price_minor, -10**9) for row in [*self.listings, *self.offers])
+        if any(value is not None and not minimum <= value <= 10**9 for value, minimum in values):
+            raise ValueError("Marketplace integer outside record contract")
+
 
 class MarketplaceSource:
     def __init__(self):

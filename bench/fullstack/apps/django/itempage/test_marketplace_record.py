@@ -15,7 +15,8 @@ from .test_marketplace import RECORDS
 
 
 def malformed_records():
-    record = RECORDS["item_1"]
+    record = deepcopy(RECORDS["item_1"])
+    record["included_in"] = [{"id": "bundle_1", "item_id": "item_2", "title": "Bundle", "quantity": 1}]
     for key in record:
         bad = deepcopy(record)
         del bad[key]
@@ -30,6 +31,25 @@ def malformed_records():
             ("contents", [{"id": "c", "item_id": "item_2", "title": None, "quantity": 1}]),
             ("included_in", [None])]:
         yield f"wrong shape {key}: {value!r}", {**deepcopy(record), key: value}
+    yield "wrong requested ID", {**deepcopy(record), "id": "item_2"}
+    for key in ("listings", "offers", "contents", "included_in"):
+        bad = deepcopy(record)
+        bad[key].append(deepcopy(bad[key][0]))
+        yield f"duplicate {key} ID", bad
+    for path in [("summary", "count"), ("summary", "quantity"), ("summary", "lowest_minor"),
+            ("listings", 0, "reviews"), ("listings", 0, "quantity"), ("listings", 0, "rating_hundredths"),
+            ("listings", 0, "price_minor"), ("offers", 0, "quantity"), ("offers", 0, "price_minor"),
+            ("contents", 0, "quantity"), ("included_in", 0, "quantity")]:
+        key = path[-1]
+        minimum = -10**9 if key.endswith("minor") else 0
+        maximum = 500 if key == "rating_hundredths" else 10**9
+        for value in (minimum - 1, maximum + 1):
+            bad = deepcopy(record)
+            parent = bad
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[key] = value
+            yield f"numeric {path}: {value}", bad
 
 
 @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})

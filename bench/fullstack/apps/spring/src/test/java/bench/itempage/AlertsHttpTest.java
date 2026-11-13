@@ -30,7 +30,7 @@ class AlertsHttpTest {
         @Bean MarketplaceSource marketplaceSource() { return source; }
     }
 
-    @Test void failedNativeTemplateRenderDoesNotCommitAnAlert() throws Exception {
+    @Test void failedNativeSourceDoesNotCommitAnAlert() throws Exception {
         var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
         String valid = json.writeValueAsString(MarketplaceTest.sample());
         var current = new AtomicReference<>(valid);
@@ -55,7 +55,7 @@ class AlertsHttpTest {
                 ((tools.jackson.databind.node.ObjectNode) malformed).set("fields", json.readTree("[null]"));
                 ((tools.jackson.databind.node.ObjectNode) malformed).put("title", "large rendered prefix ".repeat(4096));
                 current.set(json.writeValueAsString(malformed));
-                // A real Thymeleaf render, after the controller returns, fails on field.name.
+                // The complete source contract must reject this before Thymeleaf renders.
                 var failure = send(client, base, true);
                 assertEquals(500, failure.statusCode());
                 assertFalse(failure.body().contains("large rendered prefix"));

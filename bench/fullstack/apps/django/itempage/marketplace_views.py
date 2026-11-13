@@ -22,7 +22,7 @@ def show(request, locale, record_id):
     if record is None:
         raise Http404
     if request.method == "POST":
-        validate_record(record)
+        validate_record(record, record_id)
     fmt = MarketplaceFormat(locale)
     prefix = request.GET.get("seller", "")
     order = "desc" if request.GET.get("sort") == "desc" else "asc"
