@@ -351,7 +351,8 @@ async fn a_method_the_route_has_no_handler_for_is_a_405_that_says_which_it_has()
 async fn a_method_no_route_in_the_app_has_is_a_501_with_no_allow() {
     // RFC 9110 9.1: the server implements it for no resource, so this one's `Allow` is not the
     // answer. `TRACE` is HTTP's own, and no route here names it.
-    for method in ["PROPFIND", "QUERY", "TRACE"] {
+    // Methods are case-sensitive (9.1): `get` is not `GET` but an extension method no route has.
+    for method in ["PROPFIND", "QUERY", "TRACE", "get"] {
         let refused = send(method, "/items/7", &[]).await;
         assert_eq!((refused.status, refused.header("allow")), (501, None), "{method}");
     }

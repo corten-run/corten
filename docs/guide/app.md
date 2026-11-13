@@ -879,7 +879,7 @@ before it (a route that says `unstaged` goes through none;
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   a method no route has (501), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
    the error page starts the layout reads not started yet and waits for them, here, outside 5: a
    middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
@@ -2686,23 +2686,24 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
 | `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
+| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`) | 501 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
 | `Rejected { status, detail }` | the path, the query or the body did not parse | 400, 415, 422 |
-| `Failed { status, detail }` | the handler returned an `Error`, or the deadline passed while it waited for the client to send the body, or the route has the URL and no route in the app has the method | 500, or its status; 408 for the body; 501 for the method |
+| `Failed { status, detail }` | the handler returned an `Error`, or the deadline passed while it waited for the client to send the body | 500, or its status; 408 for the body |
 | `Panicked { detail }` | the handler panicked | 500 |
 | `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's), not waiting for the body | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
 
 A method is one the app implements when some route in it has a handler for that method, or
-when it is `GET`, `HEAD` (which every server implements, RFC 9110 9.1) or `OPTIONS` (which Corten
-answers itself for a CORS preflight, and whose 405 says what a resource allows). A route that
-takes every method (`any = relay`) makes every method one the app implements, since the server
-behind it may. At a URL a route has, a method the app implements and the route does not is a 405
-with the route's `Allow` (RFC 9110 15.5.6); any other (`PROPFIND`, `QUERY`, or `PUT` in an app
-that routes none) is a 501 with no `Allow` (9.1), since no resource here supports it and the
-route's `Allow` is not the answer. The path is matched first: an unknown URL is a 404 whatever its
+when it is `GET`, `HEAD` (which every server implements, RFC 9110 9.1) or `OPTIONS` (whose
+caller asks what a resource allows, which the 405's `Allow` tells it). A route that takes every
+method (`any = relay`) makes every method one the app implements, since the server behind it
+may. At a URL a route has, a method the app implements and the route does not is a 405 with the
+route's `Allow` (RFC 9110 15.5.6); any other (`PROPFIND`, `QUERY`, `PUT` in an app that routes
+none, or `get`, since a method's name is case-sensitive) is a 501 with no `Allow` (9.1), since
+no resource here supports it and the route's `Allow` is not the answer. The path is matched first: an unknown URL is a 404 whatever its
 method, as it is for a method the app does implement. Only a request that reaches a route's
 405 checks the method again, so a request a route answers costs no more (within 5 instructions
 when measured, [design Choice 25](../design.md#choice-axum-router), step 1).

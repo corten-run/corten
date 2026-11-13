@@ -44,6 +44,7 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
             (t.error_unavailable(), t.error_unavailable_text())
         }
         Failure::WrongMethod
+        | Failure::UnknownMethod
         | Failure::CrossSite
         | Failure::Refused { .. }
         | Failure::Rejected { .. }

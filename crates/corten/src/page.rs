@@ -416,8 +416,12 @@ pub enum Failure {
     NotFound,
     /// A route has this URL but not this method, which the app implements: another route has a
     /// handler for it, or it is `GET`, `HEAD` or `OPTIONS` (405; the `Allow` header is kept). One
-    /// no route has (`PROPFIND`) is [`Failure::Failed`] with 501.
+    /// no route has is [`Failure::UnknownMethod`].
     WrongMethod,
+    /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
+    /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): 501, with no
+    /// `Allow` (RFC 9110 9.1). A handler's `Error::status(NOT_IMPLEMENTED)` is [`Failure::Failed`].
+    UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
     /// The handler needs a [`crate::Caller`] the request does not have, or one who may not do
@@ -437,8 +441,7 @@ pub enum Failure {
     /// The handler returned an [`Error`]: 500, or the status [`Error::status`] gave (a 404 is
     /// [`Failure::NotFound`]). Also the deadline that passed while the handler waited for the
     /// client to send the rest of the body (408), as a stalled upload's `?` gives, since the
-    /// request did not arrive in time; and a method no route in the app has a handler for, at a
-    /// URL a route has (501, RFC 9110 9.1).
+    /// request did not arrive in time.
     Failed { status: StatusCode, detail: Option<Arc<str>> },
     /// The handler panicked (500).
     Panicked { detail: Option<Arc<str>> },
@@ -456,6 +459,7 @@ impl Failure {
         match self {
             Failure::NotFound => StatusCode::NOT_FOUND,
             Failure::WrongMethod => StatusCode::METHOD_NOT_ALLOWED,
+            Failure::UnknownMethod => StatusCode::NOT_IMPLEMENTED,
             Failure::CrossSite => StatusCode::FORBIDDEN,
             Failure::Refused { status } | Failure::Rejected { status, .. } | Failure::Failed { status, .. } => *status,
             Failure::Panicked { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -481,16 +485,17 @@ impl Failure {
     }
 
     /// A failure Corten found the request at fault for, not the service: an unknown address (a
-    /// handler's `Error::not_found()` among them), a wrong method, a refusal and a request that did
-    /// not parse, but not a 429, which slows a client down, so it starts no work for it. The error
-    /// page for one starts the layout's reads and waits for them as a page does. A handler's other
+    /// handler's `Error::not_found()` among them), a wrong method, one no route has (501), a
+    /// refusal and a request that did not parse, but not a 429, which slows a client down, so it
+    /// starts no work for it. The error page for one starts the layout's reads and waits for them
+    /// as a page does. A handler's other
     /// errors wait for none, whatever their status (a handler may answer a downstream outage with
     /// a 4xx), nor does plain text at a 5xx (a maintenance middleware's 503), nor a cross-site
     /// write, refused before anything else runs.
     fn request_at_fault(&self) -> bool {
         let fault = |status: &StatusCode| status.is_client_error() && *status != StatusCode::TOO_MANY_REQUESTS;
         match self {
-            Failure::NotFound | Failure::WrongMethod => true,
+            Failure::NotFound | Failure::WrongMethod | Failure::UnknownMethod => true,
             Failure::Refused { status } | Failure::Rejected { status, .. } => fault(status),
             Failure::CrossSite
             | Failure::Unidentified { .. }
@@ -583,9 +588,11 @@ fn default_error_document(req: &Req, failure: Failure) -> impl crate::view::Docu
         Failure::Failed { status, .. } if status == StatusCode::REQUEST_TIMEOUT => {
             ("Not received", "Check your connection and try again.")
         }
-        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
-            ("Something went wrong", "Please try again.")
-        }
+        Failure::WrongMethod
+        | Failure::UnknownMethod
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
     };
     html! {
         <!DOCTYPE html>
@@ -2713,6 +2720,8 @@ async fn page_or_error<S: crate::app::Steps>(
         None if detail.is_some() => Failure::Failed { status, detail },
         None => match status {
             StatusCode::METHOD_NOT_ALLOWED => Failure::WrongMethod,
+            // The router's: a handler's `Error::status` carries its detail, and is `Failed`.
+            StatusCode::NOT_IMPLEMENTED => Failure::UnknownMethod,
             status => Failure::Failed { status, detail: None },
         },
     };

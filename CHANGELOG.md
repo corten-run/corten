@@ -173,8 +173,11 @@ Corten is pre-1.0, so any minor version may change the API.
   it implements and this resource lacks. This changes a status code an app's clients see. A method
   some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
   route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
-  501; an unknown URL is still a 404 whatever the method. A browser gets the error page as
-  `Failure::Failed` with status 501, and an API its JSON. Only a request that reaches a route's
+  501; an unknown URL is still a 404 whatever the method. A browser gets the error page as the
+  new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
+  page waits for the layout's reads (a handler's `Error::status(NOT_IMPLEMENTED)` is still
+  `Failure::Failed`), and an API its JSON. **Breaking:** an app's error page that matches
+  `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
   405 checks the method again: measured with callgrind (release, three runs each, every run the
   same), a page route, an unstaged route and a 404 move by 1 to 5 instructions, a 405 costs 18
   more (6,921 against 6,903) and a `PROPFIND` that was a 405 costs 309 fewer as a 501

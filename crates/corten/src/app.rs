@@ -626,7 +626,8 @@ impl<M: Middleware> App<M> {
     ///
     /// Under the prefix every failure is an RFC 9457 Problem Details document
     /// (`application/problem+json`, `{"title","status","detail"}`), whatever the
-    /// client accepts, and an unknown URL or a wrong method there is a JSON 404 or 405. There is no
+    /// client accepts, and an unknown URL, a wrong method or a method no route in the app has
+    /// there is a JSON 404, 405 or 501. There is no
     /// shell and no nonce; the deadline, the request signal,
     /// compression and the same-origin check on writes stay. See [`crate::api`]. `"/"` makes the
     /// whole app an API (Corten's own routes, like the health checks, keep their behavior).

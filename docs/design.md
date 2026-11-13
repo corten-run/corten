@@ -1089,6 +1089,11 @@ rules something out.
        axum's router answered `405` with the route's `Allow`, which 15.5.6 keeps for a method the
        server implements and the resource lacks
        ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+       The path is still matched first, so an unknown URL is a `404` whatever its method: RFC 9110
+       sets no order among its errors when more than one applies, and the `404` keeps the app's
+       own not-found page for a mistyped address, where a `501` would say nothing about it.
+       A browser's `501` is the error page's `Failure::UnknownMethod`, which the request is at
+       fault for as it is for a `405`, so the page waits for the layout's reads.
        The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
        `OPTIONS` always among them, and every method once any route takes every method (`any`,
        a relay whose upstream may implement it); only a request that reaches a route's `405`
@@ -1098,7 +1103,10 @@ rules something out.
        outside the repository): a page route 17,822 instructions against 17,827, an unstaged
        route 6,885 against 6,886 and a page's 404 21,657 against 21,660; a `405` at an unstaged
        route 6,921 against 6,903, the 18 the method's second look costs there; and `PROPFIND` at
-       it 6,695 as a `501` against 7,004 as a `405`, which had an `Allow` to write.
+       it 6,695 as a `501` against 7,004 as a `405`, which had an `Allow` to write. The error
+       page's `Failure::UnknownMethod`, added after these were counted, is chosen only once a failed
+       answer for the error page is found not to be a `404`, which none of the requests above
+       reaches, so they stand.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:

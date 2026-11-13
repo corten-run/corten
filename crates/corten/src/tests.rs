@@ -12937,6 +12937,36 @@ mod layout_reads {
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "DELETE", "/", None, None).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>405</p>"), "{body}");
+        // A method no route in the app has (the shop's `any` route takes every method, so an app
+        // without one): `Failure::UnknownMethod`, waited for as the 405 is, not a handler's 501.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let home = Table::new().route(
+            "/",
+            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+        );
+        let router = App::new(Routes::from(home))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    let unknown = matches!(failure, Failure::UnknownMethod);
+                    req.page::<ForOne>(Layout {
+                        req: &req,
+                        children: html! {
+                            <p>{failure.status().as_u16()}</p>
+                            if unknown { <p>"unknown method"</p> }
+                        },
+                    })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        let (status, headers, body) = call_with(router, "PROPFIND", "/", None, None).await;
+        assert_eq!((status, headers.get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>501</p>"), "{body}");
+        assert!(body.contains("<p>unknown method</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
         // A `HEAD` has no body, so it starts none.
         let count = CartCount::default();
         let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/nowhere", None, None).await;

@@ -163,9 +163,9 @@ fn slot_of(method: &Method) -> Option<usize> {
 
 /// The methods some route in the app has a handler for, which a route without one answers with
 /// its `405`; any other is a `501` (RFC 9110 9.1: the server implements it for no resource).
-/// `GET` and `HEAD`, which every server implements (9.1), and `OPTIONS`, which Corten answers
-/// itself for a CORS preflight and whose `405` names the methods a resource has, are always
-/// among them; a route that takes every method (`any`) puts every method among them.
+/// `GET` and `HEAD`, which every server implements (9.1), and `OPTIONS`, whose caller asks what a
+/// resource allows and gets it from the `405`'s `Allow`, are always among them; a route that
+/// takes every method (`any`) puts every method among them.
 #[derive(Clone, Copy)]
 struct Known {
     slots: u16,
@@ -200,9 +200,9 @@ enum Allow {
     Any,
 }
 
-/// A route's handlers, one for each method it has and one for any other (`any`, or an unstaged
-/// route's `405`), with the state they take (`S`) still to give or given: what [`crate::Methods`]
-/// holds.
+/// A route's handlers, one for each method it has and one for any other (`any`, which
+/// [`Known`] reads as taking every method), with the state they take (`S`) still to give or
+/// given: what [`crate::Methods`] holds.
 pub(crate) struct MethodSet<S = ()> {
     slots: [Option<Slot<S>>; 9],
     fallback: Option<Slot<S>>,
