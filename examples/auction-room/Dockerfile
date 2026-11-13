@@ -12,9 +12,11 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # built on this machine with a /src/target would share it): they take turns (`locked`), each
 # building on the crates the last one compiled, and other apps build alongside. The sources are
 # touched first, since cargo goes by file times and a checkout older than the last build would get
-# that build's crates. Since the examples take turns, no two of them write the crate cache at once.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=corten-examples-target,target=/src/target,sharing=locked \
+# that build's crates. Downloaded crates are a cache of the examples' own too: cargo's lock on them
+# is in its home, not in `registry`, so two builds sharing one `registry` could unpack the same
+# crate at once, and the examples take turns on theirs as on the target.
+RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=corten-examples.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && cargo build --release -p auction-room \
     && mkdir -p /out && cp target/release/auction-room /out/server

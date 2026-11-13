@@ -143,7 +143,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_name, dependency};
+    use super::{check_name, dependency, run};
 
     #[test]
     fn a_name_the_app_cannot_be_reached_by_is_refused() {
@@ -159,6 +159,18 @@ mod tests {
     #[test]
     fn a_new_app_depends_on_the_release_the_command_came_from() {
         assert_eq!(dependency(None).unwrap(), format!("package = \"corten-run\", version = \"{}\"", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn a_new_apps_dockerfile_names_its_target_cache_for_the_app() {
+        // Without an id of the app's own, every app's build on a host would wait for every other's.
+        let dir = std::env::temp_dir().join(format!("corten-new-dockerfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        run(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
+        assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
     }
 
     #[test]
