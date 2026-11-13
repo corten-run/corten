@@ -69,9 +69,10 @@ owns cursor handling, retry, deduplication, gap recovery and snapshot fetching; 
 generated views own keyed screen updates. Historical Corten behavior remains the default
 binary mode; the separate parity image explicitly enables `LIVE_PARITY`.
 
-Unfinished independent ports remain **Phoenix, Rails, Laravel, Drogon, Leptos and Topcoat**
-in their registry-selected groups. Corten implementation is not qualification until its
-actual captures pass. Phoenix Channels/LiveView, Action Cable/Turbo,
+Independent ports not integrated in this lane remain **Phoenix, Rails, Laravel, Drogon,
+Leptos and Topcoat** in their registry-selected groups. Rails has a separate port-owner
+handoff requiring parent import, registration and shared-runner qualification; it is not
+silently admitted here. Phoenix Channels/LiveView, Action Cable/Turbo,
 Reverb, Leptos hydration and Topcoat runtime work must remain native when those ports are added.
 An SSE port under one of those names would not satisfy that requirement.
 
@@ -138,6 +139,15 @@ concurrently loaded local workstation, not a framework ranking or a passing whol
 `parity.test.mjs` mutates those real captures to reject wrong DOM, duplicate effects, lost
 updates, queue overflows hidden by labels, leaks, raw-wire mismatches, altered provenance and
 invented aggregates. These offline hostile tests do not replace rerunning the native ports.
+
+Current explicit native-feed evidence is retained separately: `evidence/native-feed-corten/`
+(Corten delivery), `evidence/native-feed-peers/` (Express and ASP.NET delivery),
+`evidence/native-feed-gin/` (Gin delivery), and `bench/recoverable-live/evidence/native-feed-corten/`
+plus `native-feed-aspnet/` (six recovery cases each). Each app passed its required native
+cases before all three requested measurement levels. These are separate partial rounds,
+not a manufactured passing whole-group ledger. Earlier build/rate/timing failures remain
+unchanged in their original captures. [Validation record](VALIDATION.md) lists checks,
+limits, measured observations and every changed path.
 
 Historical `native-live-plan/v1` evidence retains its original three-port inventory. The
 verifier checks that versioned inventory, not today's available adapters; adding a port never

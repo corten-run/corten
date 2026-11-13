@@ -1,0 +1,33 @@
+{
+  "app": "corten",
+  "group": "recoverable-live",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "corten-fanout-1.json.gz",
+      "sha256": "71ad310a49ac46ab8457b163d2e0e6d1ddeeefbb372839f90fbeaca73456fc9c"
+    },
+    {
+      "file": "corten-fanout-2.json.gz",
+      "sha256": "c702aaa20fffa60903443f648f676b86478880fbc01f2ec547f2a02e536c22bb"
+    },
+    {
+      "file": "corten-fanout-4.json.gz",
+      "sha256": "e1fc15d3be1e4e6730fc45239e6721cc79d0fb43eb835f94336daf6735003704"
+    }
+  ]
+}
