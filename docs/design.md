@@ -1169,11 +1169,50 @@ rules something out.
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
        answer's bytes, naming no router type, for matching (a segment of text chosen over a
        parameter, the path before the method, nothing decoded before matching, an empty segment
-       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for any
-       method, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
+       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for a
+       method the route lacks, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
        an API's prefix, every path under an API's prefix being its own, an API's failures, the
        host check, and an unstaged route's. It passes on axum now, and every later step passes it
        unchanged; a case the next step finds missing is added to it first, on axum.
+       Once axum had left, one case changed on purpose: a method no route in the app has a
+       handler for (`PROPFIND`, `QUERY`) is a `501` with no `Allow`, as RFC 9110 9.1 says, where
+       axum's router answered `405` with the route's `Allow`, which 15.5.6 keeps for a method the
+       server implements and the resource lacks
+       ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+       The path is still matched first, so an unknown URL is a `404` whatever its method: RFC 9110
+       sets no order among its errors when more than one applies, and the `404` keeps the app's
+       own not-found page for a mistyped address, where a `501` would say nothing about it.
+       A browser's `501` is the error page's `Failure::UnknownMethod`, which the request is at
+       fault for as it is for a `405`, so the page waits for the layout's reads; the router marks
+       its `501` (a response extension), so a `501` a handler or a middleware answers for a part
+       not built yet stays `Failure::Failed`, a failure of the app's; the mark counts only while
+       the answer is still the router's empty `501` (a body whose size is known to be zero), so a
+       middleware that turned it into another status, or gave it a body of its own that is not
+       plain text, keeps what it wrote on the error page's path, as it does on an API's; a
+       plain-text body is `Failure::Rejected { status: 501 }` for a browser and JSON for an API's
+       client, as a handler's plain-text `501` is; and an empty body whose size is not known (a
+       middleware that wraps or streams it) is sent as a bare `501` with no error page, as the
+       router's `404` and `405` are then. `CONNECT` is a `501` only in origin form (`CONNECT /items/7`); the
+       authority form a client sends (`CONNECT host:443`) names no path, so it is a `404`.
+       The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
+       `OPTIONS` always among them (`OPTIONS` because its caller asks what a resource allows,
+       which the `405`'s `Allow` tells it, where a `501` would tell it nothing), and every method
+       once any route takes every method (`any`, a relay whose upstream may implement it); only a
+       request that reaches a route's `405` reads them, so no other request does more work
+       (Stands on has the counts).
+       A `501` is a 5xx, so a scanner's `PROPFIND` or `TRACE` raises a proxy's or a CDN's 5xx
+       rate, where a `405` did not; RFC 9110 9.1 says a server SHOULD answer it so, a client
+       reads from it that no resource here takes the method, and Corten does not log it as an
+       error. Nothing on the wire tells the router's `501` from a handler's, and CloudFront's
+       stock 5xx metric and Cloudflare's error-rate notifications filter by no method (Stands on),
+       so leaving them out takes an alert built from access logs or the app's own metrics: the deploy guide gives the filter,
+       `status = 501 AND method not in the app's served methods`
+       ([Deploying](guide/deploy.md#monitoring)). That cost is accepted rather than keeping the
+       `405` the standard does not ask for: Standards first (Value 2) comes before Good defaults
+       (Value 7) in the order the Values give, the cost falls on alerting and on clients that
+       retry every 5xx by default (Stands on), each with a setting that leaves these out, rather
+       than on what a client is told, and the `405` would tell every client a wrong thing (that this resource
+       lacks a method the server implements) to spare an operator's alert.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:
@@ -1200,7 +1239,7 @@ rules something out.
        sends it through a lane (`route::Lane`) in their place, a `Stages` of its own that holds
        the host check, the headers every unstaged answer gets, the panic catch and, under an API's
        prefix, the API's JSON, and that its `404` for a segment without the text after its
-       parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
+       parameter and its `405` and `501`, the router's own, meet as its handler's answer does. Its handler
        is the app's; the lane wraps the handler's boxed future in a box of its own (two boxes, since axum's
        handler boxed its own future; step 3, below, keeps two). It costs 71 to 86 instructions more than those checks written into the handler: 7,003
        against 6,932 in the app's routes and 7,068 against 6,982 in an API's module (67 and 82
@@ -1332,7 +1371,58 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Stands on: measured (callgrind, release, three runs of each build with jemalloc and with
+    Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
+    not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
+    for a method the server knows that the target resource does not support, and MUST carry
+    `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
+    case-sensitive; migration step 1); platform, an accepted cost (migration step 1, the docs as
+    read on 2026-11-13: a CloudWatch alarm on CloudFront's `5xxErrorRate` counts every `501`,
+    since the metric has no dimension but `DistributionId` and `Region`
+    ([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
+    and Cloudflare's Origin Error Rate notification filters only by domain and sensitivity and its
+    Advanced Error Rate notification by status code and IP address
+    ([Platform Notifications](https://developers.cloudflare.com/notifications/notification-available/));
+    Cloudflare's Monitors run a SQL query with filters by field
+    ([Monitors](https://developers.cloudflare.com/notifications/monitors/)), but the pages read do
+    not say whether `events.httpRequests`, the dataset their example queries, carries the method
+    (a dataset's columns are listed by an authenticated introspection call,
+    [Datasets](https://developers.cloudflare.com/analytics/sql-api/datasets/)), so a monitor by
+    method is a built-in route not verified here; the method is in their access logs, CloudFront's `cs-method`
+    ([Standard logging reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logs-reference.html))
+    and Cloudflare Logpush's `ClientRequestMethod`
+    ([HTTP requests](https://developers.cloudflare.com/logs/logpush/logpush-job/datasets/zone/http_requests/)),
+    so an operator who wants these out builds the alert from logs or from the app's metrics);
+    platform, an accepted cost (migration step 1, the docs as read on 2026-11-13: a client that
+    retries every 5xx by default retries the router's `501` where it did not retry the `405`:
+    Polly's `HandleTransientHttpError` handles 408, any status of 500 or more and
+    `HttpRequestException`
+    ([HTTP client integrations](https://www.pollydocs.org/community/http-client-integrations.html)),
+    as Polly.Extensions.Http's `HttpPolicyExtensions.HandleTransientHttpError` does
+    ([README](https://github.com/App-vNext/Polly.Extensions.Http/blob/master/README.md)), and the
+    retry strategy of Microsoft.Extensions.Http.Resilience, which its standard handler uses,
+    handles 408, 429 and 500 and above by default
+    ([HttpRetryStrategyOptions constructor](https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.http.resilience.httpretrystrategyoptions.-ctor),
+    [Build resilient HTTP apps](https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience));
+    each lets its caller say which answers to retry, and a retried `501` costs the client its
+    retries' delay and the server a cold answer, not a different outcome);
+    reasoned (migration step 1: with the request's method and status, as access logs and an app's metrics
+    carry them, an operator can tell the router's `501` from the app's own, since the app's
+    routes serve a short list of methods and a scanner's are outside it; RFC 9110
+    sets no order among its errors, so the path is matched first and an unknown URL keeps the
+    app's `404` page, which says more about a mistyped address than a `501`; and `OPTIONS` is
+    always one the app implements because its caller asks what a resource allows, which the
+    `405`'s `Allow` answers and a `501` would not); reasoned (the mark is checked against the
+    `501` only when it is there, so the counts below hold for every request but that `501`,
+    whose check is one comparison on a cold path); measured (callgrind, release, glibc's allocator, the run of 1,200
+    requests less the run of 200 over 1,000 in process, three runs of each build alternating,
+    every run within 2 of the others, on `8b02835d` and on it with migration step 1's `501` and its
+    marker, in a harness outside the repository: a page route 17,403 instructions against
+    17,585, the 182 fewer all in glibc's `_int_malloc` and `unlink_chunk` with every function of
+    Corten's within 3; an unstaged route 7,023 against 7,022 and a page's `404` 21,991 against
+    21,988; a `405` 6,557 against 6,529 at an unstaged route and 22,352 against 22,323 at a page,
+    the 28 to 29 the method's second look costs; and `PROPFIND` as a `501` 6,978 against 6,623 as a
+    `405` at the unstaged route and 22,906 against 22,425 at the page, the marker's extension
+    map allocated on that cold path); measured (callgrind, release, three runs of each build with jemalloc and with
     glibc, every run the same but the feed's, step 4 at `5548c97a` against step 3 at `67e7f5f5`, built with
     feature `json`, in a harness outside the repository that answers the same JSON item by each
     request shape, the dispatch suite unchanged: a staged page 478 fewer, every other request
@@ -1396,7 +1486,9 @@ rules something out.
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
 
-    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
+    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
+    (other than the `501` for a method no route in the app has, RFC 9110 9.1, which migration
+    step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
     hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
@@ -1408,6 +1500,11 @@ rules something out.
     shutdown, reset-flood and full three-engine TLS checks omitted from the partial weighing.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
+    The `501` itself (migration step 1) is reopened when a named client or tool is reported
+    failing on these `501`s where it handled the `405`, in a way no documented setting of it
+    avoids. A retry policy that retries every 5xx and a 5xx alarm that cannot filter by method
+    are known and accepted (Stands on): the one can be told which answers to retry and the other
+    replaced by an alert built from access logs, so neither alone reopens it.
 
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
@@ -1423,10 +1520,17 @@ rules something out.
     2026-11-10, axum gone (step 4) at `5548c97a` against step 3 at `67e7f5f5`, with the suite
     unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
-    the `laned` variant of `fa0b1525`; 2026-11-13, hyper 1.12.0, hyper-util 0.1.21 and h2
-    0.4.20, prototype `1a8adcb5f` and driver `70e523f3b` against `ecbef5eb`, with the
-    corrected watch semantics read in `watch.rs` and `app.rs`, and the untried connection-level
-    alternative distinguished from the measured send stall.
+    the `laned` variant of `fa0b1525`; 2026-11-12, the dispatch suite with its one case changed
+    for RFC 9110 9.1 (the `501`), on `794e6c7f` and on it with that change; 2026-11-13, RFC 9110 9.1, 15.5.6 and 15.6.2 as Stands on cites
+    them, and the seven requests Stands on counts for the `501`, on `8b02835d` and on it with
+    the `501` and its marker; 2026-11-13, CloudFront's and Cloudflare's metric, alert and log
+    pages as Stands on cites them, read for migration step 1 with main at `c3d455a1`; 2026-11-13,
+    Polly's, Polly.Extensions.Http's and Microsoft.Extensions.Http.Resilience's retry defaults and
+    Cloudflare's Monitors and SQL API datasets pages as Stands on cites them, read for migration
+    step 1 with main at `f12d3daa`; 2026-11-13, hyper
+    1.12.0, hyper-util 0.1.21 and h2 0.4.20, prototype `1a8adcb5f` and driver `70e523f3b`
+    against `ecbef5eb`, with the corrected watch semantics read in `watch.rs` and `app.rs`,
+    and the untried connection-level alternative distinguished from the measured send stall.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -1658,14 +1762,14 @@ rules something out.
     runs the host check every request meets, so a
     DNS-rebound page reads it no more than any route, and, under an API's prefix, writes a failure
     as the API writes every failure there (its Problem Details or `Api::errors` shape), the
-    router's `405` and a segment without its suffix among them, so an API's clients still read
+    router's `405` and `501` and a segment without its suffix among them, so an API's clients still read
     every failure under its prefix as JSON; only a failure boxes anything for that. A tower layer
     around those routes alone (axum's `route_layer`) was built first and measured at 751
     instructions a request more than the same checks in the handler (jemalloc), since axum boxes a
     layered route again and clones that box on each request; the lane costs 71 to 86 more than
     the same checks in the handler (about 1%, which wall times did not show), taken for one place
     that says what goes around a route: the router holds the app's stages or the route's lane for
-    each path, and its own `404` and `405` meet the lane as the handler's answer does, with no
+    each path, and its own `404`, `405` and `501` meet the lane as the handler's answer does, with no
     handler of their own. Value 1 still holds with it: the route stays under axum's plain router
     in the same build and inside the bound below, which is what this Choice holds it to
     ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
@@ -3137,7 +3241,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     error page, security headers but `nosniff` and `sandbox`, cache rule but `private` on a
     cookie, or allowed origins, which its handler gives itself if it needs them; the host check
     and, under an API's prefix, the API's JSON for a failure stay; it answers reads only; a wrong
-    method or a missing suffix at its path is a plain 405 or 404 (the API's JSON under an
+    method or a missing suffix at its path is a plain 405 (501 for a method no route in the app
+    has) or 404 (the API's JSON under an
     API's prefix), a failure elsewhere is sent as its handler made it (plain text, not Problem
     Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel, a tunnel a `2xx` to `CONNECT` opens) only over HTTP/1.1 served by
@@ -3153,7 +3258,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     So a route that accepts switched connections must end idle ones (a deadline from the last
     frame the client sent, with pings so one that only listens answers) and should bound how
     many it keeps: otherwise sockets no one uses take the cap from every other request. The work
-    on a switched connection is told when shutdown begins and is not waited for.
+    on a switched connection is told when shutdown begins and is not waited for. A `CONNECT`
+    tunnel route is reached only in origin form (`CONNECT /tunnel`): the authority form a client
+    sends (`CONNECT host:443`) names no path a route can match, so it is a `404`
+    ([Choice 25](#choice-axum-router), migration step 1).
 14. <a id="limit-http1"></a>Connections are HTTP/1.1. An app with live streams needs an HTTP/2
     proxy or CDN even when it ends TLS itself. The connection bounds, measured tradeoff and
     reopening criteria are in [Choice 25](#choice-axum-router), protocol step 2; configuration

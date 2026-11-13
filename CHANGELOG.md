@@ -290,6 +290,39 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
+  or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
+  where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
+  server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
+  it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
+  where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
+  CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+  `HandleTransientHttpError`, .NET's standard resilience handler) retries it. The app does not
+  log it as an error. CloudFront's `5xxErrorRate` and Cloudflare's error-rate notifications
+  cannot leave it out, since neither filters by method (Cloudflare's Monitors may, not verified
+  here); the deploy guide says how to build one from access logs that leaves out
+  `status = 501 AND method not in the app's served methods`, which hides neither the app's own
+  501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
+  to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
+  some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
+  route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
+  501; an unknown URL is still a 404 whatever the method, and so is a `CONNECT` to a host and port
+  (the authority form a client sends), which names no path. A browser gets the error page as the
+  new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
+  page waits for the layout's reads (only the router's 501 is, while it is still its empty 501: a
+  middleware that turns it into another status, or gives it a body that is not plain text, keeps
+  what it wrote, a plain-text body is `Failure::Rejected` with status 501 for a browser and JSON
+  for an API's client, and an empty body of unknown size is sent as a bare 501; a 501 a handler
+  or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
+  `Failure::Failed`), and
+  an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
+  `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
+  405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
+  within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
+  fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
+  355 to 481 more as a 501, which allocates the router's marker
+  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
+  ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 - Pin the benchmark suites to one verified k6 release and record its actual
   executable, immutable image and platform. Native saved replay requires this
   identity, and legacy continuation/trends refuse incompatible or unidentified

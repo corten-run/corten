@@ -890,7 +890,7 @@ before it (a route that says `unstaged` goes through none;
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   a method no route has (the router's 501, not one a handler or a middleware answers), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
    the error page starts the layout reads not started yet and waits for them, here, outside 5: a
    middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
@@ -1116,7 +1116,8 @@ no-cache` (`no-store` when it says one), whatever caching it says, and loses a C
 `CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache
 hands one visitor's cookie to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
-and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
+or a plain 501 with none when no route in the app has a handler for the method ([error
+pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
 each with the headers every unstaged answer gets, not the app's error page (the API's JSON under
 an API's prefix); any other unknown URL is still the app's 404, inside its
 stages. A tower layer the app puts around the whole app (`.layer(l)`) still goes around it, and
@@ -1626,7 +1627,7 @@ Under the prefix:
    reason, `detail` the message (left out when it would only repeat the title), and `type` is
    left out, which means `about:blank`: the status says what went wrong. That covers a handler's `corten::Error`, an
    extractor's rejection (a body that does not parse), an unknown URL, a wrong method (with
-   `Allow`) and the deadline's 503. A 4xx message is sent, so write it for the client
+   `Allow`), a method no route has (501) and the deadline's 503. A 4xx message is sent, so write it for the client
    (`Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`); a 5xx message stays in the
    log except under `corten dev`. A failure answered with a JSON body of the handler's own
    passes through, and validation errors are `Errors` as the error, which adds
@@ -1641,7 +1642,7 @@ Under the prefix:
    speaks another protocol's errors (an Anthropic- or OpenAI-compatible gateway, or an MCP
    endpoint's JSON-RPC errors, as `examples/card-market`'s `/mcp` answers them): it returns a
    `ToJson` value, so a key check in `Identify` and the API's unknown URLs, wrong methods,
-   deadline and refusals all answer as its clients parse them. A `421` for a host the app does
+   methods no route has (501), deadline and refusals all answer as its clients parse them. A `421` for a host the app does
    not answer is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
 5. `Api::allow_origin` lets one site's pages call these routes from the browser: Corten answers
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
@@ -1955,7 +1956,10 @@ cache keeps neither of its answers.
 
 An app moved onto Corten a slice at a time serves its own paths and relays the rest to the
 old server behind a catch-all route. `any = relay` serves every method there, those the app never
-names included (`OPTIONS`, `PROPFIND`), so the upstream answers them, not Corten's 405. Corten
+names included (`OPTIONS`, `PROPFIND`), so the upstream answers them, not Corten's 405 or 501.
+Since the upstream may implement any method, an app with a relay anywhere implements every one:
+at a path the app routes itself, a method its route lacks is a 405 with that route's `Allow`,
+`PROPFIND` included, never a 501 ([error pages](#error-pages)). Corten
 still answers what it answers for every route first: a write from another site is a 403, and
 under an API that allows other origins a CORS preflight from one of them is Corten's (one from
 any other origin reaches the old server, and the write after it is still refused). It is
@@ -2706,7 +2710,8 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `Failure` | When | Status |
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
-| `WrongMethod` | the route has the URL but not the method (`Allow` is kept) | 405 |
+| `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
+| `UnknownMethod` | the route has the URL and no route in the app has the method (no `Allow`); a 501 a handler or a middleware answers is `Failed`; the router's turned into another status, or given a body that is not plain text, by a middleware keeps what the middleware wrote, a plain-text body is `Rejected` with status 501, and an empty body of unknown size (a wrapping or streaming middleware) is sent as a bare 501 | 501 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
@@ -2715,6 +2720,28 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `Panicked { detail }` | the handler panicked | 500 |
 | `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's), not waiting for the body | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
+
+A method is one the app implements when some route in it has a handler for that method, or
+when it is `GET`, `HEAD` (which every server implements, RFC 9110 9.1) or `OPTIONS` (whose
+caller asks what a resource allows, which the 405's `Allow` tells it). A route that takes every
+method (`any = relay`) makes every method one the app implements, since the server behind it
+may. At a URL a route has, a method the app implements and the route does not is a 405 with the
+route's `Allow` (RFC 9110 15.5.6); any other (`PROPFIND`, `QUERY`, `PUT` in an app that routes
+none, or `get`, since a method's name is case-sensitive) is a 501 with no `Allow` (9.1), since
+no resource here supports it and the route's `Allow` is not the answer. The path is matched first: an unknown URL is a 404 whatever its
+method, as it is for a method the app does implement. Only a request that reaches a route's
+405 checks the method again, so a request a route answers costs no more (within 3 instructions
+of Corten's own code when measured, [design Choice 25](../design.md#choice-axum-router), Stands on). Such a 501 is a
+refusal of a method the app does not implement, not a failure: Corten does not log it as an
+error. Scanners send `PROPFIND`, `TRACE` and made-up methods to any site, so these raise a
+proxy's or a CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+`HandleTransientHttpError`, .NET's standard resilience handler) retries them unless told not
+to. CloudFront's stock `5xxErrorRate` and Cloudflare's error-rate notifications cannot tell them
+apart, since neither filters by method (Cloudflare's Monitors may; the deploy guide says what to
+check); an alert built from access logs leaves out `status = 501 AND method not in the app's served methods` (the methods
+its routes name, with `GET`, `HEAD` and `OPTIONS`), which hides neither a handler's `501` to
+a method it serves nor any other 5xx. An app with an `any` route answers no such `501` and
+leaves nothing out ([Deploying](deploy.md#monitoring)).
 
 Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
 navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure

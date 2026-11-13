@@ -9,7 +9,7 @@
 //! - Every failure is one JSON shape, a Problem Details document (RFC 9457,
 //!   `application/problem+json`), `{"title":"Not Found","status":404,"detail":"No item 7."}`: a
 //!   handler's [`crate::Error`], an extractor's rejection (a body that does not parse), an
-//!   unknown URL, a wrong method, the deadline. A 4xx message is shown, a 5xx message only under
+//!   unknown URL, a wrong method, a method no route in the app has (501), the deadline. A 4xx message is shown, a 5xx message only under
 //!   `corten dev`; the response's other headers (`Allow`, `WWW-Authenticate`) are kept. A failure
 //!   the handler answered with a JSON body of its own passes through unchanged.
 //! - Responses carry a fixed CSP, `default-src 'none'; frame-ancestors 'none'`, and no nonce.
@@ -274,7 +274,8 @@ impl<P: Prefix> Api<P> {
     /// The JSON every failure Corten answers under the prefix is written as, in place of the
     /// Problem Details document (sent as `application/json` then), for an API that speaks another
     /// protocol's error shape:
-    /// an unknown URL (404), a wrong method (405, with `Allow`), a cross-site write (403), the
+    /// an unknown URL (404), a wrong method (405, with `Allow`), a method no route in the app has
+    /// (501), a cross-site write (403), the
     /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401, with its
     /// `WWW-Authenticate`, or 403) and a handler's `Error`. `message` is what the client may be told: a
     /// 4xx's message, a 5xx's reason (and its message under `corten dev`). A failure with a JSON
