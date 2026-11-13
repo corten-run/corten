@@ -189,3 +189,35 @@ jobs:
             fi
           done
           exit "$lost"
+      # What slows one address (deploy/nginx.conf and provision.sh) is asked for at the machine
+      # itself, since nothing else says the firewall's lines were read there. Of 300 requests at
+      # once nginx answers about 100 and refuses the rest with 429, before it asks the app, so
+      # a machine with no release is asked too. Of 40 connections at once the firewall lets 19
+      # in and leaves the rest to try again, a second later or more; all 40 are then answered.
+      - name: See that the machine slows one address that asks too fast
+        env:
+          ADDRESS: ${{ steps.apply.outputs.address }}
+        run: |
+          at=(--resolve "$SITE_DOMAIN:443:$ADDRESS" --max-time 20)
+          codes=$(curl -s -Z --parallel-max 100 -o /dev/null -w '%{http_code}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-300]" || true)
+          refused=$(grep -c '^429$' <<< "$codes" || true)
+          answered=$(grep -c -v -e '^429$' -e '^000$' <<< "$codes" || true)
+          if [ "$refused" = 0 ] && [ "$answered" = 0 ]; then
+            echo "::warning::The machine at $ADDRESS does not answer as $SITE_DOMAIN, so what it refuses was not asked for."
+            exit 0
+          fi
+          # The count of connections is over one second: these start after the ones above.
+          sleep 5
+          waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-40]" || true)
+          late=$(awk '$1 >= 0.9' <<< "$waits" | wc -l)
+          echo "Of 300 requests at once, $answered were answered and $refused refused; of 40 connections at once, $late waited a second or more."
+          lost=0
+          if [ "$refused" -lt 100 ] || [ "$answered" -lt 50 ]; then
+            echo "::error::nginx at $ADDRESS answered $answered of 300 requests at once and refused $refused: about 100 and 200 are what deploy/nginx.conf sets for one address."
+            lost=1
+          fi
+          if [ "$late" -lt 5 ]; then
+            echo "::error::Of 40 connections at once to $ADDRESS, $late waited a second or more: about 21 do where the firewall has the lines provision.sh writes for it."
+            lost=1
+          fi
+          exit "$lost"

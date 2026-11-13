@@ -101,7 +101,28 @@ grep -q '^worker_rlimit_nofile' /etc/nginx/nginx.conf || sed -i '1i worker_rlimi
 ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp
+# nginx counts what a reader asks for (nginx.conf), and a connection is not counted there
+# until it asks: one address could hold thousands that ask for nothing, each some of nginx's
+# memory, or open one after another and ask its hundred requests on each. So one reader (an
+# IPv4 address or an IPv6 network, as in nginx.conf) holds 256 connections to nginx at a
+# time, where the next is reset, and opens 19 in any one second, where the next waits
+# unanswered until its sender tries again (a browser does after a second). The second count
+# is `recent`'s, which remembers the last 100 addresses and forgets the oldest: it is ufw's
+# own for `ufw limit`, and a table that refuses a new address when it is full (`hashlimit`'s)
+# could be filled for everyone by connections with made-up addresses. ufw reads these files
+# when it starts; the lines are taken out and written again, so a second run leaves one copy.
+limit_connections() {
+    sed -i '/corten-site/d' "$1"
+    sed -i "/^COMMIT\$/i \\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m connlimit --connlimit-above 256 --connlimit-mask $3 -m comment --comment corten-site -j REJECT --reject-with tcp-reset\\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m recent --name $4 --mask $5 --set -m comment --comment corten-site\\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m recent --name $4 --mask $5 --update --seconds 1 --hitcount 20 -m comment --comment corten-site -j DROP" "$1"
+}
+limit_connections /etc/ufw/before.rules ufw-before-input 32 corten-site 255.255.255.255
+limit_connections /etc/ufw/before6.rules ufw6-before-input 64 corten-site6 ffff:ffff:ffff:ffff::
 ufw --force enable
+# On a machine whose firewall was already on, the lines above are read now.
+ufw reload
 
 # The certificate first, answered by nginx as it is installed, then the site's own configuration,
 # which names it. certbot's timer renews it; nginx takes the new one on reload. One certificate
