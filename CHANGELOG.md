@@ -19,6 +19,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Quote Spring's colon-bearing htmx attribute name in the native Thymeleaf layout,
+  restoring catalog and marketplace HTML without changing boosting behavior or checks.
+
 - Refresh the native Rails, Phoenix, Gin and Drogon live build inputs to reviewed
   stable versions and immutable base images. Bind deployment runtime descriptions
   to those sources; changed inputs still require new qualification evidence.

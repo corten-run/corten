@@ -4,6 +4,10 @@
 `GET /api/marketplace/{id}` uses Spring/Jackson to serialize the numeric record.
 Locales are `en-US`, `fr-FR`, and `de-DE`; legacy routes are unchanged.
 
+The shared Thymeleaf layout quotes the colon-bearing htmx attribute name in its
+`th:attr` assignment. Marketplace pages disable inherited boosting; other pages
+retain it. Both branches render through the native template engine in the tests.
+
 The catalog and marketplace JSON endpoints use Spring `ProblemDetail` and Jackson
 for missing records (404), method errors (405, retaining `Allow`) and upstream
 HTTP/parse failures (500 without exception details). Native `HEAD` suppresses the
