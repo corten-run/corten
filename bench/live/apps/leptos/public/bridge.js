@@ -5,6 +5,13 @@ const records = [], effects = [];
 let through = 0, stream, work = Promise.resolve(), ack = Promise.resolve(), settings, stopped = false;
 const log = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+function publication() {
+  const prior = ack;
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  ack = prior.then(() => current);
+  return { prior, release };
+}
 const state = () => ({
   state: Array.from(document.querySelectorAll('#listings > li'), li => ({ id: li.dataset.key,
     version: +li.querySelector('.version').textContent, priceCents: +li.querySelector('.price').textContent,
@@ -73,21 +80,23 @@ window.liveApp = {
     await resources(); await open(false);
   },
   async publish(event, probe = false) {
-    let release; ack = new Promise(resolve => { release = resolve; });
+    const { prior, release } = publication();
     const startedAt = performance.now();
     try {
       const result = await api('publish', { event });
       if (result.seq !== event.seq) throw new Error('native write not acknowledged');
+      await prior;
       log(probe ? 'cleanup-probe' : 'publish', probe ? { event } : { seq: result.seq, scheduledAt: startedAt, startedAt });
       log('resources', result.resources);
     } finally { release(); }
   },
   async publishBatch(events) {
-    let release; ack = new Promise(resolve => { release = resolve; });
+    const { prior, release } = publication();
     const startedAt = performance.now();
     try {
       const result = await api('publish', { events });
       if (result.acks?.length !== events.length) throw new Error('incomplete native batch acknowledgement');
+      await prior;
       for (const [i, item] of result.acks.entries()) {
         if (item.seq !== events[i].seq) throw new Error('native batch sequence mismatch');
         log('publish', { seq: item.seq, scheduledAt: startedAt, startedAt }); log('resources', item.resources);
@@ -95,10 +104,13 @@ window.liveApp = {
     } finally { release(); }
   },
   async released() {
+    await work;
     const deadline = performance.now() + settings.maxCleanupMs;
     for (;;) {
       const r = await resources();
-      if (r.connections + r.subscriptions + r.pendingTasks + r.queueEvents === 0) return;
+      // Counters remain aggregate and unchanged: another reader may be healthy.
+      // This client's native EventSource closure and drained work identify release.
+      if (!stream || stream.readyState === EventSource.CLOSED) return r;
       if (performance.now() > deadline) throw new Error('native reader not released');
       await new Promise(resolve => setTimeout(resolve, 10));
     }
