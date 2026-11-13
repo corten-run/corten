@@ -18,8 +18,11 @@ export function composePhase(binding, native, host, commands, timingAudit = true
   const policy = binding.latestStable;
   const policyAllowsComparison = policy?.schema === latestStableSchema && policy.group === binding.request.group && policy.valid === true
     && policy.status === "not-applicable" && policy.groupComparisonEligible === null;
+  // Mixed gates timing for the whole group, not just the failed functional cell.
+  const nativeAllowsComparison = (app) => binding.request.group !== "mixed-production"
+    || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   return { outcome: complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
     nativeStatus: native.status,
-    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison && r.outcome === "passed" })),
+    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison && r.outcome === "passed" && nativeAllowsComparison(r.app) })),
     report: { qualification: complete ? "native-replay-passed" : "blocked", latestStable: policy ?? null } };
 }

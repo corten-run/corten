@@ -49,6 +49,11 @@ test("production mixed fixed native API has a complete positive composition path
   const result = await inspect(); assert.equal(result.status, "verified"); assert.equal(result.attemptComplete, true);
   assert.equal(result.cleanupComplete, true); assert.equal(result.resources, "verified"); assert.equal(validator.mock.callCount(), 1);
   assert.deepEqual(result.outcomes, apps.map((app) => ({ app, outcome: "passed" })));
+  assert.deepEqual(result.comparisonEligibleApps, apps);
+  const composed = composePhase({ ...binding, preparation: { fixtures: [] }, latestStable: {
+    schema: latestStableSchema, group: "mixed-production", valid: true, status: "not-applicable", groupComparisonEligible: null } },
+  result, { resources: "verified", cleanupComplete: true }, [{ terminal: true, code: 0, signal: null, error: null, cancelled: false, forced: false, success: true }]);
+  assert.equal(composed.outcome, "native-validated"); assert.ok(composed.appOutcomes.every((row) => row.comparisonEligible));
 });
 
 test("complete functional target failure retains every selected app and gated timing", async () => {
@@ -59,6 +64,7 @@ test("complete functional target failure retains every selected app and gated ti
   const result = await inspect(); assert.equal(result.status, "failed"); assert.equal(result.attemptComplete, true);
   assert.deepEqual(result.outcomes.map((r) => r.app), apps); assert.equal(result.outcomes[0].outcome, "failed");
   assert.ok(result.outcomes.slice(1).every((r) => r.outcome === "passed"));
+  assert.deepEqual(result.comparisonEligibleApps, []);
   const composed = composePhase({ ...binding, preparation: { fixtures: [] }, latestStable: {
     schema: latestStableSchema, group: "mixed-production", valid: true, status: "not-applicable", groupComparisonEligible: null } },
   result, { resources: "verified", cleanupComplete: true }, [{ terminal: true, code: 1, signal: null, error: null, cancelled: false, forced: false, success: false }]);

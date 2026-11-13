@@ -306,6 +306,10 @@ cleanup-closed attempt can retain native `target-failed` gates as observed app f
 qualification/calibration/steady gates keep their native dispositions and do not require
 timing after a functional failure. The operational audit path is exactly the staged inbox
 bundle path; the adapter cannot supply a validator, select apps or change native settings.
+Mixed comparison eligibility additionally requires membership in the fixed adapter's
+`comparisonEligibleApps`, derived from native timing replay. A healthy functional app
+does not gain comparative metrics when another app gated the group's timing. Missing
+eligibility cannot grant comparison; complete observed failures still finish the attempt.
 
 Live and recovery still replay every native scenario/fanout through the fixed verifier.
 Standalone native folders cannot establish cleanup. In a current campaign phase, the adapter

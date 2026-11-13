@@ -11,6 +11,32 @@ test("complete observed failures stay selected; apparatus completion is not a su
   const result = composePhase(binding, native, { cleanupComplete: true, resources: "verified" }, [command]);
   assert.equal(result.outcome, "native-validated"); assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [true, false, false]);
 });
+
+test("mixed complete failures retain healthy functional apps without inventing their gated timing", () => {
+  const b = { ...binding, request: { group: "mixed-production" }, latestStable: policy("mixed-production") };
+  for (const comparisonEligibleApps of [undefined, null, "a", { 0: "a" }, [], ["unselected"]]) {
+    const result = composePhase(b, { ...native, comparisonEligibleApps }, { cleanupComplete: true, resources: "verified" }, [command]);
+    assert.equal(result.outcome, "native-validated");
+    assert.deepEqual(result.appOutcomes.map(({ comparisonEligible, ...row }) => row), native.outcomes);
+    assert.ok(result.appOutcomes.every((row) => !row.comparisonEligible));
+  }
+});
+
+test("mixed comparisons require replayed timing eligibility as well as existing policy and apparatus gates", () => {
+  const b = { ...binding, request: { group: "mixed-production" }, latestStable: policy("mixed-production") };
+  const n = { ...native, status: "verified", outcomes: native.outcomes.map((row) => ({ ...row, outcome: "passed" })), comparisonEligibleApps: ["a", "c"] };
+  const host = { cleanupComplete: true, resources: "verified" }, commands = [{ ...command, code: 0, success: true }];
+  const result = composePhase(b, n, host, commands);
+  assert.equal(result.outcome, "native-validated");
+  assert.deepEqual(result.appOutcomes.map((row) => row.comparisonEligible), [true, false, true]);
+  for (const [input, observation, audit] of [
+    [{ ...b, latestStable: policy("mixed-production", "blocked") }, host, true],
+    [b, { ...host, cleanupComplete: false }, true],
+    [b, host, false],
+  ]) assert.ok(composePhase(input, n, observation, commands, audit).appOutcomes.every((row) => !row.comparisonEligible));
+  const failed = composePhase(b, { ...native, comparisonEligibleApps: binding.selection.apps }, host, [command]);
+  assert.deepEqual(failed.appOutcomes.map((row) => row.comparisonEligible), [true, false, false]);
+});
 test("native flags, partial commands, missing OS proof, abort or invalid audit cannot promote a failed process", () => {
   for (const [n, h, c, audit] of [
     [{ ...native, status: "blocked" }, { cleanupComplete: true, resources: "verified" }, [command], true],
