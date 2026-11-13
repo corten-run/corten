@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
-import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, visibleDOM } from "./observe.mjs";
+import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM } from "./observe.mjs";
 import { upstreamDelta } from "./upstream.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
-import { navigationDestination } from "./navigation.mjs";
+import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 
@@ -18,10 +18,9 @@ export function semanticSignature() {
     document.querySelector(".marketplace__message")?.textContent,
     document.querySelector("article.marketplace") === null ? document.body?.textContent : null]);
 }
-export async function waitForSemanticChange(page, before, transitions = []) {
+export async function waitForSemanticChange(page, before, transitions = [], deadline = performance.now() + settings.actionTimeoutMs) {
   // Playwright waitForFunction calls window.eval, which a native CSP may forbid.
   // Poll the observer from the host instead; never relax CSP or redispatch an action.
-  const deadline = performance.now() + settings.actionTimeoutMs;
   while (performance.now() < deadline) {
     try {
       if (await page.evaluate(semanticSignature) !== before) return;
@@ -95,9 +94,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
+    network.attachCDP(cdp);
     const resources = new ResourceAudit(page, cdp, profile.js);
     await cdp.send("Runtime.enable");
-    await cdp.send("Network.enable"); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    await cdp.send("Network.enable"); await cdp.send("Page.enable"); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: environment.cpu });
     // No native 404/error page is used as a start document: its late subresource
@@ -123,17 +123,22 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
       const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
-      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js); row.componentsBefore = nativeBefore.components;
+      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input)); row.componentsBefore = nativeBefore.components;
       network.bindForm(row.formBefore);
       const at = performance.now();
+      const deadline = at + settings.actionTimeoutMs;
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
+        if (response?.status) row.navigationResponse = { status: response.status(), path: new URL(response.url()).pathname };
         row.timing.dispatchMs = performance.now() - at;
-        if (step.kind !== "initial") await waitForSemanticChange(page, before, row.observerTransitions);
+        if (step.kind !== "initial") await waitForSemanticChange(page, before, row.observerTransitions, deadline);
         row.timing.visibleChangeObservedMs = performance.now() - at;
         await page.waitForLoadState("load");
         await page.evaluate(() => globalThis.navigation?.transition?.finished);
         await page.waitForLoadState("networkidle");
+        await network.settle(offset, deadline, Boolean(step.input));
+        if (profile.js) await observedFrame(page, deadline);
+        await network.settle(offset, deadline, Boolean(step.input));
         row.timing.settledObservedMs = performance.now() - at;
         row.dom = await visibleDOM(page);
         assert.equal(row.dom.url.path, step.path, "visible logical route differs from action");
@@ -163,7 +168,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         // planned action. Extraction may itself fail; retain that reason too.
         if (!row.dom) try { row.dom = await visibleDOM(page); } catch (error) { row.failures.push(`failure DOM extraction: ${error.message}`); }
         if (!row.dom) try {
-          row.failurePage = { native: await page.evaluate(nativeDOM), text: (await page.locator("body").innerText()).slice(0, 4096) };
+          row.failurePage = { native: sanitizeNative(await page.evaluate(nativeDOM)), text: (await page.locator("body").innerText()).slice(0, 4096) };
         } catch (error) { row.failurePage = { error: error.message }; }
       }
       const afterCounters = await counters(); row.upstream = upstreamDelta(beforeCounters, afterCounters);
@@ -181,7 +186,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
       if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
       previousResources = row.resources;
+      try { await network.settle(offset, deadline, Boolean(step.input)); }
+      catch (error) { if (!row.failures.includes(error.message)) row.failures.push(error.message); }
       await network.drain();
+      network.annotate();
       row.requests = structuredClone(network.rows.slice(offset));
       classifyDisabledPreloads(row.requests, row.dom, profile.js);
       row.errors = [...runtimeErrors.slice(errorsAt), ...network.failures.slice(networkErrorsAt)];
@@ -191,7 +199,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         if (posts.length !== 1 || JSON.stringify(posts[0]?.input) !== JSON.stringify(step.input)) row.failures.push("Native write missing, duplicate, or input not independently observable");
         const enhancement = profile.js ? row.formBefore?.enhancement : null;
         const endpoint = profile.js && posts[0]?.transport === "livewire" ? row.formBefore?.updatePath : enhancement?.path ?? row.formBefore?.action;
-        if (!endpoint || posts[0]?.path !== endpoint) row.failures.push("Write did not use the independently discovered native form/update endpoint");
+        if (!endpoint || !posts[0] || writeDestination(posts[0], { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) !== endpoint) row.failures.push("Write did not use the independently discovered native form/update endpoint");
         if (enhancement && posts[0]?.transport !== enhancement.transport) row.failures.push("Native write transport differs from its mounted enhancement");
         const allowed = step.kind === "accepted-write" ? [200, 201, 202, 204, 302, 303] : [200, 302, 303, 400, 422];
         if (!allowed.includes(posts[0]?.status)) row.failures.push("Native write returned unexpected status");
@@ -199,7 +207,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       if (row.requests.some((r) => (r.failure || r.status === null || !r.completed) && !r.intentionallyDisabledPreload)) row.failures.push("Failed or unfinished browser requests recorded");
       if (["initial", "missing", "reset", "return"].includes(step.kind) && !row.requests.some((r) => r.path === step.path && r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200))) row.failures.push("Missing native document/error request");
       if (!step.input && (step.kind === "navigate" || !profile.js) && !row.requests.some((r) => r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200)
-        && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
+        && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
       if (profile.source === "fixture" && row.upstream.started !== 0) row.failures.push("Fixture source unexpectedly fetched upstream");
       if (row.upstream.pending || row.upstream.completed + row.upstream.cancelled !== row.upstream.started) row.failures.push("Upstream work still pending/unaccounted");
       if (profile.source === "api" && step.kind !== "missing" && row.requests.some((r) => ["document", "fetch", "router", "turbo", "livewire"].includes(r.transport) && (r.path.includes("marketplace") || r.method === "POST")) && !row.upstream.completed) row.failures.push("Request-time upstream read missing");
@@ -215,6 +223,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
   finally {
+    if (network) { await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows); }
     const beforeClose = performance.now();
     try {
       await context.close();
@@ -228,4 +237,14 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   evidence.domChecksPassed = evidence.steps.length === profile.steps.length && evidence.steps.every((s) => s.domPassed);
   result.reason = evidence.failures[0] ?? evidence.gaps[0];
   return result;
+}
+
+export async function observedFrame(page, deadline) {
+  let timer;
+  try {
+    await Promise.race([
+      page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve()))),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Native render frame not observed within the action deadline")), Math.max(0, deadline - performance.now())); }),
+    ]);
+  } finally { clearTimeout(timer); }
 }
