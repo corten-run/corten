@@ -12,6 +12,14 @@ const notFound = (message) => /Protocol error \(Runtime\.evaluate\): (?:uniqueCo
 const sameOrigin = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };
 const urlHash = (value) => typeof value === "string" ? createHash("sha256").update(value).digest("hex") : null;
 const responseTiming = (r) => r?.timing ? { requestTime: r.timing.requestTime, receiveHeadersEnd: r.timing.receiveHeadersEnd } : null;
+function parserURLs() {
+  const audit = globalThis.__fullstackBrowserAudit?.checkpoint();
+  const asset = (url) => ({ url, path: new URL(url).pathname, sameOrigin: new URL(url).origin === location.origin });
+  return { realm: audit?.realm, scope: audit?.scope, path: location.pathname, url: location.href,
+    preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, ...asset(el.href) })),
+    assets: [...document.querySelectorAll('link[rel~="stylesheet"][href],img[src]')].map((el) => ({
+      type: el.localName === "link" ? "Stylesheet" : "Image", ...asset(el.localName === "link" ? el.href : el.currentSrc || el.src) })) };
+}
 async function boundedSend(session, method, params, timeoutMs = 1000) {
   let timer;
   try { return await Promise.race([session.send(method, params), new Promise((_, reject) => {
@@ -25,7 +33,7 @@ export class PlatformLifecycle {
     this.cdp = cdp; this.targets = targets; this.events = []; this.contexts = new Map(); this.frames = new Map(); this.realms = new Map();
     this.discovery = false; this.target = null; this.boundaries = {}; this.observationFailures = [];
     this.domains = new Set();
-    this.contextConfiguration = structuredClone(contextConfiguration); this.documents = [];
+    this.contextConfiguration = structuredClone(contextConfiguration); this.documents = []; this.pendingDocuments = [];
     for (const [name, session] of [["page", cdp], ["targets", targets]]) session?.on("close", () => this.observationFailures.push({ phase: `${name}-session-closed`, at: performance.now() }));
     cdp.on("Inspector.detached", (e) => this.observationFailures.push({ phase: "inspector-detached", at: performance.now(), error: e.reason }));
     targets?.on("Target.targetCrashed", (e) => this.observationFailures.push({ phase: "target-crashed", at: performance.now(), target: e.targetId }));
@@ -51,10 +59,12 @@ export class PlatformLifecycle {
     cdp.on("Network.webSocketClosed", (e) => record("Network.webSocketClosed", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.requestWillBeSent", (e) => {
       record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, ...address(e.request.url), urlSha256: urlHash(e.request.url),
-        document: address(e.documentURL), sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
+        document: { ...address(e.documentURL), urlSha256: urlHash(e.documentURL) }, sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), urlSha256: urlHash(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
           request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null,
+        redirectHasExtraInfo: e.redirectHasExtraInfo,
         redirectResponse: e.redirectResponse ? { ...address(e.redirectResponse.url), urlSha256: urlHash(e.redirectResponse.url), status: e.redirectResponse.status, timing: responseTiming(e.redirectResponse) } : null });
     });
+    cdp.on("Network.requestWillBeSentExtraInfo", (e) => record("Network.requestWillBeSentExtraInfo", { request: e.requestId, at: e.connectTiming?.requestTime ?? null }));
     cdp.on("Network.responseReceived", (e) => record("Network.responseReceived", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, status: e.response.status, at: e.timestamp,
       mime: e.response.mimeType ?? null, timing: responseTiming(e.response), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
     cdp.on("Network.loadingFinished", (e) => record("Network.loadingFinished", { request: e.requestId, at: e.timestamp }));
@@ -100,11 +110,25 @@ export class PlatformLifecycle {
   recordDocument(dom, resources) {
     const binding = this.realms.get(resources?.realm);
     if (!binding || !dom?.observer || dom.scope !== resources.scope) return;
-    this.documents.push({ observedAt: performance.now(), observer: dom.observer, realm: resources.realm, scope: resources.scope,
+    const doc = { observedAt: performance.now(), observer: dom.observer, realm: resources.realm, scope: resources.scope,
       frame: binding.frame, loader: binding.loader, path: dom.url.path, hasMetaCsp: dom.native?.hasMetaCsp ?? null,
-      preloads: structuredClone(dom.native?.preloads ?? []), assets: structuredClone(dom.native?.assets ?? []) });
+      preloads: structuredClone(dom.native?.preloads ?? []), assets: structuredClone(dom.native?.assets ?? []) };
+    this.documents.push(doc);
+    const startedAt = performance.now();
+    const pending = boundedSend(this.cdp, "Runtime.evaluate", { expression: `(${parserURLs.toString()})()`, uniqueContextId: binding.uniqueId, returnByValue: true, silent: true }).then((result) => {
+      const observed = result.result?.value;
+      if (result.exceptionDetails || observed?.realm !== doc.realm || observed?.scope !== doc.scope || observed?.path !== doc.path) throw new Error("Unmatched parser identity observation");
+      for (const key of ["preloads", "assets"]) {
+        const publicRows = observed[key].map(({ url, ...row }) => row);
+        if (JSON.stringify(publicRows) !== JSON.stringify(doc[key])) throw new Error("Parser declarations changed during URL identity observation");
+      }
+      for (const key of ["preloads", "assets"]) doc[key] = observed[key].map(({ url, ...row }) => ({ ...row, urlSha256: urlHash(url) }));
+      doc.identityObservation = { startedAt, finishedAt: performance.now(), uniqueId: binding.uniqueId, documentSha256: urlHash(observed.url) };
+    }).catch(() => { this.observationFailures.push({ phase: "parser-url-identity", at: performance.now(), error: "Native parser URL identity observation unavailable or changed" }); });
+    this.pendingDocuments.push(pending); return pending;
   }
   async finishObservation({ observationMs = 250, realms = [] } = {}) {
+    await Promise.all(this.pendingDocuments);
     this.boundaries.terminalStartedAt = performance.now();
     await new Promise((resolve) => setTimeout(resolve, observationMs));
     for (const realm of new Set(realms)) await this.probeRealm(realm);
@@ -157,12 +181,29 @@ export class PlatformLifecycle {
   async close() { if (this.targets) await this.targets.detach(); }
 }
 
-function redirectTerminal(prior, continuation) {
+function redirectDispatchIdentities(events) {
+  const chains = new Map(), identities = new Map();
+  for (const e of events.filter((e) => e.event === "Network.requestWillBeSent")) {
+    if (!chains.has(e.request)) chains.set(e.request, []);
+    chains.get(e.request).push(e);
+  }
+  for (const [request, chain] of chains) {
+    if (chain.length < 2) continue;
+    const extra = events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo" && e.request === request);
+    // Independent network-stack receipts count dispatches even when a same-URL
+    // requestWillBeSent hop is deleted. Missing/ambiguous pairings stay unknown.
+    if (extra.length !== chain.length || extra.some((e, i) => !Number.isFinite(e.at) || e.at < 0 || i && e.at <= extra[i - 1].at)) continue;
+    chain.forEach((dispatch, i) => identities.set(dispatch, extra[i].at));
+  }
+  return identities;
+}
+function redirectTerminal(prior, continuation, identities) {
   const d = prior?.dispatch, r = continuation.redirectResponse;
   // The request ID is deliberately reused by CDP. Only the actual redirect
   // response identifies which URL immediately preceded this continuation.
   if (!d || prior.response || prior.terminal || d.frame !== continuation.frame || d.loader !== continuation.loader || d.type !== continuation.type
     || !r || !/^[a-f0-9]{64}$/.test(d.urlSha256 ?? "") || r.urlSha256 !== d.urlSha256 || r.scheme !== d.scheme || r.path !== d.path
+    || continuation.redirectHasExtraInfo !== true || !identities.has(d) || r.timing?.requestTime !== identities.get(d)
     || r.status !== continuation.redirectStatus || !Number.isInteger(r.status) || r.status < 300 || r.status >= 400
     || !Number.isFinite(d.at) || !Number.isFinite(continuation.at) || continuation.at < d.at) return null;
   return { event: "native-redirect", status: r.status, receivedAt: continuation.receivedAt, at: continuation.at, response: structuredClone(r) };
@@ -173,6 +214,7 @@ function networkCoverage(journal, requests) {
   const text = (value) => typeof value === "string" && value.length > 0;
   const path = (value) => text(value) && value.startsWith("/");
   const finite = (value) => Number.isFinite(value) && value >= 0;
+  const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
   const clocks = events.filter((e) => e.event === "native-clock-sample"), initial = clocks.filter((e) => e.phase === "initial-native-clock"), terminal = clocks.filter((e) => e.phase === "terminal-native-clock");
   const clock = initial[0], end = terminal[0];
   const validClocks = initial.length === 1 && terminal.length === 1 && [clock, end].every((e) => finite(e.at) && finite(e.startedAt) && finite(e.receivedAt) && e.startedAt <= e.receivedAt)
@@ -191,7 +233,7 @@ function networkCoverage(journal, requests) {
   if (!Number.isFinite(b.startedAt) || !Number.isFinite(b.endedAt) || b.endedAt < b.startedAt
     || events.some((e, i) => !Number.isFinite(e.receivedAt) || i && e.receivedAt < events[i - 1].receivedAt)) reasons.push("Native network observation bounds/order unavailable");
   for (const { dispatch: d, response: r, terminal: t } of requests) {
-    if (![d.request, d.frame, d.loader, d.type].every(text) || !text(d.method) || !/^[A-Z!#$%&'*+.^_`|~-]+$/.test(d.method)
+    if (![d.request, d.frame, d.loader, d.type].every(text) || !hash(d.urlSha256) || !hash(d.document?.urlSha256) || !text(d.method) || !/^[A-Z!#$%&'*+.^_`|~-]+$/.test(d.method)
       || !["http:", "https:"].includes(d.scheme) || !path(d.path) || !["http:", "https:"].includes(d.document?.scheme) || !path(d.document?.path)
       || typeof d.sameDocumentOrigin !== "boolean" || !text(d.initiator?.type) || typeof d.initiator?.sameDocumentOrigin !== "boolean"
       || !withinNativeClock(d) || !finite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt
@@ -236,15 +278,21 @@ function networkCoverage(journal, requests) {
       || doc.observedAt < b.startedAt || doc.observedAt > b.endedAt || typeof doc.hasMetaCsp !== "boolean"
       || !Array.isArray(doc.assets) || !Array.isArray(doc.preloads)) { reasons.push("Incomplete native parser inventory fields"); continue; }
     if (commits.filter((c) => c.frame === doc.frame && c.loader === doc.loader && c.path === doc.path && c.receivedAt <= doc.observedAt).length !== 1) reasons.push("Parser inventory lacks a unique matched native HTTP commit");
+    const identity = doc.identityObservation;
+    if (!identity || !text(identity.uniqueId) || !hash(identity.documentSha256) || !finite(identity.startedAt) || !finite(identity.finishedAt)
+      || identity.startedAt < doc.observedAt || identity.finishedAt < identity.startedAt || identity.finishedAt > b.endedAt
+      || !Array.isArray(journal.realms) || !journal.realms.some((r) => r?.realm === doc.realm && r.uniqueId === identity.uniqueId && r.frame === doc.frame && r.loader === doc.loader)
+      || !requests.some(({ dispatch: d, terminal: t }) => d.type === "Document" && d.frame === doc.frame && d.loader === doc.loader
+        && d.urlSha256 === identity.documentSha256 && t?.event === "Network.loadingFinished")) reasons.push("Parser URL identity observation unavailable or unmatched");
     if (doc.preloads.some((p) => !p || typeof p.rel !== "string" || typeof p.as !== "string" || !path(p.path) || typeof p.sameOrigin !== "boolean")) reasons.push("Incomplete native preload declaration fields");
     const declarations = [
       ...doc.assets.map((a) => ({ ...a, valid: a && ["Stylesheet", "Image"].includes(a.type) })),
       ...doc.preloads.filter((p) => p && typeof p.rel === "string" && typeof p.as === "string" && isScriptPreload(p)).map((p) => ({ ...p, type: "Script", valid: true })),
     ];
     for (const a of declarations) {
-      if (!a.valid || !path(a.path) || a.sameOrigin !== true) { reasons.push("Parser asset has unknown native request coverage"); continue; }
+      if (!a.valid || !path(a.path) || !hash(a.urlSha256) || a.sameOrigin !== true) { reasons.push("Parser asset has unknown native request coverage"); continue; }
       if (!requests.some(({ dispatch: d }) => d.frame === doc.frame && d.loader === doc.loader && d.path === a.path && d.type === a.type
-        && d.receivedAt <= doc.observedAt)) reasons.push(`Observed parser asset ${a.path} lacks a matched native dispatch`);
+        && d.urlSha256 === a.urlSha256 && d.receivedAt <= doc.observedAt)) reasons.push(`Observed parser asset ${a.path} lacks a matched native dispatch`);
     }
   }
   return reasons;
@@ -354,14 +402,14 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
   if (!probe || probe.outcome !== "context-not-found" || !notFound(probe.error) || !finite(probe.timeoutMs) || probe.timeoutMs > maxProbeMs
     || !finite(probe.finishedAt) || probe.finishedAt < probe.receivedAt || probe.finishedAt - probe.receivedAt > probe.timeoutMs) unknown("Bounded terminal unique-context-not-found receipt absent");
   if (probe?.outcome === "still-executable") { failed = true; unknown("Retired realm still executes at terminal probe"); }
-  const requests = new Map(), sockets = new Map();
+  const requests = new Map(), sockets = new Map(), identities = redirectDispatchIdentities(events);
   for (const e of events.filter((e) => e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt)) {
     if (e.event === "Network.requestWillBeSent") {
       if (!e.frame || !e.loader) unknown(`Request ${e.request} has unknown document ownership`);
       const prior = requests.get(e.request);
       if (!prior && e.redirectStatus !== null) unknown("Orphan native redirect continuation lacks its predecessor dispatch");
       if (prior && (!e.redirectStatus || prior.terminal)) unknown("Reused request ID lacks native redirect binding");
-      const redirect = prior && redirectTerminal(prior, e);
+      const redirect = prior && redirectTerminal(prior, e, identities);
       if (prior && !redirect) unknown("Native redirect predecessor response identity/clock/state differs from continuation");
       const row = { dispatch: e, response: null, terminal: null }; requests.set(e.request, row); result.requests.push(row);
       if (redirect) prior.terminal = redirect;
@@ -403,14 +451,14 @@ export function classifyNoJSRequests(journal) {
     result.reasons.push("Script-disabled context configuration and native page/parser journal required"); return result;
   }
   if (!Array.isArray(journal.observationFailures) || journal.observationFailures.length) result.reasons.push("Native observer coverage interrupted");
-  const latest = new Map();
+  const latest = new Map(), identities = redirectDispatchIdentities(journal.events);
   for (const event of journal.events) {
     if (event.event === "Network.requestWillBeSent") {
       if (typeof event.type !== "string") { result.reasons.push("Request resource type unavailable"); continue; }
       const previous = latest.get(event.request);
       if (!previous && event.redirectStatus !== null) result.reasons.push("Orphan native redirect continuation lacks its predecessor dispatch");
       if (previous && (!event.redirectStatus || previous.terminal)) result.reasons.push("Reused request ID lacks native redirect binding");
-      const redirect = previous && redirectTerminal(previous, event);
+      const redirect = previous && redirectTerminal(previous, event, identities);
       if (previous && !redirect) result.reasons.push("Native redirect predecessor response identity/clock/state differs from continuation");
       if (redirect) previous.terminal = redirect;
       const row = { dispatch: event, response: null, terminal: null, classification: "unknown", proof: null };
@@ -446,13 +494,14 @@ export function classifyNoJSRequests(journal) {
     }
     const documentRequest = result.requests.find((d) => d.dispatch.type === "Document" && d.dispatch.frame === r.frame && d.dispatch.loader === r.loader && d.terminal?.event === "Network.loadingFinished");
     const observed = journal.documents.find((d) => d.observer && d.scope && d.frame === r.frame && d.loader === r.loader
-      && d.path === r.document?.path && d.observedAt >= r.receivedAt);
+      && d.path === r.document?.path && typeof d.identityObservation?.documentSha256 === "string"
+      && d.identityObservation.documentSha256 === r.document?.urlSha256 && d.observedAt >= r.receivedAt);
     if (documentRequest?.classification !== "document" || !documentRequest.response || !observed || r.sameDocumentOrigin !== true || !r.frame || !r.loader) {
       result.reasons.push(`Request ${r.request} lacks matching native document/parser ownership`); continue;
     }
-    const directParser = r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && r.initiator.path === observed.path;
-    const declaration = observed.assets.find((a) => a.type === r.type && a.path === r.path && a.sameOrigin === true);
-    const preload = observed.preloads.find((p) => p.path === r.path && p.sameOrigin === true && isScriptPreload(p));
+    const directParser = r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && r.initiator.path === observed.path && r.initiator.urlSha256 === observed.identityObservation.documentSha256;
+    const declaration = observed.assets.find((a) => a.type === r.type && a.path === r.path && a.urlSha256 === r.urlSha256 && a.sameOrigin === true);
+    const preload = observed.preloads.find((p) => p.path === r.path && p.urlSha256 === r.urlSha256 && p.sameOrigin === true && isScriptPreload(p));
     const disabled = intentionalDisabledPreload({ javaScriptEnabled: false, resourceType: r.type.toLowerCase(),
       errorText: row.terminal.event === "Network.loadingFailed" && row.terminal.blockedReason === "csp" ? "csp" : row.terminal.errorText,
       scriptPreload: Boolean(preload), hasCsp: documentRequest.response.hasCsp !== false || observed.hasMetaCsp !== false });
@@ -466,8 +515,8 @@ export function classifyNoJSRequests(journal) {
     if (row.terminal.event === "Network.loadingFailed") { row.classification = "failed-request"; continue; }
     if (["Fetch", "XHR", "Script", "EventSource", "WebSocket"].includes(r.type)) { row.classification = "application-transport"; continue; }
     const stylesheet = result.requests.find((s) => s.dispatch.type === "Stylesheet" && s.dispatch.frame === r.frame && s.dispatch.loader === r.loader
-      && s.dispatch.path === r.initiator?.path && s.response?.mime === "text/css" && s.terminal?.event === "Network.loadingFinished"
-      && observed.assets.some((a) => a.type === "Stylesheet" && a.path === s.dispatch.path && a.sameOrigin === true));
+      && s.dispatch.path === r.initiator?.path && s.dispatch.urlSha256 === r.initiator?.urlSha256 && s.response?.mime === "text/css" && s.terminal?.event === "Network.loadingFinished"
+      && observed.assets.some((a) => a.type === "Stylesheet" && a.path === s.dispatch.path && a.urlSha256 === s.dispatch.urlSha256 && a.sameOrigin === true));
     if (r.method === "GET" && (directParser && declaration || r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && stylesheet && ["Image", "Font", "Stylesheet"].includes(r.type))) {
       row.classification = "parser-asset"; row.proof.stylesheetRequest = stylesheet?.dispatch.request ?? null;
     } else result.reasons.push(`Request ${r.request} has no independently observed parser asset provenance`);

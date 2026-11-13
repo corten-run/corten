@@ -31,7 +31,7 @@ test("real no-JS document replacement proves only platform retirement and journa
       const audit = new ResourceAudit(page, cdp, false, journal), base = `http://127.0.0.1:${server.address().port}`;
       const observe = async () => {
         const resources = await audit.checkpoint();
-        journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
+        await journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
         return resources;
       };
       await page.goto(base + "/r1"); const before = await observe(), retiredAt = performance.now();
@@ -210,4 +210,90 @@ test("real no-JS document replacement proves only platform retirement and journa
   } finally {
     if (journal) await journal.close(); if (browser) await browser.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("same-URL redirect dispatches and query-distinct parser assets retain independent coverage", { timeout: 30000 }, async (t) => {
+  let loops = 0, browser;
+  const server = createServer((req, res) => {
+    if (req.url === "/loop") { res.writeHead(302, { location: ++loops === 1 ? "/loop" : "/before" }); res.end(); return; }
+    if (req.url.startsWith("/site.css")) { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); return; }
+    res.setHeader("content-type", "text/html");
+    res.end(`<!doctype html><html><head>${req.url.startsWith("/query")
+      ? '<link rel="stylesheet" href="/site.css?one=SECRET_ONE"><link rel="stylesheet" href="/site.css?two=SECRET_TWO"><link rel="stylesheet" href="/site.css?one=SECRET_ONE">'
+      : '<link rel="stylesheet" href="/site.css">'}</head><body>Observed native document</body></html>`);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    browser = await chromium.launch({ headless: true });
+    const outcomes = [];
+    for (const kind of ["same-url-redirect", "query-assets"]) {
+      const context = await browser.newContext({ javaScriptEnabled: false, serviceWorkers: "block" });
+      let journal;
+      try {
+        await context.addInitScript(installResourceObserver);
+        const page = await context.newPage(), cdp = await context.newCDPSession(page);
+        journal = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: false });
+        await journal.enable(); await journal.enableDomains(); await journal.startObservation(); journal.markApplicationStart();
+        const audit = new ResourceAudit(page, cdp, false, journal), base = `http://127.0.0.1:${server.address().port}`;
+        const observe = async () => {
+          const resources = await audit.checkpoint();
+          await journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
+          return resources;
+        };
+        await page.goto(base + (kind === "same-url-redirect" ? "/loop" : "/query-before"));
+        const before = await observe(), retiredAt = performance.now();
+        await page.goto(base + (kind === "same-url-redirect" ? "/after" : "/query-after")); await observe();
+        await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
+        const snapshot = journal.snapshot(), options = { realm: before.realm, retiredAt, observationMs: 25 };
+        const intact = { retirement: validatePlatformRetirement(snapshot, options).outcome, noJS: classifyNoJSRequests(snapshot).outcome };
+        const reduced = structuredClone(snapshot);
+        if (kind === "same-url-redirect") {
+          const hops = reduced.events.filter((e) => e.event === "Network.requestWillBeSent" && e.path === "/loop");
+          assert.equal(hops.length, 2); assert.equal(hops[0].urlSha256, hops[1].urlSha256);
+          reduced.events.splice(reduced.events.indexOf(hops[1]), 1);
+          const extra = snapshot.events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo" && e.request === hops[0].request);
+          assert.equal(extra.length, 3); assert.equal(new Set(extra.map((e) => e.at)).size, 3);
+          for (const mutate of [
+            (j) => { j.events = j.events.filter((e) => e.event !== "Network.requestWillBeSentExtraInfo"); },
+            (j) => { j.events.find((e) => e.event === "Network.requestWillBeSentExtraInfo").at = null; },
+            (j) => { j.events.find((e) => e.event === "Network.requestWillBeSent" && e.redirectStatus).redirectHasExtraInfo = false; },
+            (j) => {
+              const middle = j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.path === "/loop")[1];
+              const connect = j.events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo" && e.request === middle.request)[1];
+              j.events = j.events.filter((e) => e !== middle && e !== connect);
+            },
+          ]) {
+            const altered = structuredClone(snapshot); mutate(altered);
+            assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown"); assert.equal(classifyNoJSRequests(altered).outcome, "unknown");
+          }
+          assert.equal(validatePlatformRetirement(reduced, options).requests.find((r) => r.dispatch.path === "/loop").terminal, null, "Ambiguous same-URL hops cannot supply a fabricated predecessor terminal");
+        } else {
+          const css = reduced.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Stylesheet" && e.loader === reduced.realms.find((r) => r.realm === before.realm).loader);
+          assert.equal(css.length, 2); assert.equal(css[0].path, css[1].path); assert.notEqual(css[0].urlSha256, css[1].urlSha256);
+          const declarations = snapshot.documents.find((d) => d.realm === before.realm).assets;
+          assert.equal(declarations.length, 3); assert.equal(new Set(declarations.map((a) => a.urlSha256)).size, 2, "Only exact-URL duplicate declarations can coalesce");
+          reduced.events = reduced.events.filter((e) => !e.event.startsWith("Network.") || e.request !== css[1].request);
+        }
+        for (const mutate of [
+          (j) => { delete j.documents[0].assets[0].urlSha256; },
+          (j) => { delete j.documents[0].identityObservation; },
+          (j) => {
+            j.documents.forEach((d) => { delete d.identityObservation; d.assets.forEach((a) => { delete a.urlSha256; }); });
+            j.events.filter((e) => e.event === "Network.requestWillBeSent").forEach((e) => { delete e.document.urlSha256; delete e.initiator.urlSha256; });
+          },
+          (j) => { j.documents[0].identityObservation.uniqueId = "unmatched-realm"; },
+          (j) => { j.documents[0].identityObservation.finishedAt = j.boundaries.endedAt + 1; },
+          (j) => { j.realms = {}; },
+        ]) {
+          const altered = structuredClone(snapshot); mutate(altered);
+          assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown"); assert.equal(classifyNoJSRequests(altered).outcome, "unknown");
+        }
+        const missing = { retirement: validatePlatformRetirement(reduced, options).outcome, noJS: classifyNoJSRequests(reduced).outcome };
+        outcomes.push({ kind, intact, missing });
+        assert.ok(!JSON.stringify(snapshot).includes("SECRET_"), "Query secrets must never enter retained native observations");
+      } finally { if (journal) await journal.close(); await context.close(); }
+    }
+    t.diagnostic(JSON.stringify(outcomes));
+    for (const row of outcomes) { assert.deepEqual(row.intact, { retirement: "proved", noJS: "classified" }); assert.deepEqual(row.missing, { retirement: "unknown", noJS: "unknown" }, row.kind); }
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
