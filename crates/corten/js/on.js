@@ -12,13 +12,13 @@
 
 /**
  * Parses `type:module.name(arg,arg) type:module.name()`, each call followed by `/home` when it
- * is a parent's on a child's element. Arguments are refs (`@rows`, every one:
- * `*rows`, every one by its `data-key`: `#rows`, every one with its `data-ref-value`: `=rows`, the
- * one around the event's target: `^rows`, another component's: `@offer-list/rows`), the browser's
- * values (`$e` event, `$t` the element
- * with the attribute, `$s` its signal, `$c` the component's root, `$c/offer-list`), a group of
- * arguments (`{rows:*row,all:@all}`), a message for the handler to fill in (`%["","count"," selected"]`:
- * text and argument names alternating), a format (`%{"z":"0",..}`, format.js), or JSON. A module name may have dots (`ui.combo_box`).
+ * is a parent's on a child's element. Arguments are refs (`@rows`, every one: `*rows`, every
+ * one by its `data-key`: `#rows`, every one with its `data-ref-value`: `=rows`, the one around
+ * the event's target: `^rows`, another component's: `@offer-list/rows`), the browser's values
+ * (`$e` event, `$t` the element with the attribute, `$s` its signal, `$c` the component's root,
+ * `$c/offer-list`), a group of arguments (`{rows:*row,all:@all}`), a message for the handler to
+ * fill in (`%["","count"," selected"]`: text and argument names alternating), a format
+ * (`%{"z":"0",..}`, format.js), or JSON. A module name may have dots (`ui.combo_box`).
  * @param {string} source
  * @returns {Binding[]}
  */

@@ -218,8 +218,7 @@ pub(crate) fn Wall<'a>(here: Here<'a>, t: Msg) -> impl Render {
                                 _ => Heat11,
                             },
                         )}
-                        ref={tiles}
-                        key={*reading}
+                        ref={tiles.with(*reading)}
                     ></i>
                 }
             </div>

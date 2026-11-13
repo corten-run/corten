@@ -1762,8 +1762,9 @@ impl<T, V, W> Ref<T, V, W> {
     /// every element with the ref and its value, in the page's order, so rows a script only puts
     /// in another order carry what they sort by without a `data-` attribute the script names as
     /// text. The value is named once, here: the script reads it from the map, and the call is
-    /// checked as any ref's is. A number is a number in the script (an integer past 2^53 stops
-    /// debug builds, as a handler's number argument does).
+    /// checked as any ref's is. A number is a number in the script, written as a handler's number
+    /// argument is: an integer past 2^53 stops debug builds, and a float that is NaN or infinite
+    /// arrives as `null`, since JSON has neither.
     ///
     /// ```
     /// use corten::prelude::*;
@@ -1844,6 +1845,18 @@ impl<T, V, W> Ref<T, V, W> {
     ///             </tbody>
     ///         </table>
     ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// The attribute is Corten's, as `data-ref` is: markup that writes it by hand does not compile.
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[component]
+    /// fn PriceRow() -> impl Render {
+    ///     html! { <tr data-ref-value="1250"><td>"Lamp"</td></tr> }
     /// }
     /// # fn main() {}
     /// ```

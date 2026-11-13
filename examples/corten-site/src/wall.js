@@ -2,15 +2,14 @@
 // Wall (surface.rs): puts the samples the server rendered in order by their reading, or scatters
 // them, and says what that took: the script's own work, the time from the click to the next
 // frame the browser drew, and the requests the browser recorded meanwhile. The page already has
-// every reading: the markup keys each tile by its own, so a handler is given the tiles by their
-// readings. A key is one element's alone, and so is a reading here (they are 0 to 999, each
-// once); values two tiles could share would need another way. Its controls are links, which the
-// server answers where this script does not run, so each handler stops the link being followed.
+// every reading: each tile gives its ref its own, so a handler is given the tiles with their
+// readings, numbers as the server wrote them. Its controls are links, which the server answers
+// where this script does not run, so each handler stops the link being followed.
 /** @import { Message, NumberFormat } from "corten" */
 
-/** Each tile with its reading, in the order they stand. @param {Map<string, HTMLElement>} tiles */
+/** Each tile with its reading, in the order they stand. @param {Map<HTMLElement, number>} tiles */
 function samples(tiles) {
-  return Array.from(tiles, ([reading, tile]) => ({ tile, reading: Number(reading) }));
+  return Array.from(tiles, ([tile, reading]) => ({ tile, reading }));
 }
 
 /** How many requests the browser has recorded for this page so far. */
@@ -49,7 +48,7 @@ function place(event, grid, readout, placed, began, said, number) {
 /**
  * @param {MouseEvent} event the click on the link, which is not followed
  * @param {HTMLDivElement} grid @param {HTMLOutputElement} readout
- * @param {Map<string, HTMLElement>} tiles each tile by its reading, the key the markup gives it
+ * @param {Map<HTMLElement, number>} tiles each tile with its reading, the value it gives its ref
  * @param {Message<"count" | "ms" | "frame" | "requests">} said the readout's text, in the page's locale
  * @param {NumberFormat} number the page's number format
  */
@@ -63,7 +62,7 @@ export function order(event, grid, readout, tiles, said, number) {
 /**
  * @param {MouseEvent} event the click on the link, which is not followed
  * @param {HTMLDivElement} grid @param {HTMLOutputElement} readout
- * @param {Map<string, HTMLElement>} tiles each tile by its reading
+ * @param {Map<HTMLElement, number>} tiles each tile with its reading
  * @param {Message<"count" | "ms" | "frame" | "requests">} said @param {NumberFormat} number
  */
 export function scatter(event, grid, readout, tiles, said, number) {

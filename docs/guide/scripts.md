@@ -403,8 +403,8 @@ what it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row 
 parameter typed `Map<HTMLTableRowElement, number>` gets every row with its value, in the page's
 order. Two rows may give the same value, and a row with a key keeps it. The value is named once,
 in the markup, and the script reads it from the map, so the two share no attribute name as text,
-and a number is a number in the script (an integer past 2^53 stops debug builds, as a handler's
-number argument does). The call is checked as any ref's is: a ref whose elements give no value,
+and a number is a number in the script (an integer past 2^53 stops debug builds, and a NaN or
+infinite float arrives as `null`, as a handler's number argument does). The call is checked as any ref's is: a ref whose elements give no value,
 give text where the handler takes `number`, or give one on some elements and not on others does
 not compile. A value is a number, text (`string`) or a `bool` (`boolean`); an app's own type gives
 the number or text it stands for.
@@ -421,7 +421,9 @@ component that puts a parent's ref with values on its element names its type
 `Ref<el::HTMLTableRowElement, NoRows, ts::Number>` (`corten::script::{NoRows, ts}`). A `data-`
 attribute a script reads through `dataset` is text on both sides that nothing checks: write one
 for CSS or for the runtime (`data-selected`, `data-reload`), and give a value a script reads with
-the element's ref.
+the element's ref. The one exception is an attribute a corten-ui handler that predates ref values
+documents, such as `rows::sort`'s `data-sort` ([UI guide](ui.md)); moving those onto ref values is
+[#1387](https://github.com/corten-run/corten/issues/1387).
 
 **Values the markup owns.** `html!` owns what it captures (a view lent to a prop,
 `action={&html! { .. }}`, borrows from the view around it instead), so a value borrowed from one

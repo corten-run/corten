@@ -26,7 +26,11 @@ Corten is pre-1.0, so any minor version may change the API.
   another type, or give one on some elements and not others does not compile, where a `data-`
   attribute read through `dataset` was text on both sides that nothing checked.
   `examples/card-market`'s listing sort reads its cents this way, and the scripts guide
-  recommends it for rows a script only reorders.
+  recommends it for rows a script only reorders. `examples/corten-site`'s wall, `apart.js` and
+  `answer.js` read their values the same way. **Breaking:** `data-ref-value` is printed by
+  Corten, as `data-ref` is, so markup that writes it by hand no longer compiles; give the value
+  with the element's ref. corten-ui's `rows::sort` still reads the `data-sort` an app writes
+  (moving it onto ref values is [#1387](https://github.com/corten-run/corten/issues/1387)).
 
 - Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
   every archive's provenance before publishing to crates.io or creating the GitHub release, and
