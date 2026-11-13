@@ -3007,45 +3007,68 @@ rules something out.
     `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
     (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
     `immutable`, and nothing on a load: the value is read only when a handler that takes it runs.
-    That is half the 41 bytes [Choice 45](#choice-data-on-single-quoted) did not spend on a block
-    for large data, and Value 1, which says no to what costs every user to help a few, weighs the
-    two differently. The block made a few pages' large data faster where the single-quoted attribute
-    already gave them most of the gain. Here nothing without a reader in the runtime checks the
-    name: a value read through `dataset` is text the compiler cannot see, and the other ways below
-    each give up a row's identity or its order. A misspelled name fails silently in any app whose
-    script reorders or filters the rows it was sent, and Value 4 asks for that to fail when the
-    crate compiles. So the reader is taken, at 21 bytes with gzip once a release, as one checked way
-    for those rows (Value 5) rather than a faster second way for a few pages. On Value 1 the bytes
-    are spent where a page uses them: card-market's item page, whose listings each give their ref
-    their cents, is 418 bytes larger (8,818 to 9,236), since each row now carries its ref's name
-    beside its value (`data-ref="row" data-ref-value='1250'` where it had `data-cents="1250"`), and
-    21 bytes larger with zstd (2,181 to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with
-    gzip (2,512 to 2,511), the bytes a user receives. Its render and request times did not move by
-    more than runs of one build differ by (building and rendering the main part took 13.7 to 25.3 µs
-    before and 15.1 to 26.6 after). A page whose rows give no value is unchanged.
+    The README's order puts performance at the user's end above compile-time safety and one way to
+    do things (Values 4 and 5), and on that order [Choice 45](#choice-data-on-single-quoted) did not
+    spend 41 bytes on a block for large data. This Choice does not rest on Values 4 and 5: it rests
+    on correctness, which the order puts first. With a `data-` attribute the page is wrong, not
+    slow: a misspelled or renamed name compiles, passes `tsc`, and gives the script `undefined` with
+    no error anywhere, so a sort leaves the rows as they were (`undefined - 1250` is NaN, which
+    `sort` takes as equal), and a number arrives as text, so a comparison that forgets to convert
+    (`<`, not `-`) orders `"999"` after `"1250"`. The block
+    [Choice 45](#choice-data-on-single-quoted) turned down made pages that were already correct
+    faster. Here nothing without a reader in the runtime makes these pages correct: a value read
+    through `dataset` is text the compiler cannot see, and the other ways below each give up a row's
+    identity or its order. So the reader is taken, at 21 bytes with gzip once a release, because it
+    removes a silent wrong output, and Values 4 and 5 (the mistake fails when the crate compiles,
+    one way for those rows) follow from it rather than outweigh Value 1. On Value 1 the bytes are
+    spent where a page uses them: card-market's item page, whose listings each give their ref their
+    cents, is 418 bytes larger (8,818 to 9,236), since each row now carries its ref's name beside
+    its value (`data-ref="row" data-ref-value='1250'` where it had `data-cents="1250"`), and 21
+    bytes larger with zstd (2,181 to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with gzip
+    (2,512 to 2,511), the bytes a user receives. Rendering its main part costs about 930
+    instructions more a page, 2.4% (callgrind: `ItemDetail`'s render took 2,363.8 and 2,368.9
+    million instructions over the test's 60,000 renders before, 2,424.5 and 2,419.7 million after),
+    the ref's name and value written on each listing row (22 a page on average); the whole test,
+    compression of the larger pages included, is 0.8% more (28,332.8 and 28,354.7 million to
+    28,576.2 and 28,575.3 million). An integer value is written as markup writes a number
+    (`Render`), not through `Display`'s formatter, which had made the same render 13.5% more. A page
+    whose elements give no value is unchanged: seller-desk's desk, 2,080,520,197 instructions to
+    render in every run of both builds.
 
     Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
-    brotli at quality 11, once each build; `render_cost` in `examples/card-market`, five release
-    runs of each build alternated, the base first, once); platform (a `data-` attribute is HTML's
-    place for data private to the page, and `getAttribute` gives a script its decoded value);
+    brotli at quality 11, once each build; the item page's bytes from `render_cost` in
+    `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
+    card-market and seller-desk, two runs of each build alternated, the base first); platform (a
+    `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
+    script its decoded value);
     reasoned (the runtime already finds a ref's elements in the page's order for `*` and `#`, so a
     value is one attribute read per element when the handler runs and nothing on a load; the ref's
     third type parameter is one type wherever the component uses the ref, so a ref given text on one
     element and a number on another, or a value on one and none on another, is a type error); bet
     (apps beyond card-market hand their scripts values on rows the scripts reorder or filter, so the
-    reader serves more than one page); value (no name as text at a seam, Values 4; one way for a
-    script to get what an element carries, its ref, Values 5; a value on a ref, not a new concept,
-    Values 6).
+    reader serves more than one page; today card-market's listing sort, corten-site's wall,
+    `apart.js` and `answer.js`, and the watchlist's smoke page use it); value (a value a script
+    reads is the one the server wrote, or the crate does not compile: correctness first in the
+    README's order; no name as text at a seam, Values 4; one way for a script to get what an
+    element carries, its ref, Values 5; a value on a ref, not a new concept, Values 6).
 
     Revisit when: an app's script needs a record per element rather than one number, text or
     `bool` (then the value might be any `ToJson` with its generated declaration), or the platform
     gives elements typed custom data a script can read without a name as text, or something outside
     Corten has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal.
+    The bet fails, and the 21 bytes reopen against checking `dataset` names some other way (a
+    declaration of each component's `data-` names generated as `corten::types` is), when on
+    2027-05-13 or later `rg -n 'ref=\{[a-z_]+\.with\(' crates/corten-ui crates/corten-cli examples`
+    finds ref values only in the places named in Stands on, and
+    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving
+    `rows::sort`'s `data-sort` onto them.
 
-    Last checked: 2026-11-13, the runtime's size and card-market's `render_cost` on `c3d455a1`
-    against this change; 2026-11-13, the value read back by card-market's smoke, sorted by the
-    script in Chromium and read with `getAttribute` without scripts in Chromium, Firefox and
-    WebKit (Playwright 1.64.1).
+    Last checked: 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
+    2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
+    `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as
+    markup does, and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the
+    value read back by card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and
+    read with `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
 
 ## Rules
 

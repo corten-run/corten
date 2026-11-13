@@ -278,6 +278,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- An integer handler argument (and a ref's integer value) is written as markup writes a number,
+  without `Display`'s formatter: the same digits, measured with callgrind as about 4,400
+  instructions less a page on card-market's item page, whose listing rows (22 on average) each give
+  their ref their cents (`docs/design.md#choice-ref-values`).
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
