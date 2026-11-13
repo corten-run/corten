@@ -298,11 +298,14 @@ release with the binaries, `SHA256SUMS` and the version's `CHANGELOG.md` section
 (attached as `CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub
 release allows).
 It stops before publishing when the tag, the workspace version and the changelog disagree.
-Each archive is attested in its build job with GitHub artifact attestations. Before creating
-the GitHub release, the workflow checks every archive's checksum and verifies its provenance
-against this release workflow, source commit and tag; missing or invalid evidence fails the
-job. This gate runs after crates.io publishing, not before it. Users verify downloaded archives
-as in [Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary).
+A separate `attest` job, which builds nothing, signs each archive's GitHub build provenance, so
+the build jobs never hold an OIDC token. `verify-archives` then requires exactly the five
+expected archives, verifies each one's provenance against this workflow, commit and tag, and
+writes `SHA256SUMS`; `publish` needs it, so a missing or invalid attestation stops the release
+before the `release` environment's approval and before anything reaches crates.io. The GitHub
+release checks the archives it uploads against that `SHA256SUMS`, which shows they are the
+bytes verified, not who built them. Users verify downloaded archives as in
+[Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary).
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.

@@ -12,8 +12,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
-- Release archives carry GitHub build provenance and a `SHA256SUMS` file, checked before the
-  GitHub release is created; the install guide documents verification on Unix and PowerShell.
+- Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
+  every archive's provenance before publishing to crates.io or creating the GitHub release, and
+  the install guide documents verification on Linux, macOS and PowerShell.
 
 - A read-only saved client-heavy evidence validator checks source identities,
   native bundles, observations, outcomes and resource/timing consistency without
