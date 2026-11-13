@@ -161,6 +161,7 @@ jobs:
           npm run check
           npm run check:workloads
           npm run check:groups:host
+          node --test bench/load-tool.test.mjs bench/fullstack/load-tool.test.mjs
           mapfile -t marketplace_tests < <(find bench/marketplace -maxdepth 1 -name '*.test.mjs' ! -name check.test.mjs -print | sort)
           node --test --test-concurrency=1 "${marketplace_tests[@]}"
           node --test bench/client-heavy/verify.test.mjs
