@@ -12,7 +12,8 @@ import { nativeDOM } from "./observe.mjs";
 
 test("real no-JS document replacement proves only platform retirement and journals parser failures", { timeout: 30000 }, async (t) => {
   const server = createServer((req, res) => {
-    if (req.url === "/redirect") { res.writeHead(303, { location: "/before?secret=SECRET" }); res.end(); }
+    if (req.url === "/r1") { res.writeHead(302, { location: "/r2" }); res.end(); }
+    else if (req.url === "/r2") { res.writeHead(307, { location: "/before?secret=SECRET" }); res.end(); }
     else if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); }
     else if (req.url === "/module.js") { res.setHeader("content-type", "text/javascript"); res.end('throw new Error("must not execute")'); }
     else { res.setHeader("content-type", "text/html"); res.end('<!doctype html><html lang="en-US"><head><link rel="stylesheet" href="/site.css"><link rel="modulepreload" href="/module.js"></head><body>Actual native document</body></html>'); }
@@ -33,7 +34,7 @@ test("real no-JS document replacement proves only platform retirement and journa
         journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
         return resources;
       };
-      await page.goto(base + "/redirect"); const before = await observe(), retiredAt = performance.now();
+      await page.goto(base + "/r1"); const before = await observe(), retiredAt = performance.now();
       await page.goto(base + "/after"); await observe();
       await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
       const snapshot = journal.snapshot(), options = { realm: before.realm, retiredAt, observationMs: 25 }, original = JSON.stringify(snapshot);
@@ -45,14 +46,20 @@ test("real no-JS document replacement proves only platform retirement and journa
       assert.equal(Object.hasOwn(proof, "owned"), false); assert.equal(Object.hasOwn(proof, "dom"), false);
       const classified = classifyNoJSRequests(snapshot);
       assert.equal(classified.outcome, "classified", JSON.stringify(classified));
-      assert.ok(classified.requests.some((r) => r.terminal?.event === "native-redirect" && r.terminal.status === 303));
+      assert.deepEqual(classified.requests.filter((r) => r.terminal?.event === "native-redirect").map((r) => [r.dispatch.path, r.terminal.status]), [["/r1", 302], ["/r2", 307]]);
       assert.ok(classified.requests.some((r) => r.classification === "parser-asset" && r.dispatch.path === "/site.css"));
       assert.ok(classified.requests.some((r) => r.classification === "intentionally-disabled-preload" && r.dispatch.path === "/module.js" && r.terminal.event === "Network.loadingFailed"));
       assert.equal(JSON.stringify(snapshot), original); assert.ok(!original.includes("SECRET"));
 
       const cssIds = new Set(snapshot.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Stylesheet").map((e) => e.request));
       const deletionProbes = [
-        ["orphan-redirect", (j) => { j.events = j.events.filter((e) => !(e.event === "Network.requestWillBeSent" && e.path === "/redirect")); }],
+        ["orphan-redirect", (j) => { j.events = j.events.filter((e) => !(e.event === "Network.requestWillBeSent" && e.path === "/r1")); }],
+        ["missing-middle-redirect", (j) => { j.events = j.events.filter((e) => !(e.event === "Network.requestWillBeSent" && e.path === "/r2")); }],
+        ["backwards-native-redirect", (j) => { j.events.find((e) => e.event === "Network.requestWillBeSent" && e.path === "/r2").at = 0; }],
+        ["response-after-native-terminal", (j) => {
+          const response = j.events.find((e) => e.event === "Network.responseReceived" && e.type === "Stylesheet");
+          response.at = j.events.find((e) => e.event === "Network.loadingFinished" && e.request === response.request).at + 100;
+        }],
         ["empty-commits", (j) => { j.events = j.events.filter((e) => e.event !== "Page.frameNavigated"); }],
         ["missing-css-dispatches", (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.") || !cssIds.has(e.request)); }],
         ["null-document-method", (j) => { j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document").forEach((e) => { e.method = null; }); }],
@@ -64,6 +71,31 @@ test("real no-JS document replacement proves only platform retirement and journa
       for (const row of deletionProbes) {
         assert.equal(row.retirement, "unknown", row.name);
         assert.equal(row.noJS, "unknown", row.name);
+      }
+      const missingMiddle = structuredClone(snapshot);
+      missingMiddle.events = missingMiddle.events.filter((e) => !(e.event === "Network.requestWillBeSent" && e.path === "/r2"));
+      for (const changed of [validatePlatformRetirement(missingMiddle, options), classifyNoJSRequests(missingMiddle)]) {
+        assert.equal(changed.requests.find((r) => r.dispatch.path === "/r1").terminal, null, "A missing hop cannot invent the preceding URL's redirect outcome");
+      }
+      for (const [name, mutate] of [
+        ["missing redirect response", (j) => { delete j.events.find((e) => e.path === "/r2").redirectResponse; }],
+        ["missing predecessor URL hash", (j) => { delete j.events.find((e) => e.path === "/r1").urlSha256; }],
+        ["changed predecessor response URL", (j) => { j.events.find((e) => e.path === "/r2").redirectResponse.urlSha256 = "0".repeat(64); }],
+        ["changed predecessor response path", (j) => { j.events.find((e) => e.path === "/r2").redirectResponse.path = "/different"; }],
+        ["changed predecessor response status", (j) => { j.events.find((e) => e.path === "/r2").redirectResponse.status = 307; }],
+        ["missing redirect timing", (j) => { j.events.find((e) => e.path === "/r2").redirectResponse.timing = null; }],
+        ["redirect headers after continuation", (j) => { j.events.find((e) => e.path === "/r2").redirectResponse.timing.receiveHeadersEnd += 100000; }],
+        ["response headers after transfer finish", (j) => { j.events.find((e) => e.event === "Network.responseReceived").timing.receiveHeadersEnd += 100000; }],
+        ["missing response timing", (j) => { delete j.events.find((e) => e.event === "Network.responseReceived").timing; }],
+        ["missing native clock samples", (j) => { j.events = j.events.filter((e) => e.event !== "native-clock-sample"); }],
+        ["missing initial native clock", (j) => { j.events = j.events.filter((e) => e.phase !== "initial-native-clock"); }],
+        ["missing terminal native clock", (j) => { j.events = j.events.filter((e) => e.phase !== "terminal-native-clock"); }],
+        ["invalid native clock", (j) => { j.events.find((e) => e.event === "native-clock-sample").at = null; }],
+        ["native finish before dispatch", (j) => { j.events.find((e) => e.event === "Network.loadingFinished").at = 0; }],
+      ]) {
+        const altered = structuredClone(snapshot); mutate(altered);
+        assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown", name);
+        assert.equal(classifyNoJSRequests(altered).outcome, "unknown", name);
       }
       for (const field of ["request", "frame", "loader", "type", "method", "scheme", "path", "document", "sameDocumentOrigin", "initiator", "at", "receivedAt", "redirectStatus"]) {
         const altered = structuredClone(snapshot);
