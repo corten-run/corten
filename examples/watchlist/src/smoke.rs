@@ -1,6 +1,7 @@
 //! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::for_the_smoke`):
-//! a live stream whose one event is larger than a page's usual patch and is followed by nothing, and
-//! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it.
+//! a live stream whose one event is larger than a page's usual patch and is followed by nothing,
+//! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, and a patch
+//! drawn with this area's stylesheet, which a form on a page outside the area is answered with.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -18,10 +19,15 @@ pub mod url {
     /// A handler given text and a JSON value that have an apostrophe, quotes, `&` and `<` in them.
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
+
+    /// A patch whose component is listed in this area only, for a `data-patch` form on a page
+    /// outside it (the test writes the form into the watchlist).
+    #[route("/smoke/styled", post = styled)]
+    pub struct Styled;
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -42,6 +48,22 @@ async fn quoted(req: Req) -> HtmlResult {
             <Quoted />
         </Layout>
     })
+}
+
+#[derive(Id)]
+struct StyledNoteId;
+
+/// A note styled by this area's stylesheet (`sections/smoke.css`), which no page outside the
+/// area links.
+#[component(css)]
+fn StyledNote() -> impl Patch {
+    html! { <p id={StyledNoteId} class={Note}>"Saved"</p> }
+}
+
+/// Answers with the note: the patch brings the area's stylesheet, so the note is styled on a page
+/// outside the area as it is on one inside.
+async fn styled(req: Req) -> HtmlResult {
+    req.patch(StyledNote {})
 }
 
 #[derive(Id)]

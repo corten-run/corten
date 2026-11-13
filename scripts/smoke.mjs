@@ -517,6 +517,51 @@ async function run(browser) {
     );
     await quoted.close();
   }
+  // A data-patch form on a page outside an area whose handler is in it (Area::components): the
+  // patch links the area's stylesheet, which the runtime loads before it puts the patch in place,
+  // as a navigation into the area does. One that fails to load leaves the patch in place
+  // unstyled, and the next patch that links it tries again.
+  {
+    const styled = await browser.newPage();
+    styled.on("pageerror", (e) => errors.push(`styled patch: ${e.message}`));
+    await styled.goto(base);
+    await styled.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML("beforeend", __html('<form id="styled-form" method="post" action="/smoke/styled" data-patch><button>Save</button></form>')),
+    );
+    // The note's border the moment the patch puts it in the page, and the area links then.
+    const save = async () => {
+      await styled.evaluate(() => {
+        document.getElementById("styled-note")?.remove();
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p id="styled-note"></p>'));
+        const at = /** @type {any} */ (window);
+        at.__styled = null;
+        new MutationObserver((_, observer) => {
+          const note = document.querySelector(".styled-note__note");
+          if (!note) return;
+          at.__styled = `${note.textContent} ${getComputedStyle(note).borderInlineStartWidth}`;
+          observer.disconnect();
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+      await styled.click("#styled-form button");
+      const drawn = await styled
+        .waitForFunction(() => (/** @type {any} */ (window)).__styled, undefined, { timeout: 5000 })
+        .then((got) => got.jsonValue(), () => "not drawn");
+      const links = await styled.$$eval('link[data-corten-style][href*="/sections/smoke"]', (all) => all.length);
+      return `${drawn}, ${links} link`;
+    };
+    check("a page outside an area links none of its stylesheets", (await styled.$$eval("link[data-corten-style]", (all) => all.length)) === 0);
+    await styled.route("**/sections/**", (route) => route.abort("internetdisconnected"));
+    const failed = await save();
+    check("a patch whose area stylesheet fails to load is put in place unstyled, the link taken out", failed === "Saved 0px, 0 link", failed);
+    await styled.unroute("**/sections/**");
+    const first = await save();
+    check("a patch from another area's handler loads that area's stylesheet before it is put in place", first === "Saved 5px, 1 link", first);
+    const second = await save();
+    check("the next patch from that area does not link its stylesheet again", second === "Saved 5px, 1 link", second);
+    await styled.close();
+  }
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
