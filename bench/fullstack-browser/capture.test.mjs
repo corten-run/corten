@@ -4,10 +4,37 @@ import assert from "node:assert/strict";
 import { records } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { candidates, emptyCells, settings } from "./contract.mjs";
-import { exportBrowserCaptures, projectRequest } from "./capture.mjs";
+import { exportBrowserCaptures, projectRequest, projectCase } from "./capture.mjs";
 
 const fixture = records(), plan = createBrowserPlan({ records: fixture });
 const summary = () => ({ effectivePlan: plan, settings, cells: emptyCells(plan), images: {}, code: { diagnostic: true }, browser: null });
+
+// Projection-only scaffolding, deliberately not a valid journey/oracle capture.
+function projectionEvidence() {
+  const zero = { subscriptions: 0, connections: 0, listeners: 0, timers: 0, pendingTasks: 0 };
+  let at = 0;
+  const sample = () => ({ startedAt: ++at, finishedAt: at, error: null, snapshot: { schema: "native-browser-upstream-counters/v1", ledger: "unit-only", events: [] } });
+  const upstreamLedger = { schema: "native-browser-upstream-ledger/v1", baseline: sample(),
+    phases: ["initial-store", "mutation-probes", "cleanup"].map((phase) => ({ phase, before: sample(), after: sample() })) };
+  at += 1000; upstreamLedger.terminal = sample();
+  return { functionalChecksPassed: true, failures: [], gaps: [], clock: { origin: "node.performance.now", startedAt: 1 },
+    provenance: { stillSameProcess: true }, resourceBaseline: { unattributed: zero, scopes: [{ owned: zero }] }, steps: [], requestLedger: [], networkFailures: [], runtimeErrors: [], upstreamLedger,
+    nativeCleanup: { outcome: "observed", requests: [], dom: {}, retired: { owned: zero }, released: {},
+      probe: { beforeSha256: "same", immediateSha256: "same", afterSha256: "same", requests: [], errors: [], afterResources: zero } } };
+}
+test("final raw requests cannot disappear behind a positive projection", () => {
+  const evidence = projectionEvidence(), project = () => projectCase({ evidence }, plan.cases[0], "nuxt", settings);
+  project();
+  evidence.requestLedger.push({ id: "unassigned-late-post", method: "POST", path: "/api/marketplace/item_1", status: null,
+    completed: false, failure: "net::ERR_ABORTED", captureError: "body unavailable" });
+  assert.throws(project, /request|ledger/i);
+});
+test("projection recomputes final upstream coverage rather than trusting an earlier pass", () => {
+  const evidence = projectionEvidence();
+  evidence.upstreamReconciliation = { outcome: "reconciled" };
+  evidence.upstreamLedger.terminal.snapshot.events.push({ request: "late", id: "item_1", status: 200, started: 1, completed: null, cancelled: null });
+  assert.throws(() => projectCase({ evidence }, plan.cases[0], "nuxt", settings), /upstream/i);
+});
 test("strict export retains every candidate/profile and unavailable evidence stays outside strict cells", () => {
   const raw = summary(), cell = raw.cells.nuxt[0]; cell.outcome = "failed"; cell.reason = "observed native request failed";
   cell.evidence = { requests: [{ failure: "net::ERR_ABORTED", bytes: null }], functionalChecksPassed: true };

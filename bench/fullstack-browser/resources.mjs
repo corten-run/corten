@@ -212,6 +212,8 @@ export class ResourceAudit {
   async cleanup({ timeoutMs, observationMs, network, runtimeErrors }) {
     const evidence = { outcome: "failed", before: null, navigation: null, retired: null, probe: null, after: null, failures: [] };
     let handle;
+    const offset = network.rows.length;
+    let probeOffset = null;
     const hash = (value) => createHash("sha256").update(value).digest("hex");
     try {
       evidence.before = await this.checkpoint(); handle = await this.retain(evidence.before);
@@ -240,7 +242,8 @@ export class ResourceAudit {
       await this.page.waitForLoadState("networkidle"); await network.drain();
       evidence.released = await this.checkpoint();
       evidence.retired = this.retired(evidence.before, evidence.released);
-      const offset = network.rows.length, errorsAt = runtimeErrors.length;
+      probeOffset = network.rows.length;
+      const errorsAt = runtimeErrors.length;
       const probe = await this.page.evaluate((scope) => globalThis.__fullstackBrowserAudit.probe(scope), evidence.before.scope);
       evidence.probe = { observer: randomUUID(), scope: evidence.before.scope, kind: "retired-page-event", at: performance.now(),
         beforeSha256: hash(probe.before), immediateSha256: hash(probe.after), dispatched: probe.dispatched, owned: probe.owned };
@@ -251,14 +254,18 @@ export class ResourceAudit {
       } catch (error) { evidence.domError = error.message; }
       evidence.probe.afterSha256 = hash(html); evidence.probe.afterAt = performance.now();
       evidence.probe.afterResources = (await this.checkpoint()).scopes.find((s) => s.scope === evidence.before.scope)?.owned ?? null;
-      evidence.probe.requests = structuredClone(network.rows.slice(offset)); evidence.probe.errors = runtimeErrors.slice(errorsAt);
+      evidence.probe.requests = structuredClone(network.rows.slice(probeOffset)); evidence.probe.errors = runtimeErrors.slice(errorsAt);
       if (!evidence.retired.owned || Object.values(evidence.retired.owned).some(Boolean) || Object.values(probe.owned).some(Boolean) || !evidence.probe.afterResources || Object.values(evidence.probe.afterResources).some(Boolean)) throw new Error("Retired native scope still owns browser resources");
       if (evidence.probe.beforeSha256 !== evidence.probe.immediateSha256 || evidence.probe.beforeSha256 !== evidence.probe.afterSha256) throw new Error("Retired native DOM changed after event probe");
       if (evidence.probe.requests.length || evidence.probe.errors.length) throw new Error("Retired native event probe produced network work/errors");
       if (Object.values(evidence.after.unattributed).some(Boolean) || evidence.after.unsupported.length) throw new Error("Unattributed native resources prevent page-ownership qualification");
       evidence.outcome = "observed";
     } catch (e) { evidence.failures.push(e.message); }
-    finally { if (handle) await handle.dispose().catch(() => {}); }
+    finally {
+      await network.drain(); network.annotate?.();
+      evidence.requests = structuredClone(network.rows.slice(offset, probeOffset ?? network.rows.length));
+      if (handle) await handle.dispose().catch(() => {});
+    }
     return evidence;
   }
 }

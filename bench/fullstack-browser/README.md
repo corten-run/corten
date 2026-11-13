@@ -201,6 +201,23 @@ failure evidence. CDP frame/loader facts distinguish observed document-replaceme
 cancellations from other native failures where identity is unambiguous; these annotations
 do not waive failed requests, supply missing bytes, retry an action or increase its timeout.
 
+The final pre-harness `requestLedger` is reconciled by ID and complete raw outcome with
+exactly one action, cleanup-navigation receipt or retired-event probe. Cleanup navigation
+requests are retained separately from the probe's quiescence check. Missing/duplicate IDs,
+stale outcomes, failed/body-capture-error requests and unexplained late requests block strict
+export, including when an earlier functional flag was positive. Network-observer and browser
+errors are retained through that final boundary. `harnessClosedRequestLedger` is separate;
+closing the context cannot supply native completion evidence.
+
+`upstreamLedger` retains actual numeric-source snapshots before/after the initial store read,
+every action, mutation probes and cleanup, plus a final snapshot after the terminal observation
+interval and before harness closure. The source has stable ledger and request identities;
+reconciliation checks append-only history, actual finish/close receipts, complete phase
+coverage and pending or unassigned work between phases and at the end. Fixture profiles must
+have no source work across the entire interval, not just during actions. The runner and strict
+exporter recompute these checks from raw snapshots. These receipts prove only the independent
+numeric source's request outcomes, not application-server peer closure or worker-network silence.
+
 `resources.mjs` installs observers before native scripts and records native add/remove/once/
 abort listener lifetimes, timeouts/intervals/animation/idle callbacks, native DOM observers,
 fetch/XHR/microtask work and EventSource/WebSocket/worker connections. DOM roots receive
@@ -234,6 +251,9 @@ produce raw diagnostic proofs only, never a local qualification waiver. Workers,
 ownership/coverage or missing terminal receipts block the platform predicate. See
 [the exact interfaces and evidence proposal](LIFECYCLE.md); no shared-oracle variant or
 platform-destruction exemption is accepted here.
+Committed HTTP frame/loaders also require matched native document dispatch, response and
+terminal receipts. Both pure validators require successful assets' own response receipts;
+removing network coverage cannot become a positive empty-request proof.
 
 For a retained same-realm root, `retired.mjs` freshly extracts text, rows, forms and component
 IDs from that actual detached node. It never reattaches the root or copies the previous page
