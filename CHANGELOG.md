@@ -19,6 +19,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Register the native Topcoat keyed live application in its selected recoverable-live
+  group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
+  Historical missing-port evidence stays unchanged; functional integration is not a
+  completed group timing baseline.
+
 - The marketplace browser gate observes native LiveView WebSocket and long-poll
   saves with exact form and reply correlation, waits for readiness before editing,
   and retains bounded case diagnostics on transport failure. Livewire saves must

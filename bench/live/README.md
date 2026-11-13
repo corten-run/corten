@@ -65,8 +65,13 @@ not full-group readiness or a comparative throughput claim.
 
 Implemented native ports are Express (its response writer and EventSource), ASP.NET Core
 (`TypedResults.ServerSentEvents`, a bounded `Channel<Change>` and EventSource), and Gin
-(`SSEvent`, a bounded Go channel and EventSource), plus Corten in the explicit native-feed
-profile (`Feed`, `subscribe()` and generated keyed views). Their state stores, bounded history,
+(`SSEvent`, a bounded Go channel and EventSource), Drogon (its WebSocket controller),
+Leptos (hydrated keyed views and Axum SSE), and Topcoat (native keyed components,
+`live!`/`emit!` and its runtime WebSocket), plus Corten in the explicit native-feed
+profile (`Feed`, `subscribe()` and generated keyed views). Topcoat is selected only
+for recoverable-live, not added to live-delivery by its registration. Its bounded
+replay and acknowledgement flow control are app-local, not framework-provided feeds.
+Their state stores, bounded history,
 subscription lifecycle and browser DOM renderers are independent implementations; the runner
 only publishes the shared fixture and drives faults. The oracle is imported only by the
 runner/verifier, never by an application.
@@ -89,11 +94,11 @@ owns cursor handling, retry, deduplication, gap recovery and snapshot fetching; 
 generated views own keyed screen updates. Historical Corten behavior remains the default
 binary mode; the separate parity image explicitly enables `LIVE_PARITY`.
 
-Independent ports not integrated in this lane remain **Phoenix, Rails, Laravel, Drogon,
-Leptos and Topcoat** in their registry-selected groups. Rails has a separate port-owner
+Independent ports not integrated in this lane remain **Phoenix, Rails and Laravel**
+in their registry-selected groups. Rails has a separate port-owner
 handoff requiring parent import, registration and shared-runner qualification; it is not
 silently admitted here. Phoenix Channels/LiveView, Action Cable/Turbo,
-Reverb, Leptos hydration and Topcoat runtime work must remain native when those ports are added.
+and Reverb work must remain native when those ports are added.
 An SSE port under one of those names would not satisfy that requirement.
 
 ### What is exercised

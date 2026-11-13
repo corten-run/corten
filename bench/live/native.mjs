@@ -18,6 +18,8 @@ export const nativePorts = Object.freeze({ ...legacyPorts,
     image: "cb-parity-live-drogon", wire: "drogon-live", wireModule: "./apps/drogon/wire.mjs" },
   leptos: { directory: "leptos", transport: "Leptos hydrated keyed For / Axum SSE / Tokio bounded mpsc",
     image: "cb-parity-live-leptos", wire: "leptos-axum-sse", wireModule: "./apps/leptos/wire.mjs", buildTimeoutMs: 1200000 },
+  topcoat: { directory: "topcoat", transport: "Topcoat native keyed components / live! and emit! / runtime WebSocket",
+    image: "cb-parity-live-topcoat", wire: "topcoat-live", wireModule: "./apps/topcoat/wire.mjs" },
   corten: { directory: "corten", transport: "corten_feed::Feed / native subscribe() and keyed views / browser EventSource", image: "cb-parity-live-corten",
     profiles: ["native-feed"], wire: "corten-feed", rootContext: true, dockerfile: "Dockerfile.parity", buildTimeoutMs: 1200000 },
 });

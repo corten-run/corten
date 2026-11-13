@@ -66,6 +66,24 @@ test("Leptos registration preserves native build and wire identity without upgra
   assert.deepEqual(wireResumes(network, "leptos-axum-sse"), [{ from: 0, status: "accepted" }]);
 });
 
+test("Topcoat registration binds its native wire without upgrading historical inventory", async () => {
+  for (const profile of ["bounded", "native-feed"]) {
+    const port = portFor("topcoat", profile);
+    assert.ok(port, "reviewed native Topcoat port must be registered");
+    assert.equal(port.directory, "topcoat");
+    assert.equal(port.rootContext, undefined);
+    assert.equal(port.wire, "topcoat-live");
+    assert.equal(port.wireModule, "./apps/topcoat/wire.mjs");
+    assert.equal(inventory("recoverable-live", profile).find((row) => row.app === "topcoat").implementation, "implemented");
+  }
+  const old = inventory("recoverable-live", "bounded", 1);
+  assert.equal(old.find((row) => row.app === "topcoat").implementation, "not-implemented");
+  assert.deepEqual(recordedInventory("recoverable-live", old, "bounded", 2), old);
+  assert.ok(!selectedApps("live-delivery").includes("topcoat"), "registration must not change approved group membership");
+  const manifest = await readFile(new URL("./apps/topcoat/Cargo.toml", import.meta.url), "utf8");
+  assert.doesNotMatch(manifest, /^opt-level\s*=\s*[01]\s*$/m);
+});
+
 test("native Feed limits require an explicit equal-work alternative, never a hidden default", () => {
   assert.equal(workloadFor().eventCount, 24);
   assert.equal(settingsFor("live-delivery", "slow-reader").queueLimit, 2);
