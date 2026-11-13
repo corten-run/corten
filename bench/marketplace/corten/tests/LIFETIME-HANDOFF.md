@@ -167,6 +167,15 @@ resolve it. Neither does this new 70/70 run. Preserve that failed review evidenc
 and the original ASP.NET bound failures above as failures; no flakiness excuse,
 relaxed bound or complete native lifetime parity claim is made here.
 
+The original review's printed failed row and command output were later recovered
+from its transcript, not the deleted full summary directory. They identify native
+image `sha256:aa9c25aba95191a9cce762b8d94b0f25f6962f77cc66fd1bcedd5a45e8f9e81d`
+and exactly one source request, zero completed, zero cancelled and one pending
+after the unchanged 500 ms wait. Its `elapsedMs=135.4707000000053` was captured
+before that wait and is request timing, not cleanup duration. This observation
+remains tracked in [Benchmark parity: Corten in approved workload groups](https://github.com/corten-run/corten/issues/1295);
+later passing checks do not establish a cause or resolution.
+
 Fresh independent review is the next gate; no child agent or full mixed workload
 matrix was started. Traceparent propagation requested for the marketplace source
 is queued after this checkpoint, not implemented in this repair. TLS edge/CSRF
