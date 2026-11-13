@@ -15,7 +15,7 @@ function projectionEvidence() {
   let at = 0;
   const sample = () => ({ startedAt: ++at, finishedAt: at, error: null, snapshot: { schema: "native-browser-upstream-counters/v1", ledger: "unit-only", events: [] } });
   const upstreamLedger = { schema: "native-browser-upstream-ledger/v1", baseline: sample(),
-    phases: ["initial-store", "mutation-probes", "cleanup"].map((phase) => ({ phase, before: sample(), after: sample() })) };
+    phases: ["initial-store", ...plan.cases[0].steps.map((s) => s.id), "mutation-probes", "cleanup"].map((phase) => ({ phase, before: sample(), after: sample() })) };
   at += 1000; upstreamLedger.terminal = sample();
   return { functionalChecksPassed: true, failures: [], gaps: [], clock: { origin: "node.performance.now", startedAt: 1 },
     provenance: { stillSameProcess: true }, resourceBaseline: { unattributed: zero, scopes: [{ owned: zero }] }, steps: [], requestLedger: [], networkFailures: [], runtimeErrors: [], upstreamLedger,

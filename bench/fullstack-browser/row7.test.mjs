@@ -1,0 +1,254 @@
+// Bounded apparatus controls only, not contender captures or parity evidence.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { performance } from "node:perf_hooks";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import { chromium } from "@playwright/test";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";
+import { createUpstream, UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
+import { PlatformLifecycle, validatePlatformRetirement } from "./lifecycle.mjs";
+import { nativeDOM } from "./observe.mjs";
+import { runJourney } from "./journey.mjs";
+import { projectCase } from "./capture.mjs";
+import { settings } from "./contract.mjs";
+import { createBrowserPlan } from "../workloads/browser.mjs";
+import { records } from "../marketplace/fixtures.mjs";
+
+async function listen(server) {
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  return `http://127.0.0.1:${server.address().port}`;
+}
+async function close(server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
+
+test("row7: suppressed abort delivery cannot leave a stale once wrapper", { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const audited of [false, true]) {
+      const context = await browser.newContext();
+      try {
+        if (audited) await context.addInitScript(installResourceObserver);
+        const page = await context.newPage(); await page.goto('data:text/html,<article class="marketplace"><button>Probe</button></article>');
+        for (const capture of [false, true]) for (const once of [true, false]) {
+          const observed = await page.evaluate(({ capture, once }) => {
+            const button = document.querySelector("button"), controller = new AbortController(); let calls = 0;
+            const callback = () => { calls++; };
+            controller.signal.onabort = (event) => event.stopImmediatePropagation();
+            button.addEventListener("probe", callback, { signal: controller.signal, once, capture });
+            controller.abort();
+            const aborted = globalThis.__fullstackBrowserAudit?.checkpoint();
+            button.addEventListener("probe", callback, { capture });
+            button.dispatchEvent(new Event("probe")); button.dispatchEvent(new Event("probe"));
+            const live = globalThis.__fullstackBrowserAudit?.checkpoint();
+            button.removeEventListener("probe", callback, capture);
+            const removed = globalThis.__fullstackBrowserAudit?.checkpoint();
+            const count = (s) => s?.scopes.find((r) => r.scope === s.scope).owned.listeners;
+            return { calls, aborted: count(aborted), live: count(live), removed: count(removed), unattributed: live?.unattributed.listeners };
+          }, { capture, once });
+          assert.equal(observed.calls, 2, JSON.stringify({ audited, capture, once, observed }));
+          if (audited) assert.deepEqual(observed, { calls: 2, aborted: 0, live: 1, removed: 0, unattributed: 0 });
+        }
+        const synthetic = await page.evaluate(() => {
+          const target = document.querySelector("button"), controller = new AbortController(); let calls = 0;
+          const callback = () => calls++;
+          target.addEventListener("probe", callback, { signal: controller.signal });
+          controller.signal.dispatchEvent(new Event("abort"));
+          const snapshot = globalThis.__fullstackBrowserAudit?.checkpoint();
+          target.dispatchEvent(new Event("probe")); controller.abort(); target.dispatchEvent(new Event("probe"));
+          return { calls, live: snapshot?.scopes.find((s) => s.scope === snapshot.scope).owned.listeners };
+        });
+        assert.equal(synthetic.calls, 1);
+        if (audited) assert.equal(synthetic.live, 1, "A synthetic abort event is not native signal cancellation");
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test("row7: all eleven API actions require successful requested-record reads", { timeout: 30000 }, async () => {
+  const upstream = createUpstream(records()), source = await listen(upstream);
+  const profile = createBrowserPlan({ records: records() }).cases.find((p) => p.source === "api" && !p.js);
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage(); await page.goto(source + "/__browser/counters");
+      for (const mode of ["requested", "missing-only", "wrong-record"]) {
+        const audit = new UpstreamAudit(async () => (await context.request.get(source + "/__browser/counters")).json());
+        await audit.start(); const steps = [];
+        for (const phase of ["initial-store", ...profile.steps.map((s) => s.id), "mutation-probes", "cleanup"]) {
+          const receipt = await audit.begin(phase), action = profile.steps.find((s) => s.id === phase);
+          if (action) {
+            const id = mode === "missing-only" ? "item_missing" : mode === "wrong-record" ? (action.itemId === "item_1" ? "item_2" : "item_1") : action.itemId;
+            const status = await page.evaluate(async (url) => { const response = await fetch(url); await response.arrayBuffer(); return response.status; }, source + "/marketplace/records/" + id);
+            assert.equal(status, id === "item_missing" ? 404 : 200);
+            steps.push({ action, requests: [{ id: action.id, path: action.path, method: "GET", transport: "document", completed: true, failure: null, status: action.kind === "missing" ? 404 : 200 }] });
+          }
+          await audit.end(receipt);
+        }
+        await audit.finish();
+        const original = JSON.stringify(audit.ledger), options = { source: "api", actions: profile.steps.map((s) => s.id), steps };
+        const proof = reconcileUpstream(audit.ledger, options);
+        assert.equal(proof.outcome, mode === "requested" ? "reconciled" : "unknown", `${mode}: ${JSON.stringify(proof.reasons)}`);
+        assert.equal(proof.final.completed, 11, "Failure classification must preserve all native finish receipts");
+        if (mode !== "requested") assert.equal(proof.reasons.length, 10, "Only the missing-record action is exempt from successful-record reads");
+        if (mode !== "requested") {
+          // Hostile projection scaffold, deliberately not a native capture.
+          const evidence = { upstreamLedger: audit.ledger, upstreamReconciliation: { outcome: "reconciled" }, steps,
+            requestLedger: steps.flatMap((s) => s.requests), nativeCleanup: { requests: [], probe: { requests: [] } }, networkFailures: [], runtimeErrors: [],
+            functionalChecksPassed: true, failures: [], gaps: [] };
+          assert.throws(() => projectCase({ evidence }, profile, "nuxt", { ...settings, cleanupObservationMs: 0 }), /Successful request-time upstream read/);
+        }
+        assert.equal(JSON.stringify(audit.ledger), original);
+        if (mode === "missing-only") assert.ok(audit.ledger.terminal.snapshot.events.slice(-11).every((e) => e.status === 404 && e.completed !== null));
+      }
+    } finally { await context.close(); }
+  } finally { if (browser) await browser.close(); await close(upstream); }
+});
+
+test("row7: real journey retains failed upstream reads instead of accepting their completion", { timeout: 30000 }, async () => {
+  const upstream = createUpstream(records()), source = await listen(upstream); let mode = "requested", browser;
+  const app = createServer(async (req, res) => {
+    if (req.url === "/api/alerts") { res.setHeader("content-type", "application/json"); res.end("[]"); return; }
+    if (req.url.startsWith("/marketplace/")) await (await fetch(source + "/marketplace/records/" + (mode === "requested" ? "item_1" : "item_missing"))).arrayBuffer();
+    res.setHeader("content-type", "text/html");
+    res.end('<header><a href="/">Away</a></header><article class="marketplace"><h1>Deliberately incomplete apparatus</h1><div class="marketplace__alert"><form method="post" action="/marketplace/en-US/item_1"><input name="email"><input name="target_price"><button>Submit</button></form></div></article>');
+  });
+  try {
+    const base = await listen(app); browser = await chromium.launch({ headless: true });
+    for (mode of ["requested", "missing-only"]) {
+      const result = await runJourney({ browser, app: "nuxt", base, records: records(), readback: { path: "/api/alerts" },
+        counters: async () => (await fetch(source + "/__browser/counters")).json(),
+        profile: { key: "row7-apparatus", device: "desktop", js: false, source: "api", locale: "en-US",
+          steps: [{ id: "arrival", kind: "initial", path: "/marketplace/en-US/item_1", itemId: "item_1", query: {} }] } });
+      assert.equal(result.outcome, "failed", "Incomplete apparatus must never qualify native semantics");
+      const row = result.evidence.steps[0];
+      assert.equal(row.upstream.completed, 1); assert.equal(row.upstream.events[0].status, mode === "requested" ? 200 : 404);
+      assert.equal(row.failures.some((f) => f.includes("Successful request-time upstream read")), mode !== "requested");
+      assert.equal(result.evidence.upstreamReconciliation.outcome, mode === "requested" ? "reconciled" : "unknown");
+      assert.equal(result.evidence.cleanup.contextClosed, true);
+    }
+  } finally { if (browser) await browser.close(); await close(app); await close(upstream); }
+});
+
+test("row7: React endpoint discovery rejects unsupported lexical and control flow", { timeout: 30000 }, async (t) => {
+  const base = "http://local", endpoint = '"/api/marketplace/"+r.id+"?locale="+l';
+  const candidate = (handlerSource, prefix = "") => ({ handlerSource,
+    componentSource: `function M({record:r,locale:l}){${prefix}const submit=${handlerSource};return null}`,
+    recordId: "item_2", locale: "fr-FR", action: base + "/marketplace/fr-FR/item_2", base, basis: "mounted-react-onSubmit-and-owning-fiber-props" });
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`)]).path, "/api/marketplace/item_2");
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const view=rows.map(r=>r.id);')])?.path,
+    "/api/marketplace/item_2", "An unrelated nested callback cannot shadow the mounted handler's props");
+  for (const [name, handler, prefix] of [
+    ["handler parameter", `async r=>fetch(${endpoint},{method:"POST"})`],
+    ["destructured parameter", `async ({r})=>fetch(${endpoint},{method:"POST"})`],
+    ["handler reassignment", `async e=>{r={id:"item_1"};return fetch(${endpoint},{method:"POST"})}`],
+    ["component reassignment", `async e=>fetch(${endpoint},{method:"POST"})`, 'r={id:"item_1"};'],
+    ["property reassignment", `async e=>{r.id="item_1";return fetch(${endpoint},{method:"POST"})}`],
+    ["destructured reassignment", `async e=>{({record:r}=e);return fetch(${endpoint},{method:"POST"})}`],
+    ["array reassignment", `async e=>{[r]=e;return fetch(${endpoint},{method:"POST"})}`],
+    ["mutable object alias", `async e=>{const alias=r;alias.id="item_1";return fetch(${endpoint},{method:"POST"})}`],
+    ["prop passed to unknown call", `async e=>{e(r);return fetch(${endpoint},{method:"POST"})}`],
+    ["named function shadow", `async function r(e){return fetch(${endpoint},{method:"POST"})}`],
+    ["uncalled nested function", `async e=>{const unused=()=>fetch(${endpoint},{method:"POST"});}`],
+    ["uninstantiated class field", `async e=>{class Unused{request=fetch(${endpoint},{method:"POST"})}}`],
+    ["uniterated generator", `function* submit(e){yield fetch(${endpoint},{method:"POST"})}`],
+    ["optional call", `async e=>e?.(fetch(${endpoint},{method:"POST"}))`],
+    ["unreachable fetch", `async e=>{return;fetch(${endpoint},{method:"POST"});}`],
+    ["conditional fetch", `async e=>{if(false) return fetch(${endpoint},{method:"POST"});}`],
+    ["overridden method", `async e=>fetch(${endpoint},{method:"POST",method:"GET"})`],
+    ["spread override", `async e=>fetch(${endpoint},{method:"POST",...e})`],
+  ]) await t.test(name, () => assert.equal(discoverReactEndpoint([candidate(handler, prefix)]), null));
+
+  const requests = [], server = createServer((req, res) => {
+    if (req.url.startsWith("/api/")) requests.push({ path: req.url, method: req.method });
+    res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>');
+  }), url = await listen(server); let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage(); await page.goto(url);
+    await page.evaluate(() => {
+      function M({ record: r, locale: l }) { return async r => fetch('/api/marketplace/' + r.id + '?locale=' + l, { method: 'POST' }); }
+      const form = document.querySelector("form");
+      form.__reactProps$control = { onSubmit: M({ record: { id: "item_2" }, locale: "fr-FR" }) };
+      form.__reactFiber$control = { type: M, memoizedProps: { record: { id: "item_2" }, locale: "fr-FR" } };
+    });
+    const candidates = await page.locator("form").evaluate(reactHandlerSources);
+    assert.equal(discoverReactEndpoint(candidates), null);
+    await page.evaluate(() => document.querySelector("form").__reactProps$control.onSubmit({ id: "item_1" }));
+    assert.deepEqual(requests, [{ path: "/api/marketplace/item_1?locale=fr-FR", method: "POST" }]);
+  } finally { if (browser) await browser.close(); await close(server); }
+});
+
+test("row7: the repository's native Next marketplace handler remains supported", () => {
+  const source = readFileSync(new URL("../fullstack/apps/nextjs/lib/marketplace-page.tsx", import.meta.url), "utf8");
+  const emitted = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+  const file = ts.createSourceFile("native-next.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const component = file.statements.find((s) => ts.isFunctionDeclaration(s) && s.name.text === "Marketplace"); let handler;
+  const visit = (node) => { if (ts.isPropertyAssignment(node) && node.name.text === "onSubmit") handler = node.initializer; ts.forEachChild(node, visit); };
+  visit(component);
+  const observed = { handlerSource: handler.getText(), componentSource: component.getText().replace(/^export /, ""), recordId: "item_2", locale: "fr-FR",
+    action: "http://local/marketplace/fr-FR/item_2", base: "http://local", basis: "source-control-only-not-a-mounted-capture" };
+  assert.equal(discoverReactEndpoint([observed])?.path, "/api/marketplace/item_2");
+});
+
+test("row7: actual socket receipts require unique ordered bounded native clocks", { timeout: 30000 }, async (t) => {
+  const server = createServer((req, res) => { res.setHeader("content-type", "text/html"); res.end('<article class="marketplace">Native document</article>'); });
+  const peers = new Set();
+  server.on("upgrade", (req, socket) => {
+    peers.add(socket); socket.on("close", () => peers.delete(socket)); socket.on("error", () => {});
+    const accept = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.once("data", () => socket.end(Buffer.from([0x88, 0x02, 0x03, 0xe8])));
+  });
+  const base = await listen(server); let browser, journal;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext(); await context.addInitScript(installResourceObserver);
+    try {
+      const page = await context.newPage(), cdp = await context.newCDPSession(page);
+      journal = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: true });
+      await journal.enable(); await journal.enableDomains(); await journal.startObservation(); journal.markApplicationStart();
+      const audit = new ResourceAudit(page, cdp, true, journal);
+      const observe = async () => {
+        const resources = await audit.checkpoint();
+        await journal.recordDocument({ observer: randomUUID(), scope: resources.scope, url: { path: new URL(page.url()).pathname }, native: await page.evaluate(nativeDOM) }, resources);
+        return resources;
+      };
+      await page.goto(base + "/before"); const before = await observe();
+      await page.evaluate(() => new Promise((resolve, reject) => {
+        const socket = new WebSocket(location.origin.replace("http:", "ws:") + "/socket");
+        socket.onopen = () => socket.close(); socket.onclose = resolve; socket.onerror = reject;
+      }));
+      const retiredAt = performance.now(); await page.goto(base + "/after"); await observe();
+      await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
+      const snapshot = journal.snapshot(), original = JSON.stringify(snapshot), options = { realm: before.realm, retiredAt, observationMs: 25 };
+      assert.equal(validatePlatformRetirement(snapshot, options).outcome, "proved");
+      const event = (j, suffix) => j.events.find((e) => e.event === "Network.webSocket" + suffix);
+      for (const [name, mutate] of [
+        ["missing close", (j) => { j.events = j.events.filter((e) => e.event !== "Network.webSocketClosed"); }],
+        ["missing close clock", (j) => { delete event(j, "Closed").at; }],
+        ["future close clock", (j) => { event(j, "Closed").at += 3600; }],
+        ["backwards close clock", (j) => { event(j, "Closed").at = event(j, "HandshakeResponseReceived").at - 1; }],
+        ["missing handshake clock", (j) => { delete event(j, "HandshakeResponseReceived").at; }],
+        ["future handshake clock", (j) => { event(j, "HandshakeResponseReceived").at += 3600; }],
+        ["invalid handshake status", (j) => { event(j, "HandshakeResponseReceived").status = null; }],
+        ["missing handshake", (j) => { j.events = j.events.filter((e) => e.event !== "Network.webSocketHandshakeResponseReceived"); }],
+        ["out-of-bounds creation", (j) => { event(j, "Created").receivedAt = j.boundaries.startedAt - 1; j.events.sort((a, b) => a.receivedAt - b.receivedAt); }],
+        ["missing socket identity", (j) => { for (const e of j.events.filter((e) => e.event.startsWith("Network.webSocket"))) e.request = null; }],
+        ...["Created", "HandshakeResponseReceived", "Closed"].map((suffix) => [`duplicate ${suffix}`, (j) => { const e = event(j, suffix); j.events.splice(j.events.indexOf(e), 0, structuredClone(e)); }]),
+        ["orphan handshake", (j) => { event(j, "HandshakeResponseReceived").request = "unobserved"; }],
+        ["orphan close", (j) => { event(j, "Closed").request = "unobserved"; }],
+        ["late handshake", (j) => { const e = event(j, "HandshakeResponseReceived"); j.events.splice(j.events.indexOf(e), 1); const closed = event(j, "Closed"); e.receivedAt = closed.receivedAt; j.events.splice(j.events.indexOf(closed) + 1, 0, e); }],
+      ]) await t.test(name, () => {
+        const altered = structuredClone(snapshot); mutate(altered);
+        assert.equal(validatePlatformRetirement(altered, options).outcome, "unknown", name);
+      });
+      assert.equal(JSON.stringify(snapshot), original);
+    } finally { await context.close(); }
+  } finally { if (journal) await journal.close(); if (browser) await browser.close(); for (const peer of peers) peer.destroy(); await close(server); }
+});

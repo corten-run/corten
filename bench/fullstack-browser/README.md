@@ -108,6 +108,27 @@ form's real `onSubmit`, owning fiber props and containing component function bef
 native POST expression, without invoking that function or evaluating its source. Unresolved,
 shadowed, cross-origin or mismatched bindings remain failures. Source hashes and public native
 props establish the receipt; a sent POST is not used to invent a positive binding.
+Handler parameters participate in lexical shadow checks. Prop reassignment (including property
+and destructuring writes), intervening function scopes, conditional/unreachable or uncalled
+nested fetches, duplicate method properties and option spreads are unsupported, not inferred POSTs.
+
+For API-source actions that issue native marketplace requests, a completed upstream request is
+not enough: a phase must contain a successful HTTP 200 read for that action's requested record.
+The missing-record action is exempt from the successful-read requirement. A 404, cancellation
+or successful read of another record remains in the raw counts but cannot satisfy the action.
+Journey checks, final capture projection and saved verification recompute this binding from raw
+phase receipts. Conservation-only `reconcileUpstream` callers without action observations do not
+certify request-time record reads.
+
+Listener bookkeeping checks native `signal.aborted` before reusing a registration and when
+counting resources. It does not rely solely on delivery of an `abort` event: an earlier native
+listener may stop that event while the platform still removes the signaled listener. Reusing
+the callback must create a fresh binding with the new registration's own `once` semantics.
+
+`node --test bench/fullstack-browser/row7.test.mjs` provides bounded Chromium regression controls
+for suppressed abort delivery, requested/wrong/missing record reads across all eleven phases,
+mounted React parameter shadowing and native socket receipt mutations. These are apparatus
+tests, not new contender evidence; historical saved observations are not rewritten.
 
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That

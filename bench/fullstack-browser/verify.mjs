@@ -518,7 +518,8 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
   if (e.requestReconciliation !== undefined) same(e.requestReconciliation, requestProof, "Stored final request reconciliation differs from raw ledger");
   else block("Final request reconciliation not retained by producer");
   if (requestProof.outcome !== "reconciled") block(`Final request coverage unknown: ${requestProof.reasons.join("; ")}`);
-  const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id), observationMs: settings.observationMs });
+  const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id),
+    steps: profile.steps.map((action) => ({ action, requests: e.steps.find((s) => s.action.id === action.id)?.requests ?? [] })), observationMs: settings.observationMs });
   if (e.upstreamLedger !== undefined) {
     const ledger = e.upstreamLedger;
     need(ledger?.schema === "native-browser-upstream-ledger/v1" && Array.isArray(ledger.phases), "Malformed final upstream ledger");

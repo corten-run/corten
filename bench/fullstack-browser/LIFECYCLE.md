@@ -128,6 +128,17 @@ header completion must follow dispatch and precede transfer finish or redirect c
 Its own native time still must follow dispatch and header completion and precede its bounded
 host delivery. No arbitrary clock epsilon or missing-timing fallback supplies proof.
 
+Socket creation identities must be unique, and handshake/close receipts must conserve that
+identity exactly once in observation order. A handshake after close, duplicate receipt,
+missing native timestamp, backwards handshake/close time or time outside the same bounded
+native-clock envelope leaves proof unknown. Creation has no native CDP timestamp, so its host
+receipt is checked against the observation bounds and the subsequent handshake/close receipts;
+no creation timestamp is invented. Handshake status must be a native HTTP status, not an
+assumed successful upgrade. Socket receipts outside the observation interval cannot be dropped
+to manufacture a positive proof. `row7.test.mjs` applies these mutations to an actual closed
+Chromium socket and keeps the intact journal positive and unchanged. This is still not server
+peer-closure evidence or a shared-oracle waiver.
+
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
 

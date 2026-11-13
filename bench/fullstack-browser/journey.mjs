@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
 import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM } from "./observe.mjs";
-import { UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
+import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
@@ -227,7 +227,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
       if (profile.source === "fixture" && row.upstream.started !== 0) row.failures.push("Fixture source unexpectedly fetched upstream");
       if (row.upstream.pending || row.upstream.completed + row.upstream.cancelled !== row.upstream.started) row.failures.push("Upstream work still pending/unaccounted");
-      if (profile.source === "api" && step.kind !== "missing" && row.requests.some((r) => ["document", "fetch", "router", "turbo", "livewire"].includes(r.transport) && (r.path.includes("marketplace") || r.method === "POST")) && !row.upstream.completed) row.failures.push("Request-time upstream read missing");
+      row.failures.push(...upstreamReadFailures(profile.source, step, row.requests, row.upstream));
     }
     evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
@@ -266,7 +266,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     }
     await upstream.finish();
     evidence.upstreamReconciliation = reconcileUpstream(evidence.upstreamLedger, { source: profile.source,
-      actions: profile.steps.map((s) => s.id), observationMs: settings.observationMs });
+      actions: profile.steps.map((s) => s.id), steps: evidence.steps, observationMs: settings.observationMs });
     if (evidence.upstreamReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.upstreamReconciliation.reasons);
     if (network) {
       await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows);

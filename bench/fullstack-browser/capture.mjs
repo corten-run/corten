@@ -38,7 +38,8 @@ export function projectCase(cell, profile, app, settings) {
   const e = cell.evidence;
   const requests = reconcileRequests(e ?? {});
   assert.equal(requests.outcome, "reconciled", requests.reasons.join("; "));
-  const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: e.steps.map((s) => s.action.id), observationMs: settings.cleanupObservationMs });
+  const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id),
+    steps: profile.steps.map((action) => ({ action, requests: e.steps.find((s) => s.action.id === action.id)?.requests ?? [] })), observationMs: settings.cleanupObservationMs });
   assert.equal(upstream.outcome, "reconciled", upstream.reasons.join("; "));
   for (const row of e.steps) {
     const { phase, ...delta } = upstream.phases.find((p) => p.phase === row.action.id);

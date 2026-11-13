@@ -40,14 +40,19 @@ export function installResourceObserver() {
     let targets = callbacks.get(callback); if (!targets) callbacks.set(callback, targets = new WeakMap());
     let bindings = targets.get(this); if (!bindings) targets.set(this, bindings = new Map());
     const key = JSON.stringify([String(type), capture(options)]);
+    // Native signal abort algorithms run even when an earlier abort listener
+    // suppresses our event receipt. Do not reuse that removed registration.
+    if (bindings.get(key)?.signal?.aborted) bindings.get(key).release();
     if (bindings.has(key)) return Reflect.apply(add, this, [type, bindings.get(key).wrapped, options]);
     const owned = entry("listeners", this); owned.type = String(type);
     const signal = options?.signal, once = Boolean(options?.once);
-    const binding = { owned, wrapped: null, release: null };
+    owned.signal = signal;
+    const binding = { owned, signal, wrapped: null, release: null };
+    const aborted = () => { if (signal.aborted) release(); };
     const release = () => {
       owned.active = false;
       if (bindings.get(key) === binding) bindings.delete(key);
-      if (signal) Reflect.apply(remove, signal, ["abort", release]);
+      if (signal) Reflect.apply(remove, signal, ["abort", aborted]);
     };
     binding.release = release;
     const wrapped = function(...args) {
@@ -55,7 +60,7 @@ export function installResourceObserver() {
       return typeof callback === "function" ? invoke(owned, callback, this, args) : invoke(owned, callback.handleEvent, callback, args);
     };
     binding.wrapped = wrapped; bindings.set(key, binding);
-    if (signal) Reflect.apply(add, signal, ["abort", release, { once: true }]);
+    if (signal) Reflect.apply(add, signal, ["abort", aborted, { once: true }]);
     try { return Reflect.apply(add, this, [type, wrapped, options]); }
     catch (e) { release(); throw e; }
   };
@@ -149,6 +154,7 @@ export function installResourceObserver() {
   const counts = (scope, tooling = false) => {
     const result = { subscriptions: 0, connections: 0, listeners: 0, timers: 0, pendingTasks: 0 };
     for (const owned of entries) {
+      if (owned.signal?.aborted) owned.active = false;
       if (!owned.active) continue;
       if (owned.tooling !== tooling) continue;
       const target = owned.target?.deref();
