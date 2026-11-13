@@ -282,6 +282,10 @@ Corten is pre-1.0, so any minor version may change the API.
   relabeled; version choices, checks and remaining transitive audit findings are
   recorded in `bench/fullstack/refresh-js.md`.
 
+- Lock Express's existing production dependency tree and use the same `npm ci`
+  command in its image and build recipe. Historical full-stack results retain
+  their original dependency-reproducibility caveat.
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a
