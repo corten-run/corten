@@ -48,7 +48,9 @@ export async function ownedInspector(args, task, { timeoutMs = 120000 } = {}) {
 export function verifyIdentity(node, bun, sources, manifest) {
   assert.equal(bun.versions.bun, pins.bunVersion, "wrong Bun runtime");
   assert.ok(!node.versions.bun, "Node baseline must execute Node, not Bun");
-  assert.match(node.versions.node, /^24\./, "wrong Node major");
+  const nodeVersion = pins.nodeImage.match(/^node:(\d+\.\d+\.\d+)-/)?.[1];
+  assert.ok(nodeVersion, "Node image must pin an exact release");
+  assert.equal(node.versions.node, nodeVersion, "wrong Node runtime");
   for (const identity of [node, bun]) {
     assert.deepEqual(identity.installed, manifest.dependencies, "native Express dependency versions differ");
     for (const source of sources) assert.equal(identity.sources.find((entry) => entry.path === source.path)?.sha256, source.sha256, `stale native source: ${source.path}`);

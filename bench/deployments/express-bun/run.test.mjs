@@ -29,11 +29,12 @@ test("missing/failed native cells never qualify, even identical failures", () =>
 });
 test("identity gate rejects runtime, source, dependency and artifact substitutions", () => {
   const sources = [{ path: "server.mjs", sha256: "source" }], manifest = { dependencies: { express: "5.3.0" } };
-  const node = { versions: { node: "24.22.2" }, installed: manifest.dependencies, sources: [...sources, { path: "static/htmx.min.js", sha256: "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717" }], dependenciesSha256: "deps", lockSha256: "lock" };
+  const node = { versions: { node: pins.nodeImage.match(/^node:(\d+\.\d+\.\d+)-/)[1] }, installed: manifest.dependencies, sources: [...sources, { path: "static/htmx.min.js", sha256: "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717" }], dependenciesSha256: "deps", lockSha256: "lock" };
   const bun = { ...structuredClone(node), versions: { bun: pins.bunVersion, node: "24.3.0" } };
   verifyIdentity(node, bun, sources, manifest);
   for (const modify of [
     (n, b) => b.versions.bun = "0.0.0", (n) => n.versions.bun = pins.bunVersion,
+    (n) => n.versions.node = "24.22.2", (n) => n.versions.node = "26.0.0",
     (n, b) => b.installed.express = "other", (n, b) => b.sources[0].sha256 = "stale",
     (n, b) => b.sources.push({ path: "replacement-renderer.js", sha256: "extra" }),
     (n, b) => b.dependenciesSha256 = "other", (n, b) => b.lockSha256 = "other",
