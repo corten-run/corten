@@ -355,6 +355,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The app guide's table of defaults has rows for the handler deadline (30 seconds, then a 503, or
+  the client's 408 while it waited for the body) and the request body limit (2 MiB for `Json`,
+  `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so
+  they are found where every other default is
+  ([#1220 The app guide's table of defaults leaves out the 30-second handler deadline and the 2 MiB body limit, so an app learns of its 503 and 413 only from prose](https://github.com/corten-run/corten/issues/1220)).
 - [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
   publishes no npm initializer that creates an app (`npm create corten`): the app would still
   build with Cargo and its other commands are installed by Cargo, so it would replace only
