@@ -48,7 +48,7 @@ For existing images or an independent native readback path, use a targets JSON w
 ```
 
 ```sh
-node --test bench/fullstack-browser/runner.test.mjs bench/fullstack-browser/transports.test.mjs bench/fullstack-browser/browser.test.mjs
+node --test bench/fullstack-browser/*.test.mjs
 node bench/fullstack-browser/run.mjs w2 --targets bench/fullstack-browser/work/targets.json --out bench/fullstack-browser/work/w2
 node bench/fullstack-browser/run.mjs w3 --build --out bench/fullstack-browser/work/w3 --apps nextjs --cases fixture-en-US-desktop-js,api-fr-FR-mobile-no-js
 ```
@@ -203,6 +203,9 @@ Global resources without provable ownership remain explicitly unattributed and p
 qualification. Native framework subscription internals and arbitrary Promise continuations
 are not claimed to be enumerated. Known Playwright hit-target/removal-detection registrations
 are retained separately with their observed `InjectedScript` call stacks, not charged to apps.
+DOM-observer subscriptions are counted per observed target, including multiple marketplace
+roots, repeat observation, native `unobserve` and `disconnect`. Callback-created work inherits
+ownership only when the delivered targets identify one scope; mixed-scope work stays unattributed.
 
 Cleanup clicks the app's real header link away, without forcing unmount, deleting native DOM,
 clearing timers/listeners, or closing connections. For a same-realm retired root it dispatches
