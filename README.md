@@ -238,12 +238,24 @@ Full pass-specific limits stay
 beside the detailed tables. No request failures, dropped fixed-rate iterations or app stops
 were recorded. Short-window ranges are not confidence intervals or an overall speed ranking.
 
-Browser, bytes and build measurements remain [historical](docs/performance.md#historical-measurements).
-The separate client-heavy round browser-4 (2026-11-11, at
-`3fb4b1ac`, on a Xeon Platinum 8358) measured takeover of server-rendered rows, not this workload:
+### Historical Measurements
+
+The following table preserves earlier measurements, including the site's measurement
+certificate references. Its first five rows are the old marketplace implementation from
+r16, not v2: requests were uncompressed and untagged, and localization work differed
+between frameworks. They establish neither a fair framework ranking nor a comparison
+with r20. Browser, bytes and build measurements remain
+[historical](docs/performance.md#historical-measurements). The final row is the separate
+client-heavy round browser-4 (2026-11-11, at
+`3fb4b1ac`, on a Xeon Platinum 8358), not the marketplace workload:
 
 | What | Corten, measured |
 |---|---|
+| Item pages rendered from memory | 20,705 a second, 47 µs of CPU each |
+| The same item as JSON | 26,385 a second |
+| Memory after the first request | 1.3 MiB |
+| JavaScript the item page loaded | 14.1 KB (gzip) |
+| Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
 | Taking over 1,000 server-rendered rows | 10.2 ms, 101 bytes of memory per row |
 
 See [Performance](docs/performance.md) and the [nightly procedure](bench/marketplace/nightly.md)
