@@ -271,6 +271,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- Refresh the JavaScript benchmark framework/compiler dependencies and retain
+  committed package locks in their production builds and build recipes. React
+  Router uses its current native Express dispatcher. Previous rounds are not
+  relabeled; version choices, checks and remaining transitive audit findings are
+  recorded in `bench/fullstack/refresh-js.md`.
+
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a

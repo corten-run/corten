@@ -49,7 +49,7 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
   context: "",
   workdir: "/app",
   env,
-  deps: "npm install --no-audit --no-fund",
+  deps: "npm ci --no-audit --no-fund",
   // The Dockerfiles prune dev dependencies after building; a rebuild needs them, and Docker's
   // rebuild starts from the install layer before the prune, so the prune is left out.
   build: "npm run build",
