@@ -129,6 +129,38 @@ test("body window aliases count once but independent slots using the same callba
 });
 
 // Real browser API probes, deliberately not framework qualification evidence.
+test("an obsolete abort signal cannot forget a re-registered callback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.evaluate(installObserver);
+    const observed = await page.evaluate(() => {
+      const o = window.clientObserver, source = window.clientSource = new EventTarget();
+      o.begin();
+      return ["remove", "once"].map((mode) => {
+        let calls = 0;
+        const fn = () => { calls++; }, previous = new AbortController();
+        source.addEventListener("tick", fn, { signal: previous.signal, once: mode === "once" });
+        if (mode === "once") source.dispatchEvent(new Event("tick"));
+        else source.removeEventListener("tick", fn);
+        source.addEventListener("tick", fn);
+        previous.abort();
+        const active = o.owned();
+        source.dispatchEvent(new Event("tick"));
+        source.removeEventListener("tick", fn);
+        source.dispatchEvent(new Event("tick"));
+        return { mode, calls, active, final: o.owned() };
+      });
+    });
+    for (const result of observed) {
+      assert.equal(result.calls, result.mode === "once" ? 2 : 1);
+      assert.equal(result.active.subscriptions, 1);
+      assert.equal(result.active.listeners, 1);
+      assert.ok(Object.values(result.final).every((value) => value === 0), JSON.stringify(result));
+    }
+  } finally { await browser.close(); }
+});
+
 test("observer detects and releases listeners, abort/once, timers and queued work", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
