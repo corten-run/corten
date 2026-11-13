@@ -396,6 +396,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The corten-site deploy guide has the times of the first replacement of the site's machine
+  (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six
+  until the run the workflow starts was answered) in place of "a replacement has not been
+  timed", says that with names that redirect a machine asks Let's Encrypt for two certificates,
+  each from its own set of names' five a week, and its list of what has not run on a real
+  machine no longer names the address moving or a name that redirects and names more of what
+  has not
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 - The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
   listings-feed README and its failover benchmark remove their Postgres containers with
   `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
