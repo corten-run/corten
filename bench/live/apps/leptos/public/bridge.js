@@ -5,6 +5,14 @@ const records = [], effects = [];
 let through = 0, stream, work = Promise.resolve(), ack = Promise.resolve(), settings, stopped = false;
 const log = (kind, fields = {}) => records.push(structuredClone({ kind, at: performance.now(), ...fields }));
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+function until(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const finish = (settle, value) => { signal.removeEventListener('abort', abort); settle(value); };
+    const abort = () => finish(reject, signal.reason);
+    Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+  });
+}
 function publication() {
   const prior = ack;
   let release;
@@ -18,14 +26,15 @@ const state = () => ({
     quantity: +li.querySelector('.quantity').textContent })),
   effects: effects.slice(), effectCount: Number(document.querySelector('#effect-count').textContent),
 });
-async function api(path, value) {
-  const response = await fetch(`/parity/${path}`, value === undefined ? {} : {
+async function api(path, value, signal) {
+  const response = await fetch(`/parity/${path}`, value === undefined ? { signal } : {
+    signal,
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value),
   });
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   return response.json();
 }
-async function resources() { const r = await api('resources'); log('resources', r); return r; }
+async function resources(signal) { const r = await api('resources', undefined, signal); log('resources', r); return r; }
 async function read() {
   log('snapshot-request'); const snapshot = await api('snapshot');
   if (stopped) return;
@@ -103,25 +112,37 @@ window.liveApp = {
       }
     } finally { release(); }
   },
-  async released() {
-    await work;
-    const deadline = performance.now() + settings.maxCleanupMs;
-    for (;;) {
-      const r = await resources();
-      // Counters remain aggregate and unchanged: another reader may be healthy.
-      // This client's native EventSource closure and drained work identify release.
-      if (!stream || stream.readyState === EventSource.CLOSED) return r;
-      if (performance.now() > deadline) throw new Error('native reader not released');
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
+  async released(deadline = performance.now() + settings.maxCleanupMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('native reader not released')),
+      Math.max(0, deadline - performance.now()));
+    try {
+      await until(work, controller.signal);
+      for (;;) {
+        controller.signal.throwIfAborted();
+        const r = await resources(controller.signal);
+        controller.signal.throwIfAborted();
+        // Counters remain aggregate and unchanged: another reader may be healthy.
+        if (!stream || stream.readyState === EventSource.CLOSED) return r;
+        let poll;
+        try { await until(new Promise(resolve => { poll = setTimeout(resolve, 10); }), controller.signal); }
+        finally { clearTimeout(poll); }
+      }
+    } finally { clearTimeout(timer); }
   },
-  async disconnect() { log('disconnect', { reason: 'forced' }); stream.close(); await this.released(); },
+  async disconnect() {
+    const deadline = performance.now() + settings.maxCleanupMs;
+    log('disconnect', { reason: 'forced' }); stream.close(); await this.released(deadline);
+  },
   reconnect() { return open(true); },
   async hold() { log('slow'); await api('control', { action: 'hold' }); },
   async drop(seq) { await api('control', { action: 'drop', seq }); },
   async duplicate() { await api('control', { action: 'duplicate' }); },
   async settle() { await work; },
   state() { const s = state(); log('state', { through, rows: s.state, effects: s.effects, effectCount: s.effectCount }); },
-  async detach() { log('detach'); detach_component(); await work; await this.released(); },
+  async detach() {
+    const deadline = performance.now() + settings.maxCleanupMs;
+    log('detach'); detach_component(); await this.released(deadline);
+  },
   get through() { return through; },
 };

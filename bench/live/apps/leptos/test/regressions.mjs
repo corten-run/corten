@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { wireEvents } from '../wire.mjs';
 
-const [base, selection = 'detach,overlap'] = process.argv.slice(2);
+const [base, selection = 'detach,overlap,cleanup-disconnect,cleanup-detach,watchdog'] = process.argv.slice(2);
 assert.ok(base, 'native application URL required');
 const sha = value => createHash('sha256').update(value).digest('hex');
 async function sourceHashes(directory = new URL('../', import.meta.url), prefix = '') {
@@ -44,14 +44,37 @@ const event = seq => ({ seq, effectId: `regression-${seq}`, key: row.id, op: 'up
 const browser = await chromium.launch({ headless: true });
 const localBridgeSha256 = sha(await readFile(new URL('../public/bridge.js', import.meta.url)));
 const settings = { maxCleanupMs: 5000 };
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+function budget(ms) {
+  const controller = new AbortController(); let timer;
+  const reset = duration => { clearTimeout(timer); timer = setTimeout(() => controller.abort(new Error('native regression deadline exceeded')), duration); };
+  reset(ms);
+  return { signal: controller.signal, reset, dispose: () => clearTimeout(timer),
+    wait: promise => new Promise((resolve, reject) => {
+      const finish = (settle, value) => { controller.signal.removeEventListener('abort', abort); settle(value); };
+      const abort = () => finish(reject, controller.signal.reason);
+      Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+      if (controller.signal.aborted) abort(); else controller.signal.addEventListener('abort', abort, { once: true });
+    }) };
+}
+function deferred(signal) {
+  let resolve, reject;
+  const promise = new Promise((r, j) => { resolve = r; reject = j; });
+  const abort = () => reject(signal.reason);
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const clear = () => signal?.removeEventListener('abort', abort);
+  promise.then(clear, clear);
+  return { promise, resolve, reject };
+}
 
+try {
 for (const name of selection.split(',')) {
-  assert.ok(['detach', 'overlap'].includes(name));
-  const readers = [], controls = [], faults = [];
-  const deadline = setTimeout(() => { for (const r of readers) r.context.close().catch(() => {}); }, 45000);
-  async function api(path, input) {
-    const response = await fetch(`${base}/parity/${path}`, input === undefined ? {} : {
+  assert.ok(['detach', 'overlap', 'cleanup-disconnect', 'cleanup-detach', 'watchdog'].includes(name));
+  const readers = [], controls = [], faults = [], releases = [];
+  const deadline = budget(45000);
+  let backup, watchdogStartedAt;
+  async function api(path, input, signal = deadline.signal) {
+    const response = await fetch(`${base}/parity/${path}`, input === undefined ? { signal } : {
+      signal,
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
     });
     const body = await response.json(); controls.push({ path, input, status: response.status, body });
@@ -66,6 +89,10 @@ for (const name of selection.split(',')) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
   }
+  function pending(r, promise) {
+    promise.catch(() => {}); // Preserve the original rejection for the bounded capture drain.
+    r.pending.push(promise);
+  }
   async function open() {
     const context = await browser.newContext(), page = await context.newPage();
     const r = { context, page, network: [], pending: [], errors: [] }; readers.push(r);
@@ -78,25 +105,25 @@ for (const name of selection.split(',')) {
     page.on('response', response => {
       const entry = { kind: 'response', url: response.url(), status: response.status() }; r.network.push(entry);
       if (response.headers()['content-type']?.includes('application/json')) {
-        r.pending.push(response.text().then(body => { entry.body = body; }));
+        pending(r, response.text().then(body => { entry.body = body; }));
       }
     });
-    assert.equal((await page.goto(base)).status(), 200);
-    const bridgeResponse = await context.request.get(base + '/bridge.js');
-    r.servedBridgeSha256 = sha(await bridgeResponse.body());
+    assert.equal((await deadline.wait(page.goto(base))).status(), 200);
+    const bridgeResponse = await deadline.wait(context.request.get(base + '/bridge.js'));
+    r.servedBridgeSha256 = sha(await deadline.wait(bridgeResponse.body()));
     assert.equal(r.servedBridgeSha256, localBridgeSha256, 'loaded bridge differs from the local source under test');
-    await page.waitForFunction(() => !!window.liveApp);
-    await page.evaluate(settings => window.liveApp.setup(settings), settings);
+    await deadline.wait(page.waitForFunction(() => !!window.liveApp));
+    await deadline.wait(page.evaluate(settings => window.liveApp.setup(settings), settings));
     return r;
   }
-  const call = (r, method, arg) => r.page.evaluate(async ({ method, arg }) => window.liveApp[method](arg), { method, arg });
+  const call = (r, method, arg) => deadline.wait(r.page.evaluate(async ({ method, arg }) => window.liveApp[method](arg), { method, arg }));
   const dom = r => r.page.evaluate(() => ({
     rows: Array.from(document.querySelectorAll('#listings > li'), li => ({ id: li.dataset.key,
       version: +li.querySelector('.version').textContent, priceCents: +li.querySelector('.price').textContent,
       quantity: +li.querySelector('.quantity').textContent })),
     effectCount: Number(document.querySelector('#effect-count').textContent),
   }));
-  const wait = async (r, through) => { await r.page.waitForFunction(n => window.liveApp.through === n, through); await call(r, 'settle'); };
+  const wait = async (r, through) => { await deadline.wait(r.page.waitForFunction(n => window.liveApp.through === n, through)); await call(r, 'settle'); };
   let failure;
   try {
     await api('configure', { initial: [row], queueLimit: 2, historyLimit: 4 });
@@ -114,10 +141,45 @@ for (const name of selection.split(',')) {
       assert.deepEqual(wireEvents(a.network), []);
       assert.deepEqual(wireEvents(b.network), [event(1), event(2)]);
       await call(b, 'detach'); await resources(0);
+    } else if (name.startsWith('cleanup-')) {
+      settings.maxCleanupMs = 100;
+      const r = await open(), accepted = deferred(deadline.signal), release = deferred(); releases.push(release);
+      await r.page.route('**/parity/publish', async route => {
+        const response = await route.fetch(), body = await response.body();
+        assert.equal(response.status(), 200); accepted.resolve();
+        await release.promise; await route.fulfill({ response, body });
+      });
+      try {
+        await deadline.wait(r.page.evaluate(e => {
+          window.heldWrite = window.liveApp.publish(e); window.heldWrite.catch(() => {});
+        }, event(1)));
+        await deadline.wait(accepted.promise);
+        while (!wireEvents(r.network).length) {
+          deadline.signal.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        await deadline.wait(r.page.evaluate(method => { window.cleanupOutcome = { status: 'pending', startedAt: performance.now() };
+          window.cleanupAttempt = window.liveApp[method]().then(() => { window.cleanupOutcome.status = 'resolved'; }, error => {
+            window.cleanupOutcome.status = 'rejected'; window.cleanupOutcome.error = error.message;
+          }).finally(() => { window.cleanupOutcome.elapsedMs = performance.now() - window.cleanupOutcome.startedAt; });
+        }, name.slice('cleanup-'.length)));
+        await r.page.waitForTimeout(500);
+        assert.equal((await resources(0)).subscriptions, 0);
+        const outcome = await r.page.evaluate(() => window.cleanupOutcome); faults.push({ kind: 'held-ack-cleanup', outcome });
+        assert.equal(outcome.status, 'rejected', 'cleanup work drain escaped its original deadline');
+        assert.match(outcome.error, /native reader not released/);
+        assert.ok(outcome.elapsedMs < 400);
+        assert.deepEqual(await dom(r), { rows: [row], effectCount: 0 }, 'cleanup timeout advanced an unacknowledged effect');
+      } finally { release.resolve(); await deadline.wait(r.page.evaluate(() => Promise.all([window.heldWrite, window.cleanupAttempt]))); settings.maxCleanupMs = 5000; }
+      const records = await r.page.evaluate(() => window.liveApp.records);
+      const applied = records.findIndex(r => r.kind === 'event' && r.disposition === 'applied');
+      if (name === 'cleanup-disconnect') assert.ok(applied > records.findIndex(r => r.kind === 'publish'));
+      else assert.equal(applied, -1);
+      await resources(0);
     } else {
-      const r = await open(), committed = deferred(), releaseFirst = deferred(), receivedSecond = deferred();
+      const r = await open(), committed = deferred(deadline.signal), releaseFirst = deferred(), receivedSecond = deferred(deadline.signal), releaseSecond = deferred();
+      releases.push(releaseFirst, releaseSecond);
       r.page.on('response', response => {
-        if (new URL(response.url()).pathname === '/parity/publish') r.pending.push(response.json().then(body => {
+        if (new URL(response.url()).pathname === '/parity/publish') pending(r, response.json().then(body => {
           if (body.seq === 2) receivedSecond.resolve();
         }));
       });
@@ -128,14 +190,26 @@ for (const name of selection.split(',')) {
           assert.equal(response.status(), 200); assert.equal(JSON.parse(body).seq, 1);
           faults.push({ kind: 'upstream-real-ack', body: JSON.parse(body) }); committed.resolve();
           await releaseFirst.promise;
-          await route.fulfill({ response, body });
-        } else { await committed.promise; await route.continue(); }
+          await route.fulfill({ response, body }).catch(error => { if (!r.page.isClosed()) throw error; });
+        } else {
+          await committed.promise;
+          if (name !== 'watchdog') { await route.continue(); return; }
+          const response = await route.fetch(), body = await response.body();
+          assert.equal(response.status(), 200); assert.equal(JSON.parse(body).seq, 2);
+          faults.push({ kind: 'held-real-second-ack', body: JSON.parse(body) });
+          watchdogStartedAt = performance.now(); deadline.reset(100);
+          backup = setTimeout(() => { releaseSecond.resolve(); receivedSecond.reject(new Error('watchdog backup after 500ms')); }, 500);
+          await releaseSecond.promise; await route.fulfill({ response, body }).catch(() => {});
+        }
       });
       try {
         // Both calls reserve their acknowledgement barrier in the same browser task.
         // Request 2 is forwarded only after the real server has committed request 1.
-        await r.page.evaluate(events => { window.overlappingWrites = Promise.all(events.map(e => window.liveApp.publish(e))); }, [event(1), event(2)]);
-        await receivedSecond.promise;
+        await deadline.wait(r.page.evaluate(events => {
+          window.overlappingWrites = Promise.all(events.map(e => window.liveApp.publish(e)));
+          window.overlappingWrites.catch(() => {}); // Teardown still observes the original promise.
+        }, [event(1), event(2)]));
+        await deadline.wait(receivedSecond.promise);
         const end = performance.now() + 5000;
         while (wireEvents(r.network).length !== 2) {
           assert.ok(performance.now() < end, 'two real SSE events were not received');
@@ -145,8 +219,8 @@ for (const name of selection.split(',')) {
         faults.push({ kind: 'before-held-response-release', dom: await dom(r), records: await r.page.evaluate(() => window.liveApp.records) });
         assert.deepEqual(await dom(r), { rows: [row], effectCount: 0 }, 'events escaped the outstanding real HTTP acknowledgement');
         assert.deepEqual(await r.page.evaluate(() => window.liveApp.records.filter(r => r.kind === 'publish')), []);
-      } finally { releaseFirst.resolve(); await r.page.evaluate(() => window.overlappingWrites); }
-      await wait(r, 2); await Promise.all(r.pending);
+      } finally { releaseFirst.resolve(); releaseSecond.resolve(); await deadline.wait(r.page.evaluate(() => window.overlappingWrites)); }
+      await wait(r, 2); await deadline.wait(Promise.all(r.pending));
       const records = await r.page.evaluate(() => window.liveApp.records);
       assert.deepEqual(records.filter(r => r.kind === 'publish').map(r => r.seq), [1, 2]);
       for (const seq of [1, 2]) assert.ok(records.findIndex(r => r.kind === 'publish' && r.seq === seq)
@@ -160,14 +234,31 @@ for (const name of selection.split(',')) {
     }
     for (const r of readers) assert.deepEqual(r.errors, []);
     console.log(`Leptos native regression ${name}: actual DOM, HTTP, native SSE and reader counters passed`);
-  } catch (error) { failure = error; }
+  } catch (error) {
+    if (name === 'watchdog') {
+      const elapsedMs = performance.now() - watchdogStartedAt; faults.push({ kind: 'watchdog-result', elapsedMs, error: error.message });
+      failure = elapsedMs < 400 && error.message.includes('native regression deadline') ? undefined
+        : new Error(`watchdog did not reject the operation within its 100ms budget: ${Math.round(elapsedMs)}ms; ${error.message}`);
+      if (!failure) console.log(`Leptos native watchdog: held real second acknowledgement rejected after ${Math.round(elapsedMs)}ms and reached teardown`);
+    } else failure = error;
+  }
   finally {
-    await api('resources').catch(() => {});
+    clearTimeout(backup); settings.maxCleanupMs = 5000;
+    for (const release of releases) release.resolve();
+    const teardown = budget(5000);
+    try {
     const captures = [];
     for (const r of readers) {
-      await Promise.all(r.pending).catch(() => {});
+      await teardown.wait(Promise.all(r.pending)).catch(() => {});
       captures.push({ servedBridgeSha256: r.servedBridgeSha256, network: r.network, errors: r.errors,
-        records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []), dom: await dom(r).catch(() => null) });
+        records: await teardown.wait(r.page.evaluate(() => window.liveApp?.records ?? [])).catch(() => []),
+        dom: await teardown.wait(dom(r)).catch(() => null) });
+    }
+    await teardown.wait(Promise.all(readers.map(r => r.context.close())));
+    for (;;) {
+      const final = await api('resources', undefined, teardown.signal);
+      if (final.subscriptions + final.connections + final.pendingTasks + final.queueEvents === 0) break;
+      await teardown.wait(new Promise(resolve => setTimeout(resolve, 10)));
     }
     if (process.env.LIVE_EVIDENCE) {
       await mkdir(process.env.LIVE_EVIDENCE, { recursive: true });
@@ -175,8 +266,8 @@ for (const name of selection.split(',')) {
         gzipSync(JSON.stringify({ schema: 'native-leptos-regression/v1', localBridgeSha256, controls, faults, captures,
           failure: failure?.message, provenance })), { flag: 'wx' });
     }
-    clearTimeout(deadline); await Promise.all(readers.map(r => r.context.close()));
+    } finally { deadline.dispose(); teardown.dispose(); }
   }
-  if (failure) { await browser.close(); throw failure; }
+  if (failure) throw failure;
 }
-await browser.close();
+} finally { await browser.close(); }
