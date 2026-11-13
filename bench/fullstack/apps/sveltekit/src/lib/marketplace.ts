@@ -31,12 +31,13 @@ export function targetMinor(locale: Locale, target: string): number | null {
   // Discover the decimal separator through Intl; grouping is deliberately not accepted.
   const decimal = formatters.get(locale)!.money.formatToParts(1.1).find((part) => part.type === "decimal")!.value;
   const text = target.trim();
-  const pattern = decimal === "." ? /^\d+(?:\.\d{1,2})?$/ : /^\d+(?:,\d{1,2})?$/;
+  const pattern = decimal === "." ? /^\d+(?:\.\d+)?$/ : /^\d+(?:,\d+)?$/;
   if (!pattern.test(text)) return null;
   const [whole, fraction = ""] = text.split(decimal);
-  const digits = (whole + fraction.padEnd(2, "0")).replace(/^0+/, "");
+  const digits = (whole + fraction.slice(0, 2).padEnd(2, "0")).replace(/^0+/, "");
   if (digits.length > 16) return null;
-  const minor = Number(digits);
+  // Positive targets round half away from zero, without a binary-float dollar conversion.
+  const minor = Number(digits) + (fraction.length > 2 && fraction[2]! >= "5" ? 1 : 0);
   return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 export function alertMessage(locale: Locale, title: string, email: string, target: string): string {

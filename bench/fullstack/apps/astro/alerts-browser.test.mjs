@@ -41,6 +41,21 @@ test("native browser forms persist alerts with and without JavaScript using thei
           assert.deepEqual(await saved.json(), expected);
           assert.equal(posts.length, 1, JSON.stringify(posts));
           assert.equal(posts[0].type === "document", !javaScriptEnabled, JSON.stringify(posts));
+          for (const [target, minor] of [["2.005", 201], ["12.505", 1251], ["70368744177664.01", 7036874417766401]]) {
+            const email = `round${expected.length}@example.test`;
+            await form.locator('[name="email"]').fill(email);
+            await form.locator('[name="target_price"]').fill(locale === "en-US" ? target : target.replace(".", ","));
+            await form.locator('button[type="submit"]').click();
+            await expect(page.locator(".marketplace__message")).toContainText(email, { timeout: 15000 });
+            const digits = String(minor).padStart(3, "0");
+            const price = new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(
+              digits.slice(0, -2) + "." + digits.slice(-2));
+            await expect(page.locator(".marketplace__message")).toContainText(price, { timeout: 15000 });
+            expected.push({ item_id: "item_1", email, target_minor: minor });
+            assert.deepEqual(await (await context.request.get(base + "/api/alerts")).json(), expected);
+          }
+          assert.equal(posts.length, 4, JSON.stringify(posts));
+          assert.ok(posts.every((post) => (post.type === "document") === !javaScriptEnabled), JSON.stringify(posts));
           await form.locator('[name="email"]').fill("rejected@example.test");
           await form.locator('[name="target_price"]').fill("0");
           const previous = await page.locator(".marketplace__message").textContent();
