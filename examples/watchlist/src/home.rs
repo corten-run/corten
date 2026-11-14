@@ -688,12 +688,18 @@ mod tests {
         assert!(patch.contains("Stopped watching Globex."), "{patch}");
     }
 
+    /// Writes its children in an `<svg>`'s `<desc>`.
+    #[component]
+    fn Described(children: impl Render) -> impl Render {
+        html! { <desc>{children}</desc> }
+    }
+
     /// Markup with every call the key check puts in what `html!` writes: cells keyed by
-    /// `key={..}`, one keyed by a static `key=".."`, and a `<template>`'s and a `<noscript>`'s
-    /// content.
+    /// `key={..}`, one keyed by a static `key=".."`, a `<template>`'s and a `<noscript>`'s
+    /// content, and a `<template>` among a component's children in an `<svg>`.
     #[component]
     fn KeyedMarkup<'a>(ids: &'a [String]) -> impl Render {
-        let (cell, total) = refs();
+        let (cell, total, mark) = refs();
         html! {
             <div>
                 <table>
@@ -708,6 +714,11 @@ mod tests {
                     <table><tbody><tr><td ref={cell} key="row">"0"</td></tr></tbody></table>
                 </template>
                 <noscript><p>"Prices follow the market with JavaScript on."</p></noscript>
+                <svg>
+                    <Described>
+                        <template><g ref={mark} key="row"></g></template>
+                    </Described>
+                </svg>
             </div>
         }
     }
