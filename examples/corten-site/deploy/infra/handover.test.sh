@@ -90,11 +90,15 @@ is "  with no file that runs as its owner" [ "$(find "$handed" -perm /6000 | wc 
 is "  and nothing half written" [ ! -e "$handed.new" ]
 is "  for root alone to read" [ "$(stat -c %a "$handed")" = 700 ]
 is "  every file root's, whoever owned it there" [ "$(find "$handed" ! -user root | wc -l)" = 0 ]
-# A run after one that failed hands over again, to a machine that kept the first.
+# A run after one that failed hands over again, to a machine that kept the first, or that
+# was stopped part of the way through taking it.
 touch "$handed/left-by-the-first"
+install -d "$handed.new"
+touch "$handed.new/left-half-taken"
 in_its_place() { [ ! -e "$handed/left-by-the-first" ] && [ -d "$handed/etc" ] && [ ! -e "$handed/${handed##*/}.new" ]; }
 is "take again keeps what it is sent" status 0 handover take < /tmp/given
 is "  in place of what the first kept" in_its_place
+is "  with nothing of a take that was stopped" [ ! -e "$handed/left-half-taken" ]
 rm -rf "$handed"
 head -c "$(($(wc -c < /tmp/given) / 2))" /tmp/given > /tmp/half
 is "take refuses half of it" status 2 handover take < /tmp/half

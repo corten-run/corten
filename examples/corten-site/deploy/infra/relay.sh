@@ -89,6 +89,14 @@ asked() {
     fi
 }
 hands_over() { [ "$(asked "$1")" = yes ]; }
+# What ssh said last when a machine was asked, as one line: a host key that is not the one
+# given, or a key the machine does not know, is told by it from a machine that did not answer.
+ssh_said() {
+    local last
+    last=$(tail -n 1 "$work/refusal" | tr -d '\r' | cut -c1-200)
+    last=${last%.}
+    echo "${last:-ssh said nothing}"
+}
 
 # A machine that refuses the key hands nothing over, and the address moves first. One that
 # could not be asked is another matter: it serves, so the address stays with it, and whoever
@@ -102,11 +110,7 @@ done
 if [ "$old" = no ]; then
     moves_first warning "The machine serving $DOMAIN does not hand over what it serves with."
 elif [ "$old" = away ]; then
-    # What ssh said last, as one line: a host key that is not the one given is told from a
-    # machine that did not answer by it.
-    why=$(tail -n 1 "$work/refusal" | tr -d '\r' | cut -c1-200)
-    why=${why%.}
-    say error "The machine serving $DOMAIN could not be asked over SSH whether it hands over, in three tries: ${why:-ssh said nothing}. The address has not moved, and that machine goes on serving. Run the workflow again; where it never answers, or its host key is not the one given, a new machine that is handed nothing takes its place (deploy/README.md)."
+    say error "The machine serving $DOMAIN could not be asked over SSH whether it hands over, in three tries: $(ssh_said). The address has not moved, and that machine goes on serving. Run the workflow again; where it never answers, or its host key is not the one given, a new machine that is handed nothing takes its place (deploy/README.md)."
     exit 1
 fi
 
@@ -115,7 +119,7 @@ fi
 ends=$((SECONDS + 600))
 until hands_over "$NEW"; do
     if [ "$SECONDS" -ge "$ends" ]; then
-        say error "The new machine at $NEW did not take the handover key within ten minutes. The address has not moved, and the old machine serves. Run the workflow again."
+        say error "The new machine at $NEW did not take the handover key within ten minutes: $(ssh_said). The address has not moved, and the old machine serves. Run the workflow again; where it says the same, the keys the machine was made with are not the ones this run holds (deploy/README.md)."
         exit 1
     fi
     sleep 10

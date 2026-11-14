@@ -27,12 +27,21 @@ done
 echo "127.0.0.2 site.test" >> /etc/hosts
 new=127.0.0.3
 
-# handover.sh's part: machine <old|new> <the word the key asked with>
+# handover.sh's part: machine <old|new> <the word the key asked with>. As many asks as the
+# machine's file `ask-after` says end as a connection that drops does, and its file
+# `ask-says` is what it answers in place of the word.
 cat > "$t/machine" << 'EOF'
 #!/bin/sh
 at=/test/$1
 case $2 in
-ask) echo corten-site-handover ;;
+ask)
+    after=$(cat "$at/ask-after" 2> /dev/null || echo 0)
+    if [ "$after" -gt 0 ]; then
+        echo $((after - 1)) > "$at/ask-after"
+        exit 255
+    fi
+    cat "$at/ask-says" 2> /dev/null || echo corten-site-handover
+    ;;
 give)
     cat "$at/gives"
     exit "$(cat "$at/give-ends")"
@@ -49,7 +58,8 @@ esac
 EOF
 # The site as the relay asks it: at the new machine where --resolve names it, and at the old
 # one otherwise. It answers where the machine has a file `serves`, after as many asks as its
-# file `serves-after` says go unanswered first.
+# file `serves-after` says go unanswered first, with the site's page or the machine's file
+# `page`.
 cat > "$t/bin/curl" << 'EOF'
 #!/bin/sh
 at=old
@@ -62,7 +72,7 @@ if [ "$after" -gt 0 ]; then
     exit 7
 fi
 [ -e "/test/$at/serves" ] || exit 7
-echo "<p>built from abc123def456</p>"
+cat "/test/$at/page" 2> /dev/null || echo "<p>built from abc123def456</p>"
 EOF
 chmod 755 "$t/machine" "$t/bin/curl"
 
@@ -82,13 +92,31 @@ KbdInteractiveAuthentication no
 UsePAM no
 EOF
     /usr/sbin/sshd -f "$t/sshd-$1" -E "$t/$1.log"
-    until [ -s "$t/$1.pid" ]; do sleep 0.1; done
+    waits "the $1 machine's sshd to start" test -s "$t/$1.pid"
 }
 # sshd removes the file that holds its number as it ends; the number itself stays in use
 # here, where nothing takes an ended sshd away.
 stops() {
     kill "$(cat "$t/$1.pid")"
-    while [ -e "$t/$1.pid" ]; do sleep 0.1; done
+    waits "the $1 machine's sshd to stop" test ! -e "$t/$1.pid"
+}
+# waits <for what> <a command that succeeds when it is so>: ten seconds, and then the test
+# ends with what the sshds wrote, since one that cannot start says so only there.
+waits() {
+    local what=$1 tries
+    shift
+    for ((tries = 0; tries < 100; tries++)); do
+        if "$@"; then return 0; fi
+        sleep 0.1
+    done
+    echo "FAILS waiting ten seconds for $what"
+    cat "$t"/*.log
+    exit 1
+}
+# drops <old|new> <how often>: that machine's next asks end as a dropped connection does.
+drops() {
+    echo "$2" > "$t/$1/ask-after"
+    chmod 666 "$t/$1/ask-after"
 }
 
 # Two machines as a replacement finds them when all is well: the old one serves and gives,
@@ -163,10 +191,45 @@ is "  said as a notice" said notice "does not answer as the site"
 is "  nothing handed" nothing_handed
 
 fresh
-echo 8 > "$t/old/serves-after"
+drops new 3
+echo 3 > "$t/new/serves-after"
 relay
-is "a site that misses eight asks and then answers is not taken for one that is down" ended_with 0
+is "a new machine that answers the key at the fourth ask, and as the site at the fourth: ends well" ended_with 0
+is "  the new one has what the old one gave" handed
+is "  nothing is said as a notice, a warning or an error" said_nothing
+
+fresh
+echo 11 > "$t/old/serves-after"
+relay
+is "a site that misses eleven asks and then answers is not taken for one that is down" ended_with 0
 is "  and hands over" handed
+
+fresh
+echo 12 > "$t/old/serves-after"
+relay
+is "with a site that misses twelve asks the address moves first: ends well" ended_with 0
+is "  said as a notice" said notice "does not answer as the site"
+is "  nothing handed" nothing_handed
+
+fresh
+echo "<p>another page</p>" > "$t/old/page"
+relay
+is "with a name that answers with another page the address moves first: ends well" ended_with 0
+is "  said as a notice" said notice "does not answer as the site"
+is "  nothing handed" nothing_handed
+
+fresh
+drops old 2
+relay
+is "a serving machine that answers the key at the third ask hands over: ends well" ended_with 0
+is "  the new one has what the old one gave" handed
+
+fresh
+echo another-word > "$t/old/ask-says"
+relay
+is "a serving machine that answers the key with another word keeps the address: the relay fails" ended_with 1
+is "  said as an error" said error "could not be asked over SSH"
+is "  nothing handed" nothing_handed
 
 fresh
 lets_in old "$t/other-key.pub"
@@ -206,8 +269,15 @@ fresh
 stops new
 relay
 starts new "$new"
-is "a new machine that never lets the key in: the relay fails" ended_with 1
-is "  said as an error" said error "did not take the handover key within ten minutes"
+is "a new machine whose sshd is not there: the relay fails" ended_with 1
+is "  said as an error, with what ssh said" said error "did not take the handover key within ten minutes.*Connection refused"
+is "  nothing handed" nothing_handed
+
+fresh
+lets_in new "$t/other-key.pub"
+relay
+is "a new machine that refuses the key: the relay fails" ended_with 1
+is "  said as an error, with what ssh said" said error "did not take the handover key within ten minutes.*Permission denied"
 is "  nothing handed" nothing_handed
 
 fresh

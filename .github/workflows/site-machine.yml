@@ -20,6 +20,7 @@ on:
     paths:
       - examples/corten-site/deploy/infra/**
       - examples/corten-site/deploy/provision.sh
+      - examples/corten-site/deploy/provision.test.sh
       - examples/corten-site/deploy/release.sh
       - examples/corten-site/deploy/nginx.conf
       - examples/corten-site/deploy/corten-site.service
@@ -92,7 +93,7 @@ jobs:
     concurrency:
       group: site-machine
       cancel-in-progress: false
-    # The relay's thirty-five minutes and the twenty for names that redirect, with the rest.
+    # The relay's forty minutes at most and the twenty for names that redirect, with the rest.
     timeout-minutes: 75
     permissions:
       contents: read

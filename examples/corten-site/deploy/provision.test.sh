@@ -33,12 +33,20 @@ untouched() {
     owned "root 600" /etc/victim && [ "$(cat /etc/victim)" = "root's" ] &&
         owned "root 755" /etc/victim.d && [ -z "$(ls -A /etc/victim.d)" ]
 }
-stops_for_no_key() {
-    sh "$here/provision.sh" site.test someone@site.test /tmp/not-there 2> /tmp/said && return 1
+# stops_for <what was given as the key's file>
+stops_for() {
+    sh "$here/provision.sh" site.test someone@site.test "$1" 2> /tmp/said && return 1
     grep -q "not a file that can be read" /tmp/said
+}
+# The rest of the script, without its comments: a line there that named one of that user's
+# directories would be root's, and is not run here.
+elsewhere() {
+    sed '/^id deploy /,/^# The deploy restarts the service/d' "$here/provision.sh" |
+        grep -v '^ *#' | grep -q '/home/deploy\|/opt/corten-site'
 }
 
 is "the lines that make the deploy user are found in provision.sh" grep -q useradd /tmp/lines
+is "  and no line outside them names a directory of that user's" fails elsewhere
 is "a first run ends well" provision
 is "  the key's directory the deploy user's alone" owned "deploy 700" /home/deploy/.ssh
 is "  and the key's file" owned "deploy 600" /home/deploy/.ssh/authorized_keys
@@ -63,7 +71,10 @@ is "a run over a releases' directory that is such a link ends well" provision
 is "  and root's directory is as it was" untouched
 as_deploy 'cd /opt/corten-site && rm releases && mv kept releases'
 is "a run with all of it put back ends well" provision
-is "provision.sh stops before it installs anything for a key's file that is not there" stops_for_no_key
+: > /tmp/empty
+is "provision.sh stops before it installs anything for a key's file that is not there" stops_for /tmp/not-there
+is "  for one that is empty" stops_for /tmp/empty
+is "  and for a directory" stops_for /tmp
 
 [ "$failed" = 0 ] || exit 1
 echo "provision.sh writes in the deploy user's directories as that user"

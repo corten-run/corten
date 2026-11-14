@@ -119,7 +119,9 @@ The relay gives the new droplet ten minutes to take the key and twenty-five to s
 is one new try of a step that failed on it; when either runs out the apply fails with the
 address where it was, the new droplet is left as it is, and the next run
 (`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
-is there. A droplet such a run left, which says it is set up already and does not serve, is
+is there. For a droplet that did not take the key the run says what ssh said: one that
+refuses the key or shows another host key, run after run, was made with a public half that
+is not its secret's (the table below). A droplet such a run left, which says it is set up already and does not serve, is
 replaced by another that is handed the same (`gh workflow run site-machine.yml -f replace=true`):
 the address still moves only once that one serves. Where no droplet sets itself up from what
 it is handed, the next is handed nothing
