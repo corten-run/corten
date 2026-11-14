@@ -8,10 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import * as provider from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
+import { publicError } from "./droplet.mjs";
+import { providerDiagnostic } from "./cloud-options.mjs";
 import { accountId, campaign, commit, context, harness as controllerHarness, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 
 const account = ["account", "get", "--output", "json", "--context", "synthetic-worker-context"];
-function harness(t, mode = "success", transform = (value) => value, interrupted = () => false) {
+function harness(t, mode = "success", transform = (value) => value, interrupted = () => false, receive = (value) => value) {
   const root = mkdtempSync(join(tmpdir(), "cloud-diagnostic-test-")), output = join(root, "observation.json");
   let child, tokenIPC = false, launches = 0;
   const run = provider.providerTransport({ repo: resolve("."), interrupted, launch(path, args, options) {
@@ -21,6 +23,8 @@ function harness(t, mode = "success", transform = (value) => value, interrupted 
     assert.equal(options.stdio[1], "ignore"); assert.equal(options.stdio[2], "ignore");
     assert.ok(!Object.keys(options.env).some((name) => /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i.test(name)));
     child = fork(fileURLToPath(new URL("cloud-provider-test-worker.mjs", import.meta.url)), [mode, output], options);
+    const emit = child.emit.bind(child);
+    child.emit = (name, ...args) => emit(name, ...(name === "message" ? [receive(args[0]), ...args.slice(1)] : args));
     child.on("message", (value) => { tokenIPC ||= JSON.stringify(value).includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"); });
     const send = child.send.bind(child); child.send = (message, callback) => send(transform(message), callback);
     return child;
@@ -69,6 +73,85 @@ test("provider response reflecting a token never crosses IPC", async (t) => {
   assert.equal(h.state().consumes, 1); assert.equal(h.state().requests, 1);
 });
 
+test("bounded create classifications survive real worker IPC and cached teardown to public output", async (t) => {
+  for (const [mode, diagnostic, requests] of [
+    ["post-link-failure", { code: "create-link" }, 1],
+    ["first-action-invalid", { code: "create-action-response" }, 2],
+    ["pending-create", { code: "create-action-pending" }, 2],
+    ["first-action-http-failure", { code: "create-action-http", httpStatus: 403 }, 2],
+  ]) await t.test(mode, async (t) => {
+    const h = harness(t, mode);
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+      "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+    const check = (error) => {
+      assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
+      assert.deepEqual(error.providerDiagnostic, diagnostic);
+      const output = publicError(error);
+      assert.ok(output.includes(`Provider failure: ${diagnostic.code}`));
+      assert.equal(output.includes("HTTP 403"), diagnostic.httpStatus === 403);
+      assert.ok(!`${output}${error.stack}${JSON.stringify(error)}`.includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"));
+      return true;
+    };
+    await assert.rejects(h.run(create, 500), check);
+    await assert.rejects(h.run.close(), check); await assert.rejects(h.run.close(), check);
+    assert.equal(h.state().requests, requests); assert.equal(h.launches, 1);
+    assert.ok(h.child.exitCode !== null || h.child.signalCode !== null);
+  });
+});
+
+test("unknown, extra or non-table IPC diagnostic values fail closed without public reflection", async (t) => {
+  const raw = "SYNTHETIC_RAW_BODY";
+  for (const result of [{ code: raw }, { code: "create-link", raw }, { code: "create-action-http", httpStatus: raw },
+    { code: "create-action-http", httpStatus: 499 }, { code: "create-link", httpStatus: 403 }, ["create-link"]]) {
+    const h = harness(t, "reflect", undefined, undefined, (message) => message.ok === false ? { ...message, result } : message);
+    await assert.rejects(h.run(account), (error) => {
+      assert.equal(error.controlUncertain, true); assert.equal(error.providerDiagnostic, undefined);
+      assert.ok(!publicError(error).includes(raw)); return true;
+    });
+    assert.equal(h.launches, 1);
+  }
+});
+
+test("public errors only format the closed diagnostic table, never native error fields or getters", () => {
+  const raw = "SYNTHETIC_RAW_BODY", base = publicError();
+  const native = Object.assign(new Error(raw), { code: raw, status: 403, body: raw });
+  assert.equal(publicError(native), base);
+  for (const value of [null, { code: raw }, { code: "create-link", raw }, { code: "create-action-http", httpStatus: 499 },
+    { code: "create-link", httpStatus: 403 }, { get code() { throw new Error(raw); } }]) {
+    assert.equal(providerDiagnostic(value), undefined);
+    assert.equal(publicError(Object.assign(native, { providerDiagnostic: value })), base);
+  }
+  Object.defineProperty(native, "providerDiagnostic", { get() { throw new Error(raw); } });
+  assert.equal(publicError(native), base);
+  assert.deepEqual(providerDiagnostic({ code: "create-action-http", httpStatus: 403 }), { code: "create-action-http", httpStatus: 403 });
+});
+
+test("permitted HTTP failure carries only its diagnostic and leaves the worker usable", async (t) => {
+  const h = harness(t, "first-action-http-failure");
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+  assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-action-http", httpStatus: 403 } });
+  assert.equal((await h.run(account)).status, 0); await h.run.close();
+  assert.equal(h.state().consumes, 1); assert.equal(h.launches, 1);
+});
+
+test("success IPC cannot smuggle diagnostics, unknown fields or nonempty failed output", async (t) => {
+  for (const result of [
+    { status: 0, stdout: "", stderr: "", providerDiagnostic: { code: "create-http", httpStatus: 403 } },
+    { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "SYNTHETIC_RAW_BODY" } },
+    { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-http", httpStatus: 499 } },
+    { status: 1, stdout: "SYNTHETIC_RAW_BODY", stderr: "", providerDiagnostic: { code: "create-http", httpStatus: 403 } },
+    { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-http", httpStatus: 403 }, raw: "SYNTHETIC_RAW_BODY" },
+  ]) {
+    const h = harness(t, "success", undefined, undefined, (message) => message.ok && message.result?.status === 0 ? { ...message, result } : message);
+    await assert.rejects(h.run(account), (error) => {
+      assert.equal(error.controlTreeUncertain, true); assert.equal(error.providerDiagnostic, undefined);
+      assert.ok(!publicError(error).includes("SYNTHETIC_RAW_BODY")); return true;
+    });
+    assert.equal(h.launches, 1);
+  }
+});
+
 test("deadline and cancellation reap an unsettled worker, preserve uncertainty and never retry", async (t) => {
   for (const cancel of [false, true]) await t.test(cancel ? "cancel" : "deadline", async (t) => {
     let interrupted = false;
@@ -96,7 +179,7 @@ test("controller exposes no direct credential-taking REST constructor", () => {
 });
 
 test("approved productionMain reaps the actual clean worker and retains locks for uncertain create", async (t) => {
-  for (const mode of ["success", "hang-create", "withhold-close", "post-link-failure", "first-action-http-failure", "zero-resource-create"]) await t.test(mode, async (t) => {
+  for (const mode of ["success", "hang-create", "withhold-close", "post-link-failure", "first-action-http-failure", "zero-resource-create", "create-http-failure"]) await t.test(mode, async (t) => {
   const h = controllerHarness(t), workers = [];
   let approval;
   const interrupted = () => {
@@ -121,10 +204,21 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   const launched = productionMain([...args, "--approve-reviewed-merged-ready", approval], deps);
   const completed = ["success", "first-action-http-failure", "zero-resource-create"].includes(mode);
   if (completed) assert.equal(await launched, 3);
-  else await assert.rejects(launched, (error) => error.controlTreeUncertain === true);
+  else await assert.rejects(launched, (error) => {
+    assert.equal(error.controlTreeUncertain === true, mode !== "create-http-failure");
+    if (mode === "post-link-failure") {
+      assert.deepEqual(error.providerDiagnostic, { code: "create-link" });
+      assert.ok(publicError(error).includes("Provider failure: create-link."));
+    }
+    if (mode === "create-http-failure") {
+      assert.deepEqual(error.providerDiagnostic, { code: "create-http", httpStatus: 422 });
+      assert.ok(publicError(error).includes("Provider failure: create-http (HTTP 422)."));
+    }
+    return true;
+  });
   const worker = workers[1]; assert.equal(worker.state().consumes, 1);
   assert.equal(worker.state().calls.filter((value) => value.method === "POST").length, 1);
-  const earlyFailure = ["hang-create", "post-link-failure"].includes(mode);
+  const earlyFailure = ["hang-create", "post-link-failure", "create-http-failure"].includes(mode);
   assert.equal(h.saved().status, earlyFailure ? "creating" : "running");
   if (earlyFailure) {
     assert.equal(Object.hasOwn(h.saved(), "id"), false);
@@ -134,7 +228,7 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   if (mode === "first-action-http-failure" || mode === "zero-resource-create")
     assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, mode === "zero-resource-create" ? 2 : 1);
   assert.ok(worker.child.exitCode !== null || worker.child.signalCode !== null);
-  if (!completed) {
+  if (!completed && mode !== "create-http-failure") {
     assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   } else {
     assert.equal(existsSync(join(h.local, "operation.lock")), false); assert.equal(existsSync(join(h.base, ".groups-launch.lock")), false);

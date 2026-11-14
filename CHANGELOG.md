@@ -5,6 +5,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
+  grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
+  raw responses or credentials, or changing provider validation and recovery rules.
+
+- Preserve captured `ProgramData` only for grouped cloud SSH/SCP children so Windows
+  OpenSSH can initialize with the sanitized environment. Git/doctl environments and
+  credential handling are unchanged; local configuration-only checks make no connection.
+
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run
   ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).
@@ -427,13 +435,14 @@ Corten is pre-1.0, so any minor version may change the API.
   address moves first, as it did. The workflow asks the site once a second while it applies
   and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
   makes a new machine where nothing has changed (`-f without_handover=true` makes one that
-  is handed nothing). Rehearsed in containers and not yet run on a droplet: the deploy README
-  says what that leaves untried. `provision.sh`, when it runs a second time, writes in the deploy
-  user's directories as that user: as root it made whatever a link there pointed at that
-  user's, so the holder of the deploy key could become root. It stops for a key's file that
-  is not there. The workflow's check runs the handover's command, those lines of
-  `provision.sh` and the relay in containers (`infra/handover.test.sh`, `provision.test.sh`,
-  `infra/relay.test.sh`).
+  is handed nothing). Rehearsed in containers, and run for corten.run, where on the one
+  replacement that was handed anything the site answered each of 174 requests a second
+  apart: the deploy README says what that leaves untried. `provision.sh`, when it runs a
+  second time, writes in the deploy user's directories as that user: as root it made
+  whatever a link there pointed at that user's, so the holder of the deploy key could become
+  root. It stops for a key's file that is not there. The workflow's check runs the
+  handover's command, those lines of `provision.sh` and the relay in containers
+  (`infra/handover.test.sh`, `provision.test.sh`, `infra/relay.test.sh`).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
