@@ -5,6 +5,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Link to [corten.run](https://corten.run) from the README's introduction.
+
 - Retry entire host-lifetime snapshots for comm-only bookend changes within the
   existing three-attempt budget. Every accepted identity must still match in full;
   PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
