@@ -229,7 +229,11 @@ refuses when no parent remains, and permission, non-directory or symlink-loop
 errors refuse immediately rather than being treated as missing directories.
 Preview never creates missing directories; core setup may create normal new ones.
 No control child inherits a DigitalOcean token override. SSH/SCP may use the existing
-agent/default keys. No credential is accepted in CLI arguments or remote scripts.
+agent/default keys. Their allowlist also retains `ProgramData`, which Windows OpenSSH
+needs during initialization even for a local `-G` configuration check. Like the other
+allowed locations, it is captured when the transport is composed, not reread between
+calls. Neither Git nor doctl receives it; the remaining environment stays allowlisted,
+and no credential store is copied. No credential is accepted in CLI arguments or remote scripts.
 `cloud-provider.mjs` is the controller-side IPC client, not a credential consumer
 or native HTTPS client. It captures the builtin-only worker bootstrap bytes in the
 same read whose hash enters the fixed thirteen-file executable manifest. It starts
@@ -302,6 +306,18 @@ before releasing its operation lock, including early-return and error paths. For
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
+Provider failures may append a bounded phase code to the generic CLI error. The
+closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
+account/list/create/delete requests, create response/link validation, action
+request/response validation, pending-action deadline, and output filtering.
+Unexpected HTTP responses use a `-http` code and optionally a numeric status from
+that module's closed status table; unlisted statuses are omitted, not accepted or
+retried. Only those validated data fields cross the worker failure boundary or a
+permitted HTTP-failure result, never native exceptions, raw bodies or credentials.
+Classification survives cached teardown and failed create reconciliation; it is
+diagnostic only and changes no action schema, ownership proof, retry, deadline,
+approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
+generic errors, not evidence about the provider's response.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
