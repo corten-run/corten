@@ -38,11 +38,12 @@ const blockersV1 = [
 ];
 // Git objects are immutable. Keep only one bounded object set, never a saved or
 // caller-supplied oracle. Current local runner/oracle bytes are still checked.
-let cachedCommit, cachedSources;
+let cachedCommit, cachedSources, legacyProducer;
 
-function safePath(path) {
+function safePath(path, versionedVendor = false) {
   need(typeof path === "string" && path.length > 0 && path.length <= 512, "unsafe-path");
-  for (const part of path.split("/")) need(/^[A-Za-z0-9_@.-]+$/.test(part) && part !== "." && part !== ".." && !part.endsWith(".")
+  const characters = versionedVendor ? /^[A-Za-z0-9_@.+-]+$/ : /^[A-Za-z0-9_@.-]+$/;
+  for (const part of path.split("/")) need(characters.test(part) && part !== "." && part !== ".." && !part.endsWith(".")
     && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part), "unsafe-path");
   return path;
 }
@@ -67,59 +68,76 @@ async function ancestors(folder) {
   return absolute;
 }
 
-async function snapshot(folder) {
+export async function snapshot(folder, profile = null) {
+  const bounds = profile?.limits ?? limits;
   const base = await ancestors(folder), files = new Map(), seen = new Set(), identities = new Set();
-  let total = 0, entries = 0;
+  let total = 0, blobTotal = 0, entries = 0;
+  const pending = [];
+  const read = async (path, before) => {
+    const absolute = join(base, path), handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const stat = await handle.stat({ bigint: true });
+      need(stat.isFile() && stat.dev === before.dev && stat.ino === before.ino && stat.size === before.size
+        && stat.mtimeNs === before.mtimeNs && stat.ctimeNs === before.ctimeNs && stat.nlink === 1n, "artifact-changed-during-read");
+      const bytes = Buffer.alloc(Number(stat.size));
+      let offset = 0;
+      while (offset < bytes.length) {
+        const chunk = await handle.read(bytes, offset, bytes.length - offset, offset);
+        need(chunk.bytesRead > 0, "artifact-truncated-during-read"); offset += chunk.bytesRead;
+      }
+      const after = await handle.stat({ bigint: true }), pathAfter = await lstat(absolute, { bigint: true });
+      need(after.size === stat.size && after.mtimeNs === stat.mtimeNs && after.ctimeNs === stat.ctimeNs
+        && !pathAfter.isSymbolicLink() && pathAfter.ino === stat.ino && pathAfter.dev === stat.dev
+        && await realpath(absolute) === absolute, "artifact-changed-during-read");
+      files.set(path, bytes);
+    } finally { await handle.close(); }
+  };
   const walk = async (prefix, depth) => {
-    need(depth <= limits.depth, "artifact-depth-limit");
+    need(depth <= bounds.depth, "artifact-depth-limit");
     for (const name of (await readdir(join(base, prefix))).sort()) {
-      need(++entries <= limits.files, "artifact-count-limit");
-      const path = safePath(prefix ? `${prefix}/${name}` : name), key = path.toLowerCase();
+      need(++entries <= bounds.files, "artifact-count-limit");
+      const raw = prefix ? `${prefix}/${name}` : name;
+      const path = safePath(raw, profile?.versionedVendorPaths === true && raw.startsWith("evidence/cargo-vendor/")), key = path.toLowerCase();
       need(!seen.has(key), "duplicate-or-case-colliding-file"); seen.add(key);
       const absolute = join(base, path), before = await lstat(absolute, { bigint: true });
       need(!before.isSymbolicLink(), "linked-artifact");
       need(await realpath(absolute) === absolute, "artifact-path-alias");
       if (before.isDirectory()) {
-        need(path === "native" || apps.some((app) => path === `native/${app}`), "unexpected-artifact-directory");
+        need(profile ? profile.directory(path) : path === "native" || apps.some((app) => path === `native/${app}`), "unexpected-artifact-directory");
         await walk(path, depth + 1); continue;
       }
       need(before.isFile() && before.nlink === 1n, "nonregular-or-hardlinked-artifact");
       const identity = `${before.dev}:${before.ino}`;
       need(!identities.has(identity), "duplicate-file-identity"); identities.add(identity);
-      need(before.size <= BigInt(limits.fileBytes) && (total += Number(before.size)) <= limits.totalBytes, "artifact-byte-limit");
-      const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      try {
-        const stat = await handle.stat({ bigint: true });
-        need(stat.isFile() && stat.dev === before.dev && stat.ino === before.ino && stat.size === before.size
-          && stat.nlink === 1n, "artifact-changed-during-read");
-        const bytes = Buffer.alloc(Number(stat.size));
-        let offset = 0;
-        while (offset < bytes.length) {
-          const chunk = await handle.read(bytes, offset, bytes.length - offset, offset);
-          need(chunk.bytesRead > 0, "artifact-truncated-during-read"); offset += chunk.bytesRead;
-        }
-        const after = await handle.stat({ bigint: true }), pathAfter = await lstat(absolute, { bigint: true });
-        need(after.size === stat.size && after.mtimeNs === stat.mtimeNs && after.ctimeNs === stat.ctimeNs
-          && !pathAfter.isSymbolicLink() && pathAfter.ino === stat.ino && pathAfter.dev === stat.dev
-          && await realpath(absolute) === absolute,
-        "artifact-changed-during-read");
-        files.set(path, bytes);
-      } finally { await handle.close(); }
+      need((total += Number(before.size)) <= bounds.totalBytes, "artifact-byte-limit");
+      if (profile?.blobTotalBytes && path.startsWith("evidence/blobs/"))
+        need((blobTotal += Number(before.size)) <= profile.blobTotalBytes, "unique-blob-byte-limit");
+      if (before.size > BigInt(bounds.fileBytes)) {
+        need(profile?.oversized && before.size <= BigInt(profile.oversized.fileBytes), "artifact-byte-limit");
+        // Preserve ledger order, but do not allocate/read oversized bytes until
+        // the small identity record has been read and checked by the profile.
+        files.set(path, null); pending.push({ path, before });
+      } else await read(path, before);
     }
   };
   await walk("", 0);
+  for (const { path, before } of pending) {
+    need(profile.oversized.accepts(path, Number(before.size), files), "oversized-blob-not-browser-executable");
+    await read(path, before);
+  }
   return files;
 }
 
 // Fixed local Git object queries only: no network, checkout, filters, hooks or saved commands.
-function committed(commit) {
-  if (cachedCommit === commit) return cachedSources;
+export function committed(commit, roots = null) {
+  const cacheKey = `${commit}:${JSON.stringify(roots)}`;
+  if (cachedCommit === cacheKey) return cachedSources;
   const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
     maxBuffer: limits.totalBytes, stdio: ["pipe", "pipe", "pipe"], timeout: 10000,
     env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" } });
   need(git(["rev-parse", `${commit}^{commit}`]).toString().trim() === commit, "unknown-commit");
-  const entries = git(["ls-tree", "-r", "-z", commit, "--", "crates", "bench/client-heavy", "bench/browser/gen",
-    "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json"])
+  const entries = git(["ls-tree", "-r", "-z", commit, "--", ...(roots ?? ["crates", "bench/client-heavy", "bench/browser/gen",
+    "bench/workloads/client.mjs", "bench/workloads/registry.mjs", "bench/browser/package-lock.json", "package-lock.json"])])
     .toString().split("\0").filter(Boolean).map((line) => {
       const [meta, path] = line.split("\t"), [mode, type, blob] = meta.split(" ");
       safeSourcePath(path); need(["100644", "100755"].includes(mode) && type === "blob", "linked-commit-source");
@@ -137,7 +155,7 @@ function committed(commit) {
     sources.set(entry.path, bytes.subarray(offset, offset + size)); offset += size + 1;
   }
   need(offset === bytes.length, "extra-git-object-bytes");
-  cachedCommit = commit; cachedSources = sources;
+  cachedCommit = cacheKey; cachedSources = sources;
   return sources;
 }
 
@@ -229,7 +247,7 @@ function partialRecords(records, errors, workload, phase) {
   need(bounded(records.length, ...range), "partial-records-differ-from-failure-phase");
 }
 
-function replay(pass, app, phase, workload, settings, timeoutMs) {
+export function replay(pass, app, phase, workload, settings, timeoutMs) {
   keys(pass, ["capture", "oracle", "readyMs", "actions", "failure"], ["resourceDetails"]);
   need(pass.capture?.app === app, "wrong-pass-app");
   const oracle = validateClientCapture(workload, pass.capture, settings);
@@ -308,6 +326,24 @@ export async function validateSaved(request) {
     report.round = request.round; report.commit = request.commit; return true;
   });
   if (!accepted) return report;
+  // Dispatch only on a bounded regular result file. Each schema then performs
+  // its full independent tree snapshot; this peek grants no evidence validity.
+  const version = await check("schema", async () => {
+    const folder = await ancestors(request.folder), path = join(folder, "result.json"), before = await lstat(path, { bigint: true });
+    need(before.isFile() && !before.isSymbolicLink() && before.nlink === 1n && before.size <= 64n * 1024n ** 2n, "invalid-result-file");
+    const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const stat = await handle.stat({ bigint: true });
+      need(stat.dev === before.dev && stat.ino === before.ino && stat.size === before.size, "artifact-changed-during-read");
+      const bytes = await handle.readFile();
+      const after = await handle.stat({ bigint: true });
+      need(bytes.length === Number(stat.size) && after.size === stat.size && after.mtimeNs === stat.mtimeNs && after.ctimeNs === stat.ctimeNs,
+        "artifact-changed-during-read");
+      return JSON.parse(bytes.toString()).schema;
+    } finally { await handle.close(); }
+  });
+  if (version === "client-heavy-native/v2") return (await import("./verify-v2.mjs")).validateV2(request);
+  if (report.errors.length) return report;
   const files = await check("artifacts", () => snapshot(request.folder));
   if (!files) return report;
   report.files = [...files].map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: hash(bytes) }));
@@ -364,7 +400,10 @@ export async function validateSaved(request) {
         else need(false, "source-digest-differs-from-exact-commit");
       }
       for (const [path, pin] of Object.entries(pins)) {
-        need(hash((await readFile(new URL(`../../${path}`, import.meta.url), "utf8")).replaceAll("\r\n", "\n")) === pin,
+        // v1 is no longer produced by run.mjs. Its option semantics remain
+        // pinned to the reviewed legacy producer, not the separate v2 parser.
+        legacyProducer ??= committed("5e2c6b6e9ebd838cb3d8f2d8b427de83616236b3");
+        need(hash(legacyProducer.get(path) ?? "") === pin,
           "native-runner-snapshot-changed-requires-verifier-review");
         if (hash(sources.get(path) ?? "") !== pin) report.blockers.push(`unreviewed-native-runner-at-commit:${path}`);
       }
@@ -486,9 +525,12 @@ export function cliOptions(args) {
   return { folder: args[0], round: args[2], commit: args[4] };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+async function main() {
   try {
     const result = await validateSaved(cliOptions(process.argv.slice(2)));
-    console.log(JSON.stringify(result, null, 2)); process.exitCode = result.status === "invalid" ? 1 : 2;
+    console.log(JSON.stringify(result, null, 2)); process.exitCode = result.status === "verified" ? 0 : ["invalid", "failed"].includes(result.status) ? 1 : 2;
   } catch { console.error("Usage: node bench/client-heavy/verify.mjs <folder> --round <round> --commit <full-sha>"); process.exitCode = 1; }
 }
+
+// Finish module evaluation before v2 imports the shared readers from this module.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) void main();

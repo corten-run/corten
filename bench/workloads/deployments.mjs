@@ -1,0 +1,476 @@
+// Read-only deployment selection. This module never builds, launches or promotes an image.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
+import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
+import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
+import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
+
+export const deploymentSchema = "benchmark-deployments/v1";
+export const receiptSchema = "benchmark-deployment-review/v1";
+export const reservationSchema = "benchmark-native-reservation/v1";
+const freeze = (value) => {
+  if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
+  return value;
+};
+// Only JSON values are fingerprinted; reject values JSON.stringify would silently discard.
+function canonical(value) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") { assert.ok(Number.isFinite(value), "finite JSON number required"); return value; }
+  if (Array.isArray(value)) return value.map(canonical);
+  assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain JSON object required");
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+}
+export const deploymentSha256 = (value) => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+const digest = (value, at) => assert.match(value ?? "", /^[a-f0-9]{64}$/, `${at}: sha256 required`);
+const string = (value, at) => assert.ok(typeof value === "string" && value.trim(), `${at}: text required`);
+function keys(value, wanted, at) {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value), `${at}: object required`);
+  assert.deepEqual(Object.keys(value).sort(), [...wanted].sort(), `${at}: exact keys required`);
+}
+const appRoot = (app) => `bench/fullstack/apps/${app}`;
+const productionGroups = ["localized-marketplace", "mixed-production", "hardening"];
+const profiles = ["aspnet", "nextjs", "express", "fastapi", "django", "leptos", "topcoat"];
+const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${path}`, import.meta.url))) ? "source-present" : "pending-integration";
+
+// These are the dispatched keyed live applications, not historical price transports.
+const liveNative = freeze({
+  rails: { framework: "Rails Turbo keyed DOM / Action Cable native application", runtime: "CRuby 4.0.9",
+    build: "bundle install; bundle exec ruby assets.rb", server: "Puma / Action Cable native async adapter / Turbo Streams",
+    workers: "one Puma process; 1:4 request threads; --workers 0; in-process bounded acknowledged reader state",
+    command: ["bundle", "exec", "puma", "--bind", "tcp://0.0.0.0:8080", "--threads", "1:4", "--workers", "0"],
+    environment: { RAILS_ENV: "production", BUNDLE_WITHOUT: "development", BUNDLE_DEPLOYMENT: "1" },
+    refs: ["Gemfile", "Gemfile.lock", "application.rb", "assets.rb", "client.js", "config.ru", "store.rb", "wire.mjs",
+      "views/index.html.erb", "views/application/_change.html.erb", "views/application/_counter.html.erb", "views/application/_row.html.erb", "views/application/_screen.html.erb"],
+    middleware: "native /parity controls, ERB/Turbo keyed operations and Action Cable; not the fullstack marketplace app" },
+  phoenix: { framework: "Phoenix LiveView keyed streams native application", runtime: "Elixir 1.20.5 / OTP 29.1.2 release",
+    build: "MIX_ENV=prod mix compile; native_live esbuild; mix release", server: "Phoenix LiveView / native Channels and LiveSocket",
+    workers: "one BEAM node; two normal schedulers and configured dirty schedulers; supervised bounded acknowledged reader state",
+    command: ["/app/bin/native_live", "start"],
+    environment: { ERL_FLAGS: "+S 2:2 +SDcpu 1 +SDio 1", LANG: "C.UTF-8", MIX_ENV: "prod", PHX_SERVER: "true", PORT: "8080" },
+    refs: ["mix.exs", "mix.lock", "client.js", "config/config.exs", "config/runtime.exs", "lib/application.ex", "lib/endpoint.ex", "lib/screen.ex", "lib/store.ex", "lib/web.ex", "wire.mjs"],
+    middleware: "native /parity controls, HEEx keyed streams and native LiveView lifecycle; not the fullstack marketplace app" },
+  laravel: { framework: "Laravel Livewire keyed Blade morphs / Reverb native application", runtime: "PHP 8.5.12 ZTS",
+    build: "composer install --no-dev; npm ci and native Livewire ESM bundle; Octane install", server: "FrankenPHP Octane / Livewire actions / Echo-Pusher Reverb WebSocket",
+    workers: "two persistent Octane workers plus native Reverb process; file-cache locks and bounded acknowledged reader state",
+    command: ["/bin/sh", "/app/start.sh"], environment: {},
+    refs: ["composer.json", "composer.lock", "package.json", "package-lock.json", "Caddyfile", "start.sh", "artisan", "client.js", "wire.mjs",
+      "app/Events/NativeDelivery.php", "app/Http/SameSiteWrites.php", "app/Livewire/NativeScreen.php", "app/NativeReverbServer.php", "app/Providers/AppServiceProvider.php", "app/Support/NativeStore.php",
+      "bootstrap/app.php", "bootstrap/providers.php", "config/app.php", "config/broadcasting.php", "config/cache.php", "config/logging.php", "config/session.php", "public/index.php", "routes/web.php",
+      "resources/views/home.blade.php", "resources/views/livewire/native-screen.blade.php"],
+    middleware: "native /parity controls, Livewire CSRF/locked snapshots, same-site writes and real Reverb delivery before Blade morph/DOM acknowledgement; not the fullstack marketplace app" },
+  corten: { framework: "Corten native keyed feed application", runtime: "Rust 1.100.0 native release",
+    build: "cargo build --release --locked", server: "corten_feed::Feed / native subscribe and generated keyed views / browser EventSource",
+    workers: "one native process; Tokio runtime; no broker", command: ["/app/server"], context: ".", dockerfile: "Dockerfile.parity",
+    profile: "native-feed; must be explicitly selected for every app under the same work and bounds",
+    environment: { HOST: "0.0.0.0", PORT: "8080", LIVE_PARITY: "1" },
+    refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/parity.rs", "src/parity_row.rs", "src/parity_screen.rs", "src/parity_screen.js"],
+    sharedRefs: ["Cargo.toml", "Cargo.lock", "crates/corten/Cargo.toml", "crates/corten-feed/Cargo.toml", "crates/corten-protocol/Cargo.toml", "crates/corten-macros/Cargo.toml",
+      "crates/corten/src/lib.rs", "crates/corten-feed/src/lib.rs", "crates/corten-protocol/src/lib.rs", "crates/corten-macros/src/lib.rs",
+      "crates/corten/js/dev.js", "crates/corten/js/dist/corten.js", "crates/corten/js/dist/view.js", "crates/corten/js/dist/format.js", "crates/corten/js/dist/keys.js", "crates/corten/js/dist/upload.js"],
+    middleware: "native /parity controls, corten_feed::Feed replay/subscribe and generated keyed views; not the historical price stream" },
+  drogon: { framework: "Drogon native keyed WebSocket application", runtime: "Drogon 1.9.14 / C++17 native release",
+    build: "CMake Release; pinned Drogon SDK; native CTest before runtime image", server: "Drogon WebSocketController / browser WebSocket",
+    workers: "one native process; one Drogon event-loop thread; acknowledged bounded per-reader queues", command: ["/app/server"],
+    environment: { PORT: "8080" }, refs: ["CMakeLists.txt", "src/feed.cc", "src/feed.h", "src/main.cc", "static/client.js", "static/index.html", "wire.mjs"],
+    middleware: "native /parity controls, SSR keyed table, WebSocket transport, one in-flight application message per reader; unknown native/kernel buffers remain unknown" },
+  express: { framework: "Express native SSE application", runtime: "Node 26.13.1", build: "npm ci --omit=dev --ignore-scripts",
+    server: "Express response SSE / browser EventSource", workers: "one Node application process; bounded per-reader queues",
+    command: ["node", "server.mjs"], environment: { PORT: "8080" }, refs: ["package.json", "package-lock.json", "server.mjs", "client.js"],
+    middleware: "server.mjs: express.json 256kb, native /parity controls and SSE, browser keyed renderer; no marketplace EJS/matched stack" },
+  aspnet: { framework: "ASP.NET Core native SSE application", runtime: ".NET 11 JIT", build: "dotnet publish -c Release -o /out",
+    server: "Kestrel / TypedResults.ServerSentEvents / browser EventSource", workers: "one .NET process; bounded Channels per reader",
+    command: ["dotnet", "LiveParity.dll"], environment: { ASPNETCORE_HTTP_PORTS: "8080" }, refs: ["LiveParity.csproj", "Program.cs", "wwwroot/client.js", "wwwroot/index.html"],
+    middleware: "Program.cs: UseDefaultFiles, UseStaticFiles, /parity controls and TypedResults.ServerSentEvents; not Razor Pages" },
+  gin: { framework: "Gin native SSE application", runtime: "Go 1.27.4 native", build: "CGO_ENABLED=0 go build -mod=readonly -p 2 -trimpath -o /server .",
+    server: "Gin SSEvent / bounded Go channel / browser EventSource", workers: "one Go process; native scheduler and bounded reader channels",
+    command: ["./server"], environment: { GIN_MODE: "release" }, refs: ["go.mod", "go.sum", "main.go", "client.js", "index.html"],
+    middleware: "main.go: native Gin /parity controls, SSE and static browser application; no templ marketplace rendering" },
+  topcoat: { framework: "Topcoat native keyed live components", runtime: "Rust 1.100.0 / Topcoat 0.12.1 native release",
+    build: "cargo build --release --locked; topcoat asset bundle --release", server: "Topcoat live! / emit! / runtime WebSocket",
+    workers: "one native process; Tokio runtime; bounded per-reader queues", command: ["/app/server"],
+    environment: { HOST: "0.0.0.0", PORT: "8080" }, refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/store.rs", "static/bridge.js", "wire.mjs"],
+    middleware: "native /parity controls, generated keyed components and runtime WebSocket; no fullstack marketplace renderer" },
+  leptos: { framework: "Leptos hydrated keyed For application", runtime: "Rust 1.100.0 native server / browser WASM",
+    build: "cargo leptos build --release --cargo-locked; cargo-leptos 0.3.12", server: "Axum SSE / Tokio bounded mpsc / hydrated Leptos For",
+    workers: "one native process; Tokio runtime; bounded per-reader queues", command: ["/app/server"],
+    environment: { LEPTOS_OUTPUT_NAME: "live_parity", LEPTOS_SITE_ROOT: "site", LEPTOS_SITE_PKG_DIR: "pkg", LEPTOS_SITE_ADDR: "0.0.0.0:8080", LEPTOS_ENV: "PROD" },
+    refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/lib.rs", "src/server.rs", "public/bridge.js", "wire.mjs"],
+    middleware: "native /parity controls, SSR keyed rows, WASM hydration and Axum SSE; no replacement renderer" },
+});
+
+function liveRepresentative(app) {
+  const base = `bench/live/apps/${app}`, n = liveNative[app];
+  if (!n) return { id: `${app}-live-native`, app, role: "representative", implementation: "pending-implementation", configuration: null,
+    expectedSourceRoot: base, reason: "Native keyed live/recovery port is pending catalog integration and review. Historical fullstack/transport-only code is not this application's implementation; no binding launch topology is asserted." };
+  const dockerfile = `${base}/${n.dockerfile ?? "Dockerfile"}`;
+  const sourceRefs = ["bench/live/native.mjs", "bench/live/parity.mjs", dockerfile, ...n.refs.map((ref) => `${base}/${ref}`), ...(n.sharedRefs ?? [])];
+  return { id: `${app}-live-native`, app, role: "representative", implementation: sourceState(sourceRefs), configuration: {
+    framework: n.framework, runtime: n.runtime, build: n.build, server: n.server, workers: n.workers, command: n.command,
+    profile: n.profile ?? "bounded; explicit runner profile must be identical for all apps in the round", environment: n.environment,
+    edge: "direct native container; no proxy or external broker configured", middleware: n.middleware,
+    builds: { app: { context: n.context ?? base, dockerfile, args: {} } }, sourceRefs,
+  } };
+}
+
+function clientRepresentative(app) {
+  const base = "bench/client-heavy", entry = `${base}/apps/${app}.${["react", "solid"].includes(app) ? "jsx" : app === "remix" ? "tsx" : "js"}`;
+  const sourceRefs = [`${base}/build.mjs`, `${base}/run.mjs`, `${base}/observer.mjs`, "bench/workloads/client.mjs", "bench/browser/package.json", "bench/browser/package-lock.json",
+    ...(app === "corten" ? ["bench/browser/gen/Cargo.toml", "bench/browser/gen/src/bin/client.rs", "bench/browser/gen/src/bin/client.js", "crates/corten/js/dist/corten.js"]
+      : [entry, `${base}/apps/input.js`, ...(["svelte", "vue"].includes(app) ? [`${base}/apps/${app}.${app}`] : [])])];
+  return { id: `${app}-browser-production`, app, role: "representative", implementation: sourceState(sourceRefs), configuration: {
+    framework: app === "corten" ? "Corten keyed views" : app, runtime: "browser production ES modules; Node native journey driver",
+    build: app === "corten" ? "bench/client-heavy/build.mjs buildApps: cargo release client generator (bench/browser/gen/src/bin/client.rs), bundle client.js + generated screen/views/runtime"
+      : "bench/client-heavy/build.mjs buildApps: production esbuild with the framework's native compiler and explicit workload fixture",
+    server: "bench/client-heavy/run.mjs serve(): ephemeral loopback Node static host; not an application-server comparison",
+    workers: "one Chromium instance; one renderer process limit; one concurrent page; browser main-thread app; no OS resource isolation claimed",
+    command: ["node", `${base}/run.mjs`], arguments: "Required round and exact native runner options are supplied and recorded by the dispatcher; no workload sizes/default tuning introduced here",
+    profile: "native client-heavy production bundles; separate qualification and measured journeys", environment: {}, edge: "none configured",
+    middleware: "run.mjs no-store static host; observer.mjs browser resource instrumentation",
+    builds: { screen: { context: ".", dockerfile: null, args: {}, entry: `${base}/build.mjs`, function: "buildApps" } }, sourceRefs,
+  } };
+}
+
+// These describe checked-in launch paths, not framework support or passing group results.
+const native = freeze({
+  aspnet: { framework: "ASP.NET Core Razor Pages", runtime: ".NET 11 JIT", build: "dotnet publish -c Release", server: "Kestrel", workers: "one application process; .NET thread pool", command: ["dotnet", "ItemPage.dll"], refs: ["Program.cs", "ItemPage.csproj"], middleware: "Program.cs: Razor Pages, static files; PROFILE=matched adds native production middleware" },
+  "aspnet-aot": { framework: "ASP.NET Core minimal API (JSON only)", runtime: ".NET 11 Native AOT", build: "dotnet publish -c Release -r linux-x64; PublishAot in ItemJson.csproj", server: "Kestrel", workers: "one application process; native .NET thread pool", command: ["/app/ItemJson"], refs: ["Program.cs", "ItemJson.csproj"], middleware: "Program.cs native JSON production middleware; no Razor or HTML substitute" },
+  express: { framework: "Express + EJS", runtime: "Node 26.13.1", build: "npm install; unbundled server.mjs", server: "node:http + Express", workers: "one application process; no cluster", command: ["node", "server.mjs"], refs: ["server.mjs", "package.json"], middleware: "server.mjs: express.static/urlencoded; PROFILE=matched adds connect-timeout, compression, Helmet, private cache headers" },
+  fastapi: { framework: "FastAPI + Jinja2", runtime: "CPython 3.15.2", build: "pip install requirements.txt", server: "Uvicorn via fastapi run; matched uses uvicorn directly", workers: "one application process; loop/http auto selection from installed uvicorn[standard], must be recorded in receipts", command: ["sh", "-c", 'if [ "$PROFILE" = matched ]; then exec uvicorn app.main:app --host 0.0.0.0 --port 8080 ${MAX_CONNECTIONS:+--limit-concurrency "$MAX_CONNECTIONS"}; else exec fastapi run app/main.py --host 0.0.0.0 --port 8080; fi'], refs: ["requirements.txt", "app/main.py"], middleware: "app/main.py: matched TrustedHost, GZip, production headers and RequestBodyLimit; default leaves these off" },
+  django: { framework: "Django templates + htmx", runtime: "CPython 3.15.2", build: "pip install requirements.txt; collectstatic", server: "Gunicorn WSGI sync", workers: "three preloaded sync workers", command: ["gunicorn", "itempage.wsgi", "--bind", "0.0.0.0:8080", "--workers", "3", "--preload"], refs: ["requirements.txt", "itempage/settings.py", "start_matched.py", "requirements-matched.txt"], middleware: "itempage/settings.py: Security, WhiteNoise, Common, CSRF, clickjacking; matched adds CSP, GZip, ProductionHeaders, host/body bounds" },
+  nextjs: { framework: "Next.js Pages Router + React SSR", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "custom Node Next.js server", workers: "one application process", command: ["node", "server.mjs"], refs: ["package.json", "server.mjs", "server-profile.mjs", "next.config.mjs"], middleware: "server-profile.mjs and next.config.mjs; PROFILE=matched is a separate build and runtime configuration" },
+  spring: { framework: "Spring Boot + Thymeleaf", runtime: "Temurin 27.0.1.0.2+1 JRE", build: "mvn package -DskipTests", server: "embedded Tomcat", workers: "one JVM; Tomcat-managed thread pool", command: ["java", "-jar", "app.jar"], refs: ["pom.xml", "src/main/resources/application.properties"], middleware: "Spring application and application.properties; no extra production profile asserted" },
+  "axum-maud": { framework: "axum + Maud", runtime: "Rust native release", build: "cargo build --release --locked", server: "axum", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native tower/axum layers" },
+  gin: { framework: "Gin + templ", runtime: "Go native", build: "templ generate; CGO_ENABLED=0 go build -trimpath -ldflags=-s -w", server: "Go net/http", workers: "one process; Go scheduler", command: ["/app/itempage"], refs: ["go.mod", "main.go"], middleware: "main.go native Gin handlers; GIN_MODE=release" },
+  drogon: { framework: "Drogon CSP views", runtime: "C++ native release", build: "CMake Release; compiled CSP views", server: "Drogon", workers: "one process; IO threads from cpuCount() in src/main.cc", command: ["/app/server"], refs: ["CMakeLists.txt", "src/main.cc"], middleware: "src/main.cc native handlers and static document root" },
+  leptos: { framework: "Leptos SSR + WASM hydration", runtime: "Rust native server + browser WASM", build: "cargo leptos build --release --cargo-locked", server: "axum / Leptos", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native layers; LEPTOS_ENV=PROD" },
+  topcoat: { framework: "Topcoat", runtime: "Rust native release", build: "cargo build --release --locked; topcoat asset bundle --release", server: "Topcoat", workers: "one process; native shards as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native Topcoat configuration" },
+  rails: { framework: "Rails + Hotwire", runtime: "CRuby 4.0.9", build: "bundle install; bootsnap precompile; assets:precompile", server: "Puma", workers: "one worker by checked-in default; three request threads (config/puma.rb); receipt must record WEB_CONCURRENCY and RAILS_MAX_THREADS", command: ["./bin/rails", "server"], refs: ["Gemfile", "config/puma.rb", "config/environments/production.rb", "config/cable.yml"], middleware: "Rails production middleware; Action Cable async adapter for live transport; jemalloc preload in Dockerfile" },
+  laravel: { framework: "Laravel + Blade / Livewire", runtime: "PHP 8.5.12 ZTS", build: "composer --no-dev; optimized autoload; route:cache; view:cache", server: "Octane on FrankenPHP", workers: "two explicitly configured persistent workers; not CPU auto", command: ["php", "artisan", "octane:frankenphp", "--host=0.0.0.0", "--port=8080", "--workers=2"], refs: ["composer.json", "bootstrap/app.php"], middleware: "Laravel bootstrap/app.php middleware; pcntl,intl,zip,opcache,uv installed; php.ini-production; no JIT claim" },
+  nuxt: { framework: "Nuxt + Vue", runtime: "Node 26.13.1", build: "npm run build", server: "Nitro node output", workers: "one application process", command: ["node", ".output/server/index.mjs"], refs: ["package.json", "nuxt.config.ts"], middleware: "Nuxt/Nitro checked-in configuration" },
+  astro: { framework: "Astro + client router", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "Astro Node adapter", workers: "one application process", command: ["node", "--import", "./dist/server/virtual_astro_middleware.mjs", "dist/server/entry.mjs"], refs: ["package.json", "astro.config.mjs"], middleware: "generated middleware preloaded before listening; astro.config.mjs" },
+  sveltekit: { framework: "SvelteKit", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "adapter-node", workers: "one application process", command: ["node", "build"], refs: ["package.json", "vite.config.ts"], middleware: "SvelteKit native hooks; workload-specific Dockerfile.marketplace pins origin" },
+  "react-router": { framework: "React Router + Express", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "Express + @react-router/express", workers: "one application process", command: ["node", "server.mjs"], refs: ["package.json", "server.mjs", "react-router.config.ts"], middleware: "compression, immutable assets, static files, React Router handler in server.mjs" },
+  "tanstack-start": { framework: "TanStack Start + React", runtime: "Node 26.13.1", build: "npm run build", server: "Nitro node output", workers: "one application process", command: ["node", ".output/server/index.mjs"], refs: ["package.json", "vite.config.ts"], middleware: "TanStack Start / Nitro plugins in vite.config.ts" },
+  phoenix: { framework: "Phoenix + HEEx / LiveView", runtime: "Elixir 1.20.5 / OTP 29.1.2 release", build: "MIX_ENV=prod mix compile; assets.deploy; mix release", server: "Phoenix endpoint (configured adapter)", workers: "one BEAM node; native schedulers; no synthetic worker tuning", command: ["/app/bin/item_page", "start"], refs: ["mix.exs", "config/config.exs", "config/runtime.exs"], middleware: "Phoenix endpoint/router configuration; Channels + PubSub native live transport" },
+});
+
+export const optionSources = freeze({
+  bunExpress: "https://bun.sh/guides/ecosystem/express",
+  bunPackaging: "https://bun.sh/docs/compiler/executables",
+  bunBytecode: "https://bun.sh/docs/compiler/bytecode",
+  bunMachineAot: "https://bun.sh/docs/compiler/aot",
+  aspnetAot: "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/native-aot?view=aspnetcore-10.0",
+  pythonServers: "https://docs.djangoproject.com/en/dev/howto/deployment/",
+  uvicorn: "https://uvicorn.dev/settings/",
+  granian: "https://github.com/emmett-framework/granian",
+  nuitka: "https://nuitka.net/user-documentation/user-manual.html",
+  phpServers: "https://laravel.com/framework/docs/octane",
+  phpCompiler: "https://www.php.net/manual/en/opcache.configuration.php",
+});
+
+function representative(group, app) {
+  const matched = productionGroups.includes(group) && profiles.includes(app);
+  const profile = matched ? "matched" : "framework-default";
+  if (group === "client-heavy") return clientRepresentative(app);
+  if (["live-delivery", "recoverable-live"].includes(group)) return liveRepresentative(app);
+  if (app === "corten") {
+    const area = group === "catalog-page" ? "catalog" : "marketplace";
+    const areas = group === "json-api" ? { "catalog-v1": "catalog", "marketplace-v2": "marketplace" } : { app: area };
+    return { id: `corten-${group}-native`, app, role: "representative", implementation: "source-present",
+      configuration: { framework: "Corten", runtime: "Rust native release", build: "cargo release using the checked-in Dockerfile and Cargo profiles",
+        server: "corten::serve (hyper HTTP/1.1)", workers: "one application process; Tokio configuration from source",
+        command: ["/server"], profile, environment: matched ? { PROFILE: "matched", MAX_CONNECTIONS: String(qualificationSettings.maxConnections) } : { PROFILE: "" }, edge: "none configured; deployed-edge remains pending exact edge manifest",
+        middleware: "native App defaults and app source; no features removed for parity",
+        builds: Object.fromEntries(Object.entries(areas).map(([key, path]) => [key, { context: ".", dockerfile: `bench/${path}/corten/Dockerfile`, args: {} }])),
+        sourceRefs: [...new Set(Object.values(areas).flatMap((path) => [`bench/${path}/corten/Dockerfile`, `bench/${path}/corten/Cargo.toml`, `bench/${path}/corten/src/main.rs`]))] } };
+  }
+  const n = native[app]; assert.ok(n, `no deployment manifest for ${app}`);
+  const context = appRoot(app), dockerfile = `${context}/${app === "sveltekit" && group === "fullstack-browser" ? "Dockerfile.marketplace" : "Dockerfile"}`;
+  const configuration = { framework: n.framework, runtime: n.runtime, build: n.build, server: n.server, workers: n.workers,
+    command: n.command, middleware: n.middleware, profile, environment: { ...(n.command[0] === "node" ? { NODE_ENV: "production" } : {}),
+      PROFILE: matched ? "matched" : "", ...(matched ? { MAX_CONNECTIONS: String(qualificationSettings.maxConnections) } : {}) },
+    edge: "none configured; deployed-edge requires its own exact topology and budget",
+    builds: Object.fromEntries((group === "json-api" ? ["catalog-v1", "marketplace-v2"] : ["app"]).map((key) => [key, { context, dockerfile, args: matched ? { PROFILE: "matched" } : {} }])),
+    sourceRefs: [dockerfile, ...n.refs.map((ref) => `${context}/${ref}`)] };
+  if (app === "django" && matched) Object.assign(configuration, { server: "Granian WSGI HTTP/1", workers: "one worker; one runtime thread; one runtime blocking thread; three Python blocking threads (start_matched.py)", command: ["python", "start_matched.py"] });
+  return { id: `${app}-${matched ? "matched" : "native"}`, app, role: "representative", implementation: "source-present", configuration };
+}
+
+function candidates(group, app, baseline) {
+  const choices = [];
+  const candidate = (id, change, sources, implementation = "pending-implementation") => choices.push({ id, app, role: "candidate", implementation, basedOn: baseline.id, change, sources,
+    reason: "Not qualified. Requires its own exact configuration, native parity and repeated performance review for the entire group." });
+  if (app === "express") {
+    const isLive = ["live-delivery", "recoverable-live"].includes(group), framework = `${baseline.configuration.framework} retained`;
+    candidate("express-bun", { runtime: "Bun", framework, buildMode: "ordinary runtime",
+      ...(isLive ? { supportScope: "upstream Express runtime compatibility only", doubts: "no native live-port Bun build/runtime receipt; the fullstack Express/Bun lane is not this SSE application" }
+        : { implementationPath: "bench/deployments/express-bun" }) }, [optionSources.bunExpress]);
+    if (!isLive) choices.at(-1).configurationTemplate = { framework: baseline.configuration.framework, runtime: "Bun 1.4.4 (exact binary and dependencies in native receipt)",
+      build: { context: ".", dockerfile: "bench/deployments/express-bun/Dockerfile", argsFrom: "bench/deployments/express-bun/pins.json", args: ["NODE_IMAGE", "BUN_IMAGE"] },
+      command: ["bun", "server.mjs"], workers: "one application process; same image and npm tree as Node comparator", server: "Bun node:http compatibility running Express, not Bun.serve",
+      middleware: baseline.configuration.middleware, environment: baseline.configuration.environment,
+      receipt: { schema: "express-bun-qualification/v1", cells: "Node/Bun x fixture/API x default/matched", readyForLoad: false, readyForMeasurement: false },
+      status: "Pending integration of native lane files and exact group qualification; narrower runtime checks alone cannot admit this alternative" };
+    candidate("express-bun-packaged", { runtime: "Bun", framework, buildMode: "bun build --compile; runtime packaging, not machine AOT" }, [optionSources.bunPackaging]);
+    candidate("express-bun-bytecode", { runtime: "Bun", framework, buildMode: "bun build --compile --bytecode; bytecode, not machine AOT" }, [optionSources.bunBytecode]);
+    candidate("express-bun-machine-aot", { runtime: "Bun", framework, buildMode: "experimental bun compile machine AOT; compatibility unverified" }, [optionSources.bunMachineAot]);
+  }
+  if (app === "django" && baseline.configuration.profile === "matched") {
+    candidate("django-gunicorn-sync", { server: "Gunicorn WSGI sync", workers: "three preloaded sync workers", buildProfile: "defaults", productionParity: "must independently pass; baseline middleware differs" }, [optionSources.pythonServers], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, server: native.django.server, workers: native.django.workers, command: native.django.command,
+      profile: "framework-default", environment: { PROFILE: "" }, builds: { app: { context: appRoot(app), dockerfile: `${appRoot(app)}/Dockerfile`, args: {} } } };
+  }
+  if (app === "django") {
+    candidate("django-uvicorn-asgi", { server: "Uvicorn ASGI", command: ["uvicorn", "itempage.asgi:application", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"], sourceRefs: ["bench/live/apps.mjs"], scope: "existing live launch override; not qualified for other groups" }, [optionSources.pythonServers], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, server: "Uvicorn ASGI", command: choices.at(-1).change.command,
+      workers: "one application process; Uvicorn loop/http auto selection must be captured", sourceRefs: [...baseline.configuration.sourceRefs, "bench/live/apps.mjs"] };
+  }
+  if (app === "fastapi") {
+    candidate("fastapi-uvicorn-asyncio", { server: "Uvicorn", loop: "asyncio; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);
+    candidate("fastapi-uvicorn-uvloop", { server: "Uvicorn", loop: "uvloop; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);
+    candidate("fastapi-granian-asgi", { server: "Granian ASGI", workers: "must be declared, not auto tuned", supportScope: "upstream ASGI interface only", doubts: "no checked-in FastAPI Granian launch; lifespan, cancellation and production middleware require native evidence" }, [optionSources.granian]);
+  }
+  if (["fastapi", "django"].includes(app)) candidate(`${app}-nuitka`, { compiler: "Nuitka", server: "retain native framework and declared server/loop; packaging and extension compatibility unverified", supportScope: "upstream Python compilation, not a checked-in app build", doubts: "dynamic imports, templates/static assets, native extensions and framework startup require a concrete build and native parity receipts" }, [optionSources.nuitka]);
+  if (app === "laravel") {
+    for (const server of ["roadrunner", "swoole"]) candidate(`laravel-octane-${server}`, { framework: "Laravel retained", server: `Octane on ${server}`, workers: "must be declared with equal total budget", supportScope: "upstream Octane server integration only", doubts: "no checked-in server image/launch; dependency or extension compatibility, worker state isolation and Livewire/Reverb behavior unverified" }, [optionSources.phpServers]);
+    candidate("laravel-frankenphp-jit", { framework: "Laravel retained", server: "Octane on FrankenPHP", compiler: "OPcache JIT; exact INI, CLI enablement and buffer must be declared and measured; not native AOT", supportScope: "PHP runtime option only; existing image installs OPcache", doubts: "installed OPcache is not enabled JIT; native runtime settings and meaningful repeated benefit remain unmeasured" }, [optionSources.phpCompiler]);
+  }
+  return choices;
+}
+
+export function deploymentPlan(group) {
+  const d = definition(group);
+  return freeze({ schema: deploymentSchema, registry: registrySchema, group, contractSha256: contractSha256(group),
+    selected: selectedApps(group), cases: structuredClone(d.cases), capabilities: d.capabilities, retainedFamilies,
+    budgetPolicy: "Exact group runner/reservation work and total CPU/memory/process/edge budgets; no overrides or enlargement here.",
+    selectionPolicy: "One named deployment per app for the entire group, fixed before the round across every case, phase and pass. No automatic fallback or promotion.",
+    execution: "plan-only; not execution authorization or certification",
+    apps: selectedApps(group).map((app) => {
+      const current = representative(group, app);
+      return { app, representative: current.id, deployments: [current, ...candidates(group, app, current)].map((entry) => ({ ...entry, qualification: "pending", evidence: [] })) };
+    }) });
+}
+
+function entryFor(group, app, id) {
+  const row = deploymentPlan(group).apps.find((row) => row.app === app);
+  assert.ok(row, "deployment app must be in the exact registry selection");
+  const entry = row.deployments.find((entry) => entry.id === id);
+  assert.ok(entry, "unknown deployment mode; never auto-qualified");
+  return entry;
+}
+function reference(ref) {
+  keys(ref, ["path", "sha256"], "artifact reference"); string(ref.path, "artifact path"); digest(ref.sha256, "artifact hash");
+  assert.ok(!/[\\:\x00-\x1f]/.test(ref.path) && ref.path.split("/").every((part) => part && part !== "." && part !== ".."), "artifact must be a relative local path without traversal");
+}
+const receiptKinds = ["implementation", "native-parity", "performance", "independent-review"];
+function requireImplementation(entry) {
+  assert.equal(entry.implementation, "source-present", "deployment implementation must be source-present before binding; pending integration/implementation stays unbound");
+  assert.ok(entry.configuration && sourceState(entry.configuration.sourceRefs) === "source-present", "deployment implementation sources must be source-present before binding");
+}
+
+// Adapters for existing timed native runners only. Capture-only apparatus must not
+// borrow these limits. Options/CPU validation stays with the native contract parsers.
+const reservations = {
+  "catalog-page": { runner: "bench/catalog/run.mjs", parse: catalogOptions, cpus: catalogCpus, prefix: "CATALOG" },
+  "json-api": { runner: "bench/json-api/run.mjs", parse: jsonOptions, cpus: jsonCpus, prefix: "JSON_API" },
+  "localized-marketplace": { runner: "bench/marketplace/run.mjs", parse: marketplaceOptions, cpus: marketplaceCpus, prefix: "MARKETPLACE" },
+};
+export function validateDeploymentBudget(group, budget) {
+  const native = reservations[group];
+  assert.ok(native, `${group}: native reservation adapter not integrated; deployment stays unbound`);
+  assert.ok(budget && Object.getPrototypeOf(budget) === Object.prototype, "native reservation must be a plain structured object");
+  keys(budget, ["schema", "group", "runner", "options", "cpus", "resources", "host", "edge"], "native reservation");
+  assert.equal(budget.schema, reservationSchema, "native reservation schema required");
+  assert.equal(budget.group, group, "reservation belongs to another group");
+  assert.equal(budget.runner, native.runner, "reservation belongs to another native runner");
+  const options = budget.options;
+  assert.ok(options && Object.getPrototypeOf(options) === Object.prototype, "reservation native options required");
+  for (const key of ["passes", "duration", "warmup", "rate", "startupTimeout"]) assert.ok(Number.isSafeInteger(options[key]) && options[key] > 0, `reservation ${key}: positive integer required`);
+  assert.equal(typeof options.build, "boolean", "reservation build option must be explicit");
+  assert.equal(options.checkOnly, false, "check-only apparatus is not a timed reservation");
+  const argv = [options.round, "--group", group, ...["passes", "duration", "warmup", "rate", "startupTimeout"].flatMap((key) => [key === "startupTimeout" ? "--startup-timeout" : `--${key}`, String(options[key])]), ...(options.build ? ["--build"] : [])];
+  if (group === "json-api" && options.receipts !== null) { string(options.receipts, "reservation receipts"); argv.push("--receipts", options.receipts); }
+  assert.deepEqual(options, native.parse(argv, Object.fromEntries(selectedApps(group).map((app) => [app, {}]))), "reservation must preserve exact native options and full selection");
+  keys(budget.cpus, ["app", "api", "load"], "reservation CPU roles");
+  const env = Object.fromEntries(Object.entries(budget.cpus).map(([role, value]) => {
+    assert.ok(value && (value.cpuset === null || typeof value.cpuset === "string"), "reservation CPU placement must be explicit");
+    return [`${native.prefix}_${role.toUpperCase()}_CPUS`, value.cpuset];
+  }));
+  assert.deepEqual(budget.cpus, native.cpus(env), "reservation CPU quota/placement/arguments differ from native contract");
+  const container = (cpu, memoryBytes, sharedMemoryBytes = null) => ({ cpu, memoryBytes, sharedMemoryBytes, processes: "all-container-descendants" });
+  const samplerCpu = { ...budget.cpus.load, quota: 1, args: ["--cpus", "1", ...(budget.cpus.load.cpuset ? ["--cpuset-cpus", budget.cpus.load.cpuset] : [])] };
+  // These are the existing run.mjs Docker arguments, not new tuning defaults.
+  const resources = { app: container(budget.cpus.app, 2 ** 30), upstream: container(budget.cpus.api, 512 * 2 ** 20),
+    load: container(budget.cpus.load, 2 ** 31), cold: container(budget.cpus.load, 256 * 2 ** 20), sampler: container(samplerCpu, 128 * 2 ** 20),
+    ...(group === "json-api" ? {} : { checker: container(budget.cpus.load, 2 ** 31, 2 ** 30) }),
+    ...(group === "localized-marketplace" ? { transportChecker: container(budget.cpus.load, 512 * 2 ** 20) } : {}) };
+  assert.deepEqual(budget.resources, resources, "reservation memory/shared-memory/process accounting differs from native runner");
+  assert.deepEqual(budget.host, { isolation: "none", cpu: null, memoryBytes: null, processes: group === "json-api" ? ["driver", "functional-checker"] : ["driver"] }, "reservation must disclose unisolated host processes, not invent CPU/memory limits");
+  assert.equal(budget.edge, null, "these native reservations have no edge; a new topology needs its own reviewed adapter");
+  return budget;
+}
+
+// The caller supplies the actual frozen reservation, not a locally guessed/default budget.
+// An alternative needs a concrete configuration, never a candidate name standing in for one.
+export function deploymentDescriptor(group, app, id, binding) {
+  const entry = entryFor(group, app, id);
+  requireImplementation(entry);
+  keys(binding, ["commit", "images", "configuration", "budget", "evidence"], "deployment binding");
+  assert.match(binding.commit ?? "", /^[a-f0-9]{40}$/, "exact commit required");
+  const configuration = binding.configuration ?? entry.configuration;
+  if (entry.role === "representative") assert.ok(entry.configuration, "pending native implementation; no concrete representative deployment can be bound");
+  assert.ok(configuration, "deployment requires an implemented configuration manifest");
+  if (entry.role === "representative") assert.deepEqual(configuration, entry.configuration, "representative configuration cannot be silently changed");
+  else {
+    const baseline = representative(group, app).configuration;
+    assert.ok(baseline, "pending native implementation; alternative needs a concrete native representative first");
+    assert.equal(configuration.framework, baseline.framework, "alternative must retain the native framework; no replacement server app");
+  }
+  for (const field of ["framework", "runtime", "build", "server", "workers", "middleware", "profile", "edge"]) string(configuration[field], field);
+  assert.ok(Array.isArray(configuration.command) && configuration.command.length > 0, "exact launch command required");
+  configuration.command.forEach((part) => string(part, "command argument"));
+  assert.ok(configuration.environment && typeof configuration.environment === "object" && !Array.isArray(configuration.environment), "runtime environment manifest required");
+  assert.ok(Array.isArray(configuration.sourceRefs) && configuration.sourceRefs.length > 0, "native source configuration references required");
+  assert.ok(configuration.sourceRefs.every((ref) => typeof ref === "string") && sourceState(configuration.sourceRefs) === "source-present", "deployment implementation sources must be source-present before binding");
+  assert.ok(configuration.builds && Object.keys(configuration.builds).length > 0, "build manifests required");
+  keys(binding.images, Object.keys(configuration.builds), "immutable images for every build");
+  for (const image of Object.values(binding.images)) assert.match(image, /^sha256:[a-f0-9]{64}$/, "immutable image digest required, not tag");
+  validateDeploymentBudget(group, binding.budget);
+  assert.equal(configuration.edge, representative(group, app).configuration.edge, "native reservation is direct only; changing edge topology needs a reviewed reservation adapter");
+  keys(binding.evidence, receiptKinds, "evidence references");
+  for (const ref of Object.values(binding.evidence)) if (ref !== null) reference(ref);
+  const subject = { schema: deploymentSchema, registry: registrySchema, group, app, deployment: id, contractSha256: contractSha256(group),
+    cases: definition(group).cases, commit: binding.commit, images: binding.images, configuration, budget: binding.budget };
+  const descriptor = { ...subject, bindingSha256: deploymentSha256(subject), evidence: binding.evidence };
+  return freeze({ ...structuredClone(descriptor), descriptorSha256: deploymentSha256(descriptor) });
+}
+
+// readArtifact returns bytes. Hashes bind references, not their truth. Only trusted native
+// runner validators supplied as code (never CLI/JSON flags) can verify the captured evidence.
+export function screenDeployment(descriptor, { readArtifact, verifyNative, verifyPerformance } = {}) {
+  const { descriptorSha256, bindingSha256, evidence, ...subject } = descriptor;
+  digest(descriptorSha256, "descriptor");
+  assert.equal(deploymentSha256({ ...subject, bindingSha256, evidence }), descriptorSha256, "deployment descriptor changed");
+  assert.equal(deploymentSha256(subject), bindingSha256, "deployment binding changed");
+  const entry = entryFor(subject.group, subject.app, subject.deployment);
+  assert.deepEqual(deploymentDescriptor(subject.group, subject.app, subject.deployment, { commit: subject.commit, images: subject.images,
+    configuration: subject.configuration, budget: subject.budget, evidence }), descriptor, "stale group contract or malformed descriptor");
+  const result = (status, reason) => ({ deployment: subject.deployment, bindingSha256, descriptorSha256, status, reason, certified: false, executionAuthorized: false });
+  if (!readArtifact) return result("pending", "Evidence references have not been read or verified.");
+  const readBytes = (ref) => {
+    reference(ref);
+    const bytes = readArtifact(ref.path);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), ref.sha256, "artifact bytes differ from reference");
+    return bytes;
+  };
+  const read = (ref) => JSON.parse(readBytes(ref).toString());
+  const receipts = Object.fromEntries(receiptKinds.filter((kind) => evidence[kind] !== null).map((kind) => {
+    const receipt = read(evidence[kind]);
+    assert.equal(receipt.schema, receiptSchema); assert.equal(receipt.kind, kind);
+    assert.equal(receipt.bindingSha256, bindingSha256, "receipt belongs to a different commit/image/config/contract/case/budget");
+    string(receipt.author, "evidence author"); string(receipt.reason, "evidence reason");
+    assert.ok(["complete", "pending", "unsupported", "failed"].includes(receipt.status), "unknown receipt status");
+    return [kind, receipt];
+  }));
+  for (const status of ["failed", "unsupported", "pending"]) {
+    const found = Object.values(receipts).find((r) => r.status === status);
+    if (found) return result(status, found.reason);
+  }
+  if (receiptKinds.some((kind) => evidence[kind] === null)) return result("pending", "Missing exact deployment evidence; representative is not certified.");
+  const parity = receipts["native-parity"], performance = receipts.performance, review = receipts["independent-review"];
+  assert.deepEqual(parity.cases, subject.cases, "native parity must cover the exact entire group matrix");
+  assert.deepEqual(performance.cases, subject.cases, "performance review must cover the exact entire group matrix");
+  for (const receipt of [receipts.implementation, parity, performance]) assert.notEqual(review.author, receipt.author, "reviewer must be independent of implementation and evidence authors");
+  assert.deepEqual(review.reviewed, Object.fromEntries(receiptKinds.filter((kind) => kind !== "independent-review").map((kind) => [kind, evidence[kind]])), "review must bind all evidence references");
+  for (const receipt of [receipts.implementation, parity, performance]) {
+    assert.ok(Array.isArray(receipt.artifacts) && receipt.artifacts.length > 0, "raw evidence artifacts required");
+    for (const ref of receipt.artifacts) readBytes(ref);
+  }
+  assert.ok(Array.isArray(performance.runs) && performance.runs.length > 1, "repeated performance evidence required");
+  const repeats = new Set();
+  for (const run of performance.runs) {
+    string(run.repeat, "performance repeat"); assert.ok(!repeats.has(run.repeat), "duplicate performance repeat"); repeats.add(run.repeat);
+    assert.deepEqual(run.cases.map((row) => row.key), subject.cases.map((row) => row.key), "each repeat must measure the whole matrix");
+    for (const row of run.cases) {
+      keys(row.metrics, ["cpuUsec", "memoryBytes", "startupMs", "p95Ms"], "CPU/memory/startup/latency metrics");
+      for (const value of Object.values(row.metrics)) assert.ok(Number.isFinite(value) && value >= 0, "finite measured metrics required");
+      readBytes(row.artifact);
+    }
+  }
+  assert.equal(review.scope, "entire-group", "per-row configuration cherry-picking is forbidden");
+  if (entry.role === "candidate") {
+    digest(performance.baselineBindingSha256, "performance baseline");
+    assert.notEqual(performance.baselineBindingSha256, bindingSha256, "alternative must be compared with the representative");
+    assert.equal(review.baselineBindingSha256, performance.baselineBindingSha256);
+    string(review.tradeoff, "meaningful repeated CPU/memory/startup/latency tradeoff review");
+    const baseline = performance.baseline;
+    assert.equal(baseline?.bindingSha256, performance.baselineBindingSha256, "exact representative comparison descriptor required");
+    assert.equal(baseline.group, subject.group); assert.equal(baseline.app, subject.app); assert.equal(baseline.commit, subject.commit);
+    assert.equal(baseline.deployment, representative(subject.group, subject.app).id, "alternative comparison must retain the named representative");
+    assert.deepEqual(baseline.budget, subject.budget, "alternative comparison must use the same total budget");
+    const baselineScreen = screenDeployment(baseline, { readArtifact, verifyNative, verifyPerformance });
+    if (baselineScreen.status !== "reviewed-for-selection") return result("pending", "Representative comparison lacks independent exact evidence validation.");
+  }
+  if (typeof verifyNative !== "function" || typeof verifyPerformance !== "function") return result("pending-independent-validation", "Receipt structure and hashes checked only; native runner and repeated performance validators are required.");
+  assert.equal(verifyNative({ descriptor, receipts, read, readBytes }), true, "native implementation/parity validation did not pass");
+  assert.equal(verifyPerformance({ descriptor, receipts, read, readBytes }), true, "repeated group-level CPU/memory/startup/latency validation did not pass");
+  return result("reviewed-for-selection", "Exact evidence verified by native validators and independently reviewed; not full benchmark certification.");
+}
+
+// Intent, not a launch plan: one fixed descriptor for each selected app, never per row.
+export function fixedSelection(group, descriptors, validators = {}) {
+  assert.ok(Array.isArray(descriptors));
+  assert.deepEqual(descriptors.map((d) => d.app), selectedApps(group), "all registry apps required once, in registry order");
+  const first = descriptors[0];
+  for (const descriptor of descriptors) {
+    assert.equal(descriptor.group, group); assert.equal(descriptor.commit, first.commit, "one fixed round commit required");
+    requireImplementation(entryFor(group, descriptor.app, descriptor.deployment));
+    validateDeploymentBudget(group, descriptor.budget);
+    assert.deepEqual(descriptor.budget, first.budget, "equal total deployment budgets required; no enlargement for a failing app");
+  }
+  const screens = descriptors.map((descriptor) => screenDeployment(descriptor, validators));
+  for (const [i, descriptor] of descriptors.entries()) {
+    const entry = entryFor(group, descriptor.app, descriptor.deployment);
+    if (entry.role === "candidate") assert.equal(screens[i].status, "reviewed-for-selection", "performance alternatives require complete independent group qualification");
+  }
+  const selection = { schema: "benchmark-deployment-selection/v1", group, contractSha256: contractSha256(group), commit: first.commit,
+    budget: first.budget, cases: definition(group).cases, phases: "all phases and passes use this same selection; no mid-round fallback",
+    selected: descriptors.map((d, i) => ({ app: d.app, deployment: d.deployment, descriptorSha256: d.descriptorSha256, screen: screens[i] })),
+    deployments: deploymentPlan(group).apps, retainedFamilies, executionAuthorized: false };
+  return freeze({ ...structuredClone(selection), selectionSha256: deploymentSha256(selection) });
+}
+
+// A runner must compare every phase with the hash saved before the round, not a newly
+// computed selection after an app fails. This check performs no execution or fallback.
+export function verifyPhaseSelection(selection, reservedSha256, observed) {
+  validateDeploymentBudget(selection.group, selection.budget);
+  digest(reservedSha256, "reserved selection");
+  const { selectionSha256, ...body } = selection;
+  assert.equal(selectionSha256, reservedSha256, "selection changed after reservation");
+  assert.equal(deploymentSha256(body), reservedSha256, "selection content changed after reservation");
+  assert.equal(selection.contractSha256, contractSha256(selection.group), "stale group selection");
+  assert.deepEqual(selection.selected.map((row) => row.app), selectedApps(selection.group));
+  assert.deepEqual(selection.cases, definition(selection.group).cases);
+  keys(observed, ["app", "case", "descriptorSha256", "selectionSha256"], "phase selection observation");
+  assert.equal(observed.selectionSha256, reservedSha256);
+  const entry = selection.selected.find((row) => row.app === observed.app);
+  assert.ok(entry && selection.cases.some((row) => row.key === observed.case), "unknown phase app/case");
+  assert.equal(observed.descriptorSha256, entry.descriptorSha256, "configuration switched mid-round");
+  return true;
+}
+
+export const outcomeKinds = freeze({
+  "app-capacity": "App exhausted its declared equal budget or could not sustain offered work. Preserve raw errors, stop/OOM evidence, useful service and missing phases; not zero throughput or a reason to enlarge the host.",
+  "harness-failure": "Driver, upstream, host, browser or provenance evidence invalidated the measurement. Retain it separately; no application capacity conclusion. Diagnose before a separately identified rerun.",
+  "functional-failure": "Native observable work, safety, recovery or exact-matrix parity differed. Retain the failed/unsupported app and configuration; no comparative performance pass.",
+});
+
+export function deploymentCli(args) {
+  assert.ok(args.length === 1, "usage: node bench/workloads/deployments.mjs <group|--all>; read-only plan only, no execution or promotion flags");
+  return args[0] === "--all" ? groupNames.map(deploymentPlan) : deploymentPlan(args[0]);
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) console.log(JSON.stringify(deploymentCli(process.argv.slice(2)), null, 2));

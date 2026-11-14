@@ -177,6 +177,8 @@ func (s *marketplaceSource) load(ctx context.Context, id string, completeDocumen
 	if err != nil {
 		return nil, err
 	}
+	trace, _ := ctx.Value(marketplaceTraceKey{}).(marketplaceTrace)
+	trace.apply(req)
 	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -345,6 +347,7 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 	alerts := &alertStore{}
 	r.GET("/api/alerts", alerts.read)
 	page := func(c *gin.Context) {
+		ctx := marketplaceReadContext(c.Request)
 		var form struct {
 			Email  string `form:"email"`
 			Target string `form:"target_price"`
@@ -376,7 +379,7 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 				return
 			}
 		}
-		record, err := s.load(c.Request.Context(), c.Param("id"), c.Request.Method == http.MethodPost)
+		record, err := s.load(ctx, c.Param("id"), c.Request.Method == http.MethodPost)
 		if err != nil {
 			abortRecordPage(c, err)
 			return
@@ -407,8 +410,9 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 	r.POST("/marketplace/:locale/:id", page)
 	recordJSONMethods(r)
 	r.Match([]string{http.MethodGet, http.MethodHead}, "/api/marketplace/:id", func(c *gin.Context) {
+		ctx := marketplaceReadContext(c.Request)
 		c.Header("Cache-Control", "no-store")
-		record, err := s.get(c.Request.Context(), c.Param("id"))
+		record, err := s.get(ctx, c.Param("id"))
 		if err != nil {
 			c.AbortWithStatusJSON(recordSourceStatus(err), gin.H{"error": "marketplace source unavailable"})
 			return

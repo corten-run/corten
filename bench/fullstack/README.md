@@ -116,6 +116,27 @@ item page) leave it out (`pages: false` in `apps.mjs`).
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
+## Rust Build Caches
+
+The Rust app Dockerfiles under `bench/` give each build path a distinct target-cache id with
+`sharing=locked`. Different apps do not warm each other's compiled artifacts or wait for each
+other's target lock; two builds of the same app still take turns. Corten's historical live and
+native parity Dockerfiles have separate ids. The live Leptos and Topcoat images keep their
+existing distinct ids. Each target cache stores its own compiled dependencies; old id-less
+caches remain on the builder until the operator prunes them.
+
+Downloaded crates share `/var/cache/cargo`, mounted as the whole `CARGO_HOME`, including Cargo's
+`.package-cache` lock, not just `registry/`. Rustup stays at the toolchain image's location.
+CLI installs use `--root /usr/local/cargo`, keeping their pinned binaries in the tools image and
+on its `PATH`, outside the mount. Do not put credentials, global configuration or executables
+in the shared home; use secret mounts or registry-token environment variables for credentials.
+
+The Leptos, Topcoat and axum + Maud recipes set the same `CARGO_HOME` for dependency fetches,
+release builds, rebuilds, development builds, editor checks and tests. `build.mjs` still starts
+clean in per-app container layers, without shared cache mounts. `docker-rebuild.mjs` still uses
+an empty builder per app for cold builds and keeps that builder for warm rebuilds. The cache
+change supplies no new timing results and does not requalify historical measurements.
+
 ## Results
 
 All numbers are measured (`results/r16/`, 2026-11-06 to 2026-11-07 UTC, the tree at `eea6adb`),
@@ -1579,9 +1600,9 @@ three runs:
       minutes, a cold build and six after the edit, out of a step budget every app's build shares.
       What a restored cache does to the others is read from their Dockerfiles, not measured.
       Leptos's and Topcoat's copy their source before building, with cargo's `target/` and
-      registry in cache mounts, as these two do, so a restored layer cache rebuilds them about as
-      if from clean too. The rest copy their dependency list first and install it in a layer of
-      its own (npm, pip, `dotnet restore`, `go mod download`, Maven, Mix, Bundler and Composer;
+      whole home in cache mounts (card-market's example image has its own registry cache), so a
+      restored layer cache rebuilds them about as if from clean too. The rest copy their dependency
+      list first and install it in a layer of its own (npm, pip, `dotnet restore`, `go mod download`, Maven, Mix, Bundler and Composer;
       Drogon's builds Drogon in one), so a restored layer cache keeps their dependencies and only
       the steps after the source's copy run again; Gin's keeps only its modules' downloads, since
       with no cache mount for Go's build cache `go build` compiles them again, on a kept builder

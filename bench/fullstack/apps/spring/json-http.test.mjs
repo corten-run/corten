@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,8 @@ import { checkJsonApp } from "../../../workloads/json-check.mjs";
 // Build target/app.jar with `mvn -B package` first. These are native HTTP checks,
 // not production qualification or performance measurements. No profile overrides.
 const directory = fileURLToPath(new URL(".", import.meta.url));
+const nativeImage = /^FROM (\S+) AS build$/m.exec(readFileSync(new URL("Dockerfile", import.meta.url), "utf8"))?.[1];
+assert.match(nativeImage ?? "", /^maven:[^\s@]+@sha256:[a-f0-9]{64}$/, "native JSON test uses the pinned production Java toolchain");
 const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", timeout: 30000 }).trim();
 const hostGatewayArgs = (platform) => platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : [];
 
@@ -45,7 +47,7 @@ test("native Spring/Jackson passes the shared JSON gate for both payloads and so
             "-p", "127.0.0.1::8080", "-v", `${directory}target:/app:ro`, "-v", `${folder}:/fixtures:ro`,
             "-e", `API_BASE=http://host.docker.internal:${server.address().port}`,
             "-e", `CATALOG_SOURCE=${source}`, "-e", `MARKETPLACE_SOURCE=${source}`,
-            "maven:3.9-eclipse-temurin-25", "java", "-jar", "/app/app.jar");
+            nativeImage, "java", "-jar", "/app/app.jar");
           started = true;
           const port = JSON.parse(docker("inspect", "--format", "{{json .NetworkSettings.Ports}}", name))["8080/tcp"][0].HostPort;
           const base = `http://127.0.0.1:${port}`;

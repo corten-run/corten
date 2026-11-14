@@ -105,6 +105,7 @@ class MarketplaceTest {
             @Override protected String computeContextPath(org.thymeleaf.context.IExpressionContext context, String base, java.util.Map<String, Object> parameters) { return ""; }
         });
         String html = engine.process("marketplace", new Context(java.util.Locale.FRANCE, model));
+        assertTrue(html.contains("hx-boost:inherited=\"false\""));
         assertTrue(html.contains("lang=\"fr-FR\""));
         assertTrue(html.contains("&lt;script&gt; &amp; Title"));
         assertFalse(html.contains("data-offer-id=\"o5\""));
@@ -112,6 +113,9 @@ class MarketplaceTest {
         assertTrue(html.contains("<th>Vendeur</th>"));
         assertTrue(html.contains("<th>Acheteur</th>"));
         assertTrue(html.contains("1\u202f000\u202f000 d’annonces") || html.contains("1\u00a0000\u00a0000 d’annonces"));
+        model.put("marketplacePage", false);
+        String ordinary = engine.process("marketplace", new Context(java.util.Locale.FRANCE, model));
+        assertTrue(ordinary.contains("hx-boost:inherited=\"true\""));
     }
 
     @Test void fixtureAndHttpSourcesReadNumericRecordsWithoutResponseCaching() throws Exception {

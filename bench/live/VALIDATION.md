@@ -1,0 +1,387 @@
+# Native live validation record
+
+## Scope and entry points
+
+This lane extends the previously delivered live runners, whose original source
+identity is retained in the [initial delivery plan](evidence/native-delivery/plan.json).
+The requested base was `921cd8422d4293863981546ced30da5c2e256cf6`;
+upstream was fetched and read without moving this feature branch.
+Only live/recoverable-live files were changed. Reserved native app sources were not edited.
+
+```sh
+node bench/live/run.mjs ROUND --group live-delivery [--apps comma,list] [--build] [--profile native-feed] [--measure]
+node bench/recoverable-live/run.mjs ROUND [--apps comma,list] [--build] [--profile native-feed] [--measure]
+node bench/live/verify.mjs ARTIFACT_DIRECTORY
+```
+
+Both entries export `async run(args)`: argv without `--group`, or
+`{round,apps?,build?,out?,profile?,measure?}`. Apps is a comma-separated string.
+The mandatory round is a safe single path segment. Existing destinations are refused.
+The result is false and CLI exit is 1 for any incomplete full registry, even when
+the explicitly requested subset passed. Historical live mode without `--group` is unchanged.
+
+Default qualification remains 24 events, queue 2/history 4. Explicit native-feed
+qualification uses 1,044 events, queue 1,024/history 1,025 for every app in that
+profile. Large fault setup batches actual native writes and individual resource
+acknowledgements, not effects or measurements. Recovery/slow bounds remain 10 seconds.
+Every measured level uses 60 individual native publications at 20/s, at 1/2/4 browsers.
+
+## Observed results
+
+This section records the original capture sessions. It is not current measurement
+qualification: the reviews below withdraw all v1/v2 native-cost admissions
+because their required instance/interval/reader/host-response receipts are absent.
+
+Corten uses the existing Feed, subscribe(), generated keyed views and native
+EventSource recovery, not a replacement runtime. Actual source-bound Corten and
+ASP.NET recovery rounds each passed six faults and all three measured levels.
+Corten, Express, ASP.NET and Gin delivery rounds each passed both faults and all
+three measured levels in the explicit native-feed profile. Final DOM, ordered
+effects, duplicate suppression, raw native wire/HTTP work, saturation peaks and
+post-detach zero resources were independently verified.
+
+Successful native-feed evidence is in:
+- `bench/live/evidence/native-feed-corten/`
+- `bench/live/evidence/native-feed-peers/` (Express and ASP.NET)
+- `bench/live/evidence/native-feed-gin/`
+- `bench/recoverable-live/evidence/native-feed-corten/`
+- `bench/recoverable-live/evidence/native-feed-aspnet/`
+
+Each remains its original PARTIAL round. They are not combined into an invented
+passing group ledger. Every selected candidate remains visible; readiness is false.
+Plans are native-live-plan/v2, correctness is native-live-evidence/v1,
+measurement is native-live-fanout/v1, with hashed gzip manifests and source diffs.
+Old v1 captures retain their original three-port inventory; adding a registration
+does not upgrade missing historic rows. Existing v2 missing rows also remain missing.
+
+Measured Corten delivery uses the original captured source commit in its
+[retained plan](evidence/native-feed-corten/plan.json), bound by that plan's diff,
+code hashes and image identity:
+
+| Browsers | Effects | Visible-frame p95 ms | Server CPU microseconds | Current memory bytes | Peak since container start bytes |
+|---|---|---|---|---|---|
+| 1 | 60 | 55.2 | 146406 | 11046912 | 15953920 |
+| 2 | 120 | 55.5 | 182068 | 11665408 | 15953920 |
+| 4 | 240 | 54.3 | 169937 | 10809344 | 15953920 |
+
+These are historical recorded numbers, rounded only for display, not currently
+qualified native costs. All raw browser frame/time
+origins, schedules, kernel CPU/memory counters and aggregates are retained.
+There are no Corten wins or comparative throughput claims from this concurrently
+loaded workstation. One repeat at three small levels does not establish saturation
+or scalability limits. Frames are paint opportunities, not pixel photometry.
+The browser is outside the server's 1 CPU / 1 GiB budget. Memory peak includes
+setup/qualification, not an isolated level peak. Server costs include instrumentation.
+Corten's initial native screen also server-renders rows; snapshot work counts its
+native HTTP snapshot, not all page-render work. No equal total SSR/read-cost claim is made.
+
+Native Feed queue occupancy is source-policy accounting of accepted writes minus
+body-emitted patches, not private allocator introspection. Replay transient entry,
+coalesced frames, fault slots and the 1,044-entry maximum batch are bounded explicitly.
+This is a held native consumer probe, not TCP/kernel socket-memory boundedness.
+No authentication, multi-node or process-restart durability is qualified.
+
+Earlier failures are retained unchanged: native-fanout contains ASP.NET offered-rate
+failures and a Gin build timeout; native-feed-peers retains another Gin build timeout;
+native-recovery-timing-limit retains the earlier Corten 10-second timing failures.
+Later fresh rounds do not rewrite those identities. A timed-out Docker build CLI
+may finish in the backend later; fresh qualification only used its source-bound
+finished image, never a fallback image.
+
+## Checks
+
+Observed during the original native implementation and capture session:
+- `node --test bench/live/parity.test.mjs bench/workloads/live.test.mjs`: 111 passed.
+- `npm run check:workloads`: 241 passed.
+- `npm run check`: 203 passed, one Windows platform skip.
+- Native Corten Rust unit tests: four passed; all-target clippy with warnings denied
+  and formatting check passed for `bench/live/apps/corten/Cargo.toml`.
+- Actual native browser journeys and measured rounds above, saved-byte reopening,
+  plus a real legacy Corten HTTP snapshot/write/SSE smoke with LIVE_PARITY absent.
+  Legacy root remained "live", write returned 204, snapshot/SSE carried the price,
+  and the parity route returned 404.
+- Native images were built through each app's source-image Dockerfile. Corten's
+  specialized immutable image build includes real framework sources; ordinary Rust
+  validation remained separate. Runtime provenance records image/source identity,
+  process topology and actual resource budgets.
+
+No complete framework workspace Rust matrix or example-browser matrix was rerun.
+No independent agent review was started because the user prohibited new agents.
+Parent review remains required. No crates, fullstack app sources, cloud jobs,
+automation, pushes, pull requests or merges were changed.
+
+## Remaining ports
+
+Laravel, Drogon, Leptos and Topcoat native ports are not delivered in this
+lane. Rails and Phoenix have separate owner-delivered native applications, but
+parent import/review, raw-wire resource extraction, native registration and
+shared-runner qualification are still required at this checkpoint. These are
+pending work, not unsupported frameworks or qualifying transport promises.
+The port contract and app-local raw-wire binding interface are in `PORTS.md`.
+No other group registry membership or default was changed.
+
+## Review repairs
+
+The original captured Git commit IDs remain verbatim in the retained plans and
+provenance; cherry-picking reviewed implementation/evidence into an integration
+branch does not turn its new commit IDs into captured source identities. The
+Markdown plan links above identify capture metadata, not claims that the original
+side-branch commits are ancestors of the integrating branch. Reproduction still
+requires the original plan's sources/diff, code hashes and source-bound image.
+An imported commit identifies reviewed content, not a new measurement.
+
+Independent review found three admission gaps: scenarios from different native
+instances could qualify one measurement, raw resource responses were not bound
+to the application trace, and fan-out cleanup was timed from detach rather than
+the probe acknowledgement. Repairs require full provenance equality across every
+scenario and measured level; exact raw HTTP/native-wire resource payload binding;
+and a zero-resource plus final-state observation at least 150 ms after the probe
+acknowledgement in every reader's aligned browser clock. No capture bytes or
+historic qualification identities were changed. Retained rounds revalidated
+under these stronger checks; the regression tests mutate temporary copies only.
+
+At the first repair checkpoint, 133 tests passed with
+`node --test bench/live/review.test.mjs bench/live/parity.test.mjs bench/workloads/live.test.mjs`;
+all 241 workload tests, `node scripts/design-refs.mjs` and `git diff --check`
+also passed. Exhaustive artifact reopening revalidated
+38 native journeys and 24 measured levels. Four old Corten success-schema captures
+inside the already-failed `native-recovery-timing-limit` round (normal, disconnect,
+missed-updates and gap) lack the later required batch-negative controls and remain
+unqualified; regression tests require their rejection. They are not rewritten.
+The measured levels' shortest
+final raw-bound zero-resource observation is 181.3 ms after acknowledgement;
+Corten's shortest is 193.9 ms across delivery and recovery. No fresh capture,
+native build, browser service or container was needed for these verifier-only
+repairs; the original captures contain the required observations.
+
+Repair files are `PORTS.md`, this record, `verify.mjs`, `parity.mjs`, `fanout.mjs`,
+`wire.mjs`, and new `resources.mjs` and `review.test.mjs`, all under `bench/live/`.
+The changed-file inventory below records the earlier delivery, not this repair.
+
+## Second review
+
+This section records the second-review checkpoint; current qualification is
+superseded by the third review below, without rewriting any capture.
+
+The next independent read-only review found ten further admission gaps. Repairs
+require exact distinct negative-control requests; nonempty source/container/process
+identity; exact disconnected write counts and raw native cursor status; cleanup
+of contexts/deadlines even when page/CDP allocation rejects; distinct CDP
+context/target/native-transport reader identities; kernel receipts bound to source
+instance and measured interval; raw host resource-response binding; actual browser
+publication starts within host RPC intervals; the 5-second detach cleanup deadline;
+and reopening retained/requested artifacts regardless of coverage flags or current
+port availability. Raw evidence is not rewritten to fill missing observations.
+
+All historical v1 measurements are now unqualified. The original coverage files
+and displayed numbers remain historical records only. `verifyRound` reports the
+effective `passed`/`measured` sets, `unqualified` reasons and `inspected` files;
+the verifier CLI exits 1 on unqualified success-schema captures. Invalid manifest
+hashes, hidden files or inconsistent retained coverage fail verification outright.
+
+Fresh `evidence/review-v2-express/` contains two actual native correctness journeys
+and source-instance-bound v2 measurements at 1/2/4 browsers, 60 publications at
+20/s, under the existing 1 CPU / 1 GiB limit. Reopening reports Express measured,
+no qualification errors, and full-group readiness false. No application port was
+edited. Fresh Corten/ASP.NET/Gin and recovery v2 measurements remain necessary;
+there are no current Corten wins or workstation throughput rankings.
+
+Second-review checks: 166 focused tests passed, all 241 workload tests passed,
+and the root JavaScript check passed 203 tests with one platform skip. Reopening
+all 11 retained round directories inspected their artifact manifests and reports
+16 unqualified historical journeys (missing identity or negative-control proof)
+and 24 unqualified v1 measured levels, without changing any historical bytes.
+The fresh Express round has no qualification errors. No Rust/app source changed,
+so ordinary Rust checks and the full example-browser matrix were not rerun.
+Fresh independent review is still required; no child agents were started.
+
+New code/tests are `admission.mjs`, `admission.test.mjs`, and `measurement.mjs`.
+Other repair files are `parity.mjs`, `fanout.mjs`, `verify.mjs`, `wire.mjs`,
+`parity.test.mjs`, `review.test.mjs`, `PORTS.md`, `README.md`, this record, plus
+`bench/recoverable-live/README.md`. New evidence files are the fresh directory's
+`coverage.json`, `plan.json`, `source.diff.gz`, `express-artifacts.json`,
+`express-normal.json.gz`, `express-slow-reader.json.gz`,
+`express-measurements.json`, and `express-fanout-{1,2,4}.json.gz`.
+
+## Third review
+
+Four additional in-memory bypasses reproduced against the exact retained v2
+Express four-reader bytes (sha256:735ea017c37a1df8412ffa8e99eda4abeb57ba19d411092f68104f28d39e339f):
+foreign browser URL origins, unbounded or resurrected matching raw/trace resource
+acknowledgements, paint timestamps preceding application, and duplicate event
+processing after detach at the same timestamp. These now have specific hostile
+tests rather than relying on saved aggregates.
+
+Repairs bind all browser URL origins to the inspected instance, and native frame
+request IDs to actual CDP EventSource GET / WebSocket creation receipts. All
+resource observations are bounded and peaks monotone; ordinary publication acks
+must account for every reader, and no owned resource may resurrect after zero.
+Every frame follows its actual application state/native arrival, two frame
+callbacks have increasing timestamps, and record order forbids all post-detach
+event processing. Native consumers/renderers are unchanged.
+
+The missing native connection request receipts cannot be added to old captures.
+The v2 round is retained byte-for-byte but its three measured levels are now
+unqualified. Fresh `evidence/review-v3-express/` contains actual native delivery
+qualification and 1/2/4-reader measurements with `native-live-fanout/v3` receipts.
+Reopening reports only Express measured, no qualification errors and group
+readiness false. No Corten/other native costs or comparative wins are qualified.
+Fresh independent review remains required; no child agents were started.
+
+Terminal checks for this repair: the focused admission/parity/review/live-workload
+suite passed 192 tests; `npm run check:workloads` passed 241 tests;
+`node scripts/design-refs.mjs` and `git diff --check` passed. Replaying all 12
+retained rounds inspected 81 artifacts, preserving 16 excluded historical journeys
+and 27 excluded historical measurement levels. The original four-reader v2 gzip
+still has the SHA-256 recorded above. No full framework/Rust/browser matrix was
+run for this runner-only repair.
+
+The new capture records source HEAD `6f99dca75` plus its retained dirty source
+diff (SHA-256 e99ab4be4b57d0dc92e9121ddef06795bba9e52b22a5d4397c51fb2ae91ffebd),
+not the eventual repair commit or a parent cherry-pick. Measured Express results
+for 1/2/4 readers respectively: 60/120/240 delivered effects, CPU
+266184/198982/267109 microseconds, current memory 30617600/35155968/39432192 bytes,
+and visible-latency p95 44.7002/40.5/58.3999 milliseconds. These are one bounded
+repeat on a concurrently loaded workstation, not throughput or comparative wins.
+
+Changed runner/tests: `measurement.mjs`, `resources.mjs`, `fanout.mjs`, `parity.mjs`,
+`verify.mjs`, `admission.test.mjs`, `parity.test.mjs`, and `review.test.mjs`.
+Docs: `PORTS.md`, `README.md`, this record and `bench/recoverable-live/README.md`.
+New evidence is the v3 directory's `coverage.json`, `plan.json`, `source.diff.gz`,
+`express-artifacts.json`, `express-normal.json.gz`, `express-slow-reader.json.gz`,
+`express-measurements.json`, and `express-fanout-{1,2,4}.json.gz`.
+
+## Changed files
+
+Every path changed after the previously delivered live runner commit, including
+this record (129 files), relative to the repository root:
+
+- `bench/live/PORTS.md`
+- `bench/live/README.md`
+- `bench/live/VALIDATION.md`
+- `bench/live/apps/aspnet/Program.cs`
+- `bench/live/apps/aspnet/wwwroot/client.js`
+- `bench/live/apps/corten/Cargo.lock`
+- `bench/live/apps/corten/Cargo.toml`
+- `bench/live/apps/corten/Dockerfile.parity`
+- `bench/live/apps/corten/Dockerfile.parity.dockerignore`
+- `bench/live/apps/corten/src/main.rs`
+- `bench/live/apps/corten/src/parity.rs`
+- `bench/live/apps/corten/src/parity_row.rs`
+- `bench/live/apps/corten/src/parity_screen.js`
+- `bench/live/apps/corten/src/parity_screen.rs`
+- `bench/live/apps/express/client.js`
+- `bench/live/apps/express/server.mjs`
+- `bench/live/apps/gin/client.js`
+- `bench/live/apps/gin/main.go`
+- `bench/live/evidence/native-fanout-gin/coverage.json`
+- `bench/live/evidence/native-fanout-gin/gin-artifacts.json`
+- `bench/live/evidence/native-fanout-gin/gin-fanout-1.json.gz`
+- `bench/live/evidence/native-fanout-gin/gin-fanout-2.json.gz`
+- `bench/live/evidence/native-fanout-gin/gin-fanout-4.json.gz`
+- `bench/live/evidence/native-fanout-gin/gin-measurements.json`
+- `bench/live/evidence/native-fanout-gin/gin-normal.json.gz`
+- `bench/live/evidence/native-fanout-gin/gin-slow-reader.json.gz`
+- `bench/live/evidence/native-fanout-gin/plan.json`
+- `bench/live/evidence/native-fanout-gin/source.diff.gz`
+- `bench/live/evidence/native-fanout/aspnet-artifacts.json`
+- `bench/live/evidence/native-fanout/aspnet-fanout-1.json.gz`
+- `bench/live/evidence/native-fanout/aspnet-fanout-2.json.gz`
+- `bench/live/evidence/native-fanout/aspnet-fanout-4.json.gz`
+- `bench/live/evidence/native-fanout/aspnet-measurements.json`
+- `bench/live/evidence/native-fanout/aspnet-normal.json.gz`
+- `bench/live/evidence/native-fanout/aspnet-slow-reader.json.gz`
+- `bench/live/evidence/native-fanout/coverage.json`
+- `bench/live/evidence/native-fanout/express-artifacts.json`
+- `bench/live/evidence/native-fanout/express-fanout-1.json.gz`
+- `bench/live/evidence/native-fanout/express-fanout-2.json.gz`
+- `bench/live/evidence/native-fanout/express-fanout-4.json.gz`
+- `bench/live/evidence/native-fanout/express-measurements.json`
+- `bench/live/evidence/native-fanout/express-normal.json.gz`
+- `bench/live/evidence/native-fanout/express-slow-reader.json.gz`
+- `bench/live/evidence/native-fanout/gin-failure.json`
+- `bench/live/evidence/native-fanout/plan.json`
+- `bench/live/evidence/native-fanout/source.diff.gz`
+- `bench/live/evidence/native-feed-corten/corten-artifacts.json`
+- `bench/live/evidence/native-feed-corten/corten-fanout-1.json.gz`
+- `bench/live/evidence/native-feed-corten/corten-fanout-2.json.gz`
+- `bench/live/evidence/native-feed-corten/corten-fanout-4.json.gz`
+- `bench/live/evidence/native-feed-corten/corten-measurements.json`
+- `bench/live/evidence/native-feed-corten/corten-normal.json.gz`
+- `bench/live/evidence/native-feed-corten/corten-slow-reader.json.gz`
+- `bench/live/evidence/native-feed-corten/coverage.json`
+- `bench/live/evidence/native-feed-corten/plan.json`
+- `bench/live/evidence/native-feed-corten/source.diff.gz`
+- `bench/live/evidence/native-feed-gin/coverage.json`
+- `bench/live/evidence/native-feed-gin/gin-artifacts.json`
+- `bench/live/evidence/native-feed-gin/gin-fanout-1.json.gz`
+- `bench/live/evidence/native-feed-gin/gin-fanout-2.json.gz`
+- `bench/live/evidence/native-feed-gin/gin-fanout-4.json.gz`
+- `bench/live/evidence/native-feed-gin/gin-measurements.json`
+- `bench/live/evidence/native-feed-gin/gin-normal.json.gz`
+- `bench/live/evidence/native-feed-gin/gin-slow-reader.json.gz`
+- `bench/live/evidence/native-feed-gin/plan.json`
+- `bench/live/evidence/native-feed-gin/source.diff.gz`
+- `bench/live/evidence/native-feed-peers/aspnet-artifacts.json`
+- `bench/live/evidence/native-feed-peers/aspnet-fanout-1.json.gz`
+- `bench/live/evidence/native-feed-peers/aspnet-fanout-2.json.gz`
+- `bench/live/evidence/native-feed-peers/aspnet-fanout-4.json.gz`
+- `bench/live/evidence/native-feed-peers/aspnet-measurements.json`
+- `bench/live/evidence/native-feed-peers/aspnet-normal.json.gz`
+- `bench/live/evidence/native-feed-peers/aspnet-slow-reader.json.gz`
+- `bench/live/evidence/native-feed-peers/coverage.json`
+- `bench/live/evidence/native-feed-peers/express-artifacts.json`
+- `bench/live/evidence/native-feed-peers/express-fanout-1.json.gz`
+- `bench/live/evidence/native-feed-peers/express-fanout-2.json.gz`
+- `bench/live/evidence/native-feed-peers/express-fanout-4.json.gz`
+- `bench/live/evidence/native-feed-peers/express-measurements.json`
+- `bench/live/evidence/native-feed-peers/express-normal.json.gz`
+- `bench/live/evidence/native-feed-peers/express-slow-reader.json.gz`
+- `bench/live/evidence/native-feed-peers/gin-failure.json`
+- `bench/live/evidence/native-feed-peers/plan.json`
+- `bench/live/evidence/native-feed-peers/source.diff.gz`
+- `bench/live/fanout.mjs`
+- `bench/live/native.mjs`
+- `bench/live/parity.mjs`
+- `bench/live/parity.test.mjs`
+- `bench/live/verify.mjs`
+- `bench/live/wire.mjs`
+- `bench/recoverable-live/README.md`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-artifacts.json`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-disconnect.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-expired-cursor.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-fanout-1.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-fanout-2.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-fanout-4.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-gap.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-measurements.json`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-missed-updates.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-normal.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/aspnet-slow-reader.json.gz`
+- `bench/recoverable-live/evidence/native-feed-aspnet/coverage.json`
+- `bench/recoverable-live/evidence/native-feed-aspnet/plan.json`
+- `bench/recoverable-live/evidence/native-feed-aspnet/source.diff.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-artifacts.json`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-disconnect.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-expired-cursor.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-fanout-1.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-fanout-2.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-fanout-4.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-gap.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-measurements.json`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-missed-updates.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-normal.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/corten-slow-reader.json.gz`
+- `bench/recoverable-live/evidence/native-feed-corten/coverage.json`
+- `bench/recoverable-live/evidence/native-feed-corten/plan.json`
+- `bench/recoverable-live/evidence/native-feed-corten/source.diff.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-artifacts.json`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-disconnect.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-expired-cursor.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-gap.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-missed-updates.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-normal.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/corten-slow-reader.json.gz`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/coverage.json`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/plan.json`
+- `bench/recoverable-live/evidence/native-recovery-timing-limit/source.diff.gz`
