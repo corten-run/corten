@@ -45,12 +45,12 @@ jobs:
       - run: cargo check -p corten-run --no-default-features --features json --all-targets
       - run: cargo check -p corten-run --no-default-features --features agent,feed
       # corten check type-checks the app's scripts and fails without tsc: the version package.json
-      # pins (the npm latest release checked in the getting-started guide), on the smoke jobs' Node.
+      # pins under typescript7 (npm latest checked in the guide), on the smoke jobs' Node.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: |
-          npm install --global typescript@$(node -p "require('./package.json').devDependencies.typescript")
+          npm install --global $(node -p "require('./package.json').devDependencies.typescript7.slice(4)")
           tsc --version
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |

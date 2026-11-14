@@ -215,7 +215,9 @@ rules something out.
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
    The repository's AST checks use `typescript/unstable/sync`, `typescript/unstable/fs` and
    `typescript/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
-   and the lockfile, not a compatible-version range);
+   and the lockfile as the `typescript7` npm alias, not a compatible-version range. The root
+   `typescript` 5.9.3 install remains only for `bench/**` consumers of the classic compiler API;
+   Corten's checks explicitly select the 7.0.2 alias, not npm's colliding `tsc` bin);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
    component behavior is exported functions, not classes; the runtime's one hand-written class,
    `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
@@ -223,8 +225,9 @@ rules something out.
    declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
    `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
-   maps with `crates/corten-macros/src/dom.rs` without a second TypeScript install or a separate
-   parser dependency. The exact pin and negative parser fixtures bound this dependency, but
+   maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
+   A second compiler install preserves benchmark tooling's classic API without changing
+   `bench/**` or downgrading Corten's checks. The exact pin and negative parser fixtures bound this dependency, but
    do not make the API stable); measured (deck-builder's and
    seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
    bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
@@ -249,7 +252,8 @@ rules something out.
    function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
-   update changes the unstable sync, filesystem or AST APIs they use.
+   update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
+   off the classic compiler API, so the root 5.9.3 compatibility install can be removed.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -291,9 +295,13 @@ rules something out.
    were read for the plain `input` event (no interface override);
    2026-11-14, TypeScript 7.0.2's installed `package.json` export map, `lib/version.cjs` and
    root module exports inspected at `e8d4165cd`: only version information is stable, and all
-   parsing entry points are explicitly unstable. The exact pin is retained, with no second
-   TypeScript install. The AST checks and their negative parser fixtures are exercised by
-   the root `npm run check`, independently of the benchmark apps' own compiler pins.
+   parsing entry points are explicitly unstable. The exact pin is retained. The AST checks
+   and their negative parser fixtures are exercised by the root `npm run check`;
+   2026-11-14, at `face427ab` and the change: browser evidence's classic-API failure reproduced
+   in `binding-effects.test.mjs`. Root `typescript` 5.9.3 restored solely for those benchmark
+   consumers, with 7.0.2 under `typescript7` explicitly selected by Corten's CLI, root compiler
+   and AST checks. This corrects the earlier assumption that app-local pins covered all bench
+   consumers: the evidence harness also imports the root compiler.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

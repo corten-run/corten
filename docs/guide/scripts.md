@@ -118,7 +118,8 @@ sets first is taken as declared, even when the class declares its fields, so a m
 class's fields (`/** @this {Fields} */` on a method, `/** @type {Fields} */ (this).name = ..` in
 the constructor), and a read of `naem` only when a method other than the constructor set it and
 `undefined` is not accepted. Keep behavior in exported functions, as components do, and have a
-class set only the fields it declares. TypeScript 7.0.2, which CI uses, refuses a function called
+class set only the fields it declares. TypeScript 7.0.2, which CI selects explicitly through the
+repository's `typescript7` alias (not its benchmark-only 5.9.3 install), refuses a function called
 with `new` and a call with more arguments than a function reading `arguments` declares; use a
 class and a rest parameter (`...rest`) instead. A value whose type
 nothing fixes (`new Promise((resolve) => ..)`, a type parameter no argument decides) is `any` in

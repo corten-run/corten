@@ -4,7 +4,8 @@
 //! app's generated `types/app.d.ts` (feed rows, its `corten/events` and `corten/views` classes).
 //!
 //! A handler's call is checked when the crate compiles; this checks its body. TypeScript is not
-//! a dependency of an app: the check uses `tsc` from the app's `node_modules` or the `PATH`,
+//! a dependency of an app: the check prefers the repository's `typescript7` alias when present,
+//! otherwise uses `tsc` from the app's `node_modules` or the `PATH`,
 //! and fails when there is none and the app has scripts, so a machine or a CI job without
 //! TypeScript cannot pass with the scripts unchecked. `corten check --no-script-types` skips them
 //! and says so, for a machine that cannot run it.
@@ -100,6 +101,14 @@ pub fn run(plan: Option<Plan>) -> Result<(), String> {
         return Ok(());
     };
     let mut failed = Vec::new();
+    let version = tsc_command(&tsc)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", tsc.display()))?;
+    if !version.status.success() {
+        return Err(format!("{} --version failed", tsc.display()));
+    }
+    eprintln!("corten: script types: {} ({})", String::from_utf8_lossy(&version.stdout).trim(), tsc.display());
     for app in &apps {
         let dir = target.join("corten").join(&app.name);
         std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -108,7 +117,7 @@ pub fn run(plan: Option<Plan>) -> Result<(), String> {
         if apps.len() > 1 {
             eprintln!("corten: type-checking {}'s scripts", app.name);
         }
-        let status = Command::new(&tsc)
+        let status = tsc_command(&tsc)
             .arg("-p")
             .arg(&config)
             .current_dir(&app.root)
@@ -231,13 +240,35 @@ fn checker(skip: bool, find: impl FnOnce() -> Option<PathBuf>, whose: &str) -> R
     })
 }
 
-/// `tsc` from the `node_modules` of the first of `homes` that has one, else from the `PATH`
-/// (`tsc.cmd` on Windows).
+/// The explicit TypeScript 7 alias first, without relying on npm's colliding `tsc` bin.
+/// A present but broken alias must fail the check, not silently fall back to an older compiler.
+/// Otherwise use the first local `tsc`, then the PATH (`tsc.cmd` on Windows).
 fn find_tsc(homes: &[&Path]) -> Option<PathBuf> {
+    if let Some(alias) = alias_tsc(homes) {
+        return Some(alias);
+    }
     let names: &[&str] = if cfg!(windows) { &["tsc.cmd", "tsc.exe", "tsc"] } else { &["tsc"] };
     let local = homes.iter().flat_map(|home| names.iter().map(move |n| home.join("node_modules").join(".bin").join(n)));
     let candidates = local.chain(names.iter().map(PathBuf::from));
     candidates.into_iter().find(|tsc| Command::new(tsc).arg("--version").output().is_ok_and(|o| o.status.success()))
+}
+
+fn alias_tsc(homes: &[&Path]) -> Option<PathBuf> {
+    homes
+        .iter()
+        .flat_map(|home| home.ancestors())
+        .map(|home| home.join("node_modules/typescript7/lib/tsc.js"))
+        .find(|tsc| tsc.is_file())
+}
+
+fn tsc_command(tsc: &Path) -> Command {
+    if tsc.extension().is_some_and(|ext| ext == "js") {
+        let mut command = Command::new("node");
+        command.arg(tsc);
+        command
+    } else {
+        Command::new(tsc)
+    }
 }
 
 fn cargo_metadata(root: &Path) -> Result<String, String> {
@@ -322,6 +353,41 @@ fn json_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires npm ci for the pinned repository compiler"]
+    fn the_pinned_repository_compiler_checks_template_scripts() {
+        let cli = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repo = cli.parent().unwrap().parent().unwrap();
+        let root = cli.join("template");
+        let tsc = find_tsc(&[&root]).expect("npm ci installs the repository compiler alias");
+        assert_eq!(tsc, repo.join("node_modules/typescript7/lib/tsc.js"));
+        let target = std::env::temp_dir().join(format!("corten-template-types-{}", std::process::id()));
+        let result = run(Some(Plan {
+            apps: vec![App { id: "template".into(), name: "template".into(), root }],
+            whose: "the template's scripts".into(),
+            run: Some((tsc, repo.join("crates/corten/js"), target.clone())),
+        }));
+        std::fs::remove_dir_all(target).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn the_explicit_compiler_alias_wins_over_local_bins_even_when_broken() {
+        let base = std::env::temp_dir().join(format!("corten-tsc-alias-{}", std::process::id()));
+        let app = base.join("app");
+        let alias = base.join("node_modules/typescript7/lib/tsc.js");
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(app.join("node_modules/.bin")).unwrap();
+        std::fs::write(app.join("node_modules/.bin/tsc"), "").unwrap();
+        std::fs::write(&alias, "").unwrap();
+        assert_eq!(find_tsc(&[&app]), Some(alias.clone()));
+        let command = tsc_command(&alias);
+        assert_eq!(command.get_program(), "node");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [alias.as_os_str()]);
+        assert_eq!(tsc_command(Path::new("tsc")).get_program(), "tsc");
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn scripts_without_tsc_fail_the_check_unless_it_is_told_to_skip_them() {

@@ -13,7 +13,9 @@ corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 ```
 
 The TypeScript install uses npm's newest stable release. Corten's CI checks scripts with
-TypeScript 7.0.2, the `latest` release verified on 2026-11-14 and pinned in `package.json`.
+TypeScript 7.0.2, the `latest` release verified on 2026-11-14 and pinned as `typescript7` in the
+repository's `package.json`. Repository checks select that alias explicitly; root `typescript`
+5.9.3 stays only for benchmark tooling that uses its classic compiler API.
 
 `cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
 build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary), using GitHub

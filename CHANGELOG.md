@@ -11,6 +11,8 @@ Corten is pre-1.0, so any minor version may change the API.
   unstable native parser API until a stable parsing entry point is available.
   Keep navigation `info` checked in both the listener and its `startedBy` helper through one
   shared narrowed event type, with compiler regression probes for both reads.
+  Select 7.0.2 explicitly through the `typescript7` npm alias; retain root TypeScript 5.9.3
+  only for benchmark tooling's classic compiler API, avoiding colliding `tsc` bins in Corten checks.
 
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
