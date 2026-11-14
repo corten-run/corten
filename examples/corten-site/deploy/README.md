@@ -791,7 +791,7 @@ refused. A click that Playwright's Firefox acknowledges late on a loaded Windows
 known ([CONTRIBUTING.md](../../../CONTRIBUTING.md#checks)), and the workstation was loaded.
 Four runs say that no limit acted in them, not that none ever does in this test.
 
-The handover was rehearsed in containers and not on a droplet, at `7af97547d` and, after a
+Before it ran on a droplet the handover was rehearsed in containers, at `7af97547d` and, after a
 review, every case again at `7d835fe17`; the numbers here are the second time's unless they
 say otherwise. Two containers of Ubuntu 24.04 with systemd as their first process, sudo and
 sshd were each handed by a script what `main.tf` hands a droplet, the same host key among
@@ -904,14 +904,31 @@ implied each fail one of them. The relay says what ssh said for a new machine th
 take the key, as for the old one. A whole replacement in the rig at that commit ended with
 none of 189 requests unanswered, the relay done 161 seconds after the new machine was made.
 
-What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
-the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
-signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
-the relay says which), whether root there is held to a password, the relay from a runner,
-GitHub reading the lines the workflow prints as a warning, the input that hands a machine
-nothing, how long a reserved address takes to move and whether a request in flight is lost
-to it, and a renewal on a machine that was handed its certificate. The rig is not in the
-repository, as none of this directory's rehearsals are: CI lints these scripts, validates
+It then ran for corten.run, twice, at `731c304b5` (one run each). The machine serving when
+the handover was merged was made before there was one, so that merge's apply moved the
+address first, as it said it would: the relay's line was shown by GitHub as a warning, the
+site did not answer 31 of the 57 times it was asked while the apply ran, the workflow first
+saw the new machine answer 502 under its certificate 1 min 45 s after the address had moved
+(it asks every 20 s), and the Site run started then had ended 1 min 14 s after that. The
+replacement after it (`-f replace=true`) was the first to be handed anything. The droplet
+was made in 33 s; the relay took 2 min 7 s, of which the new machine had the certificate
+and the release 1 min 37 s after it was made and answered as the site 30 s later; the
+address moved in 16 s and the old droplet was removed; and the site answered each of the
+174 times it was asked, a second apart, from before the droplet was made until the apply
+ended. The limits on one address were then as after any apply, and the name that redirects
+sent its visitors on the first time it was asked, 26 s after the address had moved. So a
+droplet lets the `handover` user in by its key, the relay runs from a runner, and a
+reserved address's move lost none of those requests that once.
+
+What that leaves untried is whatever those two runs' logs do not show. Nothing on the new
+droplet itself was looked at: whether certbot asked for anything on a machine that was
+handed its certificate, whether root there is held to a password, what is left of what it
+was handed, and that the key is refused once the machine is set up are as the rehearsals
+left them. Nor have the input that hands a machine nothing, any of the relay's failures on
+real machines, a request in flight while the address moves other than those asked a second
+apart, or a renewal on a machine that was handed its certificate been seen. The rig is not
+in the repository, as none of this directory's rehearsals are: CI lints these scripts,
+validates
 `main.tf`, and runs three tests in containers. `infra/handover.test.sh` runs the handover's
 command against the names a deploy could give a release, a handover cut short and one with
 no release in it. `provision.test.sh` runs the lines of `provision.sh` that write in the
@@ -919,10 +936,7 @@ deploy user's directories, over links that user could have put there.
 `infra/relay.test.sh` runs the relay against two sshds, with a stand-in for the command
 the key runs on a machine and one for the site, and with the relay's waits passing at once:
 it sees which way the relay decides, and none of what a real machine does. The rest is
-rehearsed again by whoever changes it. The
-machine serving when this was merged was made before there was a handover, so the first
-replacement after it moves the address first; the one after that is the first to be handed
-anything, and its run's count is the first measure of the move.
+rehearsed again by whoever changes it.
 
 Among what has still not run on a real machine: an apply that fails once begun or a droplet
 that cannot be made, a first deploy that fails, a put-back of the release before, a machine
