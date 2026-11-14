@@ -1,5 +1,6 @@
 // Fixed API composition with explicitly synthetic substitutes, not native qualification.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { appendFileSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
@@ -19,7 +20,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   const url = new URL(specifier, context.parentURL ?? import.meta.url).href;
   return urls.has(url) ? { url: urls.get(url), shortCircuit: true } : next(specifier, context);
 } });
-let action = "normal", calls = [];
+let action = "normal", calls = [], browserSubject;
 for (const [path, { group, name }] of seams) mock.module(urls.get(path), { exports: { [name]: async (input, folder) => {
   calls.push({ group, input, folder });
   if (action === "throw") throw new Error("SYNTHETIC_PRIVATE_SENTINEL");
@@ -31,6 +32,7 @@ for (const [path, { group, name }] of seams) mock.module(urls.get(path), { expor
   if (action === "malformed") return { status: "SYNTHETIC_PRIVATE_SENTINEL" };
   return { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
     ...(group === "fullstack-browser" ? { qualificationPassed: true, expectedExitCode: 0 } : {}),
+    ...(group === "fullstack-browser" && action === "browser-subject" ? { resources: "blocked", hostSubject: structuredClone(browserSubject) } : {}),
     outcomes: input.selection.apps.map((app) => ({ app, outcome: "passed" })), blockers: [] };
 } } });
 const { inspectNative, executionGroups, validateNativeResult } = await import("./native-replay.mjs");
@@ -58,6 +60,31 @@ test("browser qualification exit is exact and separate from intrinsic completion
   assert.equal(validateNativeResult(binding, qualified), qualified);
   assert.doesNotThrow(() => validateNativeResult(binding, { ...qualified, cleanupComplete: false }));
   assert.throws(() => validateNativeResult(binding, { ...qualified, status: "failed" }));
+});
+
+test("browser replay forwards the single fixed adapter's subject only when its byte seal matches the safe native snapshot", async (t) => {
+  const f = fixture(t, "fullstack-browser");
+  const files = ["raw.log", "summary.json"].map((path) => ({ path,
+    sha256: createHash("sha256").update(readFileSync(join(f.folder, path))).digest("hex") }));
+  browserSubject = { schema: "native-browser-host-subject/v2", executionWindow: { startedAt: 1000, endedAt: 2000 }, processWindows: [],
+    toolIdentities: { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "c".repeat(64) }, participants: [],
+    subjectSha256: "d".repeat(64), filesSha256: createHash("sha256").update(JSON.stringify(files) + "\n").digest("hex") };
+  action = "browser-subject"; calls = [];
+  const result = await inspectNative(f.binding, f.folder);
+  assert.equal(result.status, "verified"); assert.equal(result.resources, "blocked");
+  assert.deepEqual(result.hostSubject, browserSubject); assert.equal(calls.length, 1);
+  assert.equal(calls[0].group, "fullstack-browser");
+  const original = browserSubject.filesSha256;
+  for (const seal of ["f".repeat(64), undefined, "SYNTHETIC_PRIVATE_SENTINEL"]) {
+    browserSubject.filesSha256 = seal;
+    const invalid = await inspectNative(f.binding, f.folder);
+    assert.equal(invalid.status, "invalid"); assert.equal(invalid.hostSubject, undefined);
+    assert.equal(invalid.attemptComplete, false); assert.ok(!JSON.stringify(invalid).includes("SYNTHETIC_PRIVATE_SENTINEL"));
+  }
+  browserSubject.filesSha256 = original;
+  appendFileSync(join(f.folder, "raw.log"), "replaced native evidence");
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
+  action = "normal";
 });
 test("all registry groups have fixed awaited native APIs, with the real strict JSON report retained", async (t) => {
   assert.deepEqual(executionGroups, groupNames);
