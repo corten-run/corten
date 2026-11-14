@@ -89,6 +89,7 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       assert.equal(result.pages, 120);
       if (source === "api") assert.equal(result.upstream.readsPerRequest, 1);
     }
+    source = "fixture";
     broken = true;
     await assert.rejects(checkApp({ base, catalog, source: "fixture", upstream: upstreamBase, browser }), /fixture mismatch/);
   } finally {

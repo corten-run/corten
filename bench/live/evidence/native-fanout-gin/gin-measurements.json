@@ -1,0 +1,33 @@
+{
+  "app": "gin",
+  "group": "live-delivery",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "gin-fanout-1.json.gz",
+      "sha256": "f8b6f75157acb794c7298388178e9d69af8fb7a8898273ea53c7f90eeb220dd7"
+    },
+    {
+      "file": "gin-fanout-2.json.gz",
+      "sha256": "3a18436ec4d27f3f152d955827d1e8e9533b2a98ba5c3a978eb0e128fc0221a0"
+    },
+    {
+      "file": "gin-fanout-4.json.gz",
+      "sha256": "50f379dc32ecad36e34c568a04ccad8c04e299d003fe5bfc1903ce40de8d3ce4"
+    }
+  ]
+}

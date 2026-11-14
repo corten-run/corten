@@ -1,0 +1,10 @@
+(✓) Post-generation event received, processing... [ updates=0 needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=0 duration=572.699707ms ]
+go: downloading github.com/bojanz/currency v1.5.0
+go: downloading golang.org/x/text v0.43.0
+go: downloading github.com/nicksnyder/go-i18n/v2 v2.7.0
+go: downloading github.com/cockroachdb/apd/v3 v3.2.1
+# itempage [itempage.test]
+./trace_http_test.go:28:31: undefined: traceAppRouter
+FAIL	itempage [build failed]
+FAIL

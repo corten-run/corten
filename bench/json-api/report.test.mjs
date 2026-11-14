@@ -8,7 +8,77 @@ import test from "node:test";
 import { reader, writer } from "./artifacts.mjs";
 import { descriptor, sha256 } from "./contract.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
-import { result } from "./test-fixtures.mjs";
+import { result, failedResult } from "./test-fixtures.mjs";
+
+test("a complete negative raw attempt retains all nine apps but no gated comparison", () => {
+  for (const profile of descriptor().cases) {
+    const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load, commit: f.summary.commit });
+    assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true, report.warnings.join("\n"));
+    assert.equal(report.functionalAttemptComplete, true);
+    assert.deepEqual(report.outcomes, descriptor().apps.map((app) => ({ app, outcome: app === "corten" ? "failed" : "passed" })));
+    assert.deepEqual(report.comparisonEligibleApps, []);
+    assert.equal(report.apps.corten[profile.key].functional, false);
+    assert.equal(report.apps.corten[profile.key].nativeQualified, true);
+    assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => !r.complete && r.attemptComplete)));
+  }
+});
+
+test("retained positive timing cannot override a replayed negative or its global gate", () => {
+  const f = result(), failed = failedResult(), key = descriptor().cases[0].key;
+  const checked = f.summary.apps.corten.checks[key], negative = failed.summary.apps.corten.checks[key];
+  delete checked.functional; checked.failure = f.put(failed.load(negative.failure)); checked.raw = f.put(failed.load(negative.raw));
+  f.summary.cleanup = f.put({ runId: f.summary.runId, containers: [], networks: [] });
+  const report = inspectJson(f.summary, { load: f.load });
+  assert.equal(report.baseline, false); assert.equal(report.attemptComplete, false);
+  assert.ok(report.warnings.some((w) => w.includes("global timing disposition differs")));
+});
+
+test("negative evidence cannot waive audits, raw completeness, identity, CPU, cleanup or the global timing gate", () => {
+  for (const mutate of [
+    (f) => { delete f.summary.tools.k6; },
+    (f) => { delete f.summary.toolExecutions.k6; },
+    (f, c) => { delete c.native; },
+    (f, c) => { c.functional = {}; },
+    (f, c) => { const v = f.load(c.failure); delete v.attempt.requests[0].response; c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.failure); v.exit.expired = true; c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.failure); v.exit.code = 137; c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.failure); v.identity.commit = "b".repeat(40); c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.failure); v.clock.finishedAt = Date.parse(f.summary.finishedAt) + 1; c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.failure); v.attempt.requests[0].path = "/wrong"; c.failure = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); v.events.pop(); c.raw = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); v.runtime.quota++; c.raw = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); delete v.liveness; c.raw = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); v.liveness.app.oomKilled = true; c.raw = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); v.liveness.upstream.running = false; c.raw = f.put(v); },
+    (f, c) => { const v = f.load(c.raw); v.liveness.app.restartCount = 1; c.raw = f.put(v); },
+    (f) => { f.summary.cleanup = f.put({ runId: f.summary.runId, containers: ["leftover"], networks: [] }); },
+    (f) => { delete f.summary.cleanup; },
+    (f) => { f.summary.failures.push({ stage: "harness" }); },
+    (f) => { f.summary.cleanupFailures.push({ resource: "container" }); },
+    (f) => { f.summary.commitAfter = "b".repeat(40); },
+    (f) => { f.summary.apps.gin.runs[key].push({ pass: 1 }); },
+    (f) => { f.summary.apps.gin.aggregates[key] = { fixed: {} }; },
+    (f) => { delete f.summary.apps.gin; },
+    (f) => { delete f.summary.timingDisposition; },
+    (f) => { f.summary.complete = true; },
+    (f, c) => {
+      const v = f.load(c.failure), raw = f.load(c.raw), records = JSON.parse(f.artifacts.get(f.summary.fixtures["catalog-v1"].path));
+      for (const r of v.attempt.requests) {
+        r.response = { status: 200, type: "application/json", body: JSON.stringify(records[r.id]) };
+        Object.assign(raw.events.find((e) => e.kind === "application" && e.path === r.path), r.response);
+      }
+      c.failure = f.put(v); c.raw = f.put(raw);
+    },
+  ]) {
+    const f = failedResult(), checked = f.summary.apps.corten.checks[key]; mutate(f, checked);
+    const report = inspectJson(f.summary, { load: f.load });
+    assert.equal(report.attemptComplete, false, mutate.toString()); assert.equal(report.baseline, false);
+  }
+  const f = result(); f.summary.timingDisposition = "gated-functional";
+  for (const entry of Object.values(f.summary.apps)) for (const p of f.summary.group.cases) { entry.runs[p.key] = []; entry.aggregates[p.key] = {}; }
+  f.summary.complete = false; f.summary.checksPassed = false; f.summary.cleanup = f.put({ runId: f.summary.runId, containers: [], networks: [] });
+  assert.equal(inspectJson(f.summary, { load: f.load }).attemptComplete, false, "a declarative gate without a replayed violation is not complete");
+});
 
 const base = result(), key = descriptor().cases[0].key, api = descriptor().cases[1].key;
 const copy = () => structuredClone(base.summary);

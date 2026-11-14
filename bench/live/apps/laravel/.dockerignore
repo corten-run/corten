@@ -1,0 +1,8 @@
+node_modules
+vendor
+storage
+.env
+public/client.js
+bootstrap/cache/*.php
+test/receipts
+test/receipts-final

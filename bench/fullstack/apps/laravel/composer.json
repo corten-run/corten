@@ -7,10 +7,11 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
-        "laravel/framework": "^13.17",
-        "laravel/octane": "^2.22",
-        "laravel/reverb": "^1.12",
-        "laravel/tinker": "^3.0",
+        "brick/math": "^1.0",
+        "laravel/framework": "^13.42",
+        "laravel/octane": "^2.24",
+        "laravel/reverb": "^1.13",
+        "laravel/tinker": "^3.1",
         "livewire/livewire": "^4.4"
     },
     "require-dev": {

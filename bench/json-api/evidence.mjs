@@ -1,12 +1,57 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
+import { verifyRecordAttempt, verifyCheckerExit, verifyAttemptWindow } from "../catalog/record-attempt.mjs";
 import { aggregate, deriveLoad, loadConfig, payloads, phases, route, sha256, upstreamReadDelta, verifyParticipants, verifyRuntime } from "./contract.mjs";
 
 // Replay retained functional observations, not application code. In particular,
 // byte forwarding can pass this gate; only a separate native audit can qualify it.
 export function verifyFunctional(functional, events, profile, records) {
   return functionalVerifier(profile, records)(functional, events);
+}
+
+export function verifyFunctionalFailure(failure, events, expected, records) {
+  assert.deepEqual(failure.identity, expected, "wrong failed checker identity");
+  verifyCheckerExit(failure.exit);
+  const p = payloads[expected.payload], attempt = failure.attempt;
+  verifyRecordAttempt(attempt, records, `/api/${p.path}`);
+  verifyAttemptWindow(attempt, failure.clock);
+  const controls = events.filter((e) => e.kind === "control"), responses = events.filter((e) => e.kind === "application");
+  assert.equal(events.length, controls.length + responses.length, "unknown raw checker event");
+  assert.equal(responses.length, attempt.requests.length, "missing raw checker responses");
+  const byPath = new Map(attempt.requests.map((r) => [r.path, r.response]));
+  const seen = new Set();
+  for (const e of responses) {
+    assert.equal(e.method, "GET"); assert.ok(!seen.has(e.path) && byPath.has(e.path), "duplicate/foreign raw response"); seen.add(e.path);
+    assert.deepEqual({ status: e.status, type: e.type, body: e.body }, byPath.get(e.path), "attempt differs from raw response");
+  }
+  const path = `/__${p.path}/control`;
+  const reset = (e) => { assert.equal(e?.kind, "control"); assert.equal(e.method, "POST"); assert.equal(e.path, path);
+    assert.equal(e.status, 200); assert.deepEqual(e.value, {}); JSON.parse(e.body); };
+  assert.equal(controls.length, expected.source === "api" ? 3 : 2);
+  reset(events[0]);
+  const counter = events.at(expected.source === "api" ? -2 : -1);
+  assert.equal(counter?.kind, "control"); assert.equal(counter.method, "GET"); assert.equal(counter.path, path); assert.equal(counter.status, 200);
+  assert.deepEqual(JSON.parse(counter.body).requests, expected.source === "api" ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {});
+  if (expected.source === "api") reset(events.at(-1));
+  assert.ok(events.slice(1, expected.source === "api" ? -2 : -1).every((e) => e.kind === "application"), "unexpected sweep control");
+  return true;
+}
+
+export function functionalLiveness(infos) {
+  return Object.fromEntries(Object.entries(infos).map(([role, info]) => [role, { containerId: info.Id, startedAt: info.State.StartedAt,
+    status: info.State.Status, running: info.State.Running, oomKilled: info.State.OOMKilled, dead: info.State.Dead,
+    paused: info.State.Paused, restarting: info.State.Restarting, restartCount: info.RestartCount, exitCode: info.State.ExitCode, error: info.State.Error }]));
+}
+export function verifyFunctionalLiveness(raw, failure) {
+  assert.deepEqual(Object.keys(raw.liveness ?? {}).sort(), ["app", "upstream"], "functional participant state missing");
+  for (const role of ["app", "upstream"]) {
+    const state = raw.liveness[role];
+    assert.ok(Number.isFinite(Date.parse(state.startedAt)) && Date.parse(state.startedAt) <= failure.clock.startedAt, "participant started after checker");
+    assert.deepEqual(state, { containerId: role === "app" ? raw.runtime.containerId : raw.participants.upstream.containerId,
+      startedAt: state.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
+      restarting: false, restartCount: 0, exitCode: 0, error: "" }, "functional participant exited, restarted or OOM-killed");
+  }
 }
 
 // Prepare immutable expected bytes once; each application's observations are

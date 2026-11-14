@@ -1,0 +1,81 @@
+{
+  "schema": "benchmark-group-coverage/v1",
+  "registry": "benchmark-groups/v1",
+  "contractSha256": "b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff",
+  "group": "recoverable-live",
+  "apps": [
+    "corten",
+    "phoenix",
+    "rails",
+    "laravel",
+    "aspnet",
+    "leptos",
+    "topcoat"
+  ],
+  "cases": [
+    {
+      "key": "recovery",
+      "target": "live"
+    }
+  ],
+  "cells": [
+    {
+      "app": "corten",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing corten native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "phoenix",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing phoenix native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "rails",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing rails native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "laravel",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing laravel native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "aspnet",
+      "case": "recovery",
+      "implementation": "implemented",
+      "parity": "passed",
+      "measurement": "not-run",
+      "reason": "6/6 bounded native browser journeys passed; no load qualification",
+      "artifact": "aspnet-artifacts.json"
+    },
+    {
+      "app": "leptos",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing leptos native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "topcoat",
+      "case": "recovery",
+      "implementation": "not-implemented",
+      "parity": "not-run",
+      "measurement": "not-run",
+      "reason": "Missing topcoat native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    }
+  ],
+  "readyForLoad": false
+}

@@ -1,0 +1,14 @@
+{
+  "app": "corten",
+  "group": "live-delivery",
+  "files": [
+    {
+      "file": "corten-normal.json.gz",
+      "sha256": "31b0ab54b9f15951d6cb2f49d5bbc8687baa8bbf3881c2fa153be2d09e94b18a"
+    },
+    {
+      "file": "corten-slow-reader.json.gz",
+      "sha256": "1353724817154977667348e6947d5a12407c941b2101368d1ee5136491f21b10"
+    }
+  ]
+}

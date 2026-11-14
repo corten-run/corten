@@ -15,9 +15,84 @@ Corten is pre-1.0, so any minor version may change the API.
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
-  other native group integrations remain pending, not measured results.
+  native qualification and complete group measurements remain separate from source registration.
 
 ### Added
+
+- Bind native browser DOM evidence to bounded public reads, the actual document and
+  network origin, with exact replay and separate semantic and apparatus lifetimes.
+  Unsupported structure, private data, missing proof and uncertain cleanup remain
+  ineligible; timed-out body reads retain capacity until their actual sends settle.
+
+- Stream grouped cloud evidence through bounded physical-file hashing, durable copying
+  and complete archive preflight before extraction. Explicit byte, node and path budgets
+  cover the campaign phases without loading the complete archive into memory; oversized
+  or invalid evidence remains preserved rather than truncated or promoted to a result.
+
+- Run grouped benchmark evidence, isolated adapters and browser proof controls in
+  dedicated serial CI suites, plus required real Linux process and Docker-participant
+  controls in disposable delegated units. These checks do not stand in for native
+  framework qualification or an official benchmark run.
+
+- Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
+  including dependency-policy and whole-group timing gates. Failed and unsupported
+  outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
+
+- Quote Spring's colon-bearing htmx attribute name in the native Thymeleaf layout,
+  restoring catalog and marketplace HTML without changing boosting behavior or checks.
+
+- Refresh the native Rails, Phoenix, Gin and Drogon live build inputs to reviewed
+  stable versions and immutable base images. Bind deployment runtime descriptions
+  to those sources; changed inputs still require new qualification evidence.
+
+- Keep the native Razor and AOT benchmark CI test SDKs aligned with their production
+  Dockerfiles, so a runtime upgrade cannot leave the test jobs on an older SDK.
+
+- Preserve literal route, scoped-package and vendor-version filenames when collecting
+  native benchmark evidence. Collection, archive and artifact namespaces share the
+  portable-name check without decoding names or relaxing traversal, link or collision checks.
+
+- Prepare current Git in the browser CI image so native immutable-source checks run
+  with replacement objects and lazy fetching disabled, instead of failing on an older CLI.
+  Run source-replay checks as the checkout owner, retaining Git's ownership protection.
+
+- Register the native Rails, Phoenix and Laravel live ports without promoting
+  historical captures. Retain Livewire/Reverb wire and DOM evidence, including
+  negative HTTP controls and request timings on failed journeys; Laravel's
+  observed native-feed deadline misses remain unqualified outcomes.
+
+- Align server build recipes with the refreshed Python 3.15 and Java 27 images,
+  the native Spring JSON check with its production toolchain, deployment runtime
+  descriptions with their current sources, and the Express Node/Bun comparison
+  with the reviewed htmx 4 artifact. Changed inputs require new native qualification;
+  older captures remain historical.
+
+- Bind grouped comparison eligibility to the committed offline latest-stable dependency
+  policy while preserving every contender's native outcomes and failed evidence.
+
+- Reconcile grouped deployment manifests with the checked-in Node 26 and .NET 11
+  launch paths and native Corten/Topcoat/Leptos live ports. Source registration remains
+  separate from qualification; no older captures qualify changed images.
+
+- Align the native Corten parity and Leptos live Dockerfiles with the reviewed
+  digest-pinned Rust/trixie production toolchain and cargo-leptos version. Prior
+  captures remain historical, not qualification of the new image inputs.
+
+- Pin grouped benchmark helper images, native live Express and the Express/Bun
+  Node comparator to Node 26.13.1 by immutable digest. Retain their separate
+  native qualification requirements instead of borrowing older runtime results.
+  Django's local production-qualification helper uses that same upstream pin.
+
+- Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
+  preserving native rendering and source clients. Keep Drogon's native parser
+  normalization and repeated-header failures explicit; this does not qualify
+  that contender for traced production work. Add an opt-in native instruction-cost
+  diagnostic with complete dump validation and all-resource cleanup.
+
+- Register the native Topcoat keyed live application in its selected recoverable-live
+  group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
+  Historical missing-port evidence stays unchanged; functional integration is not a
+  completed group timing baseline.
 
 - A value the markup gives an element for its script is the element's ref's: `ref={row.with(cents)}`
   (a number, text or a `bool`), and a handler parameter typed `Map<HTMLTableRowElement, number>`
@@ -44,6 +119,7 @@ Corten is pre-1.0, so any minor version may change the API.
   images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
   and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
   historical results; the new toolchain and dependency graph are new-round inputs.
+
 - The marketplace browser gate observes native LiveView WebSocket and long-poll
   saves with exact form and reply correlation, waits for readiness before editing,
   and retains bounded case diagnostics on transport failure. Livewire saves must
@@ -70,6 +146,21 @@ Corten is pre-1.0, so any minor version may change the API.
   the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
   acquire missing evidence retroactively. Host isolation and independent source
   audit remain separate gates, not inferred from replay success.
+
+- A native Drogon keyed live application uses its own acknowledged WebSocket
+  delivery, bounded reader queues, snapshot recovery and reader-scoped cleanup.
+  Group registration preserves original wire observations and historical missing
+  outcomes; bounded correctness diagnostics are not a completed timing baseline.
+
+- Native workload-group driver entry points retain all selected contenders and explicit
+  failure/unsupported coverage. Deployment manifests separate representative production
+  choices from performance candidates and bind qualification to exact native evidence.
+  These local apparatus integrations and read-only plans are not completed group baselines
+  or automatic qualification of alternative runtimes.
+
+- Native Rails, Laravel and Phoenix marketplace alert stores expose independent,
+  session-isolated readback for accepted writes. Their adapters retain native
+  LiveView, Turbo and Livewire behavior; group qualification remains separate.
 
 - Native Corten, ASP.NET and Express marketplace reads retain request-owned
   cancellation and explicit trace context. ASP.NET and Express also bound
@@ -314,6 +405,32 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- The app `corten new` writes posts its form to the page's own route
+  (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
+  with no `GET`, where a browser without JavaScript was left at an address that answers 405 when
+  it is reloaded from a bookmark. The README and the getting-started guide show the same, and the
+  requests-and-forms guide states the rule: a form that belongs to one page posts to that page's
+  route, and a write with a path of its own redirects once done and draws a page only to refuse.
+  ui-gallery lists a card on the draft's route and `/save` sends the browser back to the draft
+  with a notice; watchlist uploads a picture to `/account`, and `/watch` and `/unwatch` send a
+  browser without JavaScript back to the watchlist with a notice and refuse a stock the market
+  does not list with a 422 (the page without JavaScript, the form as a patch with it, and a
+  Problem Details document to a data client, which got a 200 with the watchlist before)
+  ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
+
+- A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500
+  that says what to do when a path whose `#[corten::routes]` route has no `GET` handler answers
+  it with a page and a success status, keeping the handler's cookies and `Clear-Site-Data`; a
+  release build compiles none of the check. **Breaking (debug builds only):** an app from an
+  earlier `corten new` (`/greet`, with no `GET`), or any post-only route that answers a
+  browser's plain post with a 200 page (a payment provider's return, a sign-in provider's
+  `form_post` callback, a refusal sent with 200), now gets a 500 in debug builds and in its
+  router tests. To move: post the form to the page's own route (`get = .., post = ..`), or
+  answer the write with `req.redirect` or `req.redirect_with_notice` once it is done and refuse
+  with `req.invalid`. A router built by hand, an `unstaged` route and an `any = ..` route are
+  not checked
+  ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
+
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
@@ -444,6 +561,14 @@ Corten is pre-1.0, so any minor version may change the API.
   app's test that compares such a patch's body whole changes (the watchlist's Load more test now
   splits it off)
   ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
+- Give the Rust benchmark images distinct locked target caches and a shared whole Cargo home,
+  including the package-cache lock. Keep pinned CLI binaries outside that mount and align the
+  fullstack recipes' dependency, build and development paths with the images. Historical results
+  remain historical; no build timings or native qualification are inferred from this change.
+
+- The marketplace browser gate recognizes Livewire's native enhanced alert response
+  only for the same origin, matching component, item, locale, save call and submitted
+  values. Native transport and plain-form behavior remain unchanged.
 
 - The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
   (`<app>-target`), so a build waits only for another build of the same app, where every app on a
@@ -611,6 +736,10 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- Benchmark deployment refreshes target the newest stable framework, runtime and build
+  tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
+  silently downgrading them or removing selected contenders; qualify new inputs afresh.
 
 - The corten-site deploy guide has the times of the first replacement of the site's machine
   (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six

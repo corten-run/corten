@@ -1,0 +1,8 @@
+{
+  "name": "native-laravel-live-recovery",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "esbuild client.js --bundle --minify --target=es2022 --outfile=public/client.js" },
+  "dependencies": { "laravel-echo": "2.6.3", "pusher-js": "8.6.0" },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "live-parity-express",
+  "private": true,
+  "type": "module",
+  "dependencies": { "express": "5.3.0" }
+}

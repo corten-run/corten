@@ -25,7 +25,7 @@ pub(crate) fn document(title: &str, content: Markup, catalog: bool) -> Markup {
                 script src="/static/htmx.min.js" defer {}
                 script src="/static/item.js" defer {}
             }
-            body hx-boost="true" {
+            body "hx-boost:inherited"="true" {
                 header class="site-header__bar" { a href="/" { "Card Market" } }
                 main { (content) }
             }
