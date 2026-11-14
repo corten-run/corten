@@ -380,7 +380,7 @@ also be nonempty, but may contain empty segments (`/files/a//b`); it can answer 
 `/items//edit` when the parameter route does not match. Without another matching route the
 answer is 404. Matching is case-sensitive
 and keeps trailing slashes distinct. Corten pins the matchit version it tests, so a fresh app
-gets these same rules ([design Choice 47](../design.md#choice-matchit)).
+gets these same rules ([design Choice 48](../design.md#choice-matchit)).
 
 A parameter may be followed by plain text in its segment, as a file's extension is:
 `#[route("/sitemap/{kind}/{page}.xml")] pub struct SitemapPage<'a> { pub kind: &'a str, pub page: u32 }`

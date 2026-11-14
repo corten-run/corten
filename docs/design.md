@@ -1182,7 +1182,7 @@ rules something out.
        ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
        The deliberate matchit 0.9.2 upgrade later made every path parameter nonempty: an empty
        segment no longer matches it, though another route such as a catch-all may answer
-       ([Choice 47](#choice-matchit)); the dispatch suite now requires that rule.
+       ([Choice 48](#choice-matchit)); the dispatch suite now requires that rule.
        The path is still matched first, so an unknown URL is a `404` whatever its method: RFC 9110
        sets no order among its errors when more than one applies, and the `404` keeps the app's
        own not-found page for a mistyped address, where a `501` would say nothing about it.
@@ -1475,7 +1475,7 @@ rules something out.
     error page, tag, compression or layout reads); measured, one pair of runs (functions named for
     axum, tower or matchit 1.7% of the item page's user instructions, 2.5% with their code inside
     Corten's, the item's JSON 3.8%, on `b79a6b23`); platform (hyper 1.12 reads and writes
-    HTTP/1.1, matchit 0.9.2 matches paths ([Choice 47](#choice-matchit)), and `http` 1 is the type hyper and its clients share);
+    HTTP/1.1, matchit 0.9.2 matches paths ([Choice 48](#choice-matchit)), and `http` 1 is the type hyper and its clients share);
     platform (rustc names the argument no request can fill for one impl per arity, where one impl
     over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
     holds a router of Corten's to what axum does without naming either); measured (the partial
@@ -1535,7 +1535,7 @@ rules something out.
     against `ecbef5eb`, with the corrected watch semantics read in `watch.rs` and `app.rs`,
     and the untried connection-level alternative distinguished from the measured send stall;
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
-    17 tests passed with empty parameters refused ([Choice 47](#choice-matchit)); 2026-11-14,
+    17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
@@ -1922,8 +1922,8 @@ rules something out.
     parameter is stripped before the router holds the path (`suffixed`); a `Route` written by hand
     and given to the hidden `Routes::__route` can put text before one, and the count follows
     matchit 0.9.2 for that too; such a route can also meet 0.9.2's order-dependent conflict,
-    a known limit Choice 47 records); platform (matchit 0.9.2, exactly pinned by
-    [Choice 47](#choice-matchit), read in `tree.rs`: a parameter takes at least one byte after
+    a known limit Choice 48 records); platform (matchit 0.9.2, exactly pinned by
+    [Choice 48](#choice-matchit), read in `tree.rs`: a parameter takes at least one byte after
     any text before it and before any suffix, a segment holds one parameter, and a catch-all
     takes the nonempty rest of the path. Corten still strips suffixes before insertion, so
     0.9's tightened prefix/suffix conflicts do not change the shapes its macros insert.
@@ -2028,7 +2028,7 @@ rules something out.
     differential test in the commit that adds it, which fails when the count is made to refuse an
     empty value before a `/`; 2026-11-13, matchit 0.9.2's `tree.rs`, `error.rs` and insertion
     tests read against 0.8.4 and 0.8.6, and `Router::new` and `api::can_match_under` re-read
-    against them for the exact pin ([Choice 47](#choice-matchit)); 2026-11-14, the matching
+    against them for the exact pin ([Choice 48](#choice-matchit)); 2026-11-14, the matching
     differential and area-scope tests passed in the merged workspace's full debug tests at
     `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
@@ -3193,7 +3193,138 @@ rules something out.
     card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
     `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
 
-47. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
+47. <a id="choice-patch-brings-area-styles"></a>**A patch ends with the section stylesheet links of its handler's path, and the
+    runtime loads the ones the page lacks before it puts the patch in place; the server is not
+    told the page the patch lands on.** A page links the stylesheets of the areas its path is
+    under (`Area::components`, [Limit 9](#limit-stylesheet-support)), and a navigation's answer
+    carries the same links for the runtime to load before it swaps the page in. A patch carried
+    none and the runtime's `apply()` loaded none, so a `data-patch` form on `/search` answered by
+    a handler at `/items/{slug}/save` drew the `/items` area's dialog unstyled, while the debug
+    check passed because it read the handler's path
+    ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
+    Now `Req::patch` (and a refused form's patch) ends with the links of the handler's path, after
+    the patch's elements, and `apply()` loads those the document lacks with the patch's modules,
+    through the function a navigation uses (`stylesOf`). A component a patch renders is then
+    listed where its handler is, as a page's components are listed where the page is, and the
+    debug check's path is the right one. A stylesheet that fails to load is taken out of the
+    head again and the patch goes in unstyled, where a navigation loads the page in full: a
+    patch is often a write's answer, which a reload would lose, and the next patch that links the
+    stylesheet tries again. A second answer that links a stylesheet still loading (two patches in
+    flight, a patch and a navigation) waits for the same load rather than take the link in the
+    head for a loaded stylesheet. One that neither loads nor fails holds the answer as it holds a
+    navigation's, and holds every later answer that links it too, each later patch from the
+    area's handlers and each later navigation into the area, until the page is loaded again:
+    Corten sets no timeout of its own, as the browser sets none on a page's stylesheets.
+
+    Every cost it adds, and who pays it. First, the runtime is 53 bytes larger with gzip and 49
+    with brotli, paid by every user of every Corten app, apps with no areas too, once a release,
+    since the runtime's URL is versioned and cached for good. Second, a patch from a handler
+    outside every area of an app with area stylesheets costs 95.1 instructions a request more
+    (18,709.4 against 18,614.3), the area check (`section_links` and `memcmp`); in an app whose
+    areas have no stylesheets a patch costs nothing measurable (18,559.0 against 18,562.5), since
+    the check returns at once. Third, a patch whose handler is under an area with a stylesheet,
+    wherever it lands and whatever it renders, is the link longer (88 bytes for the watchlist's
+    `/smoke` area, sent as they are, since a patch under 1 KiB is not compressed) and costs
+    633.5 instructions more in the harness (19,193.0 against 18,559.5). About 120 of those find
+    and write the link (`section_links` +104, `memcmp` +18); about 510 are the harness patch's
+    buffer growing to hold it (`realloc`, `finish_grow`, the copy and the allocator's own frames,
+    by the per-function counts of one run of each). That patch's 27-byte body leaves its buffer
+    at 32 bytes, and the 87-byte link, pushed whole, makes it grow once more, to 114 bytes
+    (reasoned from the lengths and `String`'s growth to the larger of double and what is
+    needed); a patch whose buffer has room for the link pays about the 120, as a patch drawn by a
+    bare `html!` does, whose string starts at its call site's last size and never below 256
+    bytes (the harness patch is a component, whose string starts empty). Fourth, on
+    a page that lacks the area's stylesheet, the page fetches it and the answer waits for it,
+    even when the patch renders none of the area's components (one that only removes a row, or
+    renders components from `App::components`): the link goes by the handler's path, not by what
+    the patch drew. That costs the stylesheet's bytes once a page (the watchlist's
+    `sections/smoke.css` is 62 bytes, sent as they are, measured) and one request's wait
+    (reasoned: the stylesheet's own fetch, which a warm cache may answer). On a page that has
+    the stylesheet, the same-area case, the runtime finds the link in the head and fetches
+    nothing.
+
+    Weighed: all four are the README's conflict order, 2, performance at the user's end. What
+    they buy is in its 1, correctness and reliability: without them a patch from another area's
+    handler is drawn unstyled with no error, in release as in debug. Correctness comes first in
+    that order, so the costs are paid. They are also small where they fall most: by the bet
+    below, most patches land in their handler's area, where the change costs the link's bytes
+    and the instructions above and no request, and the case it fixes, a patch landing outside
+    its handler's area, is the minority. Giving a component's string a size of its own, as an
+    `html!` call site's has, takes the 510 of growth off the harness patch and saves more than
+    the links cost:
+    [#1418 Size a component's string from its own last render, as an html! call site's is](https://github.com/corten-run/corten/pull/1418)
+    measures a small component's patch at 17,537.5 instructions a request against 18,734.5 on
+    main `0ff569c6` (1,197 fewer) and a 4 KiB one's at 26,695.9 against 32,414.8, with its own
+    harness; the string then starts at 256 bytes, room for the 88-byte link. It is a change of
+    its own, not part of this one; its head is not on this history, so it is cited by the pull
+    request.
+    The stylesheet a patch brings is loaded under the policy of the page it lands on, not the
+    area's: an image or font it loads from a source only `Area::policy` adds is refused on a page
+    outside the area. An area stylesheet that needs such a source does not carry over to patches
+    answered outside the area; the source goes on the app's policy, or the handler moves to the
+    page's side.
+
+    Not chosen: the runtime telling the server the page's path (a request header of Corten's own
+    beside `corten: action`, [Choice 11](#choice-corten-request-header)), which would let the server
+    leave out a link the page has or, as the issue's second option, refuse the patch in a debug
+    build. Leaving links out saves the same-area patch its link bytes, but every patch request
+    carries the header, a response that depends on it needs `Vary` on it, and a script's
+    `patch()` or a `ReadAgain` read has no page path to send that the server could trust more
+    than the document's own head; refusing in a debug build leaves a release build drawing the
+    patch unstyled and makes the app list the component in both areas (a shared file) or in
+    `App::components`, which every page then links, the pilot's workaround. `Referer` is not
+    used for the same purpose, since an area may set a referrer policy that sends less, and a
+    proxy may drop it. Recording which components a patch rendered, so only their sections are
+    linked (and a patch that draws none of them links none), would make every release render keep
+    that record, which [Limit 9](#limit-stylesheet-support) rules out. A live fragment
+    (`corten::live`) is drawn without a request's path and still carries no links: a stream that
+    renders an area's component on a page outside the area lists it where its pages are.
+
+    Stands on: measured (callgrind, release, `tests::what_a_patch_in_an_area_costs` at 200 and
+    1,200 requests with jemalloc, its three `PATCH_WHERE` cases, three runs of each build
+    alternated, before at `d1cb28f9` (main) with the test as at `43e7e8a1` added and after at
+    `43e7e8a1`, every run of a build within 1.6 instructions of the others; the runtime's
+    minified size with Node's gzip and brotli at their defaults, once, at `bccc912f` (this change
+    merged onto main) against main `0ff569c6`; the patch's and the stylesheet's bytes from the
+    watchlist, once); platform (a
+    `<link rel="stylesheet">` added to `<head>` fires `load` once its rules apply and `error` when
+    it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
+    subresources are under that policy too; the load, the failure and a second patch waiting for
+    a load are checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and a navigation
+    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API); reasoned (a
+    handler's path decides its area, as a page's does, so the links need nothing the request does
+    not have; the runtime already skips a stylesheet the head has, by its URL; the wait a page
+    outside the area pays is one request; the harness patch's buffer grows once more for the link,
+    from its 27-byte body's 32 bytes); bet (a patch from an area's handler, a write's answer
+    or a `ReadAgain` read of a part under the area, mostly lands on a page in the same area, where
+    the links are bytes and no request; a part polled under an area sends the link with every
+    read, and writes and reads are few enough a visit that those bytes do not show beside its
+    pages); value (a patch drawn unstyled with no error is wrong output, which the README's
+    conflict order puts first, 1, correctness and reliability, above the costs weighed above,
+    which are its 2, performance at the user's end; an area's rules still load only where they are
+    used rather than on every page, README Value 1, Fast; a component is listed in its own area
+    for patches as for pages, README Value 5, One way to do each thing).
+
+    Revisit when: an app in the repository or the Chase Sets pilot sends patches or `ReadAgain`
+    reads under an area whose link bytes reach a tenth of its patch bytes on a screen people use
+    for many writes, or watch through many reads, in a row (a patch-heavy desk, a part polled
+    every few seconds); patches from an area's handlers are found landing mostly on pages outside
+    it, where each first one waits for the stylesheet; the runtime starts sending the page's path
+    for another reason, when the server could leave out the links the page has; a live
+    fragment is found drawing an area's component unstyled on a page outside it; or
+    [#1418 Size a component's string from its own last render, as an html! call site's is](https://github.com/corten-run/corten/pull/1418)
+    closes unmerged, when a linked component patch, whose string starts empty, keeps the 510 of
+    growth and the weighing above loses its offset.
+
+    Last checked: 2026-11-13, the callgrind runs on `d1cb28f9` against `43e7e8a1`, with valgrind
+    3.19.0; 2026-11-13, the runtime's size at `bccc912f` against main `0ff569c6`; 2026-11-13, the patch's link and `sections/smoke.css` from the watchlist at `43e7e8a1`;
+    2026-11-13, the patch's link loaded, failed, kept and waited for in Chromium 156.0.8078.4,
+    Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
+    waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
+    unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
+    `stylesOf` (`9c722e27`) put back in this head's runtime.
+
+48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
     fixes [#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368):
     with `0.8`, a fresh app's lockfile took 0.8.6 while the workspace's held 0.8.4, and a patch
@@ -3429,11 +3560,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
-   linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
-   a page renders, which would cost every render.
+   linked from those pages, and from the patches their handlers answer
+   ([Choice 47](#choice-patch-brings-area-styles)); the split is by URL prefix, chosen by the app,
+   not detected from what a page renders, which would cost every render.
    The lists are written by hand. `corten check` reads the source for a component with a
    stylesheet, script or view that no array names (a `COMPONENTS` list, `.components(&[..])`),
-   and a debug build refuses a page that draws one its area does not get. The scan sees names,
+   and a debug build refuses a page, or a patch, that draws one its handler's area does not get. The scan sees names,
    not whether a list reaches `App::components`. A build-time check could do more for a child
    whose type `html!` knows (an inherent constant on each component, `None` for a hand-written
    `Render`, walked at startup), but not for a generic child, whose type is known only where it is

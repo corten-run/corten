@@ -37,7 +37,7 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 | `tokens!("tokens/tokens.resolver.json")` ([design tokens](#design-tokens)) | custom properties (`--space-4`), each theme's changes (`[data-theme="dark"]`, `[data-density="compact"]`), enums (`Space::_4.var()`) and typed utilities, a function per value (`gap_2()` prints `gap-2`, `mx_auto()` `mx-auto`) and per utility for a value chosen as the page renders or per breakpoint: `gap(Responsive::new(Space::_2).md(Space::_4))` prints `gap-2 md:gap-4` |
 | `App::components(&[TOKENS, OfferList, ...])` | one `components.css` in the listed order, linked from `<head>` and precached by the PWA; a component rendered but not listed is an error in a debug build (a router test, `cargo run`, `corten dev`) |
 | `var(--color-accent)` in a component's stylesheet | a startup error unless a stylesheet on the same pages declares it (the token file, a listed component's, a `.css` file in the static directory, or for an area's component one linked from its area), naming the file and the property; `var(--x, fallback)` is not checked |
-| `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`; a component listed in two places, or tokens in an area, is a startup error, and a page outside the area that renders one is an error in a debug build |
+| `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`, and from the patches their handlers answer; a component listed in two places, or tokens in an area, is a startup error, and a page or a patch handler outside the area that renders one is an error in a debug build |
 
 Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks the
 class, so adding a variant without a rule does not compile. A component library is a crate that
@@ -449,9 +449,30 @@ App::new(routes)
   go in a file the areas share (`sections/search+categories.css` for one screen at `/search`
   and `/categories/{slug}`), linked from their pages only, with any other component the same
   areas list. One most pages render belongs in `App::components` instead, and so do tokens,
-  which style every page; a component is in one or the other, not both. A patch is styled by the page it lands on and is checked
-  against its own URL, so a form whose action sits outside the page's area should answer with
-  components from `App::components`.
+  which style every page; a component is in one or the other, not both.
+- A patch brings the stylesheets of its handler's area, linked after its elements, as a
+  navigation's answer does: a `data-patch` form on `/search` whose action is `/items/{slug}/save`
+  gets its dialog styled by the `/items` area's stylesheet, which the runtime adds and waits for
+  before it puts the patch in place; a second patch or a navigation that links it while it loads
+  waits for the same load. List a patch's components where its handler is, as a page's are listed
+  where the page is; a debug build checks them against the handler's path.
+- A patch answered on a page that already links the stylesheet costs the link's bytes and no
+  request (the runtime skips one it has). On a page that lacks it, the page fetches the area's
+  stylesheet and the answer waits for it, even when the patch draws none of the area's
+  components (one that only removes a row, or draws components from `App::components`): the
+  link goes by the handler's path, not by what the patch draws. A handler whose patches mostly
+  land outside its area is cheaper routed where its pages are.
+- A stylesheet that fails to load leaves the patch in place unstyled, since the patch is a
+  write's answer, and the next patch that links it tries again. One that neither loads nor fails
+  holds the answer as it holds a navigation, with no timeout of Corten's own, and so holds every
+  later answer that links it: each later patch from the area's handlers and each later navigation
+  into the area wait on the same load until the page is loaded again.
+- The stylesheet is loaded under the policy of the page the patch lands on, not the area's: an
+  image or font it loads from a source only `Area::policy` adds is refused on a page outside the
+  area. An area stylesheet that needs such a source does not carry over to those patches: add the
+  source to the app's policy, or answer them from a handler on the page's side.
+- Why the server links by the handler's path rather than being told the page's, and what it
+  costs: [design Choice 47](../design.md#choice-patch-brings-area-styles).
 
 Splitting has a price: two files compress worse than one, and entering the area costs a
 request. Measured on the item page (release build, brotli at its file level): one
