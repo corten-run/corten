@@ -3495,9 +3495,10 @@ rules something out.
     (`HtmlResult`) does not say whether it answers a page or a patch. So a patch in an app with
     layout reads takes 26,562 instructions where it took 21,556 (callgrind puts about 3,450 in the
     copy and its drop, the rest in the boxed fill around the route, which a whole document's `GET`
-    pays too); in an app without them a patch takes 21,487 where it took 21,382 (the mark carried
-    through the middleware's futures). The runtime is 341 bytes larger raw, 93 with gzip (15,069 to
-    15,162) and 80 with brotli. A `GET` form and a navigation pay nothing.
+    pays too); in an app without them a patch takes 21,487 where it took 21,382 (by reasoning, not a
+    profile, the mark carried through the middleware's futures). The runtime is 341 bytes larger
+    raw, 93 with gzip (15,069 to 15,162) and 80 with brotli. A `GET` form and a navigation pay
+    nothing.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`, the
     difference of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every
