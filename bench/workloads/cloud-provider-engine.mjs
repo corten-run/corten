@@ -169,7 +169,9 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         for (;;) {
           const { action } = await call("GET", `/v2/actions/${actions[0].id}`);
           assert.ok(action?.id === actions[0].id && action.resource_type === "droplet" && action.type === "create");
-          assert.ok(action.resource_id === result.droplet.id || action.status === "in-progress" && action.resource_id === null);
+          // The action model permits integer zero as well as null. Neither is
+          // completion proof: only a completed action bound to this droplet is.
+          assert.ok(action.resource_id === result.droplet.id || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0));
           if (action.status === "completed") { assert.equal(action.resource_id, result.droplet.id); break; }
           assert.equal(action.status, "in-progress", "provider create action failed");
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
