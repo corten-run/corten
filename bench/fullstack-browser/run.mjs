@@ -69,18 +69,26 @@ export class OwnedDocker {
   }
   record(event) { return this.ledger?.append({ ...event, at: Date.now() }); }
   async acknowledged(operation, meta, args) {
+    const retainCreateId = (stdout) => {
+      if (operation !== "create" || !/^[a-f0-9]{64}$/.test(stdout ?? "")) return null;
+      this.containers.add(stdout); this.participants.set(stdout, { role: meta.role, app: meta.app, case: meta.case });
+      return stdout;
+    };
     try {
       const stdout = await docker(args);
       if (operation === "create") {
         assert.match(stdout, /^[a-f0-9]{64}$/);
-        this.containers.add(stdout); this.participants.set(stdout, { role: meta.role, app: meta.app, case: meta.case });
+        retainCreateId(stdout);
       }
       this.record({ event: "command", operation, ...meta, id: operation === "create" ? stdout : meta.id, code: 0 });
       return stdout;
     } catch (error) {
       const r = error.receipt;
+      // A failed/interrupting create can still return the original full ID.
+      // Register it before interpreting the exit or attempting any readback.
+      const createdId = retainCreateId(r?.stdout);
       if (r && !r.timedOut && !r.spawnError && !r.signal && Number.isInteger(r.code))
-        this.record({ event: "command", operation, ...meta, id: meta.id ?? null, code: r.code });
+        this.record({ event: "command", operation, ...meta, id: createdId ?? meta.id ?? null, code: r.code });
       throw error;
     }
   }
@@ -128,7 +136,7 @@ export class OwnedDocker {
       assert.equal(info.Config.Labels["agent.task"], this.task); assert.equal(info.Config.Labels["agent.owner"], "codex");
       try { if (this.ledger) await this.participant(id, "terminal"); } catch (error) { observationError = error; }
     }
-    // A successful own create registered the original full ID before inspect.
+    // An own create registered any returned original full ID before inspect.
     // Lost terminal evidence blocks replay, but must not strand that resource.
     const removed = await commandResult("docker", ["rm", "-f", "-v", id]);
     if (!removed.timedOut && !removed.spawnError && !removed.signal && Number.isInteger(removed.code)) this.record({ event: "remove", kind: "container", id, code: removed.code });

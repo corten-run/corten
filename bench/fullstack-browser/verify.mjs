@@ -22,6 +22,7 @@ import { replaySource, replayBuildContext, replayTools } from "./native-source.m
 import { replayExecution } from "./native-execution.mjs";
 import { replayWorkerAbsence, replayPeerApplicability, expectedNativeExitCode } from "./native-lifetimes.mjs";
 import { replayResponse } from "./native-responses.mjs";
+import { definition } from "../workloads/registry.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
 const hash = /^[a-f0-9]{64}$/, commitId = /^[a-f0-9]{40}$/;
@@ -35,6 +36,7 @@ const same = (a, b, message) => need(isDeepStrictEqual(a, b), message);
 const need = (ok, message) => assert.ok(ok, message);
 const exactKeys = (v, names, message) => same(object(v) ? Object.keys(v).sort() : null, [...names].sort(), message);
 const cleanSnapshot = sha256(JSON.stringify({ diff: "", untracked: [] }));
+const nativeCaseSources = new Map(definition("fullstack-browser").cases.map((p) => [p.key, p.source]));
 
 function localPath(value) {
   need(text(value) && !/[\x00-\x1f\x7f]/.test(value) && !/^[\\/]{2}/.test(value), "Local filesystem path required; no network/device paths");
@@ -621,7 +623,10 @@ export function validateContextReceipts(contexts, terminal, execution) {
   for (const c of contexts) {
     exactKeys(c, ["id", "role", "app", "case", "source", "createStartedAt", "createdAt", "closeStartedAt", "closeEventAt", "closeCompletedAt", "absentAfter"], "Unknown context receipt");
     need(text(c.id) && !ids.has(c.id), "Duplicate/missing native context identity"); ids.add(c.id);
-    need(["application", "ssr-parser", "mutation-other"].includes(c.role) && candidates.includes(c.app) && ["api", "fixture"].includes(c.source), "Unknown native context role/source");
+    need(["application", "ssr-parser", "mutation-other"].includes(c.role) && candidates.includes(c.app) && [null, "api", "fixture"].includes(c.source), "Unknown native context role/source");
+    need(nativeCaseSources.has(c.case), "Unknown native context case");
+    if (c.source === null) complete = false;
+    else same(c.source, nativeCaseSources.get(c.case), "Native context source differs from fixed case");
     const windows = execution.processWindows.filter((w) => w.app === c.app && w.case === c.case);
     if (windows.length !== 1) { complete = false; continue; }
     const times = [windows[0].startedAt, c.createStartedAt, c.createdAt, c.closeStartedAt, c.closeEventAt, c.closeCompletedAt, windows[0].endedAt];
@@ -634,14 +639,36 @@ export function validateContextReceipts(contexts, terminal, execution) {
     && times.every(finite) && times.every((v, i) => !i || times[i - 1] <= v);
 }
 
+function participantSource(snapshot, caseKey) {
+  need(nativeCaseSources.has(caseKey), "Unknown native application case");
+  const actualSource = snapshot?.env?.filter(([key]) => key === "MARKETPLACE_SOURCE") ?? [];
+  if (!actualSource.length) return false;
+  need(actualSource.length === 1, "Ambiguous native workload source");
+  if (typeof actualSource[0][1] !== "string") return false;
+  same(actualSource[0][1], nativeCaseSources.get(caseKey), "Native workload source differs from fixed case");
+  return true;
+}
+
+export function validateExecutionSources(events) {
+  let complete = true;
+  for (const e of events) if (e.event === "participant" && e.role === "application")
+    if (!participantSource(e.snapshot, e.case)) complete = false;
+  return complete;
+}
+
 export function validateCaseParticipant(app, caseKey, evidence, execution) {
   const participants = execution.participants.filter((p) => p.role === "application" && p.app === app && p.case === caseKey);
   const windows = execution.processWindows.filter((w) => w.app === app && w.case === caseKey);
   if (!participants.length || !windows.length || !evidence.provenance) return false;
   need(participants.length === 1 && windows.length === 1, "Ambiguous application participant/window");
   const participant = participants[0], window = windows[0], p = evidence.provenance;
+  need(nativeCaseSources.has(caseKey), "Unknown native application case");
+  const expectedSource = nativeCaseSources.get(caseKey);
+  if (p.source === undefined || p.source === null) return false;
+  same(p.source, expectedSource, "Journey source differs from fixed case");
   same([p.containerId, p.imageId], [participant.id, participant.imageId], "Journey differs from original execution participant");
   if (!participant.terminal || !participant.window) return false;
+  if (!participantSource(participant.terminal, caseKey)) return false;
   need(participant.window.startedAt <= window.startedAt && window.endedAt <= participant.window.endedAt, "Browser window outside application participant");
   if (p.stillSameProcess) need(participant.terminal.state.Running === true && participant.terminal.state.StartedAt === p.startedAt
     && participant.terminal.restartCount === 0, "Journey process continuity contradicts native terminal participant");
@@ -682,7 +709,8 @@ export function replayPrerequisite(cell, app, summary, execution, buildContexts)
     return { prerequisite: "native-create-rejected", command: create[0].seq };
   if (create.length === 1 && create[0].code === 0 && start.length === 1 && start[0].id === create[0].id && start[0].code > 0) {
     const participant = execution.participants.find((p) => p.id === create[0].id && p.role === "application" && p.app === app && p.case === cell.case);
-    if (participant?.terminal?.state.Status === "created" && participant.window === null && participant.imageId === summary.images[app]?.id)
+    if (participant?.terminal?.state.Status === "created" && participant.window === null && participant.imageId === summary.images[app]?.id
+      && participantSource(participant.terminal, cell.case))
       return { prerequisite: "native-start-rejected", command: start[0].seq };
   }
   return null;
@@ -738,6 +766,8 @@ async function validateNativeV2(input) {
     same([executionValue.task, executionValue.commit], [summary.task, input.commit], "Native execution identity differs");
     need(Date.parse(summary.startedAt) <= execution.executionWindow.startedAt && execution.executionWindow.endedAt <= Date.parse(summary.finishedAt), "Native execution outside producer run");
     for (const reason of execution.blocked) block(`execution:${reason}`);
+    const sourcesComplete = validateExecutionSources(executionValue.events);
+    if (!sourcesComplete) block("application-source-proof-missing");
     const buildContexts = new Set();
     for (const [app, build] of Object.entries(summary.builds)) {
       if (!build.nativeContext) { block("immutable-build-context-missing"); continue; }
@@ -777,7 +807,7 @@ async function validateNativeV2(input) {
         need(!readIds.has(r.requestId), "Reused independent native read identity"); readIds.add(r.requestId);
         const c = n.contexts.find((c) => c.id === r.context);
         need(context && c && c.role === role && c.app === app && c.case === cell.case && c.source === context.source, "Independent readback/context identity differs");
-        same([r.app, r.case, r.source, r.round, r.phase, r.path], [app, cell.case, c.source, summary.options.round, phase, targets[app]?.readback?.path], "Independent readback source/phase/endpoint differs");
+        same([r.app, r.case, r.source, r.round, r.phase, r.path], [app, cell.case, nativeCaseSources.get(cell.case), summary.options.round, phase, targets[app]?.readback?.path], "Independent readback source/phase/endpoint differs");
         need(c.createdAt <= r.startedAt && r.startedAt <= r.finishedAt && r.finishedAt <= c.closeStartedAt, "Independent read outside native context window");
         const response = replayResponse(reader, r.responseEvidence, { requestId: r.requestId, responseSha256: r.responseSha256, path: r.path, status: r.status });
         same(response.value, r.alerts, "Independent public readback differs from retained bytes");
@@ -811,7 +841,7 @@ async function validateNativeV2(input) {
     const manifest = reader.finish(); same(manifest, n.manifest, "Native store changed during replay");
     files.unchanged();
     const outer = [...files.entries].filter(([, f]) => !f.directory).map(([path, f]) => ({ path, sha256: sha256(readFileSync(f.path)) }));
-    if (!execution.blocked.length && result.cleanupComplete && execution.participants.every((p) => p.imageId && p.terminal)) result.hostSubject = {
+    if (!execution.blocked.length && sourcesComplete && result.cleanupComplete && execution.participants.every((p) => p.imageId && p.terminal)) result.hostSubject = {
       schema: "native-browser-host-subject/v2", executionWindow: execution.executionWindow, processWindows: execution.processWindows,
       toolIdentities: { node: tools.node, browser: tools.browser }, participants: execution.participants,
       subjectSha256: execution.subjectSha256, filesSha256: sha256(encoded(outer)) };

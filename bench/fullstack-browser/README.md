@@ -401,13 +401,19 @@ their acknowledged original image IDs and context digests must match the observe
 Labels alone do not provide this build proof.
 
 Owned Docker create/build IDs are registered before inspect, so a lost readback cannot lose
-cleanup ownership. Artifacts stay stopped. The execution ledger retains command acknowledgements,
+cleanup ownership. A full original container ID returned by a failed or interrupted create also
+remains owned; the failed exit is retained, never promoted to success or a no-ID rejection.
+Artifacts stay stopped. The execution ledger retains command acknowledgements,
 pre-removal participant observations, actual `rm -f -v` acknowledgements and final ALL/OWNED
 inventories. Parser, mutation and application contexts separately retain creation, native close
 event, close completion and enumerated absence; browser disconnection is required too. A blocked
 execution result never produces a verified host subject. Docker configuration is not OS proof.
 Every observed journey also binds its original container/image/start identity and browser window
 to the replayed application participant, within the retained producer execution interval.
+The fixed case determines the workload source: every retained application participant snapshot's
+actual `MARKETPLACE_SOURCE`, journey provenance, context and independent readback must agree with
+it. Matching saved claims cannot override that source; missing source evidence blocks completion
+and cannot produce a verified host subject.
 
 V2 distinguishes selected-slice completeness, all-registry attempt completeness, unchanged strict
 qualification and apparatus cleanup. Failed build/create/start prerequisites can explain an
