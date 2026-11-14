@@ -398,16 +398,16 @@ find their cells without reading attributes:
 // on:connect={js::live(qty, url::Levels, signal)}, live(cells, feed, signal) with cells.get(level.id)
 ```
 
-**A value for each element.** Rows a script compares (orders by price, filters by stock) carry
-what it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a
-parameter typed `Map<HTMLTableRowElement, number>` gets every row with its value, in the page's
-order. Two rows may give the same value, and a row with a key keeps it. The value is named once,
-in the markup, and the script reads it from the map, so the two share no attribute name as text,
-and a number is a number in the script (an integer past 2^53 stops debug builds, and a NaN or
-infinite float arrives as `null`, as a handler's number argument does). The call is checked as any ref's is: a ref whose elements give no value,
-give text where the handler takes `number`, or give one on some elements and not on others does
-not compile. A value is a number, text (`string`) or a `bool` (`boolean`); an app's own type gives
-the number or text it stands for.
+**A value for each element.** Rows a script compares (orders by price, filters by stock) carry what
+it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a parameter
+typed `Map<HTMLTableRowElement, number>` gets every row with its value, in the page's order. Two
+rows may give the same value, and a row with a key keeps it. The value is named once, in the markup,
+and the script reads it from the map, so the two share no attribute name as text, and a number is a
+number in the script (an integer past 2^53 stops debug builds, and a NaN or infinite float arrives
+as `null`, as a handler's number argument does). The call is checked as any ref's is: a ref whose
+elements give no value, give text where the handler takes `number`, or give one on some elements and
+not on others does not compile. A value is a number, text (`string`) or a `bool` (`boolean`); an
+app's own type gives the number or text it stands for.
 
 ```rust,ignore
 <tbody ref={body}>

@@ -204,8 +204,10 @@ fn a_float_argument_is_written_as_display_writes_it() {
     }
 }
 
-/// An integer argument, and a ref's integer value, are the digits `Display` writes, whatever the
-/// type and sign, though they are written as markup writes a number, without the formatter.
+/// An integer argument, and a ref's integer value, are the digits `Display` writes for the types,
+/// signs and values here, though they are written as markup writes a number, without the
+/// formatter. That writer is `Render`'s, and `integers_render_as_display_writes_them` in
+/// `view/tests.rs` holds it to `Display` at every width and both ends of each type.
 #[test]
 fn an_integer_argument_is_written_as_display_writes_it() {
     let ints: [i64; 10] = [0, 7, 10, 99, 100, 1250, -1, -100, 9_007_199_254_740_991, -9_007_199_254_740_991];

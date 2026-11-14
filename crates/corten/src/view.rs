@@ -1635,16 +1635,22 @@ impl<T: Attrs> Attrs for Option<T> {
     }
 }
 
+/// The attributes a spread of pairs skips, in any case: Corten writes them from `style=`, `ref=`,
+/// `on:` and a component's root, and `html!` refuses them written by hand.
+const PRINTED_BY_CORTEN: [&str; 5] = ["data-vars", "data-ref", "data-ref-value", "data-on", "data-scope"];
+
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's
-/// code; a name with characters an attribute name cannot have is skipped, and so is `data-vars`,
-/// which only `style={..}` writes (a full page's style block has rules for its values alone).
+/// code; a name with characters an attribute name cannot have is skipped, and so are the names
+/// `html!` refuses because Corten prints them: `data-vars`, which only `style={..}` writes (a full
+/// page's style block has rules for its values alone), and `data-ref`, `data-ref-value`,
+/// `data-on` and `data-scope`, which only `ref=`, `on:` and a component's root write.
 impl<N: AsRef<str>, V: AttrValue> Attrs for [(N, V)] {
     fn render_attrs(&self, out: &mut String) {
         for (name, value) in self {
             let name = name.as_ref();
             if !name.is_empty()
                 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.'))
-                && !name.eq_ignore_ascii_case("data-vars")
+                && !PRINTED_BY_CORTEN.iter().any(|printed| name.eq_ignore_ascii_case(printed))
             {
                 value.write_attr(&format!(" {name}"), out);
             }

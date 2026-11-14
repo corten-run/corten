@@ -3077,21 +3077,21 @@ rules something out.
     element to its value.** A script that reorders or filters rows the server drew compares
     something each row carries (a price in cents, a count in stock). A `data-` attribute read
     through `dataset` named it as text twice, in the markup and in the script, so a misspelled or
-    renamed name compiled, passed `tsc` and read `undefined`, and the value reached the script as
-    a string to convert. A ref already ties a handler's parameter to the elements it names, checked
-    when the crate compiles ([Choice 5](#choice-handlers-checked-where-called)), so the value goes on
-    the ref: `row.with(x)` fixes the ref's third type parameter from `x`'s Rust type (a number,
-    text or a `bool`: `ts::Number`, `ts::String`, `ts::Boolean`), every element given the ref
-    gives a value of that one type, and a parameter typed `Map<El, number>` (or `string`,
-    `boolean`) takes only such a ref, as `El` takes only a ref on that tag. A ref given a value on
-    some elements and none on others, or text where the handler takes `number`, does not compile
-    (`compile_fail` doctests on `Ref::with`). The call names it `=row`, and the runtime gives the
-    handler every element with the ref, in the page's order, with `JSON.parse` of its
-    `data-ref-value`. The server writes the value with the writers a handler's arguments use,
-    single-quoted ([Choice 45](#choice-data-on-single-quoted)), so a number is a number in the
-    script, and an integer past 2^53 stops debug builds as an argument's does. The one name the
-    markup and the script share is the ref's, which the compiler already holds them to;
-    `data-ref-value` is the runtime's own, written only by `ref=`.
+    renamed name compiled, passed `tsc` and read `undefined`, and the value reached the script as a
+    string to convert. A ref already ties a handler's parameter to the elements it names, checked
+    when the crate compiles ([Choice 5](#choice-handlers-checked-where-called)), so the value goes
+    on the ref: `row.with(x)` fixes the ref's third type parameter from `x`'s Rust type (a number,
+    text or a `bool`: `ts::Number`, `ts::String`, `ts::Boolean`), every element given the ref gives
+    a value of that one type, and a parameter typed `Map<El, number>` (or `string`, `boolean`) takes
+    only such a ref, as `El` takes only a ref on that tag. A ref given a value on some elements and
+    none on others, or text where the handler takes `number`, does not compile (`compile_fail`
+    doctests on `Ref::with`). The call names it `=row`, and the runtime gives the handler every
+    element with the ref, in the page's order, with `JSON.parse` of its `data-ref-value`. The server
+    writes the value with the writers a handler's arguments use, single-quoted
+    ([Choice 45](#choice-data-on-single-quoted)), so a number is a number in the script, and an
+    integer past 2^53 stops debug builds as an argument's does. The one name the markup and the
+    script share is the ref's, which the compiler already holds them to; `data-ref-value` is the
+    runtime's own, written only by `ref=`.
 
     Not chosen: the row's key (`ref={rows} key={..}` and a `Map<string, El>`). A key is a row's
     identity, which two rows with the same price cannot share, and it is text, so taking it for the
@@ -3111,68 +3111,87 @@ rules something out.
     `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
     (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
     `immutable`, and nothing on a load: the value is read only when a handler that takes it runs.
-    The README's order puts performance at the user's end above compile-time safety and one way to
-    do things (Values 4 and 5), and on that order [Choice 45](#choice-data-on-single-quoted) did not
-    spend 41 bytes on a block for large data. This Choice does not rest on Values 4 and 5: it rests
-    on correctness, which the order puts first. With a `data-` attribute the page is wrong, not
-    slow: a misspelled or renamed name compiles, passes `tsc`, and gives the script `undefined` with
-    no error anywhere, so a sort leaves the rows as they were (`undefined - 1250` is NaN, which
-    `sort` takes as equal), and a number arrives as text, so a comparison that forgets to convert
-    (`<`, not `-`) orders `"999"` after `"1250"`. The block
-    [Choice 45](#choice-data-on-single-quoted) turned down made pages that were already correct
-    faster. Here nothing without a reader in the runtime makes these pages correct: a value read
+    What it costs a page that uses it is the value written on each element: card-market's item page,
+    whose listings each give their ref their cents (22 rows a page on average), is 418 bytes larger
+    (8,818 to 9,236), since each row now carries its ref's name beside its value (`data-ref="row"
+    data-ref-value='1250'` where it had `data-cents="1250"`), and 21 bytes larger with zstd (2,181
+    to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with gzip (2,512 to 2,511), the bytes a
+    user receives. Rendering its main part costs about 930 instructions more a page, about 42 a row,
+    2.4% (callgrind: `ItemDetail`'s render took 2,363.8 and 2,368.9 million instructions over the
+    test's 60,000 renders before, 2,424.5 and 2,419.7 million after); the whole test, compression of
+    the larger pages included, is 0.8% more (28,332.8 and 28,354.7 million to 28,576.2 and 28,575.3
+    million). An integer value is written as markup writes a number (`Render`), not through
+    `Display`'s formatter, which had made the same render 13.5% more. A page whose elements give no
+    value costs nothing: seller-desk's desk took 2,080,520,197 instructions to render in every run
+    of both builds.
+
+    The trade is a Value 4 benefit against a small Value 1 cost. The benefit is Value 4's, mistakes
+    failing at compile time: a value a script reads back is checked when the crate compiles, where
+    with a `data-` attribute a misspelled or renamed name compiled, passed `tsc` and gave the script
+    `undefined` with no error anywhere (a sort that subtracts gets NaN, which `sort` takes as equal,
+    and leaves the rows as they were), and a number came as text the script had to convert (one
+    compared with `<` orders `"999"` after `"1250"`); one way for a script to get what an element
+    carries, its ref, is Value 5's. Value 1 ranks above both and says no to features that cost every
+    user to help a few, which is why [Choice 45](#choice-data-on-single-quoted) did not spend 41
+    bytes with gzip (128 raw, 45 with brotli) on a reader for a block of large data. The render cost
+    here is not of that kind: only a page whose elements give values writes them, and a page that
+    gives none is unchanged to the instruction. The runtime's 21 bytes are of that kind: every user
+    downloads them once a release, whether or not a page they load gives a value. That is the
+    deciding point, and it was accepted because it is half what
+    [Choice 45](#choice-data-on-single-quoted) refused, and because what it buys differs in kind:
+    that Choice's block would have made pages that were already correct a fraction of a millisecond
+    faster, while this makes a silent wrong answer a compile error in any app whose script reads a
+    value its markup wrote, which no change without a reader in the runtime does (a value read
     through `dataset` is text the compiler cannot see, and the other ways below each give up a row's
-    identity or its order. So the reader is taken, at 21 bytes with gzip once a release, because it
-    removes a silent wrong output, and Values 4 and 5 (the mistake fails when the crate compiles,
-    one way for those rows) follow from it rather than outweigh Value 1. On Value 1 the bytes are
-    spent where a page uses them: card-market's item page, whose listings each give their ref their
-    cents, is 418 bytes larger (8,818 to 9,236), since each row now carries its ref's name beside
-    its value (`data-ref="row" data-ref-value='1250'` where it had `data-cents="1250"`), and 21
-    bytes larger with zstd (2,181 to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with gzip
-    (2,512 to 2,511), the bytes a user receives. Rendering its main part costs about 930
-    instructions more a page, 2.4% (callgrind: `ItemDetail`'s render took 2,363.8 and 2,368.9
-    million instructions over the test's 60,000 renders before, 2,424.5 and 2,419.7 million after),
-    the ref's name and value written on each listing row (22 a page on average); the whole test,
-    compression of the larger pages included, is 0.8% more (28,332.8 and 28,354.7 million to
-    28,576.2 and 28,575.3 million). An integer value is written as markup writes a number
-    (`Render`), not through `Display`'s formatter, which had made the same render 13.5% more. A page
-    whose elements give no value is unchanged: seller-desk's desk, 2,080,520,197 instructions to
-    render in every run of both builds.
+    identity or its order). It rests on the bet in Stands on that more than one app's scripts read
+    such values; if that fails, the 21 bytes help a few, and the Revisit-when reopens them. The
+    README prints the runtime's size to 0.1 KB, and `npm run check` accepts the figure a build
+    within 32 bytes would print, the spread between two zlibs (`scripts/readme-size.mjs`). 15,016
+    bytes is 14.66 KB, which on its own rounds to 14.7, but 32 bytes less rounds to 14.6, so the
+    README's "14.6 KB (gzip) runtime" still passes: the 21 bytes are inside that allowance, and they
+    leave 17 bytes (to 15,033) before the printed figure has to become 14.7.
 
     Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
     brotli at quality 11, once each build; the item page's bytes from `render_cost` in
     `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
     card-market and seller-desk, two runs of each build alternated, the base first); platform (a
     `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
-    script its decoded value);
-    reasoned (the runtime already finds a ref's elements in the page's order for `*` and `#`, so a
-    value is one attribute read per element when the handler runs and nothing on a load; the ref's
-    third type parameter is one type wherever the component uses the ref, so a ref given text on one
-    element and a number on another, or a value on one and none on another, is a type error); bet
-    (apps beyond card-market hand their scripts values on rows the scripts reorder or filter, so the
-    reader serves more than one page; today card-market's listing sort, corten-site's wall,
-    `apart.js` and `answer.js`, and the watchlist's smoke page use it); value (a value a script
-    reads is the one the server wrote, or the crate does not compile: correctness first in the
-    README's order; no name as text at a seam, Values 4; one way for a script to get what an
-    element carries, its ref, Values 5; a value on a ref, not a new concept, Values 6).
+    script its decoded value); reasoned (the runtime already finds a ref's elements in the page's
+    order for `*` and `#`, so a value is one attribute read per element when the handler runs and
+    nothing on a load; the ref's third type parameter is one type wherever the component uses the
+    ref, so a ref given text on one element and a number on another, or a value on one and none on
+    another, is a type error); bet (apps beyond card-market hand their scripts values on elements
+    the scripts reorder, filter or follow, so the reader serves more than one page; today the values
+    are given in card-market's listing sort, `listing_sort.rs`, read by `listing_sort.js`;
+    corten-site's wall, `surface.rs`, read by `wall.js`; its seam's marked names, `apart.rs`, read
+    by `apart.js`; its header table, `steel.rs`, read by `answer.js`; and the watchlist's smoke
+    page, `smoke.rs`, read by `quoted.js`); value (a mistake in a value a script reads fails when
+    the crate compiles, Values 4, at a cost every user pays of 21 bytes with gzip once a release,
+    Values 1, which ranks above it; no name as text at a seam, Values 4; one way for a script to get
+    what an element carries, its ref, Values 5; a value on a ref, not a new concept, Values 6).
 
-    Revisit when: an app's script needs a record per element rather than one number, text or
-    `bool` (then the value might be any `ToJson` with its generated declaration), or the platform
-    gives elements typed custom data a script can read without a name as text, or something outside
-    Corten has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal.
-    The bet fails, and the 21 bytes reopen against checking `dataset` names some other way (a
-    declaration of each component's `data-` names generated as `corten::types` is), when on
-    2027-05-13 or later `rg -n 'ref=\{[a-z_]+\.with\(' crates/corten-ui crates/corten-cli examples`
-    finds ref values only in the places named in Stands on, and
-    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving
-    `rows::sort`'s `data-sort` onto them.
+    Revisit when: an app's script needs a record per element rather than one number, text or `bool`
+    (then the value might be any `ToJson` with its generated declaration), or the platform gives
+    elements typed custom data a script can read without a name as text, or something outside Corten
+    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal. The bet
+    fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
+    each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
+    things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value
+    (`ref={name.with(..)}`, on one line or split over several) beyond the five places named in
+    Stands on, and their tests and docs; a search for `.with(` lists the candidates, and each is
+    read, since a search alone misses markup split over lines. Second,
+    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving corten-ui's
+    `data-sort` and the attributes beside it onto ref values. If that issue is still open on
+    2027-11-13, the first condition alone decides on that date.
 
     Last checked: 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
     2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
-    `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as
-    markup does, and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the
-    value read back by card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and
-    read with `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
+    `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
+    and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
+    card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
+    `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1); 2026-11-13,
+    the room left under the README's printed size, by `phrase` in `scripts/readme-size.mjs` on
+    `d1cb28f9`, for the runtime built on `d1cb28f9` merged with the change.
 
 ## Rules
 

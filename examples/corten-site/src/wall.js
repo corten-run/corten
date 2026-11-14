@@ -20,7 +20,8 @@ function requests() {
 /**
  * Moves the tiles into `placed`'s order and writes the readout. The script's time is from
  * `began`, when its handler was called, to here; the frame's is from the click itself, so it
- * counts the runtime's work of handing the tiles over, to the next frame drawn.
+ * counts the runtime's work of handing the tiles over (finding them, and a `JSON.parse` of each
+ * tile's reading), to the next frame drawn.
  * @param {MouseEvent} event @param {HTMLDivElement} grid @param {HTMLOutputElement} readout
  * @param {{ tile: HTMLElement }[]} placed @param {number} began
  * @param {Message<"count" | "ms" | "frame" | "requests">} said @param {NumberFormat} number
