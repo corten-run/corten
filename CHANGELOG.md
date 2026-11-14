@@ -293,6 +293,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A patch's body starts from the size the last patch took, an eighth more, as a page's does,
+  where it started empty and grew while the patch was drawn. Measured at `731cdda0` against
+  main `d1cb28f9` (callgrind, release, jemalloc, three runs each, with the
+  `what_a_patch_in_an_area_costs` harness of
+  [#1416 Bring a patch's area stylesheets with it](https://github.com/corten-run/corten/pull/1416)
+  added to both): a patch under an area costs 17,382.0 instructions a request against 18,559.5,
+  one outside every area 17,437.9 against 18,614.3, and one in an app whose areas have no
+  stylesheets 17,385.5 against 18,562.5, about 1,177 fewer each, the `realloc` and
+  `finish_grow` of growing the buffer.
+
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
