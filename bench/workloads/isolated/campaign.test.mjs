@@ -13,6 +13,7 @@ import { groupNames } from "../registry.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
+import { composePhase } from "./composition.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -87,13 +88,19 @@ mock.module("./host-lifetime.mjs", { exports: {
 mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
   async inspectNative(binding, native) {
     evidence.tree(native);
-    if (mode === "complete") return { status: binding.request.group === "live-delivery" ? "failed" : "verified",
-      attemptComplete: true, cleanupComplete: true, resources: "verified",
-      outcomes: binding.selection.apps.map((app, i) => ({ app, outcome: binding.request.group === "live-delivery" && i === 1 ? "failed" : "passed" })), blockers: [] };
+    if (mode === "complete") return completeNative(binding);
     return { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
       outcomes: binding.selection.apps.map((app) => ({ app, outcome: "not-run" })), blockers: [] };
   },
 } });
+function completeNative(binding) {
+  return { status: binding.request.group === "live-delivery" ? "failed" : "verified",
+    attemptComplete: true, cleanupComplete: true, resources: "verified",
+    outcomes: binding.selection.apps.map((app, i) => ({ app, outcome: binding.request.group === "live-delivery" && i === 1 ? "failed" : "passed" })),
+    blockers: [], ...(binding.request.group === "fullstack-browser" ? {
+      qualificationPassed: true, expectedExitCode: 0, comparisonEligibleApps: [...binding.selection.apps],
+    } : {}) };
+}
 mock.module("./json-staging.mjs", { namedExports: {
   ...audit,
   inspectPreparation: () => ({ summary: { actualBuilt: true }, report: { baseline: false } }),
@@ -279,6 +286,30 @@ for (const progress of ["intent", "started", "exited"]) test(`saved pending comm
   }
 });
 
+test("synthetic complete browser evidence follows exact qualification and native-exit gates", () => {
+  const binding = { request: { group: "fullstack-browser" }, selection: { apps: ["corten", "selected-failure"] },
+    preparation: { fixtures: [] }, latestStable: { schema: "benchmark-latest-stable-evaluation/v1", group: "fullstack-browser",
+      valid: true, status: "not-applicable", groupComparisonEligible: null } };
+  const native = completeNative(binding), host = { resources: "verified", cleanupComplete: true };
+  const command = (code) => ({ terminal: true, code, signal: null, cancelled: false, forced: false, error: null, success: code === 0 });
+  nativeReplay.validateNativeResult(binding, native);
+  assert.equal(composePhase(binding, native, host, [command(0)]).outcome, "native-validated");
+  for (const key of ["qualificationPassed", "expectedExitCode"]) {
+    const missing = { ...native }; delete missing[key];
+    assert.throws(() => nativeReplay.validateNativeResult(binding, missing), key);
+    assert.notEqual(composePhase(binding, missing, host, [command(0)]).outcome, "native-validated", key);
+  }
+  for (const code of [1, 2, 137, null])
+    assert.notEqual(composePhase(binding, native, host, [command(code)]).outcome, "native-validated");
+  const unsupported = { ...native, qualificationPassed: false, expectedExitCode: 1, comparisonEligibleApps: [],
+    outcomes: native.outcomes.map((r) => ({ ...r, outcome: "unsupported" })) };
+  nativeReplay.validateNativeResult(binding, unsupported);
+  const failedQualification = composePhase(binding, unsupported, host, [command(1)]);
+  assert.equal(failedQualification.outcome, "native-validated");
+  assert.ok(failedQualification.appOutcomes.every((r) => r.outcome === "unsupported" && !r.comparisonEligible));
+  assert.notEqual(composePhase(binding, unsupported, host, [command(0)]).outcome, "native-validated");
+});
+
 test("all-nine intrinsic completion is reachable without claiming every framework passed or external authority", async () => {
   const s = setup(), h = await begin(s); mode = "complete";
   let current = s.campaign.status(h);
@@ -297,6 +328,9 @@ test("all-nine intrinsic completion is reachable without claiming every framewor
   assert.equal((await validateSavedCampaign({ folder: root, round: expectedPlan.round, commit: expectedPlan.commit })).status, "verified");
   const live = saved.groups.find((g) => g.group === "live-delivery");
   assert.deepEqual(live.appOutcomes[1], { app: "selected-failure", outcome: "failed", comparisonEligible: false });
+  const browser = saved.groups.find((g) => g.group === "fullstack-browser");
+  assert.deepEqual(browser.appOutcomes, expectedPlan.bindings.find((b) => b.request.group === "fullstack-browser").selection.apps
+    .map((app) => ({ app, outcome: "passed", comparisonEligible: true })));
   for (const target of ["00-catalog-page-timing/host-before.json", "00-catalog-page-timing/command-0-host/raw.json",
     "mixed-audit-subject.json", "mixed-audit-delivery-retained.json", "mixed-native-audits.json",
     `mixed-audit-sources/blobs/${audit.sourceFile.sha256}`]) {
