@@ -3588,7 +3588,12 @@ rules something out.
     18,404.68 before (18,404.65 to 18,406.15), 18,389.72 after with `HtmlResult` (18,389.65 to
     18,389.74) and 18,389.60 with `HtmlResult<Patches>` (18,388.02 to 18,389.69), 15 fewer; both
     differences are in how the generic methods were inlined, not work added or removed, and the
-    two kinds cost the same); bet (the routes a part is read from are few and
+    two kinds cost the same; and for the mode `patch_or`, `invalid` and `invalid_with` read, one
+    more field of `Req` set as it is made, the same way, three runs of each, on `74b8bef51`
+    (before; the binary built at `6bcccbca0`, the same Rust) and `89e355062` (after): the patch
+    17,967.70 before (17,967.67 to 17,967.72) and 17,963.83 after (17,963.68 to 17,965.37) with
+    `HtmlResult`, 17,967.68 and 17,963.73 with `HtmlResult<Patches>`, the page 18,385.65 and
+    18,381.58 with either, 4 fewer, again in how the code was laid out, not work removed); bet (the routes a part is read from are few and
     declared in a routes module, so the one word and the one return type cost an app little, and
     no app reads a part again from a route given by hand); value (mistakes fail at compile time,
     Values 4).
@@ -3622,7 +3627,17 @@ rules something out.
     `corten::Result<impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>>` named as `Methods` (the
     doctest on `AnyAnswer`), a post-only mount refused with the mount's message
     (`tests/handler_message.rs`), and, in a scratch crate with the same assertion, a mount only
-    `main` reaches passing `cargo test` and failing `cargo build --bins`, on `75d031c24`.
+    `main` reaches passing `cargo test` and failing `cargo build --bins`, on `75d031c24`;
+    2026-11-14, a handler returning `impl Answer<.., Kind = Patches>` taken by its routes module
+    and by a mount, and its patch served
+    (`an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand`),
+    an app's own answer that holds a patch refused as such a route's `get` (the
+    `compile_fail,E0277` doctest on `PatchRoute`), the routes module's message still at the
+    handler's name (`tests/handler_message.rs`), and a handler that sets
+    `req.mode = Mode::Document` still answering the runtime's read with a patch through
+    `patch_or`, `invalid` and `invalid_with`
+    (`a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set`), on
+    `89e355062`.
 
 ## Rules
 

@@ -506,7 +506,9 @@ Corten is pre-1.0, so any minor version may change the API.
   `impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
   nothing to run (callgrind, a `patch_or` request in process, `what_a_patch_or_request_costs` on
   `0ff569c69` and `811324247`: 17,972 instructions for the patch before and 17,973 after, 18,405
-  before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`). The requests guide now says
+  before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`;
+  the mode `patch_or` reads, one more field of `Req`, measured 4 fewer on `89e355062` than on
+  `74b8bef51`: 17,968 and 17,964 for the patch, 18,386 and 18,382 for the page). The requests guide now says
   what a `data-patch` form gets from a handler that answers its page: the page swapped in, as a
   navigation's
   ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
