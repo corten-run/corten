@@ -153,6 +153,69 @@ test("native document origins refuse absent bodies or ambiguous loaders but do n
 });
 
 test("native body observation bounds concurrency bytes and deadline without retaining raw data", async (t) => {
+  await t.test("second wave after timeout cannot exceed four unsettled sends", async () => {
+    const cdp = new EventEmitter(), resolves = [], receipts = []; let active = 0, peak = 0;
+    cdp.send = () => new Promise((resolve) => {
+      active++; peak = Math.max(peak, active);
+      resolves.push(() => { active--; resolve({ body: "late private bytes", base64Encoded: false }); });
+    });
+    const audit = new NativeNetworkAudit(cdp, () => null, (r) => receipts.push(r));
+    const wave = (n) => { for (let i = 0; i < 4; i++) {
+      const requestId = `${n}-${i}`;
+      cdp.emit("Network.requestWillBeSent", { requestId, frameId: "frame", loaderId: requestId, timestamp: n + 1, wallTime: n + 100,
+        type: "Document", request: { url: "http://127.0.0.1/page", method: "GET" } });
+      cdp.emit("Network.responseReceived", { requestId, response: { status: 200 } }); cdp.emit("Network.loadingFinished", { requestId });
+    } };
+    try {
+      wave(0); await audit.drain();
+      assert.equal(active, 4, "Drain must not wait forever for unresolved transport calls");
+      wave(1); await audit.drain();
+      assert.equal(peak, 4, "Expired observations must not release actual-send capacity");
+      assert.equal(resolves.length, 4, "Second-wave observations expire without protocol calls");
+      assert.equal(audit.queue.length, 0);
+      assert.equal(audit.pending.size, 4, "Unsettled transport calls remain counted after both deadlines");
+    } finally {
+      resolves.forEach((resolve) => resolve()); await new Promise(setImmediate); await audit.drain();
+    }
+    assert.equal(active, 0); assert.equal(audit.pending.size, 0); assert.equal(resolves.length, 4);
+    assert.equal(audit.observations.size, 0);
+    assert.equal(receipts.length, 1, "Neither timed-out nor expired queued observations become proof");
+    assert.equal(audit.parserBody, null); assert.ok(!JSON.stringify(receipts).includes("late private bytes"));
+  });
+  for (const kind of ["late settlement", "session close", "rejection", "synchronous throw"]) await t.test(kind, async () => {
+    const cdp = new EventEmitter(), resolves = [], receipts = []; let calls = 0;
+    cdp.send = () => {
+      calls++;
+      if (kind === "synchronous throw") throw new Error("Body unavailable");
+      if (kind === "rejection") return Promise.reject(new Error("Body unavailable"));
+      return new Promise((resolve) => resolves.push(() => resolve({ body: "late bytes", base64Encoded: false })));
+    };
+    const audit = new NativeNetworkAudit(cdp, () => null, (r) => receipts.push(r));
+    const finishResponse = (i) => {
+      const requestId = String(i);
+      cdp.emit("Network.requestWillBeSent", { requestId, frameId: "frame", loaderId: requestId, timestamp: i + 1, wallTime: i + 100,
+        type: "Document", request: { url: "http://127.0.0.1/page", method: "GET" } });
+      cdp.emit("Network.responseReceived", { requestId, response: { status: 200 } }); cdp.emit("Network.loadingFinished", { requestId });
+    };
+    try {
+      for (let i = 0; i < 5; i++) finishResponse(i);
+      if (kind === "session close") {
+        assert.equal(calls, 4); cdp.emit("close"); await audit.drain();
+        finishResponse(5); assert.equal(calls, 4, "A closed session cannot dispatch queued or new observations");
+      } else if (kind === "late settlement") {
+        await audit.drain(); assert.equal(calls, 4);
+        resolves.splice(0).forEach((resolve) => resolve()); await new Promise(setImmediate);
+        assert.equal(calls, 4, "Expired queued work cannot start after capacity becomes available");
+        finishResponse(5); assert.equal(calls, 5, "Actual settlement releases capacity for a fresh observation");
+        resolves.splice(0).forEach((resolve) => resolve()); await audit.drain();
+      } else { await audit.drain(); assert.equal(calls, 5); }
+    } finally {
+      resolves.forEach((resolve) => resolve()); await new Promise(setImmediate); await audit.drain();
+    }
+    assert.equal(audit.pending.size, 0); assert.equal(audit.queue.length, 0); assert.equal(audit.observations.size, 0);
+    assert.equal(receipts.length, kind === "late settlement" ? 2 : 1);
+    if (kind !== "late settlement") assert.equal(audit.parserBody, null);
+  });
   await t.test("at most four reads active", async () => {
     const cdp = new EventEmitter(), resolves = [], receipts = []; let active = 0, peak = 0;
     cdp.send = () => new Promise((resolve) => { active++; peak = Math.max(peak, active); resolves.push(() => { active--; resolve({ body: "bounded bytes", base64Encoded: false }); }); });

@@ -442,8 +442,12 @@ under the unchanged strict parity gate. Missing, extra or substituted rows remai
 Independent network-stack dispatch receipts must also conserve every native chain/hop and its
 bounded clock identity; deleting both ordinary ledgers cannot excuse an orphan stack receipt.
 Bounded CDP response reads retain only byte hash/length and optional Date-header hash. The body
-string and decoded bytes each have a 16 MiB limit, with at most four reads active and a bounded
-1024-entry queue; each observation has 1000 ms including queue time. Only the latest document's
+string and decoded bytes each have a 16 MiB limit, with at most four unsettled protocol reads and a bounded
+1024-entry queue; each observation has 1000 ms including queue time. Expiry does not release an
+unsettled protocol read's slot; actual settlement or session close releases it. A closed session
+starts no further reads. Queued observations expire without dispatch when capacity stays
+unavailable; drain waits for observation deadlines, not indefinitely for transport settlement.
+Late results supply no proof. Only the latest document's
 bytes remain in memory for one independent parser consumption. No raw body is saved or logged.
 Missing/failed reads, exceeded bounds and unsupported responses remain unproved. Retained
 projection bytes with missing linkage are conserved but cannot attest their saved semantic model.
