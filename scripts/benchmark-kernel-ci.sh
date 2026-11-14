@@ -53,6 +53,7 @@ JS
     --property='Delegate=cpu cpuset memory pids' --property=DelegateSubgroup=supervisor \
     --property=Restart=no --property=KillMode=control-group --property=RuntimeMaxSec=120 \
     --property=TimeoutStopSec=15 --working-directory "$checkout" \
+    --setenv="PATH=$(dirname "$node"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     --setenv=BROWSER_PARTICIPANT_OS_TESTS=1 --setenv=BROWSER_PARTICIPANT_NAMESPACE=matched \
     --setenv="BROWSER_PARTICIPANT_ID=$id" /bin/bash "$work/unit.sh" | tee "$work/$suite.tap"
   grep -Fx '# fail 0' "$work/$suite.tap"
