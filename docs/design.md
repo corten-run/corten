@@ -1179,8 +1179,9 @@ rules something out.
        axum's router answered `405` with the route's `Allow`, which 15.5.6 keeps for a method the
        server implements and the resource lacks
        ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
-       The deliberate matchit 0.9.2 upgrade later changed empty parameter segments to 404s
-       everywhere ([Choice 47](#choice-matchit)); the dispatch suite now requires that rule.
+       The deliberate matchit 0.9.2 upgrade later made every path parameter nonempty: an empty
+       segment no longer matches it, though another route such as a catch-all may answer
+       ([Choice 47](#choice-matchit)); the dispatch suite now requires that rule.
        The path is still matched first, so an unknown URL is a `404` whatever its method: RFC 9110
        sets no order among its errors when more than one applies, and the `404` keeps the app's
        own not-found page for a mistyped address, where a `501` would say nothing about it.
@@ -1533,7 +1534,8 @@ rules something out.
     against `ecbef5eb`, with the corrected watch semantics read in `watch.rs` and `app.rs`,
     and the untried connection-level alternative distinguished from the measured send stall;
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
-    17 tests passed with empty parameters refused ([Choice 47](#choice-matchit)).
+    17 tests passed with empty parameters refused ([Choice 47](#choice-matchit)); 2026-11-14,
+    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2024,7 +2026,9 @@ rules something out.
     differential test in the commit that adds it, which fails when the count is made to refuse an
     empty value before a `/`; 2026-11-13, matchit 0.9.2's `tree.rs`, `error.rs` and insertion
     tests read against 0.8.4 and 0.8.6, and `Router::new` and `api::can_match_under` re-read
-    against them for the exact pin ([Choice 47](#choice-matchit)).
+    against them for the exact pin ([Choice 47](#choice-matchit)); 2026-11-14, the matching
+    differential and area-scope tests passed in the merged workspace's full debug tests at
+    `66cb2936e`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -3237,7 +3241,9 @@ rules something out.
     2026-11-13, the four direct matching tests failed on 0.8.4 and passed on the exact 0.9.2
     pin, with all 17 dispatch tests passing after the deliberate empty-value change;
     2026-11-13, the matched and unknown requests counted at `cebf0b4f7` against `0ff569c69`
-    with the same harness copied into the base snapshot, rustc 1.99.1 and valgrind 3.19.0.
+    with the same harness copied into the base snapshot, rustc 1.99.1 and valgrind 3.19.0;
+    2026-11-14, the four direct matching tests, 17 dispatch tests and scope differential
+    passed in the merged workspace's full debug tests at `66cb2936e`.
 
 ## Rules
 
