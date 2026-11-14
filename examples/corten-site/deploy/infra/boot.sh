@@ -13,15 +13,27 @@ domain='' email='' machine='' redirects=''
 
 # First, so the workflow that made this machine can reach it while it installs: the handover
 # key runs handover.sh as root and nothing else, on this machine as on the one before it. Its
-# private half is the workflow's alone, and is not among what a machine is handed.
+# private half is the workflow's alone, and is not among what a machine is handed. The key
+# signs in as a user of its own, made as provision.sh makes `deploy`, and not as root: a cloud
+# image may hold root to a password that must be changed before anything signs in as it.
+# sudo and sshd are on a cloud image already.
 handed=/var/lib/corten-site-handover
 if grep -q . /root/deploy/handover.pub 2>/dev/null; then
     install -m 755 /root/deploy/handover.sh /usr/local/sbin/corten-site-handover
-    install -d -m 700 /root/.ssh
-    touch /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-    sed -i '/corten-site-handover/d' /root/.ssh/authorized_keys
-    sed 's|^|restrict,command="/usr/local/sbin/corten-site-handover" |' /root/deploy/handover.pub >> /root/.ssh/authorized_keys
+    id handover >/dev/null 2>&1 || useradd --create-home --shell /bin/sh handover
+    install -d -m 700 -o handover -g handover /home/handover/.ssh
+    # The word the key's holder sends is one argument, whatever is in it, and sudo lets three
+    # words through.
+    # shellcheck disable=SC2016 # read by the shell sshd starts, not this one
+    printf 'restrict,command="sudo -n /usr/local/sbin/corten-site-handover \\"$SSH_ORIGINAL_COMMAND\\"" %s\n' \
+        "$(cat /root/deploy/handover.pub)" > /home/handover/.ssh/authorized_keys
+    chown handover:handover /home/handover/.ssh/authorized_keys
+    chmod 600 /home/handover/.ssh/authorized_keys
+    cat > /etc/sudoers.d/corten-site-handover <<'EOF'
+handover ALL=(root) NOPASSWD: /usr/local/sbin/corten-site-handover ask, /usr/local/sbin/corten-site-handover give, /usr/local/sbin/corten-site-handover take
+EOF
+    chmod 440 /etc/sudoers.d/corten-site-handover
+    visudo -cf /etc/sudoers.d/corten-site-handover
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -75,25 +87,32 @@ wait_for() {
 # names set up are the ones the certificate holds: asked for any other, provision.sh would ask
 # Let's Encrypt for a certificate, and Let's Encrypt cannot reach this machine until the
 # address is here. Each step leaves what an earlier try finished.
+#
+# The names the site's certificate holds beside the site's own, one a line.
+held() {
+    openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -ext subjectAltName |
+        tr ',' '\n' | sed -n 's/^ *DNS://p' | grep -vxF "$domain" || true
+}
 take_over() {
     if [ -d "$handed/etc/letsencrypt" ]; then
         rm -rf /etc/letsencrypt
         mv "$handed/etc/letsencrypt" /etc/letsencrypt
     fi
-    held=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -ext subjectAltName |
-        tr ',' '\n' | sed -n 's/^ *DNS://p' | grep -vxF "$domain" | tr '\n' ' ')
-    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$held"
+    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$(held | tr '\n' ' ')"
     for release in "$handed"/*/; do
         release=${release%/}
+        name=${release##*/}
         [ -x "$release/corten-site" ] || continue
-        to=/opt/corten-site/releases/${release##*/}
-        rm -rf "$to"
-        cp -a "$release" "$to"
-        chown -R deploy:deploy "$to"
+        # A release's name was a deploy's to choose on the machine before this one.
+        case $name in *[!A-Za-z0-9._-]* | [!A-Za-z0-9]*) continue ;; esac
+        # Put there by the deploy user, as a deploy puts one: the directory is that user's,
+        # and its key is on this machine by now, so root writes nothing in it and follows no
+        # link there. What that user's tar writes is that user's, whatever its mode was.
+        runuser -u deploy -- rm -rf "/opt/corten-site/releases/$name"
+        tar -cf - -C "$handed" "$name" | runuser -u deploy -- tar -xf - -C /opt/corten-site/releases
         # As release.sh points `current` at a release: made beside it and moved over it.
-        ln -sfn "$to" /opt/corten-site/next
-        mv -T /opt/corten-site/next /opt/corten-site/current
-        chown -h deploy:deploy /opt/corten-site/current
+        runuser -u deploy -- ln -sfn "/opt/corten-site/releases/$name" /opt/corten-site/next
+        runuser -u deploy -- mv -T /opt/corten-site/next /opt/corten-site/current
         systemctl restart corten-site.service
     done
 }
@@ -128,12 +147,19 @@ wait_for "$domain"
 # them and the site's name takes the place of the site's (provision.sh). The word is still
 # served meanwhile: the site's configuration answers that path on port 80 for any name. After
 # a handover this is where the names become the ones given, should they differ from the ones
-# the old machine's certificate holds; where they are the same, no certificate is asked for.
-for name in $redirects; do
-    wait_for "$name"
-done
-if [ -n "$redirects" ] || [ -e /var/lib/corten-site-boot.handed ]; then
-    sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
+# the old machine's certificate holds. Where they are the same the machine is set up already,
+# and is left as it is: a second run would start the firewall again under a machine that
+# serves.
+listed() { tr ' ' '\n' | grep . | sort -u; }
+if [ -e /var/lib/corten-site-boot.handed ] && [ "$(echo "$redirects" | listed)" = "$(held | listed)" ]; then
+    echo "the names given are the ones the certificate holds: nothing more to set up"
+else
+    for name in $redirects; do
+        wait_for "$name"
+    done
+    if [ -n "$redirects" ] || [ -e /var/lib/corten-site-boot.handed ]; then
+        sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$redirects"
+    fi
 fi
 rm -f /var/www/html/.well-known/acme-challenge/corten-site-boot
 touch /var/lib/corten-site-boot.done

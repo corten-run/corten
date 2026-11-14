@@ -290,7 +290,9 @@ Corten is pre-1.0, so any minor version may change the API.
   up before. Where nothing can be handed over (no key, or a droplet made before this) the
   address moves first, as it did. The workflow asks the site once a second while it applies
   and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
-  makes a new machine where nothing has changed.
+  makes a new machine where nothing has changed (`-f without_handover=true` hands it
+  nothing). Rehearsed in containers and not yet run on a droplet: the deploy README says
+  what that leaves untried.
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's

@@ -103,24 +103,37 @@ behind it and also while the service is down.
 A new droplet serves before the address moves because it is handed what the old one serves
 with. Every droplet lets one key, the handover key, run one command as root
 (`infra/handover.sh`), which gives certbot's directory and the release being served, or takes
-them on a machine that is not set up yet. The key's private half is the `Site machine`
-workflow's alone (`SITE_HANDOVER_KEY`), and is not among what a droplet is handed. Between
+them on a machine that is not set up yet. The key signs in as a user of its own, `handover`,
+which may do nothing else, and not as root: a droplet made with no key of the account is
+sent a password for root, and where that password must be changed first, sshd lets no key
+sign in as root either (seen in a container; not looked at on a droplet). The key's private
+half is the `Site machine` workflow's alone (`SITE_HANDOVER_KEY`), and is not among what a
+droplet is handed. Between
 making the new droplet and moving the address, the apply runs `infra/relay.sh` on the runner:
 it asks the machine at the site's name to give and the new one, at its own address, to take,
 one into the other and never to a file, and then asks the new one for the page at the site's
 name until it answers, with the certificate checked. The new droplet sets itself up with the
 names the certificate holds, so it asks Let's Encrypt for nothing, and serves the same
 release. Then the address moves, and the Site workflow the apply starts ships `main` to it.
-The relay gives the new droplet ten minutes to take the key and fifteen to serve; when either
-runs out the apply fails with the address where it was, the new droplet is left as it is,
-and the next run (`gh workflow run site-machine.yml`) asks it again. What the address's own
-move costs is in each run's log: the site is asked once a second while the apply runs, and
-the run says how many of those went unanswered.
+The relay gives the new droplet ten minutes to take the key and twenty-five to serve, which
+is one new try of a step that failed on it; when either runs out the apply fails with the
+address where it was, the new droplet is left as it is, and the next run
+(`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
+is there. A droplet that cannot set itself up from what it was handed, however often it is
+asked, is replaced by one that is handed nothing
+(`gh workflow run site-machine.yml -f replace=true -f without_handover=true`): the address
+moves first, as below. What the address's own move costs is in each run's log: the site is
+asked once a second while the apply runs, and the run says how many of those went
+unanswered.
 
 The address moves first, and the site is away until the new droplet has a certificate and a
 release of its own, where nothing can be handed over: there is no handover key, the droplet
 serving was made before there was one or with another, or the site does not answer when the
-apply reaches that step. The run says which. That is also every replacement made before
+apply reaches that step (it is asked three times). The run says which, and warns where a
+droplet that serves would not hand over. A repository set up before there was a handover
+gets its key from a second run of `bootstrap.sh`, and that is best done before the change
+that brings the handover is applied: the droplet made with the key is then the one that
+change makes anyway. That is also every replacement made before
 there was a handover, and that time is a machine's to install its packages and get a
 certificate, and then a whole run of the Site workflow, which waits for a runner and tests
 and builds before it ships. For the first machine made for
@@ -216,12 +229,15 @@ The handover key is not among what a droplet is handed: a droplet has its public
 the private half is a secret of the `site-machine` environment, given to the apply's step
 alone. Its holder can run one command as root on a droplet, and so read certbot's directory
 there, the certificate's private key and the Let's Encrypt account's among it, and the
-release; on a droplet that is not set up yet it can also put those in place. The same
-environment holds the DigitalOcean token, whose holder can read a droplet's disk without
-it. The deploy key cannot run the command, and nothing on the machine holds the private
-half. A new handover key (the secret and the variable removed, and `bootstrap.sh` run again)
-replaces the droplet on the next apply, and the droplet serving then does not know it: that
-one replacement moves the address first.
+release. On a droplet that is not set up yet it can also put those in place, and that makes
+it root there: certbot's directory holds the hooks certbot runs as root when it renews, and
+the release is what the service runs. The same environment holds the DigitalOcean token,
+whose holder can read a droplet's disk, and make one, without it. The release is put in
+place by the `deploy` user, whose directory it goes into, so what a deploy left in a release
+gains nothing by being carried. The deploy key cannot run the command, and nothing on the
+machine holds the private half. A new handover key (the secret and the variable removed, and
+`bootstrap.sh` run again) replaces the droplet on the next apply, and the droplet serving
+then does not know it: that one replacement moves the address first.
 
 ### By hand, on any machine
 

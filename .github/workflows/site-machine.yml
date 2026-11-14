@@ -30,6 +30,10 @@ on:
         description: Make a new machine in place of the one there, though nothing it is made from has changed
         type: boolean
         default: false
+      without_handover:
+        description: Hand a new machine nothing, so the address moves first and the site is away meanwhile (for one that cannot set itself up from what it is handed)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -131,12 +135,17 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
           TF_VAR_email: ${{ secrets.SITE_EMAIL }}
           TF_VAR_host_key: ${{ secrets.SITE_HOST_KEY }}
-          HANDOVER_KEY: ${{ secrets.SITE_HANDOVER_KEY }}
+          # Empty on a push, where there are no inputs, and so the key is there.
+          HANDOVER_KEY: ${{ !inputs.without_handover && secrets.SITE_HANDOVER_KEY || '' }}
           REPLACE: ${{ inputs.replace && '-replace=digitalocean_droplet.site' || '' }}
         run: |
+          # What relay.sh has to say that a run should not be missed for: under the apply its
+          # lines follow the resource's name, and GitHub reads a warning only from a line's start.
+          export RELAY_SAID="$RUNNER_TEMP/relay"
           asking=
           ended() {
             rm -f "$RUNNER_TEMP/plan"
+            [ ! -s "$RELAY_SAID" ] || cat "$RELAY_SAID"
             [ -n "$asking" ] || return 0
             kill "$asking" 2>/dev/null || true
             echo "While the apply ran, https://$SITE_DOMAIN/ was asked $(wc -l < "$RUNNER_TEMP/asked") times, a second apart, and did not answer as the site $(grep -c lost "$RUNNER_TEMP/asked" || true) of them."
@@ -144,7 +153,9 @@ jobs:
           trap ended EXIT
           # shellcheck disable=SC2086 # the one option, or none
           tofu plan -input=false $REPLACE -out="$RUNNER_TEMP/plan"
-          made=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select(.address == "digitalocean_droplet.site") | .change.actions[]] | index("create") != null')
+          # A machine this run makes, or one an earlier run made and this one moves the address
+          # to (after a relay that failed, the plan makes none): either is shipped to below.
+          made=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select((.address == "digitalocean_droplet.site" and (.change.actions | index("create") != null)) or (.address == "digitalocean_reserved_ip.site" and (.change.actions | index("update") != null)))] | length > 0')
           echo "made=$made" >> "$GITHUB_OUTPUT"
           # The page names the commit it was built from; read whole, then searched.
           while :; do
