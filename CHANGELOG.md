@@ -639,6 +639,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
+  the form that asked for it (or its button) is outside the dialog: the element a submit's answer
+  replaces takes the answer's open state then, as the press is newer than the user's close, so a
+  Preview button beside a server-drawn sheet works on every press, not only the first, and a
+  `<details>` asked for unfolded unfolds. A submit from inside the element, the elements inside
+  the one replaced, a live fragment, a `ReadAgain` read and a script's `patch()` still keep what
+  the user opened or closed, and a popover stays as the user left it (design Choice 49). The
+  runtime is 39 bytes larger with gzip.
+
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
   the answer links its handler's section stylesheets after its elements, as a navigation's
   answer does, and the runtime loads the ones the page lacks with the patch's modules before it
