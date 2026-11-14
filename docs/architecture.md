@@ -112,7 +112,7 @@ definition:
 | Seam | Source of truth | Checked by |
 |---|---|---|
 | Rust to markup | page struct and component props | `html!` and `#[component]` are Rust: a missing field or prop is a compile error |
-| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on, `event` by the `on:` name, `target` by the tag, values by their Rust type (a JSON value by a generated declaration's; a call to a handler whose parameter has no type to check the argument against does not compile, and only `unknown` takes any argument). `tsc --checkJs` (`strict` and the checks of [Choice 39](design.md#choice-script-checks)) checks the function bodies against the same JSDoc |
+| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on (and, for a `Map<El, number>`, by the value every element gives it, `ref={row.with(cents)}`, [Choice 46](design.md#choice-ref-values)), `event` by the `on:` name, `target` by the tag, values by their Rust type (a JSON value by a generated declaration's; a call to a handler whose parameter has no type to check the argument against does not compile, and only `unknown` takes any argument). `tsc --checkJs` (`strict` and the checks of [Choice 39](design.md#choice-script-checks)) checks the function bodies against the same JSDoc |
 | Typed events | the `#[event]` struct | `corten::types` declares its class in `corten/events` with the fields' types; `on:Name` must name an `#[event]` type |
 | Feed rows to script | the row struct | `corten::types` writes `types/app.d.ts`; `subscribe<Row>` types the snapshot and every patch |
 | Feed rows to their key | the field marked `#[row(id)]` | `#[derive(Row)]` (`corten::feed::Row`) takes the row's id from that field, so a renamed key field moves the key every patch is matched by; a row with no field marked or two, an id that is not text, a serde attribute that makes the id's JSON differ from `id()` or puts another member under its key (a flattened field's members aside), a tuple struct, or a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static` (a generic one, where a feed of it is built) does not compile |
@@ -137,8 +137,14 @@ a feed's envelope (a snapshot's `epoch`, `seq` and `rows`; a patch's `seq` and e
 and `id`) when it arrives and trusts its rows as the server's `Row`
 ([design Choice 40](design.md#choice-script-boundaries)).
 
-Not checked: `data-*` attributes a script reads through `dataset` (strings on both sides; pass
-the value as a handler argument instead), that the elements of a ref a `Map` parameter takes each
+Not checked: the `data-*` attributes corten-ui's handlers, which predate ref values, still read
+through `dataset`, strings on both sides: `rows::sort` (`rows.js`) reads the `data-sort` an app
+writes on a cell and the `data-ascending`, `data-descending` and `data-first` the kit's
+`SortHeader` writes on its link, `ordered::send` and `ordered::link` (`ordered.js`) the same
+link's `data-ascending` and `data-descending`, and `ComboBox` its own `data-terms` (moving them is
+[#1387](https://github.com/corten-run/corten/issues/1387); a value a script reads is otherwise its
+element's ref's, `ref={row.with(cents)}` for a `Map<El, number>`, checked at the call like any
+ref), that the elements of a ref a `Map<string, El>` parameter takes each
 have a `key=` (those without one share one entry of the map), that a ref inside an `if` is present when a handler
 runs (the call throws when it is not; the type says it is always there), the value a call passes to a
 handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to

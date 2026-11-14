@@ -63,12 +63,12 @@ for (engine of engines) {
     check("no sideways scroll", (await page.evaluate(sideways)) === 0);
 
     // The component taken apart: one name lit by the server, the rest followed by the script.
-    const lit = () => page.evaluate(`${shown("[data-seam][data-lit]")}.map((el) => el.dataset.seam + "@" + el.closest("pre").getAttribute("aria-label"))`);
+    const lit = () => page.evaluate(`${shown("pre [data-ref-value][data-lit]")}.map((el) => JSON.parse(el.getAttribute("data-ref-value")) + "@" + el.closest("pre").getAttribute("aria-label"))`);
     const first = /** @type {string[]} */ (await lit());
     check("one name is lit at load, in two files", first.length === 2 && new Set(first).size === 2 && first.every((name) => name.startsWith("call:order@")), first.join(" "));
     const seams = /** @type {[string, number][]} */ (
       await page.evaluate(
-        `(() => { const by = {}; for (const el of ${shown("[data-seam]")}) (by[el.dataset.seam] ??= new Set()).add(el.closest("pre").getAttribute("aria-label")); return Object.entries(by).map(([seam, files]) => [seam, files.size]); })()`,
+        `(() => { const by = {}; for (const el of ${shown("pre [data-ref-value]")}) (by[JSON.parse(el.getAttribute("data-ref-value"))] ??= new Set()).add(el.closest("pre").getAttribute("aria-label")); return Object.entries(by).map(([seam, files]) => [seam, files.size]); })()`,
       )
     );
     check("every marked name in the cuts is in two files", seams.length >= 4 && seams.every(([, files]) => files >= 2), JSON.stringify(seams));
@@ -81,20 +81,20 @@ for (engine of engines) {
       await button.scrollIntoViewIfNeeded();
       const before = await page.evaluate(() => scrollY);
       await button.click();
-      await page.waitForFunction(`${shown("[data-seam][data-lit]")}.every((el) => el.dataset.seam === ${JSON.stringify(seam)})`);
+      await page.waitForFunction(`${shown("pre [data-ref-value][data-lit]")}.every((el) => JSON.parse(el.getAttribute("data-ref-value")) === ${JSON.stringify(seam)})`);
       const now = /** @type {string[]} */ (await lit());
       check(`the button ${label} follows its name`, now.length >= 2 && now.every((name) => name.startsWith(`${seam}@`)), String(now.length));
       check(`the button ${label} leaves the window where it is`, (await page.evaluate(() => scrollY)) === before);
     }
-    const name = page.locator("pre [data-seam='ref:readout']").first();
+    const name = page.locator(`pre [data-ref-value='"ref:readout"']`).first();
     await name.scrollIntoViewIfNeeded();
     await name.hover();
-    await page.waitForFunction(`${shown("[data-seam][data-lit]")}.every((el) => el.dataset.seam === "ref:readout")`);
+    await page.waitForFunction(`${shown("pre [data-ref-value][data-lit]")}.every((el) => JSON.parse(el.getAttribute("data-ref-value")) === "ref:readout")`);
     check("pointing at a name follows it", true);
     const whole = page.locator("summary", { hasText: "in full" });
     await whole.click();
     check("the whole files open at their tops", (await page.evaluate(() => [...document.querySelectorAll("details pre")].every((pane) => pane.scrollTop === 0 && pane.scrollLeft === 0))) === true);
-    check("a class the cuts leave out is marked in the whole files", (await page.locator("details pre [data-seam='class:heat0']").count()) >= 2);
+    check("a class the cuts leave out is marked in the whole files", (await page.locator(`details pre [data-ref-value='"class:heat0"']`).count()) >= 2);
     await whole.click();
 
     // The wall: 1,000 samples the browser puts in order with no request.
@@ -105,7 +105,7 @@ for (engine of engines) {
     await order.scrollIntoViewIfNeeded();
     await order.click();
     await page.waitForFunction(() => {
-      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key")));
+      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => JSON.parse(tile.getAttribute("data-ref-value") ?? "null"));
       return readings.length === 1000 && readings.every((reading, at) => at === 0 || /** @type {number} */ (readings[at - 1]) <= reading);
     });
     check("the wall sorts in the browser with no request", requests === 0, `${requests} requests`);
@@ -115,7 +115,7 @@ for (engine of engines) {
     const took = /^1,000 samples put in order: ([\d.,]+) ms of script, ([\d.,]+) ms from the click to the next frame drawn\. Requests sent: 0\.$/.exec(await readout.innerText());
     check("the readout says what the sort took", took !== null, await readout.innerText());
     // A second and a third click are handed every tile too.
-    const keys = () => page.evaluate(() => [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key"))));
+    const keys = () => page.evaluate(() => [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => JSON.parse(tile.getAttribute("data-ref-value") ?? "null")));
     await page.getByRole("link", { name: "Scatter them" }).click();
     await page.locator("output", { hasText: "samples scattered" }).waitFor();
     const scattered = await keys();
@@ -250,11 +250,11 @@ for (engine of engines) {
 
     // The response read back, and the same address as JSON. A header the response lacked is
     // written in as that, in words, so every value is held to being a header's.
-    const etag = page.locator("dd[data-header=etag]");
+    const etag = page.locator(`dd[data-ref-value='"etag"']`);
     await etag.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => (document.querySelector("dd[data-header=etag]")?.textContent ?? "").length > 2);
+    await page.waitForFunction(() => (document.querySelector(`dd[data-ref-value='"etag"']`)?.textContent ?? "").length > 2);
     const sent = /** @type {Record<string, string>} */ (
-      await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("dd[data-header]")].map((dd) => [dd.getAttribute("data-header"), dd.textContent ?? ""])))
+      await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("dd[data-ref-value]")].map((dd) => [JSON.parse(dd.getAttribute("data-ref-value") ?? "null"), dd.textContent ?? ""])))
     );
     const lacking = Object.entries(sent).filter(([, value]) => value === "" || /not sent/.test(value)).map(([name]) => name);
     check("each header the page lists was sent", Object.keys(sent).length === 9 && lacking.length === 0, lacking.join(" "));
@@ -422,12 +422,12 @@ for (engine of engines) {
   {
     const { context, page, errors } = await open({ viewport: { width: 1440, height: 900 } }, "/?scripts=off");
     check("blocked: the notes keep the names, as text", (await page.locator("section button", { hasText: "ref={grid}" }).count()) === 0 && (await page.locator("p code", { hasText: "ref={grid}" }).count()) === 1);
-    check("blocked: a name is lit by the server", (await page.evaluate(`${shown("[data-seam][data-lit]")}.length`)) === 2);
+    check("blocked: a name is lit by the server", (await page.evaluate(`${shown("pre [data-ref-value][data-lit]")}.length`)) === 2);
     check("blocked: nothing offers what only a script does", !(await page.locator("body").innerText()).includes("Point at another name"));
     await page.getByRole("link", { name: "Put them in order" }).click();
     await page.waitForURL(/wall=sorted/);
     const sorted = await page.evaluate(() => {
-      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => Number(tile.getAttribute("data-key")));
+      const readings = [...document.querySelectorAll("[data-ref='tiles']")].map((tile) => JSON.parse(tile.getAttribute("data-ref-value") ?? "null"));
       return readings.length === 1000 && readings.every((reading, at) => at === 0 || /** @type {number} */ (readings[at - 1]) <= reading);
     });
     check("blocked: the server sorts the wall", sorted && new URL(page.url()).searchParams.get("scripts") === "off");
@@ -447,7 +447,7 @@ for (engine of engines) {
     const follow = page.locator("section button", { hasText: "ref={grid}" });
     const style = await follow.evaluate((button) => ({ events: getComputedStyle(button).pointerEvents, border: getComputedStyle(button).borderTopWidth }));
     check("no script: a follow button is the name as text", style.events === "none" && style.border === "0px", JSON.stringify(style));
-    check("no script: a name is lit", (await page.locator("pre [data-seam][data-lit]").count()) >= 2);
+    check("no script: a name is lit", (await page.locator("pre [data-ref-value][data-lit]").count()) >= 2);
     check("no script: no sideways scroll", (await page.evaluate(sideways)) === 0);
     await page.locator("summary", { hasText: "in full" }).click();
     check("no script: the whole files open", await page.locator("details pre").first().isVisible());
@@ -459,18 +459,18 @@ for (engine of engines) {
   // On a touch screen: a tap follows a name, a swipe over one does not.
   if (engine === "chromium") {
     const { context, page, errors } = await open({ ...devices["Pixel 7"] });
-    const lit = () => page.evaluate(`[...new Set(${shown("[data-seam][data-lit]")}.map((el) => el.dataset.seam))].join(" ")`);
+    const lit = () => page.evaluate(`[...new Set(${shown("pre [data-ref-value][data-lit]")}.map((el) => JSON.parse(el.getAttribute("data-ref-value"))))].join(" ")`);
     const button = page.locator("section button", { hasText: "class={Grid}" });
     await button.scrollIntoViewIfNeeded();
     await button.tap();
-    await page.waitForFunction(`${shown("[data-seam][data-lit]")}.every((el) => el.dataset.seam === "class:grid")`);
+    await page.waitForFunction(`${shown("pre [data-ref-value][data-lit]")}.every((el) => JSON.parse(el.getAttribute("data-ref-value")) === "class:grid")`);
     check("touch: a button follows its name", true);
-    const name = page.locator("pre [data-seam='ref:readout']").first();
+    const name = page.locator(`pre [data-ref-value='"ref:readout"']`).first();
     await name.scrollIntoViewIfNeeded();
     await name.tap();
-    await page.waitForFunction(`${shown("[data-seam][data-lit]")}.every((el) => el.dataset.seam === "ref:readout")`);
+    await page.waitForFunction(`${shown("pre [data-ref-value][data-lit]")}.every((el) => JSON.parse(el.getAttribute("data-ref-value")) === "ref:readout")`);
     check("touch: a tap on a name follows it", true);
-    const box = await page.locator("pre [data-seam='ref:grid']").first().boundingBox();
+    const box = await page.locator(`pre [data-ref-value='"ref:grid"']`).first().boundingBox();
     if (!box) throw new Error("the grid's name has no box");
     const client = await context.newCDPSession(page);
     const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
