@@ -15,7 +15,7 @@ corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 `cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
 build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary), using GitHub
 artifact attestations and `SHA256SUMS`, not a minisign signature
-([Choice 52](../design.md#choice-release-verification)).
+([Choice 49](../design.md#choice-release-verification)).
 
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a
@@ -96,7 +96,7 @@ download only by HTTPS: its
 [supported metadata](https://github.com/cargo-bins/cargo-binstall/blob/main/SUPPORT.md) has no
 checksum-file setting, and its [signature support](https://github.com/cargo-bins/cargo-binstall/blob/main/SIGNING.md)
 uses minisign, not GitHub attestations. Corten deliberately keeps no minisign signing key
-([Choice 52](../design.md#choice-release-verification)). To verify
+([Choice 49](../design.md#choice-release-verification)). To verify
 a prebuilt binary before installing it,
 download and verify it as above, then extract it and put `corten` (`corten.exe` on Windows) in
 a directory on your `PATH`. Alternatively, `cargo install corten-cli` builds from the source

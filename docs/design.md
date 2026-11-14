@@ -2859,7 +2859,7 @@ rules something out.
     ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
     `cargo binstall` does not consume that file or GitHub attestations; it verifies only a
     minisign signature, which Corten chooses not to add
-    ([Choice 52](#choice-release-verification)), so it still has only HTTPS,
+    ([Choice 49](#choice-release-verification)), so it still has only HTTPS,
     and verification before installation uses the
     [manual download](guide/getting-started.md#verify-a-prebuilt-binary) (cargo-binstall
     1.27.0's `SUPPORT.md` and `SIGNING.md`, read 2026-11-13).
@@ -3455,7 +3455,7 @@ rules something out.
     0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
     `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
 
-52. <a id="choice-release-verification"></a>**Release archives are verified with GitHub artifact
+49. <a id="choice-release-verification"></a>**Release archives are verified with GitHub artifact
     attestations and `SHA256SUMS`; Corten keeps no minisign signing key.** `cargo binstall`
     checks a Corten archive's download over HTTPS, not against its build. Its users verify by
     hand before installation: download the archive and `SHA256SUMS`, run `gh attestation verify`

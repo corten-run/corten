@@ -62,7 +62,7 @@ corten dev    # serves http://localhost:3000 and reloads on save
 build first, download it as in
 [Verify a prebuilt binary](docs/guide/getting-started.md#verify-a-prebuilt-binary), using GitHub
 artifact attestations and `SHA256SUMS`. Corten keeps no minisign signing key
-([Choice 52](docs/design.md#choice-release-verification)).
+([Choice 49](docs/design.md#choice-release-verification)).
 
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a test and a Dockerfile. [Getting started](docs/guide/getting-started.md) walks
