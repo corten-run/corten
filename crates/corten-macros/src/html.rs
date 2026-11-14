@@ -1594,15 +1594,17 @@ impl Gen {
         }
     }
 
-    /// Declares a local that holds a debug build's record (`open`, an expression) while the
+    /// Declares a local that holds the key check's record (`open`, an expression) while the
     /// markup after it is written, and is let go by a statement after that markup. It is declared
     /// outside the parts' `if`s, so it lives through them, and before the static markup not yet
-    /// written, which has no refs. Release builds compile neither.
+    /// written, which has no refs. The record is Corten's to keep or not: a build of `corten-run`
+    /// without debug assertions makes it an empty value and its calls empty, whatever the app's
+    /// own setting, so the check is on or off for every crate's markup together.
     fn debug_local(&mut self, open: &str) -> TokenStream {
         self.debug_locals += 1;
         let name: TokenStream =
             TokenTree::Ident(Ident::new(&format!("__corten_debug_{}", self.debug_locals), Span::call_site())).into();
-        self.out.extend(q(&format!("#[cfg(debug_assertions)] let __A0 = {open};"), std::slice::from_ref(&name)));
+        self.out.extend(q(&format!("let __A0 = {open};"), std::slice::from_ref(&name)));
         name
     }
 
@@ -1828,14 +1830,13 @@ impl Gen {
                     self.text.push_str(attr);
                 }
                 Attr::Page(_) => self.text.push_str(" data-corten-page"),
-                // A keyed ref's key, which debug builds check against its other elements'.
+                // A keyed ref's key, which debug builds check against its other elements'. The
+                // call is given the key as written, not the output, so it goes beside the markup
+                // not yet written instead of ending it: the tag is still written in one piece.
                 Attr::Static(attr, value) if has_ref && is_key(attr) => {
                     let written = format!(" {attr}=\"{}\"", escape(value));
                     self.text.push_str(&written);
-                    self.code(q(
-                        "#[cfg(debug_assertions)] ::corten::script::__private::key_written(__A0);",
-                        &[literal(&written)],
-                    ));
+                    self.out.extend(q("::corten::script::__private::key_written(__A0);", &[literal(&written)]));
                 }
                 Attr::Static(attr, value) => {
                     self.text.push_str(&format!(" {attr}=\"{}\"", escape(value)));
@@ -1951,11 +1952,9 @@ impl Gen {
                 // A keyed ref's key, which debug builds check against its other elements' as written.
                 Attr::Expr(attr, expr) if has_ref && is_key(attr) => self.code(q(
                     "{
-                        #[cfg(debug_assertions)]
                         let __corten_key = __OUT.len();
                         (&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);
-                        #[cfg(debug_assertions)]
-                        ::corten::script::__private::key_written(&__OUT[__corten_key..]);
+                        ::corten::script::__private::key_written_from(__OUT, __corten_key);
                     }",
                     &[expr.clone(), literal(&format!(" {attr}"))],
                 )),
@@ -2030,7 +2029,7 @@ impl Gen {
             }
         }
         if let Some(tag) = tag {
-            self.out.extend(q("#[cfg(debug_assertions)] __A0.close();", &[tag]));
+            self.out.extend(q("__A0.close();", &[tag]));
         }
         self.text.push('>');
     }
@@ -2052,17 +2051,18 @@ impl Gen {
                 }
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
-                    // A `<template>`'s content, which the runtime's query for a ref's elements does
-                    // not reach: debug builds record none of its keys.
-                    let content = name
-                        .eq_ignore_ascii_case("template")
-                        .then(|| self.debug_local("::corten::script::__private::TemplateContent::open()"));
+                    // A `<template>`'s content and a `<noscript>`'s, which the runtime's query for a
+                    // ref's elements does not reach (with scripts on, a `<noscript>` holds text):
+                    // debug builds record none of their keys. In an `<svg>` both are elements like
+                    // any other, whose children the query finds.
+                    let unqueried = !self.svg && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
+                    let content = unqueried.then(|| self.debug_local("::corten::script::__private::UnqueriedContent::open()"));
                     let outer = self.svg;
                     self.svg = within_svg(outer, name);
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
                     if let Some(content) = content {
-                        self.out.extend(q("#[cfg(debug_assertions)] ::core::mem::drop(__A0);", &[content]));
+                        self.out.extend(q("__A0.end();", &[content]));
                     }
                     self.text.push_str(&format!("</{name}>"));
                 }

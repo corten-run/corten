@@ -595,6 +595,108 @@ fn a_key_in_a_template_s_content_is_not_one_of_the_page_s() {
     assert_eq!(html.matches(r#"<td data-ref="cell" data-key="a">"#).count(), 2, "{html}");
 }
 
+/// A keyed cell in the page and one with the same key in a `<noscript>`, whose content a browser
+/// running the script reads as text.
+#[component]
+fn NoscriptKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table>
+                <tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="a">"1"</td></tr></tbody>
+            </table>
+            <noscript>
+                <table><tbody><tr><td ref={cell} key="a">"2"</td></tr></tbody></table>
+            </noscript>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_noscript_s_content_is_not_one_of_the_page_s() {
+    let html = NoscriptKeys {}.to_html();
+    assert_eq!(html.matches(r#"<td data-ref="cell" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// Marks of an `<svg>`, one in its `<template>`, which in SVG is an element like any other: the
+/// runtime's query finds what it holds.
+#[component]
+fn SvgTemplateKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <svg>
+            <g ref={mark} key="a"></g>
+            <template><g ref={mark} key="a"></g></template>
+        </svg>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one svg-template-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_an_svg_s_template() {
+    SvgTemplateKeys {}.to_html();
+}
+
+/// A key written as it is by an `AttrValue` of the app's, which Corten's escapers would not write.
+struct RawKey(&'static str);
+
+impl crate::view::AttrValue for RawKey {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        out.push_str(self.0);
+        out.push('"');
+    }
+}
+
+/// Two cells a browser reads as keyed `€` and U+0080: `&#128;` is the Windows-1252 euro to a
+/// browser, which decoding it as a code point would take for the other cell's key.
+#[component]
+fn RawKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                <tr>
+                    <td ref={cell} key={RawKey("&#128;")}>"1"</td>
+                    <td ref={cell} key={"\u{80}"}>"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+fn a_key_written_with_a_reference_corten_does_not_write_is_not_checked() {
+    let html = RawKeys {}.to_html();
+    assert!(html.contains(r#"<td data-ref="cell" data-key="&#128;">1</td>"#), "{html}");
+}
+
+/// The check reads a key as `getAttribute` does for the five references Corten's escapers write,
+/// and leaves out a key with any other `&`, which only an app's own `AttrValue` writes.
+#[test]
+#[cfg(debug_assertions)]
+fn a_key_is_read_with_corten_s_five_references_decoded_and_no_others() {
+    use super::keys::{read, Read};
+    let key = |value: &str| read(&format!(" data-key=\"{value}\""));
+    for (written, reads) in
+        [("a&amp;b", "a&b"), ("a&lt;b", "a<b"), ("a&gt;b", "a>b"), ("a&quot;b", "a\"b"), ("a&#39;b", "a'b"), ("&amp;lt;", "&lt;")]
+    {
+        assert_eq!(key(written), Read::Key(reads.into()), "{written}");
+    }
+    let text = "& < > \" ' &amp; &#97;";
+    assert_eq!(key(&crate::html::escape(text)), Read::Key(text.into()), "what Corten writes reads back");
+    assert_eq!(key("a\r\nb\rc\0"), Read::Key("a\nb\nc\u{FFFD}".into()));
+    assert_eq!(read(" data-key"), Read::Key(String::new()));
+    assert_eq!(read(""), Read::Absent);
+    for raw in ["&#128;", "&#+97;", "&#97", "&#97;", "&nbsp;", "&#0;", "&#xD800;", "&#x110000;", "&apos;", "a&b"] {
+        assert_eq!(key(raw), Read::Unknown, "{raw}");
+    }
+    assert_eq!(read(" data-key='a'"), Read::Unknown);
+    assert_eq!(read(" data-key=\"a\"b\""), Read::Unknown);
+}
+
 /// A component with a keyed ref, the key written before the ref, rendered while another's
 /// element is half written.
 #[component]
@@ -738,6 +840,7 @@ fn release_builds_do_not_check_keys() {
     assert_eq!(html.matches(r#"data-key="a""#).count(), 2, "{html}");
     BlankKeys {}.to_html();
     NewlineKeys {}.to_html();
+    SvgTemplateKeys {}.to_html();
 }
 // The doctests' script for rows that give their script a value (`Ref::with`), shared here.
 script::script!(mod priced = "../price_list.js");

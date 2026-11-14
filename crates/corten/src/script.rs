@@ -2454,8 +2454,11 @@ thread_local! {
 /// one ref whose keys the browser reads as equal, or one whose `key={..}` wrote none (`None`),
 /// stop the render, as an integer past 2^53 does. A handler's `Map<string, El>` would hold one
 /// entry for the two, or one under `null`. Keys follow the runtime's query for a ref's elements:
-/// those in a `<template>`'s content are not the page's and are not recorded. The page's other
-/// renders (a patch, rows a script adds) are not seen.
+/// those in a `<template>`'s or a `<noscript>`'s content are not the page's and are not recorded.
+/// A key is read as the browser reads it when it is written as Corten writes text; one written
+/// otherwise (a custom `AttrValue`) is left out rather than guessed at. The page's other renders
+/// (a patch, rows a script adds) are not seen. Whether the check runs is `corten-run`'s own
+/// debug-assertions setting: the code `html!` writes calls it in every build.
 #[cfg(debug_assertions)]
 mod keys {
     use std::cell::{Cell, RefCell};
@@ -2475,8 +2478,8 @@ mod keys {
         /// The keyed elements whose tags are being written, innermost last: a render in a ref's
         /// or a key's expression writes its own above the element's.
         static TAGS: RefCell<Vec<Tag>> = const { RefCell::new(Vec::new()) };
-        /// How many `<template>`s' content is being written.
-        static TEMPLATE: Cell<usize> = const { Cell::new(0) };
+        /// How many `<template>`s' or `<noscript>`s' content is being written.
+        static UNQUERIED: Cell<usize> = const { Cell::new(0) };
     }
 
     pub(super) fn enter(scope: &'static str) {
@@ -2495,7 +2498,7 @@ mod keys {
     /// Its tag ends: checks its key, or, when a render unwinds (`checked` is false), drops it.
     pub(super) fn close(checked: bool) {
         let tag = TAGS.with(|t| t.borrow_mut().pop());
-        if !checked || TEMPLATE.with(Cell::get) > 0 {
+        if !checked || UNQUERIED.with(Cell::get) > 0 {
             return;
         }
         if let Some((Some(at), Some(written))) = tag {
@@ -2519,17 +2522,19 @@ mod keys {
         });
     }
 
-    /// A `<template>`'s content is being written, or is no longer.
-    pub(super) fn template(inside: bool) {
-        TEMPLATE.with(|t| t.set(if inside { t.get() + 1 } else { t.get().saturating_sub(1) }));
+    /// A `<template>`'s or a `<noscript>`'s content is being written, or is no longer.
+    pub(super) fn unqueried(inside: bool) {
+        UNQUERIED.with(|t| t.set(if inside { t.get() + 1 } else { t.get().saturating_sub(1) }));
     }
 
     fn check((scope, name): RefName, written: &str) {
-        let Some(key) = read(written) else {
-            panic!(
+        let key = match read(written) {
+            Read::Key(key) => key,
+            Read::Unknown => return,
+            Read::Absent => panic!(
                 "an element of ref {name} in {scope} has a key={{..}} that wrote no key (None or false), so a handler's \
                  Map<string, ..> would get it under null: give every element of the ref a key"
-            )
+            ),
         };
         // The innermost render of the ref's component holds it, as the page's `data-scope` root
         // nearest the element does.
@@ -2548,48 +2553,49 @@ mod keys {
         }
     }
 
+    /// A key as a browser reads it (`getAttribute`).
+    #[derive(Debug, PartialEq)]
+    pub(super) enum Read {
+        /// No attribute: `key={None}` or `key={false}`.
+        Absent,
+        /// A value Corten's escapers would not write: one not double-quoted, with a `"` inside,
+        /// or with an `&` that starts none of their five references. Only a custom `AttrValue`
+        /// writes one, and decoding it as a browser does is the HTML standard's character
+        /// reference rules, so it is not checked.
+        Unknown,
+        Key(String),
+    }
+
+    /// The references Corten's escapers write (`corten::html::escape`, `escape_into`, `html!`'s
+    /// text), with the characters they stand for.
+    const REFERENCES: [(&str, char); 5] = [("&amp;", '&'), ("&lt;", '<'), ("&gt;", '>'), ("&quot;", '"'), ("&#39;", '\'')];
+
     /// What `getAttribute` returns for a key as written: nothing for no attribute, `""` for one
     /// without a value (`key={true}`), and a value with its line breaks as the parser reads them
-    /// (CR LF and CR are LF, NUL is U+FFFD) and its character references decoded.
-    fn read(written: &str) -> Option<String> {
+    /// (CR LF and CR are LF, NUL is U+FFFD) and Corten's five references decoded.
+    pub(super) fn read(written: &str) -> Read {
         if written.is_empty() {
-            return None;
+            return Read::Absent;
         }
-        let Some((_, value)) = written.split_once('=') else { return Some(String::new()) };
-        let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
-        let value = value.replace("\r\n", "\n").replace(['\r'], "\n").replace('\0', "\u{FFFD}");
+        let Some((_, value)) = written.split_once('=') else { return Read::Key(String::new()) };
+        let Some(value) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else { return Read::Unknown };
+        if value.contains('"') {
+            return Read::Unknown;
+        }
+        let value = value.replace("\r\n", "\n").replace('\r', "\n").replace('\0', "\u{FFFD}");
         let mut read = String::with_capacity(value.len());
         let mut rest = value.as_str();
         while let Some(at) = rest.find('&') {
             read.push_str(&rest[..at]);
             rest = &rest[at..];
-            let end = rest.find(';');
-            let named = end.and_then(|end| match &rest[1..end] {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                number => match number.strip_prefix('#') {
-                    Some(hex) if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16).ok(),
-                    Some(decimal) => decimal.parse().ok(),
-                    None => None,
-                }
-                .and_then(char::from_u32),
-            });
-            match (named, end) {
-                (Some(c), Some(end)) => {
-                    read.push(c);
-                    rest = &rest[end + 1..];
-                }
-                _ => {
-                    read.push('&');
-                    rest = &rest[1..];
-                }
-            }
+            let Some((reference, c)) = REFERENCES.into_iter().find(|(reference, _)| rest.starts_with(reference)) else {
+                return Read::Unknown;
+            };
+            read.push(c);
+            rest = &rest[reference.len()..];
         }
         read.push_str(rest);
-        Some(read)
+        Read::Key(read)
     }
 }
 /// The module of numbers, money and dates for a script (`js/format.js`, minified into
@@ -2917,18 +2923,27 @@ pub mod __private {
 
     /// ` data-key=".."` as written on an element with a keyed ref: debug builds stop when two of
     /// the ref's elements in one render of its component have keys the browser reads as equal,
-    /// or one has none. The code `html!` writes calls it in debug builds only, between a
-    /// [`KeyTag`]'s `open` and `close`.
+    /// or one has none. The code `html!` writes calls it between a [`KeyTag`]'s `open` and
+    /// `close`, in every build: what it does is decided here, by `corten-run`'s debug-assertions
+    /// setting, so the app's own cannot leave half the check on. In a release build it is empty.
     #[inline]
     pub fn key_written(_written: &str) {
         #[cfg(debug_assertions)]
         keys::key_written(_written);
     }
 
+    /// [`key_written`] for a `key={..}`, which `out` holds from `from` on.
+    #[inline]
+    pub fn key_written_from(_out: &str, _from: usize) {
+        #[cfg(debug_assertions)]
+        keys::key_written(&_out[_from..]);
+    }
+
     /// The start tag of an element with a keyed ref, held while its attributes are written, so
     /// its ref and key are checked together even when an attribute's expression renders another
-    /// view. The code `html!` writes holds it in debug builds only; one dropped without `close`
-    /// (a render that unwinds) is let go unchecked.
+    /// view. The code `html!` writes holds it in every build; one dropped without `close` (a
+    /// render that unwinds) is let go unchecked. In a release build it is an empty value with no
+    /// `Drop`.
     pub struct KeyTag(());
 
     impl KeyTag {
@@ -2948,32 +2963,36 @@ pub mod __private {
         }
     }
 
+    #[cfg(debug_assertions)]
     impl Drop for KeyTag {
         fn drop(&mut self) {
-            #[cfg(debug_assertions)]
             keys::close(false);
         }
     }
 
-    /// A `<template>`'s content, held while it is written: the runtime's query for a ref's
-    /// elements does not reach it, so debug builds record none of its keys. The code `html!`
-    /// writes holds it in debug builds only, and dropping it ends the content, a render that
-    /// unwinds included.
-    pub struct TemplateContent(());
+    /// A `<template>`'s or a `<noscript>`'s content, held while it is written: the runtime's
+    /// query for a ref's elements does not reach it, so debug builds record none of its keys. The
+    /// code `html!` writes holds it in every build, and `end` or a drop ends the content, a render
+    /// that unwinds included. In a release build it is an empty value with no `Drop`.
+    pub struct UnqueriedContent(());
 
-    impl TemplateContent {
+    impl UnqueriedContent {
         #[inline]
         pub fn open() -> Self {
             #[cfg(debug_assertions)]
-            keys::template(true);
-            TemplateContent(())
+            keys::unqueried(true);
+            UnqueriedContent(())
         }
+
+        /// The content is written.
+        #[inline]
+        pub fn end(self) {}
     }
 
-    impl Drop for TemplateContent {
+    #[cfg(debug_assertions)]
+    impl Drop for UnqueriedContent {
         fn drop(&mut self) {
-            #[cfg(debug_assertions)]
-            keys::template(false);
+            keys::unqueried(false);
         }
     }
     /// ` data-on='click:m.f(..) input:m.g(..)'`, or nothing when no handler is there. Single-quoted,
