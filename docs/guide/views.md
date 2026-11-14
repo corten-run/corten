@@ -6,6 +6,15 @@
 time, expressions are escaped as they are written, and the output buffer is sized from the last
 render of the same call site.
 
+A `#[component]` rendered into a string of its own (`to_html`, which a patch is drawn with) is
+sized the same way, from that component's last render on its own, an eighth more and never below
+256 bytes. A component rendered inside other markup writes into its parent's string, and neither
+reads nor sets that size. There is one size per component definition, shared by every
+instantiation of a generic component, as an `html!` call site inside a generic function has one.
+There is no upper bound, as for an `html!` call site: after one very large render, the next
+render of that component reserves that size once (a 1-byte render right after a 2 MiB one reserves
+2.25 MiB), then sizes from its own length again.
+
 | Write | Means |
 |---|---|
 | `"Price"` | text (source whitespace between tags is never output) |
