@@ -406,6 +406,8 @@ pre-removal participant observations, actual `rm -f -v` acknowledgements and fin
 inventories. Parser, mutation and application contexts separately retain creation, native close
 event, close completion and enumerated absence; browser disconnection is required too. A blocked
 execution result never produces a verified host subject. Docker configuration is not OS proof.
+Every observed journey also binds its original container/image/start identity and browser window
+to the replayed application participant, within the retained producer execution interval.
 
 V2 distinguishes selected-slice completeness, all-registry attempt completeness, unchanged strict
 qualification and apparatus cleanup. Failed build/create/start prerequisites can explain an

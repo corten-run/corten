@@ -634,6 +634,20 @@ export function validateContextReceipts(contexts, terminal, execution) {
     && times.every(finite) && times.every((v, i) => !i || times[i - 1] <= v);
 }
 
+export function validateCaseParticipant(app, caseKey, evidence, execution) {
+  const participants = execution.participants.filter((p) => p.role === "application" && p.app === app && p.case === caseKey);
+  const windows = execution.processWindows.filter((w) => w.app === app && w.case === caseKey);
+  if (!participants.length || !windows.length || !evidence.provenance) return false;
+  need(participants.length === 1 && windows.length === 1, "Ambiguous application participant/window");
+  const participant = participants[0], window = windows[0], p = evidence.provenance;
+  same([p.containerId, p.imageId], [participant.id, participant.imageId], "Journey differs from original execution participant");
+  if (!participant.terminal || !participant.window) return false;
+  need(participant.window.startedAt <= window.startedAt && window.endedAt <= participant.window.endedAt, "Browser window outside application participant");
+  if (p.stillSameProcess) need(participant.terminal.state.Running === true && participant.terminal.state.StartedAt === p.startedAt
+    && participant.terminal.restartCount === 0, "Journey process continuity contradicts native terminal participant");
+  return true;
+}
+
 function readbackEntries(e) {
   const m = e.mutationProbes;
   return [[e.storeBefore, "initial-store", "application"], ...e.steps.filter((r) => r.action.input).map((r) => [r.readback, r.action.id, "application"]),
@@ -722,6 +736,7 @@ async function validateNativeV2(input) {
     same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");
     const executionValue = root("execution", "execution"), execution = replayExecution(reader, n.execution);
     same([executionValue.task, executionValue.commit], [summary.task, input.commit], "Native execution identity differs");
+    need(Date.parse(summary.startedAt) <= execution.executionWindow.startedAt && execution.executionWindow.endedAt <= Date.parse(summary.finishedAt), "Native execution outside producer run");
     for (const reason of execution.blocked) block(`execution:${reason}`);
     const buildContexts = new Set();
     for (const [app, build] of Object.entries(summary.builds)) {
@@ -749,6 +764,7 @@ async function validateNativeV2(input) {
         continue;
       }
       if (!buildContexts.has(app) || summary.builds[app]?.passed !== true) block("immutable-image-build-proof-missing");
+      if (!validateCaseParticipant(app, cell.case, e, execution)) block("application-process-binding-missing");
       const context = n.contexts.find((c) => c.id === e.context && c.role === "application" && c.app === app && c.case === cell.case);
       if (!context || contextIds.has(e.context)) { block("application-context-binding-missing"); proof.readbacks = false; } else contextIds.add(e.context);
       const windows = execution.processWindows.filter((w) => w.app === app && w.case === cell.case), j = e.platformLifecycle;

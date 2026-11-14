@@ -12,7 +12,7 @@ import { createUpstream, upstreamDelta } from "./upstream.mjs";
 import { observeNetwork, architecture, classifyDisabledPreloads } from "./observe.mjs";
 import { readStore, waitForSemanticChange } from "./journey.mjs";
 import { imageEvidence, captureLiveInputs } from "./run.mjs";
-import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts } from "./verify.mjs";
+import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts, validateCaseParticipant } from "./verify.mjs";
 import { sha256 } from "./contract.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
@@ -142,6 +142,23 @@ test("native context terminal observations require unique context and actual clo
   for (const changed of [{ ...context, absentAfter: false }, { ...context, closeEventAt: null }, { ...context, createdAt: 1 }, { ...context, closeCompletedAt: 16 }])
     assert.equal(validateContextReceipts([changed], terminal, execution), false);
   assert.equal(validateContextReceipts([context], { ...terminal, contextsBefore: [context.id] }, execution), false);
+});
+
+test("native journey identity must match its original execution participant and process window", () => {
+  const app = "nextjs", key = plan.cases[0].key;
+  const p = { containerId: "a".repeat(64), imageId: "sha256:" + "b".repeat(64), startedAt: "native-start", stillSameProcess: true };
+  const participant = { id: p.containerId, imageId: p.imageId, role: "application", app, case: key, window: { startedAt: 1, endedAt: 10 },
+    terminal: { state: { Running: true, StartedAt: p.startedAt }, restartCount: 0 } };
+  const execution = { participants: [participant], processWindows: [{ app, case: key, startedAt: 2, endedAt: 9 }] };
+  assert.equal(validateCaseParticipant(app, key, { provenance: p }, execution), true);
+  for (const changed of [{ ...p, containerId: "c".repeat(64) }, { ...p, imageId: "sha256:" + "c".repeat(64) }, { ...p, startedAt: "transplanted" }])
+    assert.throws(() => validateCaseParticipant(app, key, { provenance: changed }, execution));
+  assert.equal(validateCaseParticipant(app, key, { provenance: p }, { ...execution, participants: [] }), false);
+  assert.equal(validateCaseParticipant(app, key, { provenance: p }, { ...execution, participants: [{ ...participant, terminal: null }] }), false);
+  for (const changed of [{ ...execution, participants: [participant, participant] },
+    { ...execution, processWindows: [{ app, case: key, startedAt: 0, endedAt: 9 }] },
+    { ...execution, participants: [{ ...participant, terminal: { ...participant.terminal, restartCount: 1 } }] }])
+    assert.throws(() => validateCaseParticipant(app, key, { provenance: p }, changed));
 });
 test("native caller retains all bound inputs including imported helpers and non-module files", () => {
   const paths = ["bench/mixed-production/immutable-git.mjs", "bench/workloads/isolated/evidence.mjs", "scripts/steady.mjs", "README.md"];
