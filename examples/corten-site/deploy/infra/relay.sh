@@ -47,7 +47,7 @@ if [ -z "${HANDOVER_KEY:-}" ]; then
 fi
 # Nothing to keep serving: the first machine, or a site that is down already.
 if ! thrice serves; then
-    moves_first '' "https://$DOMAIN/ does not answer as the site now."
+    moves_first notice "https://$DOMAIN/ does not answer as the site now."
 fi
 
 work=$(mktemp -d)
@@ -65,11 +65,35 @@ machine() {
         -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
         -o UserKnownHostsFile="$work/known_hosts" -o StrictHostKeyChecking=yes "handover@$at" "$@"
 }
-hands_over() { [ "$(machine "$1" ask < /dev/null 2>/dev/null || true)" = corten-site-handover ]; }
+# What a machine says when it is asked whether it hands over: `yes`; `no` where it does not
+# let the key in, as one made before there was a handover or with another key; and `away`
+# where it could not be asked.
+asked() {
+    local said
+    if said=$(machine "$1" ask < /dev/null 2> "$work/refusal") && [ "$said" = corten-site-handover ]; then
+        echo yes
+    elif grep -q 'Permission denied' "$work/refusal"; then
+        echo no
+    else
+        echo away
+    fi
+}
+hands_over() { [ "$(asked "$1")" = yes ]; }
 
-# The machine serving now may have been made before there was a handover, or with another key.
-if ! thrice hands_over "$DOMAIN"; then
+# A machine that refuses the key hands nothing over, and the address moves first. One that
+# could not be asked is another matter: it serves, so the address stays with it, and whoever
+# keeps its sshd busy for these seconds does not take the site away.
+old=away
+for _ in 1 2 3; do
+    old=$(asked "$DOMAIN")
+    [ "$old" = away ] || break
+    sleep 5
+done
+if [ "$old" = no ]; then
     moves_first warning "The machine serving $DOMAIN does not hand over what it serves with."
+elif [ "$old" = away ]; then
+    say error "The machine serving $DOMAIN could not be asked over SSH whether it hands over, in three tries. The address has not moved, and that machine goes on serving. Run the workflow again; where it never answers, a new machine that is handed nothing takes its place (deploy/README.md)."
+    exit 1
 fi
 
 # The new machine takes the key as its first step, before it installs anything: ten minutes
@@ -86,12 +110,17 @@ done
 # A run after one that failed further on finds the new machine set up already.
 if ! serves --resolve "$DOMAIN:443:$NEW"; then
     # From one machine to the other through this one's memory: never a file here.
-    if machine "$DOMAIN" give < /dev/null | machine "$NEW" take; then
+    # What counts is whether the new machine kept it, and it keeps only a whole one with a
+    # certificate and a release in it: tar on the old machine may end badly having sent all
+    # of it, as when a file changed while it was read.
+    ended=(0 0)
+    machine "$DOMAIN" give < /dev/null | machine "$NEW" take || ended=("${PIPESTATUS[@]}")
+    if [ "${ended[1]}" = 0 ]; then
         echo "The new machine at $NEW has the certificate and the release $DOMAIN is served with."
     # A machine that is set up already takes nothing: one that an earlier run handed
     # everything, and that did not answer the one question above.
     elif ! thrice serves --resolve "$DOMAIN:443:$NEW"; then
-        say error "What $DOMAIN is served with did not reach the new machine at $NEW: the lines above say which end refused. The address has not moved, and the old machine serves. Run the workflow again."
+        say error "What $DOMAIN is served with did not reach the new machine at $NEW: the lines above say which end refused. The address has not moved, and the old machine serves. Run the workflow again; a new machine that says it is set up already and does not serve is replaced by one that is handed nothing (deploy/README.md)."
         exit 1
     fi
     # Twenty-five minutes: a step that fails on the new machine (a package mirror out of

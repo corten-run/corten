@@ -64,7 +64,11 @@ jobs:
       - run: tofu validate
       # A script that parses but does not mean what it says is found here, not on the machine.
       - name: The scripts the machine, a deploy and an operator run
-        run: shellcheck --severity=warning boot.sh bootstrap.sh handover.sh relay.sh ../provision.sh ../release.sh
+        run: shellcheck --severity=warning boot.sh bootstrap.sh handover.sh handover.test.sh relay.sh ../provision.sh ../release.sh
+      # The one command the handover key runs as root, with the names a deploy could give a
+      # release: in a container, since it writes where a machine keeps its certificates.
+      - name: What the handover's command gives, takes and refuses
+        run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 sh /deploy/infra/handover.test.sh
 
   apply:
     needs: check

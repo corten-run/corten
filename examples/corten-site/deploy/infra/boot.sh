@@ -102,10 +102,11 @@ take_over() {
         mv "$handed/etc/letsencrypt" /etc/letsencrypt
     fi
     sh /root/deploy/provision.sh "$domain" "$email" /root/deploy/deploy.pub "$machine" "$(held | tr '\n' ' ')"
+    placed=no
     for release in "$handed"/*/; do
         release=${release%/}
         name=${release##*/}
-        [ -x "$release/corten-site" ] || continue
+        [ ! -L "$release" ] && [ -x "$release/corten-site" ] || continue
         # A release's name was a deploy's to choose on the machine before this one, which
         # sends none that a command would take for an option, nor `etc`, where certbot's
         # directory lay (handover.sh). Refused here too.
@@ -119,7 +120,14 @@ take_over() {
         runuser -u deploy -- ln -sfn "/opt/corten-site/releases/$name" /opt/corten-site/next
         runuser -u deploy -- mv -T /opt/corten-site/next /opt/corten-site/current
         systemctl restart corten-site.service
+        placed=yes
     done
+    # handover.sh takes nothing without a release in it; were one not put in place all the
+    # same, this machine would answer 502 as a machine that is set up, and take nothing more.
+    if [ "$placed" = no ]; then
+        echo "what was handed over holds no release this machine could put in place" >&2
+        exit 1
+    fi
 }
 
 # The site first. A machine that was handed a certificate and a release serves with them, and

@@ -130,7 +130,9 @@ The address moves first, and the site is away until the new droplet has a certif
 release of its own, where nothing can be handed over: there is no handover key, the droplet
 serving was made before there was one or with another, or the site does not answer when the
 apply reaches that step (it is asked three times). The run says which, and warns where a
-droplet that serves would not hand over. A repository set up before there was a handover
+droplet that serves would not hand over. A droplet that serves and could not be asked over
+SSH at all is not among these: the apply fails with the address where it was, so whoever
+keeps its sshd busy does not take the site away. A repository set up before there was a handover
 gets its key from a second run of `bootstrap.sh`, and that is best done before the change
 that brings the handover is applied: the droplet made with the key is then the one that
 change makes anyway. That is also every replacement made before
@@ -851,8 +853,10 @@ the relay says which), whether root there is held to a password, the relay from 
 GitHub reading the lines the workflow prints as a warning, the input that hands a machine
 nothing, how long a reserved address takes to move and whether a request in flight is lost
 to it, and a renewal on a machine that was handed its certificate. The rig is not in the
-repository, as none of this directory's rehearsals are: CI lints these scripts and
-validates `main.tf`, and a change to them is rehearsed again by whoever makes it. The
+repository, as none of this directory's rehearsals are: CI lints these scripts, validates
+`main.tf`, and runs the handover's command in a container against the names a deploy could
+give a release, a handover cut short and one with no release in it
+(`infra/handover.test.sh`); the rest is rehearsed again by whoever changes it. The
 machine serving when this was merged was made before there was a handover, so the first
 replacement after it moves the address first; the one after that is the first to be handed
 anything, and its run's count is the first measure of the move.

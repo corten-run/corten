@@ -51,13 +51,24 @@ take)
     # What a try that fails got as far as writing holds part of the certificate's key.
     trap 'rm -rf "$handed.new"' EXIT
     install -d -m 700 "$handed.new"
-    # Owned by root here whoever owned it there: the deploy user is not made yet. One that
-    # was cut short on the way fails here, and nothing is kept.
-    tar -xzf - -C "$handed.new" --no-same-owner
+    # Owned by root here whoever owned it there: the deploy user is not made yet, and a
+    # file of that user's that runs as its owner does not become one that runs as root. One
+    # that was cut short on the way fails here, and nothing is kept.
+    tar -xzf - -C "$handed.new" --no-same-owner --no-same-permissions
     [ -e "$handed.new/etc/letsencrypt/live/$domain/fullchain.pem" ] || { echo "no certificate for $domain in what was sent" >&2; exit 1; }
+    # A machine set up from a certificate alone would answer 502 and take nothing more.
+    release=''
+    for each in "$handed.new"/*/; do
+        each=${each%/}
+        [ "${each##*/}" != etc ] && [ ! -L "$each" ] && [ -x "$each/corten-site" ] || continue
+        release=$each
+    done
+    [ -n "$release" ] || { echo "no release in what was sent" >&2; exit 1; }
     # In place whole or not at all: boot.sh goes on as soon as the directory is there.
     rm -rf "$handed"
     mv "$handed.new" "$handed"
+    # boot.sh may have finished with an earlier one meanwhile, and would not look again.
+    [ ! -e /var/lib/corten-site-boot.site ] || rm -rf "$handed"
     ;;
 *)
     echo "usage: ask | give | take" >&2

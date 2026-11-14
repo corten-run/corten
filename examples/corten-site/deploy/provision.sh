@@ -66,12 +66,14 @@ apt-get install -y --no-install-recommends nginx certbot openssl ufw sudo openss
 # Each deploy's release lands in a directory of its own under /opt/corten-site/releases, and
 # `current` points at the one served.
 id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/sh deploy
-install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
+# What lies in a directory of that user's is written by that user: when this runs again the
+# deploy key is on the machine, and root would follow a link put where one of these goes.
+runuser -u deploy -- install -d -m 700 /home/deploy/.ssh
 # The key runs commands and copies files, and nothing else: no forwarding, no terminal.
-sed 's/^/restrict /' "$key" > /home/deploy/.ssh/authorized_keys
-chown deploy:deploy /home/deploy/.ssh/authorized_keys
-chmod 600 /home/deploy/.ssh/authorized_keys
-install -d -o deploy -g deploy /opt/corten-site /opt/corten-site/releases
+sed 's/^/restrict /' "$key" |
+    runuser -u deploy -- sh -c 'umask 077; cat > /home/deploy/.ssh/authorized_keys'
+install -d -o deploy -g deploy /opt/corten-site
+runuser -u deploy -- install -d /opt/corten-site/releases
 
 # The deploy restarts the service and nothing else.
 cat > /etc/sudoers.d/corten-site <<'EOF'
