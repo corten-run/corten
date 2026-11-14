@@ -3224,11 +3224,11 @@ rules something out.
     `key_check_cost` in `examples/watchlist/src/home.rs` (`LivePrices` with 50 rows and two keyed
     cells each, and `KeyedMarkup`, with cells keyed by `key={..}` and by a static `key=".."`, a
     `<template>` and a `<noscript>`, and a `<template>` among a component's children in an
-    `<svg>`'s `<desc>`, 1,000 renders each), on `50b9c52bf` with the test added against
+    `<svg>`'s `<desc>`, 1,000 renders each), on `e59c32c28` with the test added against
     `6caa34f39`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
     instructions for `render_live_prices` and 7,668,108 for `render_keyed_markup` in every run of
     both, the same bytes, and both compile to the same instructions (1,809 lines each, differing
-    only in the mangled name of `data_ref`, which names the key's type, and constants' addresses);
+    only in the mangled name of `data_ref`, which names the key's type);
     2026-11-14, a `<template>` among a component's children, which the component writes into an
     `<svg>`'s `<desc>`, not counted, and one in an `<svg>` the children write themselves counted,
     on `7c2fba42a`, as the tests beside `DescribedKeys` and `BoxedSvgKeys` hold the check to;
