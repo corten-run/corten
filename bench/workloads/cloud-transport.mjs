@@ -15,7 +15,7 @@ export const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 export const controlEnvironment = (binary) => {
   const env = {};
   for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "TEMP", "TMP",
-    ...(["ssh", "scp"].includes(binary) ? ["SSH_AUTH_SOCK"] : [])])
+    ...(["ssh", "scp"].includes(binary) ? ["SSH_AUTH_SOCK", "ProgramData"] : [])])
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,5 +36,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const output = fileURLToPath(new URL('./fixtures/catalog.json', import.meta.url));
   mkdirSync(dirname(output), { recursive: true });
   writeFileSync(output, `${JSON.stringify(records())}\n`);
+  // Public synthetic input, mounted read-only by non-root native app users.
+  // Explicit modes also repair an earlier fixture written under a private umask.
+  chmodSync(output, 0o644);
+  chmodSync(dirname(output), 0o755);
   console.log(`${workload}: ${count} records in ${output}`);
 }

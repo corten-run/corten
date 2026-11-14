@@ -23,6 +23,44 @@ const publishedCreate = () => ({ status: 202, value: { droplet: { id: 3164444, s
 const createAction = (status = "completed", resource_id = 3164444) => ({ status: 200, value: {
   action: { id: 7515, type: "create", resource_type: "droplet", resource_id, status } } });
 
+test("create failures retain only bounded phase codes and HTTP status, never raw evidence", async () => {
+  for (const mode of ["response", "link", "action", "pending", "http", "transport"]) {
+    let clock = 0, posts = 0, reads = 0;
+    const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, sleep: async (ms) => { clock += ms; }, request({ method }) {
+      if (method === "POST") {
+        posts++;
+        const response = publishedCreate();
+        if (mode === "response") response.value.droplet.id = credential;
+        if (mode === "link") response.value.links.actions[0].href = `https://synthetic.invalid/${credential}`;
+        return response;
+      }
+      reads++;
+      if (mode === "http") return { status: 403, value: { raw: credential } };
+      if (mode === "transport") throw new Error(`raw-native-${credential}`);
+      return createAction(mode === "pending" ? "in-progress" : credential, mode === "pending" ? 0 : 3164444);
+    } });
+    const code = { response: "create-response", link: "create-link", action: "create-action-response", pending: "create-action-pending",
+      http: "create-action-http", transport: "create-action-request" }[mode];
+    await assert.rejects(run(create, 2500), (error) => {
+      assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}) });
+      assert.equal(error.controlUncertain === true, ["pending", "transport"].includes(mode));
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential));
+      return true;
+    });
+    assert.equal(posts, 1); assert.equal(reads, ["response", "link"].includes(mode) ? 0 : mode === "pending" ? 3 : 1);
+  }
+});
+
+test("HTTP diagnostic status is optional and never reflects an unlisted number or native value", async () => {
+  for (const status of [499, 999999, "SYNTHETIC_RAW_BODY", undefined]) {
+    const run = providerTransport({ repo: resolve("."), spawn, request: () => ({ status, value: { raw: credential } }) });
+    await assert.rejects(run(create, 1000), (error) => {
+      assert.deepEqual(error.providerDiagnostic, { code: "create-http" });
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("SYNTHETIC_RAW_BODY")); return true;
+    });
+  }
+});
+
 test("published create example and nullable in-progress action already satisfy the engine contract", async () => {
   for (const actionId of [7515, 3_000_000_001]) {
     const response = publishedCreate(), calls = []; let clock = 0;

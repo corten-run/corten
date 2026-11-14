@@ -5,6 +5,33 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
+  GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
+  follow the documented manual check before installing the binary.
+
+- Retry entire host-lifetime snapshots for comm-only bookend changes within the
+  existing three-attempt budget. Every accepted identity must still match in full;
+  PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
+  This repairs a demonstrated local native churn race, not an established r21 cause.
+
+- Retain bounded first/last host-lifetime observer failures with fixed operation and
+  allowlisted error codes, without saving raw errors or weakening identity, retry,
+  continuity or cleanup proof. This adds diagnostics; it does not establish or repair
+  the historical r21 failure's cause.
+
+- Make generated catalog fixtures and Gin's public static assets readable by native
+  non-root image users under a private job umask. Preserve original catalog checker
+  errors when negative-response receipts are missing or invalid, without accepting
+  failed checks or starting timing; add private-umask native Gin CI coverage.
+
+- Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
+  grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
+  raw responses or credentials, or changing provider validation and recovery rules.
+
+- Preserve captured `ProgramData` only for grouped cloud SSH/SCP children so Windows
+  OpenSSH can initialize with the sanitized environment. Git/doctl environments and
+  credential handling are unchanged; local configuration-only checks make no connection.
+
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run
   ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).
@@ -427,13 +454,14 @@ Corten is pre-1.0, so any minor version may change the API.
   address moves first, as it did. The workflow asks the site once a second while it applies
   and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
   makes a new machine where nothing has changed (`-f without_handover=true` makes one that
-  is handed nothing). Rehearsed in containers and not yet run on a droplet: the deploy README
-  says what that leaves untried. `provision.sh`, when it runs a second time, writes in the deploy
-  user's directories as that user: as root it made whatever a link there pointed at that
-  user's, so the holder of the deploy key could become root. It stops for a key's file that
-  is not there. The workflow's check runs the handover's command, those lines of
-  `provision.sh` and the relay in containers (`infra/handover.test.sh`, `provision.test.sh`,
-  `infra/relay.test.sh`).
+  is handed nothing). Rehearsed in containers, and run for corten.run, where on the one
+  replacement that was handed anything the site answered each of 174 requests a second
+  apart: the deploy README says what that leaves untried. `provision.sh`, when it runs a
+  second time, writes in the deploy user's directories as that user: as root it made
+  whatever a link there pointed at that user's, so the holder of the deploy key could become
+  root. It stops for a key's file that is not there. The workflow's check runs the
+  handover's command, those lines of `provision.sh` and the relay in containers
+  (`infra/handover.test.sh`, `provision.test.sh`, `infra/relay.test.sh`).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
@@ -457,7 +485,7 @@ Corten is pre-1.0, so any minor version may change the API.
   without; before, only `<main>` was swapped and the count kept its value from before the write. A
   `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
   answer must change one answers its page
-  ([design Choice 49](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  ([design Choice 50](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. Measured against `main` with callgrind: such a write takes 57,202 instructions
   where its `<main>` swap took 23,042 (two layout reads), 25,173 where it took 22,794 without

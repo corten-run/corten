@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { quote, shellTransport } from "./cloud-transport.mjs";
+import { controlEnvironment, quote, shellTransport } from "./cloud-transport.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -103,4 +103,50 @@ test("control environment locations are frozen for the lifetime of a transport",
     process.env.HOME = resolve("synthetic-changed-home"); run("doctl", []); run("doctl", []);
     assert.ok(envs.every((env) => env.HOME === previous));
   } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; }
+});
+
+test("SSH/SCP alone capture ProgramData without widening other control environments", () => {
+  const keys = ["ProgramData", "SSH_AUTH_SOCK", "DIGITALOCEAN_ACCESS_TOKEN", "NODE_OPTIONS", "UNLISTED_CLOUD_TEST"];
+  const previous = new Map(keys.map((key) => [key, process.env[key]])), calls = [];
+  try {
+    for (const key of keys) process.env[key] = `synthetic-${key}`;
+    const expected = new Map(["git", "doctl"].map((binary) => [binary, controlEnvironment(binary)]));
+    const run = shellTransport({ repo: resolve("."), spawn: (binary, _args, options) => {
+      calls.push({ binary, env: options.env }); return { status: 0 };
+    } });
+    process.env.ProgramData = "synthetic-changed-ProgramData";
+    process.env.SSH_AUTH_SOCK = "synthetic-changed-SSH_AUTH_SOCK";
+    for (let i = 0; i < 2; i++) {
+      run("git", ["rev-parse", "HEAD"]); run("doctl", []);
+      run("ssh", ["root@192.0.2.10", "true"]);
+      run("scp", [resolve("synthetic-file"), "root@192.0.2.10:/bench/job.sh"]);
+    }
+    for (const { binary, env } of calls) {
+      if (binary === "git" || binary === "doctl") {
+        assert.equal(env.ProgramData, undefined); assert.equal(env.SSH_AUTH_SOCK, undefined);
+        assert.deepEqual(env, expected.get(binary));
+      } else {
+        assert.equal(env.ProgramData, "synthetic-ProgramData"); assert.equal(env.SSH_AUTH_SOCK, "synthetic-SSH_AUTH_SOCK");
+        assert.deepEqual(Object.keys(env).sort(), [...Object.keys(expected.get("git")), "ProgramData", "SSH_AUTH_SOCK"].sort());
+      }
+      for (const key of keys.slice(2)) assert.equal(env[key], undefined);
+    }
+  } finally {
+    for (const [key, value] of previous) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
+
+test("installed Windows OpenSSH consumes the sanitized environment without a connection", { skip: process.platform !== "win32" }, (t) => {
+  const executable = join(process.env.SystemRoot, "System32", "OpenSSH", "ssh.exe");
+  if (!existsSync(executable)) { t.skip("Windows OpenSSH is not installed"); return; }
+  const env = controlEnvironment("ssh");
+  assert.ok(process.env.ProgramData, "Windows ProgramData source path required");
+  const result = spawnSync(executable, ["-G", "-F", "none", "127.0.0.1"], {
+    cwd: resolve("."), env, shell: false, windowsHide: true, encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"], timeout: 10000, maxBuffer: 1024 * 1024,
+  });
+  assert.equal(result.error, undefined); assert.equal(result.signal, null); assert.equal(result.status, 0);
+  assert.equal(env.ProgramData, process.env.ProgramData, "use the captured system path, not a fallback");
+  assert.match(result.stdout, /^hostname 127\.0\.0\.1\r?$/m);
+  assert.match(result.stdout, /^globalknownhostsfile /m);
 });
