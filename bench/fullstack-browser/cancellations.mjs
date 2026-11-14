@@ -1,5 +1,10 @@
 import { publicURL, sha256 } from './contract.mjs';
 import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
+
+export function nativeOriginId(namespace, dispatch, hop) {
+  return `cdp:${sha256(JSON.stringify([namespace.observerSession, namespace.targetId, dispatch.request, hop, dispatch.at, dispatch.frame, dispatch.loader]))}`;
+}
 
 export function responseDateHash(headers) {
   const values = Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() === 'date');
@@ -25,11 +30,13 @@ export function classifyCancellation(request, documents, frames) {
 }
 
 export class NativeNetworkAudit {
-  constructor(cdp, identity, retainBody = () => {}) {
+  constructor(cdp, identity, retainBody = () => {}, namespace = { observerSession: randomUUID(), targetId: null }) {
     this.identity = identity; this.requests = []; this.latest = new Map(); this.frames = [];
-    this.pending = new Set();
+    this.cdp = cdp; this.retainBody = retainBody; this.namespace = { ...namespace }; this.pending = new Set(); this.queue = []; this.parserBody = null;
+    retainBody({ event: 'native-network-observer', namespaceKind: 'observer-assigned', ...this.namespace, receivedAt: performance.now() });
     cdp.on('Network.requestWillBeSent', (e) => {
       const row = { id: e.requestId, frame: e.frameId ?? null, loader: e.loaderId ?? null, at: e.timestamp,
+        hop: (this.latest.get(e.requestId)?.hop ?? -1) + 1,
         wall: e.wallTime * 1000, url: e.request.url, ...publicURL(e.request.url), method: e.request.method, kind: e.type,
         status: null, failed: null };
       this.requests.push(row); this.latest.set(e.requestId, row);
@@ -39,25 +46,47 @@ export class NativeNetworkAudit {
     } });
     cdp.on('Network.loadingFinished', (e) => {
       const row = this.latest.get(e.requestId);
-      if (!row || row.kind !== 'Document' || row.failed || row.status >= 300 && row.status < 400) return;
-      const startedAt = performance.now(); let timer;
-      const pending = Promise.race([cdp.send('Network.getResponseBody', { requestId: row.id }), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Native document body observation unavailable')), 1000);
-      })]).then((result) => {
-        if (typeof result.body !== 'string' || result.body.length > 16 * 1024 ** 2 || typeof result.base64Encoded !== 'boolean') return;
-        const bytes = Buffer.from(result.body, result.base64Encoded ? 'base64' : 'utf8');
-        row.body = { event: 'native-document-body', request: row.id, dispatchAt: row.at, frame: row.frame, loader: row.loader,
-          urlSha256: sha256(row.url), method: row.method, status: row.status, dateSha256: row.dateSha256,
-          bodySha256: sha256(bytes), bytes: bytes.length, startedAt, receivedAt: performance.now() };
-        retainBody({ ...row.body });
-      }).catch(() => { row.body = null; }).finally(() => { clearTimeout(timer); this.pending.delete(pending); });
-      this.pending.add(pending);
+      if (!row || row.failed || !/^https?:/.test(row.url) || row.status >= 300 && row.status < 400 || this.queue.length >= 1024) return;
+      this.queue.push({ row, queuedAt: performance.now() }); this.pump();
     });
     cdp.on('Network.loadingFailed', (e) => { const row = this.latest.get(e.requestId); if (row) row.failed = {
       at: e.timestamp, canceled: e.canceled === true, errorText: e.errorText, blockedReason: e.blockedReason ?? null }; });
     cdp.on('Page.frameNavigated', (e) => this.frames.push({ frame: e.frame.id, loader: e.frame.loaderId, ...publicURL(e.frame.url) }));
   }
-  async drain() { while (this.pending.size) await Promise.allSettled([...this.pending]); }
+  pump() {
+    while (this.pending.size < 4 && this.queue.length) {
+      const { row, queuedAt } = this.queue.shift(), startedAt = performance.now(), remaining = 1000 - (startedAt - queuedAt);
+      if (remaining <= 0) continue;
+      let timer;
+      const pending = Promise.race([this.cdp.send('Network.getResponseBody', { requestId: row.id }), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Native response body observation unavailable')), remaining);
+      })]).then((result) => {
+        if (typeof result.body !== 'string' || result.body.length > 16 * 1024 ** 2 || typeof result.base64Encoded !== 'boolean') return;
+        const bytes = Buffer.from(result.body, result.base64Encoded ? 'base64' : 'utf8');
+        if (bytes.length > 16 * 1024 ** 2) return;
+        const originId = nativeOriginId(this.namespace, { request: row.id, ...row }, row.hop);
+        row.body = { event: row.kind === 'Document' ? 'native-document-body' : 'native-response-body', ...this.namespace, originId, hop: row.hop,
+          request: row.id, dispatchAt: row.at, frame: row.frame, loader: row.loader, urlSha256: sha256(row.url), method: row.method,
+          status: row.status, dateSha256: row.dateSha256 ?? null, bodySha256: sha256(bytes), bytes: bytes.length, queuedAt, startedAt, receivedAt: performance.now() };
+        if (row.kind === 'Document') this.parserBody = { originId, bytes };
+        this.retainBody({ ...row.body });
+      }).catch(() => { row.body = null; }).finally(() => { clearTimeout(timer); this.pending.delete(pending); this.pump(); });
+      this.pending.add(pending);
+    }
+  }
+  async drain() { while (this.pending.size || this.queue.length) { this.pump(); await Promise.allSettled([...this.pending]); } }
+  originatingDocument(binding) {
+    const matches = this.requests.filter((r) => binding && r.kind === 'Document' && r.frame === binding.frame && r.loader === binding.loader
+      && r.body && !r.failed && !(r.status >= 300 && r.status < 400));
+    return matches.length === 1 ? { requestId: matches[0].body.originId, sha256: matches[0].body.bodySha256 } : null;
+  }
+  takeDocumentResponse(origin) {
+    const rows = this.requests.filter((r) => r.kind === 'Document' && r.body?.originId === origin?.requestId && r.body.bodySha256 === origin.sha256);
+    const saved = this.parserBody;
+    if (rows.length !== 1 || saved?.originId !== origin.requestId) return null;
+    this.parserBody = null;
+    return { ...origin, body: saved.bytes, status: rows[0].status, url: rows[0].url };
+  }
   annotate(rows) {
     const documents = this.requests.filter((r) => r.kind === 'Document');
     for (const row of rows) {
@@ -65,13 +94,6 @@ export class NativeNetworkAudit {
         const identity = this.identity(row.id);
         if (identity) {
           row.documentIdentity = { urlSha256: sha256(identity.url), startedAt: identity.startTime, dateSha256: row.dateSha256 ?? null };
-          const sameResponse = (native, browser) => native.url === this.identity(browser.id)?.url && native.method === browser.method
-            && native.status === browser.status && native.body?.bodySha256 === browser.bodySha256 && native.body?.bytes === browser.bytes?.decodedBody
-            && typeof native.dateSha256 === 'string' && native.dateSha256 === browser.dateSha256;
-          const matches = documents.filter((r) => sameResponse(r, row));
-          const browserMatches = matches.length === 1 ? rows.filter((other) => other.resource === 'document' && sameResponse(matches[0], other)) : [];
-          row.nativeDocument = matches.length === 1 && browserMatches.length === 1 ? { request: matches[0].id, frame: matches[0].frame, loader: matches[0].loader,
-            at: matches[0].at, wall: matches[0].wall, urlSha256: sha256(matches[0].url) } : null;
         }
       }
       if (!row.failure) continue;

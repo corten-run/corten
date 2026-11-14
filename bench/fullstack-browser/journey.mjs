@@ -188,7 +188,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           const button = page.locator('.marketplace__alert [type="submit"]');
           assert.ok(await button.isVisible() && await button.isEnabled(), "native action not usable");
           evidence.readiness.actionableObservedMs = performance.now() - at;
-          row.document = await responseDocument(browser, response, base + step.path, observation, network.requestId(response.request()), step.id);
+          row.document = await responseDocument(browser, response, base + step.path, observation, observation ? network.takeDocumentResponse(row.dom.originatingResponse) : null, step.id);
           evidence.architecture = architecture(app, row.dom.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.architecture = architecture(app, row.document.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.gaps.push("Native architecture unverified in observed DOM and independent SSR markers");

@@ -429,11 +429,23 @@ Live, independent parser and missing-item DOM observations use the installed fix
 projection API. Each typed read binds its unique observer, action/context, native resource scope,
 bounded read interval and originating document response. The response is reconciled with native
 frame/loader/dispatch/terminal observations; a live read is not claimed to reproduce earlier HTML.
-An independently bounded CDP document-body read retains only its byte hash/length and response
-Date-header hash. Native and browser response tuples must be mutually unique, including complete-URL
-hash, method and status; repeated URLs never use an ordinal or approximate start-time match to
-attest a DOM response. Missing Date/body receipts, failed reads, documents exceeding the bounded
-16 MiB body-string observation or indistinguishable response tuples remain unproved. Retained
+The primary origin is the actual CDP document dispatch/redirect hop, frame and loader, namespaced
+by an explicitly observer-assigned session UUID and the actual native target ID. The UUID is not
+claimed to be a protocol session ID. Replay derives each opaque origin ID from those native
+receipts and checks response, terminal, commit, realm/context lifetime and pre-read body window.
+Repeated identical URL/body/Date responses therefore retain distinct native origins without
+inventing a Playwright request bijection. Date hashes are optional consistency evidence, not IDs.
+The separately observed Playwright ledger must conserve the full native HTTP request multiset:
+complete-URL hash, public path, method, resource type, status, completion/failure, body hash/length
+and multiplicity. Redirects and aborts remain accounted for; conservation never excuses a failure
+under the unchanged strict parity gate. Missing, extra or substituted rows remain unproved.
+Independent network-stack dispatch receipts must also conserve every native chain/hop and its
+bounded clock identity; deleting both ordinary ledgers cannot excuse an orphan stack receipt.
+Bounded CDP response reads retain only byte hash/length and optional Date-header hash. The body
+string and decoded bytes each have a 16 MiB limit, with at most four reads active and a bounded
+1024-entry queue; each observation has 1000 ms including queue time. Only the latest document's
+bytes remain in memory for one independent parser consumption. No raw body is saved or logged.
+Missing/failed reads, exceeded bounds and unsupported responses remain unproved. Retained
 projection bytes with missing linkage are conserved but cannot attest their saved semantic model.
 Independent parser contexts retain their actual script-disabled configuration. Missing/ambiguous
 linkage or incomplete/privacy-filtered extraction remains proof-missing, not an observed target

@@ -9,7 +9,8 @@ import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedF
 import { exportBrowserCaptures } from "./capture.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
-import { classifyNoJSRequests, validatePlatformRetirement } from "./lifecycle.mjs";
+import { classifyNoJSRequests, validatePlatformRetirement, nativeNetworkRequests } from "./lifecycle.mjs";
+import { nativeOriginId } from "./cancellations.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { comparePage } from "../marketplace/check.mjs";
@@ -690,6 +691,74 @@ export function nativeToolIdentities(tools, canonicalLock) {
   return { node: tools.node, browser: tools.browser, lockSha256: tools.lockSha256 };
 }
 
+// This is multiset conservation, not a guessed bijection between protocol IDs.
+export function reconcileNativeNetwork(evidence) {
+  const result = { outcome: "unknown", reasons: [], namespace: null, requests: [] };
+  try {
+    const j = evidence.platformLifecycle, events = j?.events;
+    need(Array.isArray(events) && events.length <= 100000, "Native network journal unavailable");
+    const observers = events.filter((e) => e.event === "native-network-observer");
+    need(observers.length === 1, "Native network observer namespace missing/duplicated");
+    const ns = observers[0];
+    exactKeys(ns, ["event", "namespaceKind", "observerSession", "targetId", "receivedAt"], "Unknown native observer namespace field");
+    need(ns.namespaceKind === "observer-assigned" && text(ns.observerSession) && text(ns.targetId) && ns.targetId === j.target?.target
+      && finite(ns.receivedAt) && ns.receivedAt <= j.boundaries?.startedAt, "Native observer/target binding unavailable");
+    const inventories = events.filter((e) => e.event === "Target.getTargets" && e.phase === "initial");
+    need(inventories.length === 1 && inventories[0].targets?.filter((t) => t.target === ns.targetId && t.context === j.target.context && t.type === "page").length === 1,
+      "Native observer target lacks actual discovery inventory");
+    const network = nativeNetworkRequests(j); need(!network.reasons.length, network.reasons.join("; "));
+    const bodies = events.filter((e) => ["native-document-body", "native-response-body"].includes(e.event)), byDispatch = new Map(), used = new Set(), origins = new Set();
+    for (const body of bodies) {
+      const key = JSON.stringify([body.request, body.dispatchAt]);
+      need(!byDispatch.has(key), "Duplicated native body receipt"); byDispatch.set(key, body);
+    }
+    const browser = new Map(), native = new Map();
+    const add = (groups, tuple, date) => { const key = JSON.stringify(tuple); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(date); };
+    for (const r of network.requests) {
+      const d = r.dispatch, redirected = r.terminal?.event === "native-redirect", failed = r.terminal?.event === "Network.loadingFailed";
+      const status = redirected ? r.terminal.status : r.response?.status ?? null;
+      let body = null;
+      if (!redirected && !failed) {
+        body = byDispatch.get(JSON.stringify([d.request, d.at])); need(body, "Completed native response lacks bounded body receipt"); used.add(body);
+        exactKeys(body, ["event", "observerSession", "targetId", "originId", "hop", "request", "dispatchAt", "frame", "loader", "urlSha256", "method", "status", "dateSha256", "bodySha256", "bytes", "queuedAt", "startedAt", "receivedAt"], "Unknown native body receipt field");
+        const originId = nativeOriginId(ns, d, r.hop);
+        same([body.event, body.observerSession, body.targetId, body.originId, body.hop, body.frame, body.loader, body.urlSha256, body.method, body.status],
+          [d.type === "Document" ? "native-document-body" : "native-response-body", ns.observerSession, ns.targetId, originId, r.hop, d.frame, d.loader, d.urlSha256, d.method, status], "Native response body/dispatch identity differs");
+        need(!origins.has(originId), "Duplicated native origin identity"); origins.add(originId);
+        need(hash.test(body.bodySha256 ?? "") && integer(body.bytes) && body.bytes <= 16 * 1024 ** 2
+          && [body.queuedAt, body.startedAt, body.receivedAt].every(finite) && r.terminal.receivedAt <= body.queuedAt
+          && body.queuedAt <= body.startedAt && body.startedAt <= body.receivedAt && body.receivedAt - body.queuedAt <= 1000
+          && body.receivedAt <= j.boundaries.endedAt, "Native body observation is missing/beyond its bounded window");
+        need(body.dateSha256 === null || hash.test(body.dateSha256 ?? ""), "Malformed optional native response date");
+        need(r.response.dateSha256 === null || r.response.dateSha256 === undefined || hash.test(r.response.dateSha256 ?? ""), "Malformed optional native response-header date");
+        if (body.dateSha256 && r.response.dateSha256) same(body.dateSha256, r.response.dateSha256, "Native response date consistency differs");
+      }
+      r.body = body;
+      add(native, [d.scheme, d.path, d.urlSha256, d.method, d.type.toLowerCase(), status, !failed, failed ? r.terminal.errorText : null,
+        body?.bodySha256 ?? null, body?.bytes ?? null], body?.dateSha256 ?? null);
+    }
+    need(used.size === bodies.length, "Orphan/late native response body receipt");
+    need(Array.isArray(evidence.requestLedger), "Semantic browser request ledger missing");
+    const ids = new Set();
+    for (const r of evidence.requestLedger) {
+      need(text(r.id) && !ids.has(r.id), "Duplicate/missing semantic request ID"); ids.add(r.id);
+      need(hash.test(r.urlSha256 ?? "") && typeof r.completed === "boolean" && !r.captureError, "Incomplete semantic request identity/body capture");
+      need(r.dateSha256 === null || r.dateSha256 === undefined || hash.test(r.dateSha256 ?? ""), "Malformed optional semantic response date");
+      need(!r.failure || r.completed === false, "Semantic failed request claims completion");
+      add(browser, [r.scheme, r.path, r.urlSha256, r.method, r.resource, r.status, r.completed, r.failure ?? null,
+        r.bodySha256 ?? null, r.bytes?.decodedBody ?? null], r.dateSha256 ?? null);
+    }
+    same([...native.keys()].sort(), [...browser.keys()].sort(), "Native/semantic request methods/paths/status/bodies/failures differ");
+    for (const [key, dates] of native) {
+      same(dates.length, browser.get(key).length, "Native/semantic request multiplicity differs");
+      // Optional dates can contradict a group; they never distinguish its IDs.
+      if (dates.every(text) && browser.get(key).every(text)) same([...dates].sort(), [...browser.get(key)].sort(), "Native/semantic response date consistency differs");
+    }
+    result.namespace = ns; result.requests = network.requests; result.outcome = "reconciled";
+  } catch (error) { result.reasons.push(error.message); }
+  return result;
+}
+
 // This checks observational identities only; the installed leaf decodes reads.
 // Missing linkage stays unknown, while contradictory retained linkage rejects.
 export function validateDOMIdentity(dom, row, evidence, context, caseKey, observers, parser = false) {
@@ -710,42 +779,14 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
   same(dom.url?.path, row.action.path, "Native DOM route differs from action");
   const j = evidence.platformLifecycle, origin = dom.originatingResponse;
   if (!origin || !j?.events || !j.realms) return null;
-  const requests = evidence.requestLedger?.filter((r) => r.id === origin.requestId) ?? [];
-  need(requests.length === 1, "Missing/ambiguous originating document request");
-  const r = requests[0], n = r.nativeDocument, p = r.documentIdentity;
-  if (!n || !p) return null;
-  need([n.request, n.frame, n.loader].every(text) && finite(n.at) && finite(n.wall) && hash.test(n.urlSha256 ?? "") && hash.test(p.urlSha256 ?? ""), "Incomplete native document identity");
-  need(r.resource === "document" && r.completed && !r.failure && !r.captureError && hash.test(r.bodySha256 ?? "")
-    && Number.isInteger(r.status) && r.status >= 100 && r.status <= 599 && !(r.status >= 300 && r.status < 400), "Originating document did not complete");
-  same(origin.sha256, r.bodySha256, "Native DOM originating body differs");
-  const dispatches = j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document" && e.request === n.request && e.at === n.at);
-  need(dispatches.length === 1, "Missing/ambiguous native document dispatch");
-  const d = dispatches[0];
-  same([n.frame, n.loader, n.wall, n.urlSha256, r.method, r.path, p.urlSha256], [d.frame, d.loader, d.wall, d.urlSha256, d.method, d.path, d.urlSha256], "Document/native dispatch identity differs");
-  const next = j.events.find((e) => e.event === "Network.requestWillBeSent" && e.request === d.request && e.at > d.at);
-  const replies = j.events.filter((e) => e.event === "Network.responseReceived" && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
-  const terminals = j.events.filter((e) => ["Network.loadingFinished", "Network.loadingFailed"].includes(e.event) && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
-  need(replies.length === 1 && replies[0].status === r.status && replies[0].frame === d.frame && replies[0].loader === d.loader
-    && replies[0].type === "Document" && finite(replies[0].at) && replies[0].at >= d.at && d.receivedAt <= replies[0].receivedAt
-    && terminals.length === 1 && terminals[0].event === "Network.loadingFinished"
-    && finite(terminals[0].at) && terminals[0].at >= d.at
-    && replies[0].receivedAt <= terminals[0].receivedAt && epoch(terminals[0].receivedAt) <= times[2] + 1, "Native document response/terminal differs or follows DOM read");
-  const bodies = j.events.filter((e) => e.event === "native-document-body" && e.request === d.request && e.dispatchAt === d.at);
-  need(bodies.length === 1, "Missing/ambiguous native document body receipt");
-  const body = bodies[0];
-  same([body.frame, body.loader, body.urlSha256, body.method, body.status, body.bodySha256, body.bytes, body.dateSha256],
-    [d.frame, d.loader, d.urlSha256, d.method, r.status, r.bodySha256, r.bytes?.decodedBody, r.dateSha256], "Native document response bytes/identity differ");
-  same([p.dateSha256, replies[0].dateSha256], [body.dateSha256, body.dateSha256], "Native/browser response date identity differs");
-  need(hash.test(body.dateSha256 ?? "") && integer(body.bytes) && finite(p.startedAt)
-    && finite(body.startedAt) && finite(body.receivedAt) && terminals[0].receivedAt <= body.startedAt
-    && body.startedAt <= body.receivedAt && epoch(body.receivedAt) <= times[2] + 1, "Native document body read outside pre-DOM window");
-  const nativeTuple = j.events.filter((e) => e.event === "native-document-body" && e.urlSha256 === body.urlSha256 && e.method === body.method
-    && e.status === body.status && e.bodySha256 === body.bodySha256 && e.bytes === body.bytes && e.dateSha256 === body.dateSha256);
-  const browserTuple = evidence.requestLedger.filter((q) => q.resource === "document" && q.documentIdentity?.urlSha256 === body.urlSha256 && q.method === body.method
-    && q.status === body.status && q.bodySha256 === body.bodySha256 && q.bytes?.decodedBody === body.bytes && q.dateSha256 === body.dateSha256);
-  need(nativeTuple.length === 1 && browserTuple.length === 1, "Ambiguous native document response identity");
+  const network = reconcileNativeNetwork(evidence); if (network.outcome !== "reconciled") return null;
+  const origins = network.requests.filter((r) => r.dispatch.type === "Document" && r.body?.originId === origin.requestId);
+  need(origins.length === 1, "Missing/ambiguous originating native document");
+  const { dispatch: d, response, terminal, body } = origins[0];
+  same(origin.sha256, body.bodySha256, "Native DOM originating body differs");
+  need(terminal.event === "Network.loadingFinished" && epoch(body.receivedAt) <= times[2] + 1, "Native document body follows DOM read");
   const commits = j.events.filter((e) => e.event === "Page.frameNavigated" && e.frame === d.frame && e.loader === d.loader && e.path === d.path);
-  need(commits.length === 1 && d.receivedAt <= commits[0].receivedAt && commits[0].receivedAt <= terminals[0].receivedAt, "Document lacks unique native commit");
+  need(commits.length === 1 && d.receivedAt <= commits[0].receivedAt && commits[0].receivedAt <= terminal.receivedAt, "Document lacks unique native commit");
   const realms = j.realms.filter((v) => v.realm === row.resourcesAtDOM.realm);
   need(realms.length === 1 && realms[0].frame === d.frame && realms[0].loader === d.loader, "Originating document differs from DOM native realm");
   const realm = realms[0], created = j.events.filter((e) => e.event === "Runtime.executionContextCreated" && e.uniqueId === realm.uniqueId);
@@ -755,14 +796,14 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
     && (e.event === "Runtime.executionContextDestroyed" && (e.uniqueId === realm.uniqueId || e.context === realm.context)
       || e.event === "Runtime.executionContextsCleared" || e.event === "Page.frameDetached" && e.frame === realm.frame)), "Native DOM context destroyed before read completed");
   if (parser) {
-    same([dom.requestId, dom.responseSha256, dom.status], [r.id, r.bodySha256, r.status], "Parser differs from original document response");
+    same([dom.requestId, dom.responseSha256, dom.status], [body.originId, body.bodySha256, response.status], "Parser differs from original document response");
   } else {
     same(dom.scope, row.resourcesAtDOM.scope, "Native DOM/resource scope differs");
     need(j.documents?.filter((v) => v.observer === dom.observer && v.scope === dom.scope && v.realm === realm.realm && v.frame === d.frame && v.loader === d.loader).length === 1,
       "Native DOM observer lacks matching lifecycle document");
   }
   return { observer: dom.observer, context: context.id, case: caseKey, action: row.action.id, scope: dom.scope,
-    originatingResponse: { requestId: r.id, sha256: r.bodySha256 }, readInterval: dom.readInterval, url: dom.url };
+    originatingResponse: { requestId: body.originId, sha256: body.bodySha256 }, readInterval: dom.readInterval, url: dom.url };
 }
 
 export function replayDOMObservation(reader, dom, row, evidence, context, caseKey, observers, parser = false) {
@@ -901,6 +942,7 @@ async function validateNativeV2(input) {
         || Math.ceil(e.clock.timeOrigin + j.boundaries.endedAt) > windows[0].endedAt + 1) block("native-case-process-window-unbound");
       const workers = replayWorkerAbsence(j), peer = replayPeerApplicability(j, workers); proof.lifetimes.set(`${app}/${cell.case}`, { workers, peer });
       if (workers.status !== "verified" || peer.status !== "verified") block("native-worker-or-peer-proof-missing");
+      if (reconcileNativeNetwork(e).outcome !== "reconciled") { proof.responses = false; block("native-semantic-network-proof-missing"); }
       for (const [r, phase, role] of readbackEntries(e)) {
         if (!r?.responseEvidence) { proof.readbacks = false; block("independent-readback-response-missing"); continue; }
         need(!readIds.has(r.requestId), "Reused independent native read identity"); readIds.add(r.requestId);

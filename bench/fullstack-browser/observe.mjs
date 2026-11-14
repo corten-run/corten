@@ -47,7 +47,7 @@ export function observeNetwork(page) {
   let formBinding = null;
   const track = (promise) => { pending.add(promise); promise.catch((e) => failures.push(e.message)).finally(() => pending.delete(promise)); };
   page.on("request", (request) => {
-    const row = { id: randomUUID(), ...publicURL(request.url()), method: request.method(), transport: transportOf(request),
+    const row = { id: randomUUID(), ...publicURL(request.url()), scheme: new URL(request.url()).protocol, urlSha256: sha256(request.url()), method: request.method(), transport: transportOf(request),
       resource: request.resourceType(), status: null, completed: false, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
     rows.push(row); byRequest.set(request, row); byId.set(row.id, request); bindings.set(request, formBinding);
     notify();
@@ -67,7 +67,7 @@ export function observeNetwork(page) {
     row.status = response.status();
     const headers = response.headers(); row.type = headers["content-type"] ?? null; row.encoding = headers["content-encoding"] ?? "identity";
     row.hasCsp = Boolean(headers["content-security-policy"]);
-    if (row.resource === "document") row.dateSha256 = responseDateHash(headers);
+    row.dateSha256 = responseDateHash(headers);
   });
   page.on("requestfinished", (request) => { track((async () => {
     const row = byRequest.get(request), response = await request.response();
@@ -103,14 +103,12 @@ export function observeNetwork(page) {
   return { rows, failures,
     requestId(request) { return byRequest.get(request)?.id ?? null; },
     attachCDP(cdp, lifecycle) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; },
-      (receipt) => lifecycle?.events.push(receipt)); },
+      (receipt) => lifecycle?.events.push(receipt), { observerSession: randomUUID(), targetId: lifecycle?.target?.target ?? null }); },
     annotate() { native?.annotate(rows); },
     originatingDocument(binding) {
-      native?.annotate(rows);
-      const matches = rows.filter((r) => binding && r.resource === "document" && r.nativeDocument?.frame === binding.frame && r.nativeDocument?.loader === binding.loader
-        && r.completed && !r.failure && !r.captureError && r.bodySha256 && !(r.status >= 300 && r.status < 400));
-      return matches.length === 1 ? { requestId: matches[0].id, sha256: matches[0].bodySha256 } : null;
+      return native?.originatingDocument(binding) ?? null;
     },
+    takeDocumentResponse(origin) { return native?.takeDocumentResponse(origin) ?? null; },
     bindForm(form) { formBinding = form ? structuredClone(form) : null; }, drain,
     async settle(offset, deadline, requirePost = false) {
       while (performance.now() < deadline) {
@@ -237,29 +235,31 @@ export async function visibleDOM(page, observation = null, identity = null) {
     page: present ? await page.evaluate(snapshotPage) : null,
     error: present ? null : (await page.locator("body").innerText()).trim() };
 }
-export async function responseDocument(browser, response, url, observation = null, requestId = null, action = null) {
+export async function responseDocument(browser, response, url, observation = null, nativeResponse = null, action = null) {
   // Parse the actual initial response in a DIFFERENT, script-disabled context.
   // Fulfillment replays only these observed bytes to the parser, never oracle HTML.
-  const body = await response.body();
+  if (observation && (!Buffer.isBuffer(nativeResponse?.body) || nativeResponse.body.length > 16 * 1024 ** 2
+    || nativeResponse.url !== url || sha256(nativeResponse.body) !== nativeResponse.sha256)) throw new Error("Native initial response bytes unavailable");
+  const body = observation ? nativeResponse.body : await response.body(), status = observation ? nativeResponse.status : response.status();
   const context = await observedContext(browser, { javaScriptEnabled: false, serviceWorkers: "block" }, observation, "ssr-parser");
   try {
     const page = await context.newPage();
     await page.route("**/*", async (route) => {
-      if (route.request().isNavigationRequest() && route.request().url() === url) await route.fulfill({ status: response.status(), contentType: "text/html", body });
+      if (route.request().isNavigationRequest() && route.request().url() === url) await route.fulfill({ status, contentType: "text/html", body });
       else await route.abort();
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(installResourceObserver);
     const scope = await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope);
     const result = { observer: randomUUID(), scope, url: publicURL(url), error: null,
-      responseSha256: sha256(body), status: response.status(), page: observation ? null : await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
+      responseSha256: sha256(body), status, page: observation ? null : await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
       parserScope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
     if (observation) {
       result.context = observation.byContext.get(context).id;
-      result.requestId = requestId; result.responseEvidence = null;
+      result.requestId = nativeResponse.requestId; result.responseEvidence = null;
       try {
         Object.assign(result, await retainedDOM(page, observation, { context: result.context, case: observation.case, action, scope,
-          originatingResponse: { requestId, sha256: result.responseSha256 } }));
+          originatingResponse: { requestId: result.requestId, sha256: result.responseSha256 } }));
       } catch { result.captureFailure = "public-dom-projection-unproved"; }
     }
     return result;
