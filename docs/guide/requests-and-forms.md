@@ -1491,7 +1491,11 @@ bookmarked, reloaded and reached with Back, and the form works without a script.
 filter as soon as it changes, a handler submits the form (`form.requestSubmit()` on `change`).
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
 position stays, and focus returns to the control the user is on when the form goes (by id, else
-by its name, and its value for a checkbox or radio), with its caret: the one they changed, or for
+by its name inside its nearest ancestor with an id, falling back to `<main>`, and its value for
+a checkbox or radio). Among repeated matches there, it keeps the same index, not counting hidden
+inputs or controls disabled, hidden or inert in the markup. Give the filter form or rail a
+`#[derive(Id)]` id so visible copies in other forms cannot move that index. Focus returns with
+its caret to the one they changed, or for
 a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
 while one they closed stays closed, so the control is in view and can take focus even when the

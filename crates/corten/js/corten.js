@@ -1232,8 +1232,7 @@ function counterpart(root, fresh, el, exact, ids) {
   if (el === root) return fresh;
   const id = idOf(el);
   if (id) return ids ? ids(id) : queryOne(fresh, `#${CSS.escape(id)}`);
-  let anchor = /** @type {Element} */ (el.parentElement);
-  while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
+  const anchor = anchorOf(root, el);
   const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
   const name = attrOf(el, "name");
   if (!home) return null;
@@ -2790,7 +2789,8 @@ function fieldsAt(root, wanted) {
 
 /**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by
- * its name in <main>, and which of the controls with that name it is), and its caret. Null when
+ * its name inside the nearest ancestor with an id (else <main>), and which eligible control
+ * with that name it is), and its caret. Null when
  * nothing is focused.
  * @param {Element | null} el
  * @returns {{ at: string, nth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
@@ -2798,7 +2798,9 @@ function fieldsAt(root, wanted) {
 function placeOf(el) {
   const name = el && attrOf(el, "name");
   const id = el && idOf(el);
-  const at = id ? `#${CSS.escape(id)}` : name && el ? `main ${named(el, name)}` : "";
+  const root = el && closestOf(el, "main");
+  const anchor = !id && name && root && el && idOf(anchorOf(root, el));
+  const at = id ? `#${CSS.escape(id)}` : name && el ? `${anchor ? `#${CSS.escape(anchor)}` : "main"} ${named(el, name)}:not([type=hidden i], :disabled, [hidden], [hidden] *, [inert], [inert] *)` : "";
   if (!at) return null;
   const f = /** @type {HTMLInputElement} */ (el);
   /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
@@ -2807,6 +2809,16 @@ function placeOf(el) {
     caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
   return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), caret };
+}
+
+/** The nearest ancestor with an id, bounded by `root`. @param {Element} root @param {Element} el */
+function anchorOf(root, el) {
+  let anchor = el;
+  while (anchor !== root) {
+    anchor = /** @type {Element} */ (anchor.parentElement);
+    if (idOf(anchor)) break;
+  }
+  return anchor;
 }
 
 /**
