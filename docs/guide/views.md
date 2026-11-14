@@ -272,7 +272,10 @@ a prop the handler passes. A read the handler itself needs and wants started ear
 `corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
 reads the request's mode before the handler has its `Req`. `Ahead` is `tokio::spawn` with the two
 things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
-after the client left), and its panic fails the request.
+after the client left), and its panic fails the request. It starts before the handler, so on a
+write it may not see what the write did: a value that depends on the write (the count after an item
+is added) is read or given by the handler after the write, or is a layout read, which a write's own
+page starts once the handler has answered.
 
 A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
 runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so

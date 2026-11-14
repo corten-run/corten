@@ -115,12 +115,17 @@ async fn written(req: Req) -> HtmlResult {
 }
 
 /// The form, and once it is sent the write's own page, in the layout the smoke's other pages draw.
+/// The write's page draws a component with a script the form's page has not loaded, so the test
+/// can hold the page on its way in while the write is done, and leave it by a link to a page in
+/// the same area, which a navigation swaps into this document.
 fn written_page(req: &Req, written: bool) -> HtmlResult {
     req.page(html! {
         <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head="">
+            <a href={url::Quoted}>"Quoted arguments"</a>
             <form method="post" action={url::Written} data-patch>
                 if written {
                     <p>"Written by the form's own page."</p>
+                    <Quoted />
                 }
                 <button>"Write"</button>
             </form>

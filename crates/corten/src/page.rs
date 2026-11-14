@@ -1191,7 +1191,9 @@ impl Req {
             plain_write: write && !shared.https_only && plain_origin(headers),
             write,
             fetched,
-            fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
+            fills: !shared.layout_reads.is_empty()
+                && (extensions.get::<crate::layout::StartHere>().is_some()
+                    || extensions.get::<crate::layout::ActionWrite>().is_some_and(|write| write.kept)),
             shared,
             signal,
         }
@@ -2686,8 +2688,7 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
-    // A write the runtime sent may answer its own page, which is whole: its reads start as a
-    // document write's do, as it answers with one.
+    // A write the runtime sent may answer its own page, which is whole (#1370).
     let action_write = mode == Mode::Action && !matches!(*req.method(), http::Method::GET | http::Method::HEAD);
     if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
@@ -2700,7 +2701,15 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
-    let here = crate::layout::StartHere::new(shared.clone(), until, action_write);
+    // A write the runtime sent runs no read beside its handler, whose reads must see what it wrote:
+    // its page route keeps the request's head, and only a page it answers with starts the reads
+    // that page draws and is filled (`layout::fill_after`). A patch or a redirect starts none, and
+    // its error page is a swap of `<main>`, which draws none.
+    if action_write {
+        req.extensions_mut().insert(crate::layout::ActionWrite { until, kept: false });
+        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
+    }
+    let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
         let res = here.beside(page_or_error(shared, req, next, deadline, signal, (mode, fetched))).await;

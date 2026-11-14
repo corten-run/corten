@@ -16,6 +16,11 @@ use std::{
 /// builds the layout's props awaits it. Each page that draws the layout takes the extractor, so
 /// one that does not cannot draw the count, and none joins the read with its own by hand.
 ///
+/// It starts before the handler, so on a write it may not see what the write did: a value that
+/// depends on it (the count after an item is added) is read or given after the write, by the
+/// handler, or is a [`crate::LayoutRead`], which a write's own page starts once the handler has
+/// answered.
+///
 /// ```
 /// use corten::{extract::FromRequestParts, http::{request::Parts, Method}, prelude::*, Ahead};
 ///

@@ -1835,7 +1835,11 @@ async function swapDocument(html, signal, notice, again = false, stay = again, o
   const head = [doc.querySelector("title"), ...Array.from(doc.head.querySelectorAll("[data-corten-head], link[data-corten-style]"))].filter(
     (el) => el !== null,
   );
-  const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
+  // A write's own page whose frame differs swaps in what a navigation's answer holds, the layout's
+  // elements that are the page's (`page` in `html!`, a section's nav) included ({@link swapPage}).
+  // With the layout drawn, they are drawn with it.
+  const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => !el.parentElement?.closest("[data-corten-page]"));
+  const text = head.map((el) => el.outerHTML).join("") + parts.map((el) => el.outerHTML).join("") + main.innerHTML;
   const whole = comparableText(text);
   // Read again with nothing new in the page: it stays as it is, with what the user typed and its
   // live streams, and only what changed around it (a count the layout reads) is drawn.
@@ -1851,7 +1855,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again, o
   }
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
-  content.append(...head, ...Array.from(main.childNodes));
+  content.append(...head, ...parts, ...Array.from(main.childNodes));
   const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
   // The layout not drawn: the next navigation reads it whole, as after a write that redirected.
   if (swappedIn && !layout) stale = true;
@@ -2434,9 +2438,9 @@ const SOURCE = Symbol("corten.source");
  */
 const WRITTEN = Symbol("corten.written");
 /**
- * A write redirected and no whole page has been swapped in since (the user went elsewhere before
- * it came): every navigation reads the whole page until one is, so what the write changed in the
- * layout is drawn.
+ * A write redirected, or answered with its own page, and no whole page's layout has been drawn
+ * since (the user went elsewhere before it came, or its frame differed): every navigation reads
+ * the whole page until one is, so what the write changed in the layout is drawn.
  */
 let stale = false;
 
@@ -2997,6 +3001,10 @@ async function send(form, submitter, sends) {
       renew();
       reload(noticeOf(res));
     } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-shell"))) {
+      // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
+      // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
+      // every navigation reads the whole page, as after a write that redirects.
+      if (!res.headers.has("corten-patch") && !res.headers.has("corten-page")) stale ||= method !== "GET";
       const body = await res.text();
       renew();
       signal.throwIfAborted();

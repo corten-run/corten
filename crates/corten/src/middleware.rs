@@ -242,22 +242,23 @@ impl Next for Handle {
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
 /// the API writes as its own.
 #[inline]
-fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
+fn handle(route: Option<crate::router::Route>, mut req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
-    // middleware sees it.
+    // middleware sees it. A write the runtime sent keeps the head for its own page instead, whose
+    // reads start after the handler (`layout::ActionWrite`).
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    let late = if here.is_none() { crate::layout::kept_for_its_page(&mut req) } else { None };
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
         None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
     };
-    match here {
-        None => Either::Left(answer),
-        // Boxed, so a request in an app without layout reads carries none of the fill's state.
-        Some(here) => {
-            Either::Right(Box::pin(async move { here.fill(answer.await).await })
-                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
-        }
-    }
+    // Boxed, so a request in an app without layout reads carries none of the fill's state.
+    let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> = match (here, late) {
+        (None, None) => return Either::Left(answer),
+        (Some(here), _) => Box::pin(async move { here.fill(answer.await).await }),
+        (None, Some(late)) => Box::pin(crate::layout::fill_after(late, answer)),
+    };
+    Either::Right(filled)
 }
 
 refs!(A);
