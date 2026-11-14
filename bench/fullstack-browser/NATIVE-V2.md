@@ -90,13 +90,27 @@ omit/substitute inputs. Replay never extracts saved tar. Archive bytes must be t
 actual Docker stdin; owner must bind image build command/log/ID to this digest.
 
 `captureTools(store,{browserExecutable})` resolves live local paths, never stores
-them, and returns `{schema:'native-browser-tools/v2',lock:ref,node:ref,browser:ref,
+them, and returns `{schema:'native-browser-tools/v3',lock:ref,node:executable,browser:executable,
 packages:[{name,version,archive:ref,files:[{path,body:ref}]}]}`. Exact fixed packages:
 `@playwright/test`, `playwright`, `playwright-core`, `typescript`. Each archive is
 found only in local npm cache, including npm's configured local cache (offline
 config query), SHA-512 checked against the root lock using `packageFiles`, and
 compared byte-for-byte with the actual installed package tree. Missing cache or
 changed install throws, without fetching or accepting a hash-only substitute.
+
+Each executable is `{schema:'native-browser-executable-bytes/v1',bytes,sha256,
+chunks:[ref...]}`. Its positive size is at most 512 MiB; chunks are ordered,
+canonical 16 MiB pieces, with only the final piece shorter. Capture validates the
+physical regular single-link file and size before allocation, pins a no-follow
+descriptor, checks descriptor/path identity and metadata before/after, and hashes
+all bytes incrementally. Replay validates every ref/length before reading, consumes
+every chunk in order, and checks the whole-file size and SHA-256 without concatenation.
+Identical chunks may deduplicate in storage, but every logical occurrence is hashed.
+The generic 256 MiB/blob, 1 GiB total and other storage caps above are unchanged.
+Old tools/v2 receipts are explicitly rejected: regenerate unpublished development
+evidence only, never rewrite historical benchmark evidence. Lock/package/source/
+build receipt formats are unchanged; no tool downgrade or hash-only substitute.
+
 `replayTools(reader,receipt)` consumes every archived/installed file and executable
 and returns `{node,browser,lockSha256}`. Owner MUST compare `lockSha256` with the
 canonical source receipt's package-lock.json before accepting tool source closure.
