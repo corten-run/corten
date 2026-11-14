@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -16,6 +16,13 @@ function git(root, ...args) {
   assert.equal(result.status, 0, "synthetic local Git operation failed"); return result.stdout.trim();
 }
 const sharedDependencies = resolve(checkout, git(checkout, "rev-parse", "--git-common-dir"), "..", "node_modules");
+function removeDependencyLink(repo) {
+  const link = join(repo, "node_modules");
+  assert.ok(lstatSync(link).isSymbolicLink());
+  assert.equal(realpathSync(link), realpathSync(sharedDependencies));
+  if (process.platform === "win32") rmdirSync(link);
+  else unlinkSync(link);
+}
 
 async function fakeNative(t, source, { realGraph = false, unconfirmed = false } = {}) {
   const h = harness(t), repo = join(h.temp, "validator"), root = join(repo, "bench/workloads");
@@ -118,7 +125,7 @@ test("same-read snapshot survives replacement after capture and before real Work
   const marker = join(h.input.folder, "post-capture-marker");
   for (const path of ["cloud-validation-worker.mjs", "isolated/campaign-verify.mjs"])
     writeFileSync(join(h.input.folder, path), `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "unapproved");`);
-  rmdirSync(join(h.repo, "node_modules"));
+  removeDependencyLink(h.repo);
   mkdirSync(dirname(join(h.repo, typescriptPath)), { recursive: true });
   writeFileSync(join(h.repo, typescriptPath), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "unapproved dependency"); module.exports = {version:"forged"};`);
   assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "5.9.3" });
@@ -149,7 +156,7 @@ test("evidence commit cannot select historical code; absent closure and changed 
   git(h.repo, "-c", "user.name=Synthetic test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Missing closure");
   assert.throws(() => captureValidation(git(h.repo, "rev-parse", "HEAD"), { root: h.repo }), /validation unavailable/);
   // Remove only our junction, nonrecursively; never alter the shared install.
-  rmdirSync(join(h.repo, "node_modules"));
+  removeDependencyLink(h.repo);
   mkdirSync(dirname(join(h.repo, typescriptPath)), { recursive: true });
   writeFileSync(join(h.repo, typescriptPath), 'throw new Error("private dependency marker");');
   // Existing module captured its original commit. That graph still exists and
