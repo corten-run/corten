@@ -65,6 +65,20 @@ function treeHashes(folder) {
   }
   return values;
 }
+
+test("native v2 malformed namespace is awaitable invalid evidence, never an observed target failure", async (t) => {
+  const f = fixture(t); mkdirSync(join(f.folder, "native-evidence"));
+  const before = treeHashes(f.folder), result = await f.check();
+  assert.equal(result.schema, "native-browser-saved-validation/v2");
+  assert.equal(result.status, "invalid"); assert.ok(result.invalid.length);
+  assert.equal(result.attemptComplete, false); assert.equal(result.selectedComplete, false);
+  assert.equal(result.qualificationPassed, false); assert.equal(result.cleanupComplete, false); assert.equal(result.hostSubject, null);
+  assert.equal(result.expectedExitCode, 1); assert.deepEqual(treeHashes(f.folder), before);
+  const cli = spawnSync(process.execPath, [script, "--folder", f.folder, "--round", "w1", "--commit", commit], { encoding: "utf8", timeout: 30000, windowsHide: true });
+  assert.equal(cli.status, 1); assert.equal(cli.signal, null);
+  const saved = JSON.parse(cli.stdout); assert.equal(saved.schema, result.schema); assert.equal(saved.status, "invalid"); assert.equal(saved.expectedExitCode, 1);
+  assert.deepEqual(treeHashes(f.folder), before);
+});
 function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api"), app = "nuxt") {
   const cell = summary.cells[app].find((c) => c.case === profile.key);
   Object.assign(cell, { outcome: "failed", reason: "Native apparatus deliberately unavailable", qualificationPassed: false, evidence: {
