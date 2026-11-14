@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
-import { validationLimit, validationStopLimit } from "./cloud-validation.mjs";
+import { inspectCampaign, validationLimit, validationStopLimit } from "./cloud-validation.mjs";
 import { captureValidation, validationPaths, validationTask, typescriptPath } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -41,7 +41,7 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false } 
     copyFileSync(join(checkout, path), join(repo, path));
   // Synthetic committed modules, never benchmarks. Reuse the main install only.
   symlinkSync(realpathSync(sharedDependencies), join(repo, "node_modules"), "junction");
-  writeFileSync(join(root, "isolated/campaign-verify.mjs"), source);
+  if (source !== undefined) writeFileSync(join(root, "isolated/campaign-verify.mjs"), source);
   git(repo, "init", "--initial-branch=main");
   git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs");
   git(repo, "-c", "user.name=Synthetic validation test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Synthetic validation fixture");
@@ -213,4 +213,23 @@ test("complete fixed native graph and pinned TypeScript evaluate captured bytes 
     }`;
   const h = await fakeNative(t, source, { realGraph: true });
   assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "5.9.3", statements: 1 });
+});
+
+test("unchanged native campaign API evaluates captured real sources and rejects an empty archive", { timeout: 15000 }, async (t) => {
+  const h = await fakeNative(t, undefined, { realGraph: true });
+  assert.deepEqual(await h.inspect(h.input), {
+    status: "invalid", controllerReady: false, qualified: false, deletionAuthorized: false, error: "saved-campaign-invalid",
+  });
+});
+
+test("snapshot setup consumes the existing validation deadline rather than extending it", { timeout: 5000 }, async (t) => {
+  const clock = t.mock.method(performance, "now");
+  clock.mock.mockImplementationOnce(() => 0, 0);
+  clock.mock.mockImplementationOnce(() => validationLimit - 10, 1);
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let retained = false;
+  const result = inspectCampaign({}, { inspect: () => new Promise(() => {}), preserveLock: () => { retained = true; } });
+  const rejected = assert.rejects(result, /validation unavailable/);
+  t.mock.timers.tick(9); assert.equal(retained, false);
+  t.mock.timers.tick(1); await rejected; assert.equal(retained, true);
 });

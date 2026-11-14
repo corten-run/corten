@@ -200,7 +200,7 @@ export function captureValidation(commit, { root = checkout } = {}) {
     assert.equal(offset, result.stdout.length);
     // Only this fixed package entry is executable. Pin same-read bytes, never
     // evaluate a package resolver/loader or trust package.json/version alone.
-    const fd = openSync(realpathSync(join(root, typescriptPath)), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const fd = openSync(realpathSync(join(root, typescriptPath)), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     let bytes;
     try {
       const stat = fstatSync(fd);
