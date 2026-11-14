@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { createHash } from "node:crypto";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
+import { responseDateHash } from "./cancellations.mjs";
 
 function address(value) {
   try { const url = new URL(value); return { scheme: url.protocol, path: ["http:", "https:", "ws:", "wss:"].includes(url.protocol) ? url.pathname : null }; }
@@ -58,7 +59,7 @@ export class PlatformLifecycle {
     cdp.on("Network.webSocketHandshakeResponseReceived", (e) => record("Network.webSocketHandshakeResponseReceived", { request: e.requestId, at: e.timestamp, status: e.response.status }));
     cdp.on("Network.webSocketClosed", (e) => record("Network.webSocketClosed", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.requestWillBeSent", (e) => {
-      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, ...address(e.request.url), urlSha256: urlHash(e.request.url),
+      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, wall: e.wallTime * 1000, ...address(e.request.url), urlSha256: urlHash(e.request.url),
         document: { ...address(e.documentURL), urlSha256: urlHash(e.documentURL) }, sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), urlSha256: urlHash(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
           request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null,
         redirectHasExtraInfo: e.redirectHasExtraInfo,
@@ -66,7 +67,7 @@ export class PlatformLifecycle {
     });
     cdp.on("Network.requestWillBeSentExtraInfo", (e) => record("Network.requestWillBeSentExtraInfo", { request: e.requestId, at: e.connectTiming?.requestTime ?? null }));
     cdp.on("Network.responseReceived", (e) => record("Network.responseReceived", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, status: e.response.status, at: e.timestamp,
-      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
+      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), dateSha256: responseDateHash(e.response.headers), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
     cdp.on("Network.loadingFinished", (e) => record("Network.loadingFinished", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.loadingFailed", (e) => record("Network.loadingFailed", { request: e.requestId, at: e.timestamp, canceled: e.canceled === true, errorText: e.errorText, blockedReason: e.blockedReason ?? null }));
     for (const event of ["Target.targetCreated", "Target.targetInfoChanged"]) targets?.on(event, ({ targetInfo: t }) => record(event, targetInfo(t)));
@@ -314,6 +315,54 @@ function networkCoverage(journal, requests, sockets = []) {
     }
   }
   return reasons;
+}
+
+// Reuse the native redirect/clock/commit coverage rules without interpreting
+// JavaScript or assigning a Playwright request to a native dispatch.
+export function nativeNetworkRequests(journal) {
+  const requests = [], reasons = [], live = new Map(), events = journal?.events, b = journal?.boundaries;
+  if (!Array.isArray(events) || !b || ![b.startedAt, b.applicationStartedAt, b.terminalStartedAt, b.endedAt].every((v, i, all) => Number.isFinite(v) && v >= 0 && (!i || all[i - 1] <= v)))
+    return { requests, reasons: ["Native network journal/window unavailable"] };
+  const identities = redirectDispatchIdentities(events);
+  for (const e of events) {
+    if (e.event === "Network.requestWillBeSent" && ["http:", "https:"].includes(e.scheme)) {
+      if (e.receivedAt < b.applicationStartedAt || e.receivedAt > b.endedAt) reasons.push("Native request outside application observation");
+      const prior = live.get(e.request), terminal = prior && redirectTerminal(prior, e, identities);
+      if ((!prior && e.redirectStatus !== null) || prior && !terminal) reasons.push("Native request ID reuse lacks complete redirect binding");
+      if (terminal) prior.terminal = terminal;
+      const row = { dispatch: e, hop: (prior?.hop ?? -1) + 1, response: null, terminal: null };
+      requests.push(row); live.set(e.request, row);
+    } else if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(e.event)) {
+      const row = live.get(e.request);
+      if (!row) { reasons.push("Orphan native network response/terminal"); continue; }
+      if (e.event === "Network.responseReceived") {
+        if (row.response || row.terminal) reasons.push("Duplicate/late native network response");
+        row.response = e;
+      } else {
+        if (row.terminal) reasons.push("Duplicate native network terminal");
+        row.terminal = e;
+      }
+    }
+  }
+  const chains = new Map(), extras = new Map();
+  for (const r of requests) { if (!chains.has(r.dispatch.request)) chains.set(r.dispatch.request, []); chains.get(r.dispatch.request).push(r); }
+  for (const e of events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo")) {
+    if (!extras.has(e.request)) extras.set(e.request, []); extras.get(e.request).push(e);
+  }
+  for (const request of extras.keys()) if (!chains.has(request)) reasons.push("Orphan native network-stack dispatch receipt");
+  const clock = events.find((e) => e.event === "native-clock-sample" && e.phase === "initial-native-clock"), endClock = events.find((e) => e.event === "native-clock-sample" && e.phase === "terminal-native-clock");
+  for (const [request, chain] of chains) {
+    const stack = extras.get(request) ?? [];
+    if (stack.length !== chain.length) { reasons.push("Native/network-stack dispatch multiplicity differs"); continue; }
+    stack.forEach((e, i) => {
+      const r = chain[i], requestTime = r.response?.timing?.requestTime ?? r.terminal?.response?.timing?.requestTime;
+      if (!Number.isFinite(e.at) || e.at < 0 || i && e.at <= stack[i - 1].at || e.receivedAt < b.startedAt || e.receivedAt > b.endedAt
+        || !clock || !endClock || e.at < clock.at || e.at > endClock.at || e.at > clock.at + (e.receivedAt - clock.startedAt) / 1000
+        || requestTime !== undefined && requestTime !== e.at) reasons.push("Native/network-stack dispatch clock identity differs");
+    });
+  }
+  reasons.push(...networkCoverage(journal, requests));
+  return { requests, reasons: [...new Set(reasons)] };
 }
 
 // This proof is deliberately separate from the shared DOM/event-probe oracle.

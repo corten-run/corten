@@ -6,16 +6,16 @@ import { discoverReactEndpoint } from "./bindings.mjs";
 import { observeBindingLinks } from "./binding-links.mjs";
 import { inspectScopedBinding } from "./scopes.mjs";
 import { singleFetchData } from "./navigation.mjs";
-import { NativeNetworkAudit } from "./cancellations.mjs";
+import { NativeNetworkAudit, responseDateHash } from "./cancellations.mjs";
 import { performance } from "node:perf_hooks";
 import { installResourceObserver } from "./resources.mjs";
-import { collectDOMReads } from "../mixed-production/response-evidence.mjs";
-import { snapshotMixedPage } from "../mixed-production/snapshot.mjs";
-import { retainDOMProjection } from "./native-responses.mjs";
+import { collectBrowserDOM } from "./native-browser-dom.mjs";
+import { retainBrowserDOMProjection } from "./native-responses.mjs";
 
 export async function observedContext(browser, options, observation, role) {
   if (!observation) return browser.newContext(options);
   const row = { id: randomUUID(), role, app: observation.app, case: observation.case, source: observation.source,
+    javaScriptEnabled: options.javaScriptEnabled ?? true,
     createStartedAt: Date.now(), createdAt: null, closeStartedAt: null, closeEventAt: null, closeCompletedAt: null, absentAfter: null };
   observation.contexts.push(row);
   const context = await browser.newContext(options); row.createdAt = Date.now();
@@ -47,7 +47,7 @@ export function observeNetwork(page) {
   let formBinding = null;
   const track = (promise) => { pending.add(promise); promise.catch((e) => failures.push(e.message)).finally(() => pending.delete(promise)); };
   page.on("request", (request) => {
-    const row = { id: randomUUID(), ...publicURL(request.url()), method: request.method(), transport: transportOf(request),
+    const row = { id: randomUUID(), ...publicURL(request.url()), scheme: new URL(request.url()).protocol, urlSha256: sha256(request.url()), method: request.method(), transport: transportOf(request),
       resource: request.resourceType(), status: null, completed: false, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
     rows.push(row); byRequest.set(request, row); byId.set(row.id, request); bindings.set(request, formBinding);
     notify();
@@ -67,6 +67,7 @@ export function observeNetwork(page) {
     row.status = response.status();
     const headers = response.headers(); row.type = headers["content-type"] ?? null; row.encoding = headers["content-encoding"] ?? "identity";
     row.hasCsp = Boolean(headers["content-security-policy"]);
+    row.dateSha256 = responseDateHash(headers);
   });
   page.on("requestfinished", (request) => { track((async () => {
     const row = byRequest.get(request), response = await request.response();
@@ -97,12 +98,17 @@ export function observeNetwork(page) {
       } catch { /* A malformed native payload is retained, never normalized. */ }
     }
   })().finally(notify)); });
-  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); };
+  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); await native?.drain(); };
   let native;
   return { rows, failures,
     requestId(request) { return byRequest.get(request)?.id ?? null; },
-    attachCDP(cdp) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; }); },
+    attachCDP(cdp, lifecycle) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; },
+      (receipt) => lifecycle?.events.push(receipt), { observerSession: randomUUID(), targetId: lifecycle?.target?.target ?? null }); },
     annotate() { native?.annotate(rows); },
+    originatingDocument(binding) {
+      return native?.originatingDocument(binding) ?? null;
+    },
+    takeDocumentResponse(origin) { return native?.takeDocumentResponse(origin) ?? null; },
     bindForm(form) { formBinding = form ? structuredClone(form) : null; }, drain,
     async settle(offset, deadline, requirePost = false) {
       while (performance.now() < deadline) {
@@ -202,36 +208,58 @@ export function architecture(app, native) {
   const marker = { "react-router": "reactRouter", "tanstack-start": "tanstack" }[app] ?? app;
   return native.markers[marker] ? app : `unverified-${app}-architecture`;
 }
-export async function visibleDOM(page) {
+async function retainedDOM(page, observation, identity) {
+  try {
+    const readWindow = { startedAt: Date.now(), finishedAt: null };
+    const dom = await collectBrowserDOM(page, identity);
+    readWindow.finishedAt = Date.now();
+    const expected = { observer: dom.observer, ...identity, readInterval: dom.readInterval, url: dom.url };
+    const responseEvidence = retainBrowserDOMProjection(observation.store, dom, expected);
+    return { ...expected, readWindow, responseEvidence, page: dom.result.page, error: dom.result.error?.text ?? null,
+      articleCount: dom.result.articleCount, extractionComplete: dom.result.extractionComplete };
+  } catch {
+    // Collector argument/URL diagnostics may include the rejected private value.
+    throw new Error("Typed native DOM extraction unavailable");
+  }
+}
+
+export async function visibleDOM(page, observation = null, identity = null) {
   const native = sanitizeNative(await page.evaluate(nativeDOM));
+  if (observation) {
+    if (!identity?.originatingResponse || !identity.scope) return { observer: randomUUID(), scope: identity?.scope ?? null, url: publicURL(page.url()), native,
+      page: null, error: null, responseEvidence: null, extractionComplete: false, captureFailure: "native-document-binding-unavailable" };
+    return { ...await retainedDOM(page, observation, identity), native };
+  }
   const present = await page.locator("article.marketplace").count();
   return { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit?.checkpoint()?.scope ?? null), url: publicURL(page.url()), native,
     page: present ? await page.evaluate(snapshotPage) : null,
     error: present ? null : (await page.locator("body").innerText()).trim() };
 }
-export async function responseDocument(browser, response, url, observation = null, requestId = null) {
+export async function responseDocument(browser, response, url, observation = null, nativeResponse = null, action = null) {
   // Parse the actual initial response in a DIFFERENT, script-disabled context.
   // Fulfillment replays only these observed bytes to the parser, never oracle HTML.
-  const body = await response.body();
+  if (observation && (!Buffer.isBuffer(nativeResponse?.body) || nativeResponse.body.length > 16 * 1024 ** 2
+    || nativeResponse.url !== url || sha256(nativeResponse.body) !== nativeResponse.sha256)) throw new Error("Native initial response bytes unavailable");
+  const body = observation ? nativeResponse.body : await response.body(), status = observation ? nativeResponse.status : response.status();
   const context = await observedContext(browser, { javaScriptEnabled: false, serviceWorkers: "block" }, observation, "ssr-parser");
   try {
     const page = await context.newPage();
     await page.route("**/*", async (route) => {
-      if (route.request().isNavigationRequest() && route.request().url() === url) await route.fulfill({ status: response.status(), contentType: "text/html", body });
+      if (route.request().isNavigationRequest() && route.request().url() === url) await route.fulfill({ status, contentType: "text/html", body });
       else await route.abort();
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(installResourceObserver);
-    const result = { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope), url: publicURL(url), error: null,
-      responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
+    const scope = await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope);
+    const result = { observer: randomUUID(), scope, url: publicURL(url), error: null,
+      responseSha256: sha256(body), status, page: observation ? null : await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
       parserScope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
     if (observation) {
       result.context = observation.byContext.get(context).id;
-      result.requestId = requestId; result.responseEvidence = null;
+      result.requestId = nativeResponse.requestId; result.responseEvidence = null;
       try {
-        const transcript = await page.evaluate(collectDOMReads, { source: snapshotMixedPage.toString(), readPath: result.url.path });
-        result.responseEvidence = retainDOMProjection(observation.store, transcript,
-          { requestId, responseSha256: result.responseSha256, path: result.url.path, status: result.status });
+        Object.assign(result, await retainedDOM(page, observation, { context: result.context, case: observation.case, action, scope,
+          originatingResponse: { requestId: result.requestId, sha256: result.responseSha256 } }));
       } catch { result.captureFailure = "public-dom-projection-unproved"; }
     }
     return result;

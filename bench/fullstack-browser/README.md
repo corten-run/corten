@@ -425,10 +425,39 @@ Only continuous native network observation plus proved worker absence can derive
 peer population; completed ordinary HTTP keepalive is not such a peer. Peer-present cells stay blocked
 without matched pre-teardown peer receipts. No worker collector or semantic oracle waiver is added.
 
-The current bounded integration still rejects live/error DOM observations not covered by the fixed
-typed public projection API. It never retains original secret-bearing HTML as a fallback or claims
-an initial parser projection reproduced later DOM changes. These explicit blockers can prevent a
-selected journey from completing; a command-prerequisite control is not production qualification.
+Live, independent parser and missing-item DOM observations use the installed fixed browser
+projection API. Each typed read binds its unique observer, action/context, native resource scope,
+bounded read interval and originating document response. The response is reconciled with native
+frame/loader/dispatch/terminal observations; a live read is not claimed to reproduce earlier HTML.
+The primary origin is the actual CDP document dispatch/redirect hop, frame and loader, namespaced
+by an explicitly observer-assigned session UUID and the actual native target ID. The UUID is not
+claimed to be a protocol session ID. Replay derives each opaque origin ID from those native
+receipts and checks response, terminal, commit, realm/context lifetime and pre-read body window.
+Repeated identical URL/body/Date responses therefore retain distinct native origins without
+inventing a Playwright request bijection. Date hashes are optional consistency evidence, not IDs.
+The separately observed Playwright ledger must conserve the full native HTTP request multiset:
+complete-URL hash, public path, method, resource type, status, completion/failure, body hash/length
+and multiplicity. Redirects and aborts remain accounted for; conservation never excuses a failure
+under the unchanged strict parity gate. Missing, extra or substituted rows remain unproved.
+Independent network-stack dispatch receipts must also conserve every native chain/hop and its
+bounded clock identity; deleting both ordinary ledgers cannot excuse an orphan stack receipt.
+Bounded CDP response reads retain only byte hash/length and optional Date-header hash. The body
+string and decoded bytes each have a 16 MiB limit, with at most four unsettled protocol reads and a bounded
+1024-entry queue; each observation has 1000 ms including queue time. Expiry does not release an
+unsettled protocol read's slot; actual settlement or session close releases it. A closed session
+starts no further reads. Queued observations expire without dispatch when capacity stays
+unavailable; drain waits for observation deadlines, not indefinitely for transport settlement.
+Late results supply no proof. Only the latest document's
+bytes remain in memory for one independent parser consumption. No raw body is saved or logged.
+Missing/failed reads, exceeded bounds and unsupported responses remain unproved. Retained
+projection bytes with missing linkage are conserved but cannot attest their saved semantic model.
+Independent parser contexts retain their actual script-disabled configuration. Missing/ambiguous
+linkage or incomplete/privacy-filtered extraction remains proof-missing, not an observed target
+failure. Native v2 never falls back to body/error text or original secret-bearing HTML. The strict
+page, form, request, status and retirement checks are unchanged. A command-prerequisite control
+is not production qualification.
+Derived host subjects carry Node/browser identities and the actual replayed lock SHA, matched to
+the immutable canonical source. Missing or altered lock evidence cannot supply an OS handoff.
 The v2 CLI returns the replayed qualification's expected exit, exactly 0 or 1. Load readiness stays false.
 
 Portable replay checks run with `node --test --test-skip-pattern="^retained real w28 "
