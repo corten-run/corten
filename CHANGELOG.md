@@ -410,10 +410,10 @@ Corten is pre-1.0, so any minor version may change the API.
   makes a new machine where nothing has changed (`-f without_handover=true` makes one that
   is handed nothing). Rehearsed in containers, and run once for corten.run, where the site
   answered each of 174 requests a second apart while its machine was replaced: the deploy
-  README says what that leaves untried. `provision.sh`, when it runs a second time, writes in the deploy
-  user's directories as that user: as root it made whatever a link there pointed at that
-  user's, so the holder of the deploy key could become root. It stops for a key's file that
-  is not there. The workflow's check runs the handover's command, those lines of
+  README says what that leaves untried. `provision.sh`, when it runs a second time, writes
+  in the deploy user's directories as that user: as root it made whatever a link there
+  pointed at that user's, so the holder of the deploy key could become root. It stops for a
+  key's file that is not there. The workflow's check runs the handover's command, those lines of
   `provision.sh` and the relay in containers (`infra/handover.test.sh`, `provision.test.sh`,
   `infra/relay.test.sh`).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
