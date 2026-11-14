@@ -94,8 +94,13 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
     try {
       assert.ok(cancellation instanceof SharedArrayBuffer && cancellation.byteLength === 4);
       assert.deepEqual(sources.map((s) => s.path), fleetWorkerPaths);
-      for (const source of sources) assert.equal(digest(source.source), source.sha256);
       const entry = sources.find((s) => s.path === "bench/workloads/fleet-worker.mjs");
+      const root = dirname(dirname(dirname(fileURLToPath(entry.url))));
+      assert.equal(realpathSync(root), root);
+      for (const source of sources) {
+        assert.equal(source.url, pathToFileURL(join(root, source.path)).href, "fleet-source-url");
+        assert.equal(digest(source.source), source.sha256);
+      }
       const bootstrap = new URL(`data:text/javascript;base64,${Buffer.from(entry.source).toString("base64")}`);
       worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url }, stdout: true, stderr: true, execArgv: [] });
     } catch { reject(uncertain()); return; }

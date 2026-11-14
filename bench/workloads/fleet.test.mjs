@@ -261,7 +261,7 @@ test("fixed worker rejects malformed messages/startup uncertainty without exposi
 });
 
 test("production snapshot bootstrap executes captured entry/closure bytes and denies unlisted imports before evaluation", async (t) => {
-  for (const change of ["positive", "entry", "production-dependency", "unlisted"]) {
+  for (const change of ["positive", "entry", "production-dependency", "unlisted", "url-mismatch"]) {
     const p = fixture(t); await fleetMain(p.prepare(), p.deps);
     const root = join(p.h.temp, "snapshot"), marker = join(p.h.temp, "PRIVATE_MARKER");
     const module = `import {parseDropletArgs} from './cloud-options.mjs';
@@ -279,6 +279,7 @@ test("production snapshot bootstrap executes captured entry/closure bytes and de
       dependency.source = `import './unlisted.mjs';\n${dependency.source}`; dependency.sha256 = digest(dependency.source);
       writeFileSync(join(root, "bench/workloads/unlisted.mjs"), `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)},'unsafe');`);
     }
+    if (change === "url-mismatch") sources.find((s) => s.path === "bench/workloads/cloud-production.mjs").url = pathToFileURL(join(root, "foreign.mjs")).href;
     class ReplaceAfterCapture extends Worker {
       constructor(bootstrap, options) {
         assert.ok(bootstrap.href.startsWith("data:text/javascript;base64,"));
@@ -293,6 +294,7 @@ test("production snapshot bootstrap executes captured entry/closure bytes and de
       "--account-id", accountId, "--context", context, "--group", group, "--fleet", join(p.h.base, "fleet-r21.json"), "--approve-reviewed-merged-ready", "f".repeat(64)];
     const operation = productionChild(args, { cancellation: new SharedArrayBuffer(4), sources, WorkerClass: ReplaceAfterCapture });
     if (change === "unlisted") await assert.rejects(operation, /group-bootstrap-invalid/);
+    else if (change === "url-mismatch") await assert.rejects(operation, /group-control-uncertain/);
     else assert.equal(await operation, 3);
     assert.ok(!existsSync(marker), `${change}: mutable source must never evaluate`);
   }

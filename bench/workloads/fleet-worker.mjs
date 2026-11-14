@@ -10,10 +10,15 @@ try {
   assert.ok(workerData.cancellation instanceof SharedArrayBuffer && workerData.cancellation.byteLength === 4);
   assert.ok(Array.isArray(workerData.args) && workerData.args.length <= 24 && workerData.args.every((arg) => typeof arg === "string" && arg.length <= 4096));
   assert.ok(Array.isArray(workerData.sources) && workerData.sources.length <= 100);
+  const entry = new URL(workerData.entry), root = new URL("../../", entry);
+  assert.equal(entry.protocol, "file:");
+  assert.equal(new URL("bench/workloads/fleet-worker.mjs", root).href, entry.href);
   const approved = new Map();
   for (const source of workerData.sources) {
     assert.deepEqual(Object.keys(source).sort(), ["path", "sha256", "source", "url"]);
     assert.equal(typeof source.source, "string"); assert.ok(Buffer.byteLength(source.source) <= 1024 * 1024);
+    assert.ok(/^bench\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs$/.test(source.path));
+    assert.equal(new URL(source.path, root).href, source.url);
     assert.equal(createHash("sha256").update(source.source).digest("hex"), source.sha256);
     assert.ok(!approved.has(source.url)); approved.set(source.url, source.source);
   }
