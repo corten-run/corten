@@ -2719,18 +2719,14 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // its page route keeps the request's head, and only a page it answers with starts the reads
     // that page draws and is filled (`layout::kept_for_its_page`). A patch or a redirect starts none, and
     // its error page is a swap of `<main>`, which draws none.
-    // A page the app's or an area's middleware made with `Req` before the route is filled here,
-    // after the middleware, as the plain write's is below; the route's own page was filled as the
-    // route answered. Anything else passes with one look at its extensions.
+    // A page the app's or an area's middleware made with `Req` before the route is filled as the
+    // middleware answers ([`FillsLate`]), under the deadline and before the error page, as the
+    // route's own page was filled as the route answered. Anything else passes with one look at its
+    // extensions.
     if action_write {
         signal.mark_late();
-        let res = page_or_error(shared, req, next.late(until), deadline, signal, (mode, fetched)).await;
-        if res.extensions().get::<crate::layout::Pending>().is_none() {
-            return res;
-        }
-        let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> =
-            Box::pin(crate::layout::fill_made_early(shared.clone(), until, res));
-        return filled.await;
+        let next = FillsLate { next: next.late(until), shared, until };
+        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
@@ -2741,11 +2737,53 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     filled.await
 }
 
+/// What answers a request under its deadline and panic catch: the app's middleware and the route
+/// ([`Next`]), and for a write the runtime sent in an app with layout reads, the fill of a page the
+/// middleware made after them ([`FillsLate`]).
+pub(crate) trait Answers: Send {
+    fn answer(self, req: Request) -> impl Future<Output = Response> + Send;
+}
+
+impl<S: crate::app::Steps> Answers for Next<'_, S> {
+    #[inline]
+    fn answer(self, req: Request) -> impl Future<Output = Response> + Send {
+        self.run(req)
+    }
+}
+
+/// A write the runtime sent, in an app with layout reads (#1370): a page the app's or an area's
+/// middleware made with `Req` in the route's place is filled as the middleware answers, from the
+/// head that `Req` was taken with (`layout::fill_made_early`), so its reads stop at the request's
+/// deadline and a failure to fill it gets the error page, as the route's own page does. Anything
+/// else passes with one look at its extensions. Only such a write comes here, so no other request's
+/// future carries it.
+pub(crate) struct FillsLate<'a, 'b, S: crate::app::Steps> {
+    next: Next<'a, S>,
+    shared: &'b Arc<Shared>,
+    until: Option<tokio::time::Instant>,
+}
+
+impl<S: crate::app::Steps> Answers for FillsLate<'_, '_, S> {
+    fn answer(self, req: Request) -> impl Future<Output = Response> + Send {
+        let FillsLate { next, shared, until } = self;
+        let answer = next.run(req);
+        async move {
+            let res = answer.await;
+            if res.extensions().get::<crate::layout::Pending>().is_none() {
+                return res;
+            }
+            let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> =
+                Box::pin(crate::layout::fill_made_early(shared.clone(), until, res));
+            filled.await
+        }
+    }
+}
+
 /// The handler's page, or the error page in its place.
-async fn page_or_error<S: crate::app::Steps>(
+async fn page_or_error(
     shared: &Arc<Shared>,
     req: Request,
-    next: Next<'_, S>,
+    next: impl Answers,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
@@ -2961,12 +2999,7 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 
 /// The handler's response, through [`within_deadline`]; a handler that panics is answered as a
 /// handler error (500), whose message only `corten dev` shows.
-async fn run<S: crate::app::Steps>(
-    req: Request,
-    next: Next<'_, S>,
-    deadline: Option<std::time::Duration>,
-    signal: &crate::Signal,
-) -> Response {
+async fn run(req: Request, next: impl Answers, deadline: Option<std::time::Duration>, signal: &crate::Signal) -> Response {
     use std::{future::Future, panic::AssertUnwindSafe, pin::pin, task::Poll};
     // For the log only: a method and a URI clone without allocating.
     let (method, uri) = (req.method().clone(), req.uri().clone());
@@ -2997,17 +3030,17 @@ async fn run<S: crate::app::Steps>(
 
 /// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
 /// was waiting for the client to send the body (the 413 while a body over its limit is read past).
-async fn within_deadline<S: crate::app::Steps>(
+async fn within_deadline(
     req: Request,
-    next: Next<'_, S>,
+    next: impl Answers,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (method, uri): (&http::Method, &Uri),
 ) -> Response {
     let Some(limit) = deadline else {
-        return next.run(req).await;
+        return next.answer(req).await;
     };
-    match within(limit, next.run(req)).await {
+    match within(limit, next.answer(req)).await {
         Ok(res) => res,
         // The handler was waiting for the client to send the rest of the body: the request had
         // not arrived whole in time, which is the client's 408 (a stalled upload with the

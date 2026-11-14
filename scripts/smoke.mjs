@@ -3971,6 +3971,91 @@ async function run(browser) {
     );
     await own.context().close();
   }
+  // The other order: two writes from two forms. The first is done on the server but its answer
+  // is held; the second's page, made after both writes (count 2), draws. Then the first's comes
+  // and draws, made before the second write (count 1): its layout is older than the one it
+  // replaced, so the second write is undrawn again and the next page is read whole, with the count
+  // the server has.
+  const laterName = "a write's own page drawn after a later write's leaves that write's change to the layout for the next page to draw";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(laterName, "without the Navigation API a link is a full load");
+  else {
+    const counted = (/** @type {string} */ body, /** @type {number} */ writes) => body.replace(">Watchlist</span>", `>Count ${writes}</span>`);
+    const { own, seen } = await writtenPage(counted);
+    /** @type {() => void} */
+    let answerFirst = () => {};
+    const first = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
+    /** @type {() => void} */
+    let reached = () => {};
+    const done = new Promise((resolve) => (reached = () => resolve(true)));
+    seen.hold = (writes) => (writes === 1 ? (reached(), first) : undefined);
+    await own.evaluate(() =>
+      document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
+    );
+    const brandIs = (/** @type {string} */ text) =>
+      own
+        .waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 })
+        .then(
+          () => true,
+          () => false,
+        );
+    await own.click("main form button");
+    const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    await own.click("#second-go");
+    const drewSecond = await brandIs("Count 2");
+    answerFirst();
+    const drewFirst = await brandIs("Count 1");
+    await own.click('main a[href="/smoke/quoted"]');
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    check(
+      laterName,
+      written && drewSecond && drewFirst && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ written, drewSecond, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write the server has done, whose answer has not come when the user follows a link: the
+  // navigation cuts it off, and since the write may have been applied, the next page is read whole
+  // and shows what it changed.
+  const cutOffName = "a navigation that cuts off a write before its answer reads the next page whole, with what the write changed";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(cutOffName, "without the Navigation API a link is a full load");
+  else {
+    const { own, seen } = await writtenPage(brand);
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    /** @type {() => void} */
+    let reached = () => {};
+    const done = new Promise((resolve) => (reached = () => resolve(true)));
+    seen.hold = () => (reached(), held);
+    await own.click("main form button");
+    // The server has done the write; its answer is held.
+    const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    await own.click('main a[href="/smoke/quoted"]');
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    release();
+    check(
+      cutOffName,
+      written && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ written, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
   // A write's own page whose frame differs from the page's draws <main> alone, and the layout's
   // elements that are the page's (the sector links, `page` in `html!`) with it, as a navigation
   // does: the write's page has other sector links than the form's.

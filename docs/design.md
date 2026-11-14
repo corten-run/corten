@@ -3515,11 +3515,20 @@ rules something out.
     ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
     changed, in the same document. Until it is in, every navigation reads the whole page, as after a
     write that redirects, so one that leaves it on its way still shows what the write changed. The
-    runtime keeps the writes whose change no layout has drawn, numbered as their answers come, and a
-    page's layout stands for those answered before it was asked for and the write it answers: with
-    two writes out, the page drawn first leaves the other's change to the next whole page. A page
-    the app's or an area's middleware makes with `Req` in the route's place is filled after the
-    middleware, from the head that `Req` was taken with, as a plain write's is. A
+    runtime keeps the writes whose change no layout has drawn, numbered as their outcomes come. A
+    page's layout stands for those answered before it was asked for and the write it answers, and
+    drawing it makes every other write answered since it was asked for undrawn again: with two
+    writes out, whichever page is drawn last, its layout may be older than the other write, so the
+    next navigation reads the whole page. A write whose outcome the runtime cannot know counts too:
+    one sent with no answer back (a navigation or a newer submit cut it off, the network failed) or
+    answered with a 5xx, which the server may have applied; and a navigation that cuts off a write
+    still waiting for its answer reads the whole page. The limit: the server may still be running a
+    write that was cut off when that page is read, and the page may not show it; nothing marks the
+    layout stale after that page is drawn, so the change shows at the next whole page read for
+    another reason (another write, a reload). A page the app's or an area's
+    middleware makes with `Req` in the route's place is filled as the middleware answers, under the
+    request's deadline and before the error page, from the head that `Req` was taken with, as the
+    route's own page is. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in

@@ -2444,26 +2444,34 @@ const SOURCE = Symbol("corten.source");
  */
 const WRITTEN = Symbol("corten.written");
 /**
- * The writes whose answers have come and that change what the layout draws (one that redirected,
- * or answered with its own page whole), numbered in the order they came.
+ * The writes that may change what the layout draws, numbered in the order their outcome came: one
+ * that redirected or answered with its own page whole, and one whose outcome is not known (no
+ * answer came, or a 5xx), which the server may have applied.
  */
 let writesIn = 0;
 /**
  * Those whose change no whole page's layout has drawn yet: the user went elsewhere before its page
- * came, its frame differed, or another write's page, made before it, was drawn first. While any is,
- * every navigation reads the whole page, so what each write changed in the layout is drawn.
+ * came, its frame differed, its outcome is not known, or a page made before it was drawn after it.
+ * While any is, every navigation reads the whole page, so what each write changed in the layout
+ * is drawn.
  * @type {Set<number>}
  */
 const undrawn = new Set();
 /**
  * What a whole page's layout draws: every write answered before it was asked for (`through`, the
  * count of them then), and the write it answers, for a write's own page (`write`). A write
- * answered while it was on its way may not be in it, and stays undrawn.
+ * answered while it was on its way may not be in it.
  * @typedef {{ through: number, write?: number }} Covers
  */
-/** A whole page's layout is drawn: the writes it `covers` are. @param {Covers} covers */
+/**
+ * A whole page's layout is drawn: the writes it `covers` are, and every other write answered since
+ * it was asked for is undrawn again, though a page drawn before this one drew it: this layout,
+ * drawn last, may be older than what that write changed.
+ * @param {Covers} covers
+ */
 function drew({ through, write }) {
   for (const n of undrawn) if (n <= through || n === write) undrawn.delete(n);
+  for (let n = through + 1; n <= writesIn; n++) if (n !== write) undrawn.add(n);
 }
 /** The count of writes answered when each page a redirect handed on was asked for. @type {WeakMap<Response, number>} */
 const askedAfter = new WeakMap();
@@ -2543,10 +2551,13 @@ navigation?.addEventListener("navigate", (event) => {
   // The dwell of the link followed ends: the server may answer with another page (a redirect),
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
+  // A write still waiting for its answer, which this navigation cuts off: the server may have
+  // applied it, so the page is read whole, as after a write whose page is not drawn yet.
+  const cut = !again && Array.from(submits.values()).some((pending) => pending.write && !pending.answered);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
-  const written = !!event.info?.[WRITTEN] || undrawn.size > 0;
+  const written = !!event.info?.[WRITTEN] || undrawn.size > 0 || cut;
   // The same page read again, or a form or link marked `data-keep-place` (filters applied as they
   // change): the page changes under the user, who stays where they were reading, on the control
   // they used. Kept across a redirect the server answers with.
@@ -2554,7 +2565,7 @@ navigation?.addEventListener("navigate", (event) => {
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
-      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, undrawn.size > 0) });
+      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, undrawn.size > 0 || cut) });
       return;
     }
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
@@ -2888,7 +2899,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, answered: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2960,7 +2971,7 @@ async function send(form, submitter, sends) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", answered: false, next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -2987,6 +2998,8 @@ async function send(form, submitter, sends) {
   forget();
   // The writes answered before this one is sent, which its own page, if it answers with one, draws.
   const through = writesIn;
+  // Whether it went out: one cut off or failed on its way may have been applied all the same.
+  let went = false;
   try {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
@@ -2996,11 +3009,13 @@ async function send(form, submitter, sends) {
     // Left while the module loaded (a navigation; a newer submit of a write waits for this one):
     // nothing is sent.
     signal.throwIfAborted();
+    went = true;
     const res = upload
       ? await upload(url, method, /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
           if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
         })
       : await fetch(url, init);
+    pending.answered = true;
     forget();
     // A whole answer below 500 is definitive: the write applied or was refused, and the form gets
     // a new key. A 5xx (a 502 from a proxy can hide a committed write), a network error, an abort
@@ -3030,7 +3045,10 @@ async function send(form, submitter, sends) {
       // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
       // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
       // every navigation reads the whole page, as after a write that redirects.
-      const write = !res.headers.has("corten-patch") && !res.headers.has("corten-page") && method !== "GET" ? ++writesIn : undefined;
+      // A 5xx's answer is drawn too, but the write it hides may have been applied, so its change is
+      // left for a whole page to draw.
+      const whole = !res.headers.has("corten-patch") && !res.headers.has("corten-page");
+      const write = method !== "GET" && (whole || res.status >= 500) ? ++writesIn : undefined;
       if (write) undrawn.add(write);
       const body = await res.text();
       renew();
@@ -3054,6 +3072,8 @@ async function send(form, submitter, sends) {
       // 5xx, which may hide a write that was applied or not, under the same key.
       if (!res.ok && res.status !== 422) pending.next = undefined;
     } else {
+      // A write a 5xx answered may have been applied: what it changed is left for a whole page.
+      if (method !== "GET" && res.status >= 500) undrawn.add(++writesIn);
       // An answer the runtime does not draw is whole once its body has arrived too.
       await res.arrayBuffer();
       signal.throwIfAborted();
@@ -3075,6 +3095,9 @@ async function send(form, submitter, sends) {
       }
     }
   } catch (error) {
+    // A write sent with no answer back (cut off by a navigation or a newer submit, or the network
+    // failed): the server may have applied it, so what it changed is left for a whole page.
+    if (went && !pending.answered && method !== "GET") undrawn.add(++writesIn);
     if (signal.aborted) return;
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit

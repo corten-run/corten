@@ -493,10 +493,11 @@ Corten is pre-1.0, so any minor version may change the API.
   copy of the request's head for a page it may answer with), and one in an app without them
   21,487 where it took 21,382 (counted before a page a middleware makes was filled too). The
   runtime is 190 bytes larger with gzip. A read an `Ahead` starts
-  before the handler may not see the write. With two writes out at once, the page drawn first
-  stands only for the writes answered before it was asked for, so the next navigation still reads
-  the whole page until the other's is in; a page the app's or an area's middleware makes with `Req`
-  in the route's place is filled too. **Breaking:** an app that skips a layout value of its own when
+  before the handler may not see the write. With two writes out at once, whichever page is drawn
+  last may be older than the other write, so the next navigation reads the whole page; so does one
+  after a write cut off before its answer or answered with a 5xx, which the server may have
+  applied. A page the app's or an area's middleware makes with `Req` in the route's place is
+  filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; skip it only for a `GET`
   (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does

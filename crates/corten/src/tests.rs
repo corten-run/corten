@@ -14457,6 +14457,58 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
     }
 
+    /// [`AnswersEarly`]'s page with a body that never ends, or one that fails as it is read.
+    struct AnswersEarlyBroken {
+        fails: bool,
+    }
+
+    impl crate::Middleware for AnswersEarlyBroken {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.uri().path() != "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, _) = req.into_parts();
+            let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            let (head, _) = refused(&req, "early").into_response().into_parts();
+            let body = if self.fails {
+                Body::from_stream(futures_util::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other("cut off"))]))
+            } else {
+                Body::from_stream(futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>())
+            };
+            crate::response::Response::from_parts(head, body)
+        }
+    }
+
+    /// A page the app's middleware makes for a write the runtime sent is filled under the request's
+    /// deadline, and a failure to fill it gets the app's error page, as the route's own page does
+    /// (#1370).
+    #[tokio::test]
+    async fn a_page_middleware_makes_for_a_write_is_filled_within_the_deadline_and_its_failure_gets_the_error_page() {
+        for fails in [false, true] {
+            let routes = Table::new().route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }));
+            let router = App::new(Routes::from(routes))
+                .deadline(Duration::from_millis(20))
+                .error_page(
+                    |failure: Failure, req: Req| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"failed "{failure.status().as_u16()}</p> } })
+                    },
+                    (),
+                )
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware((AsViewer(Some("ada")), AnswersEarlyBroken { fails }))
+                .router();
+            let answer = call_with(router, "POST", "/early", Some("action"), None);
+            let Ok((status, _, body)) = tokio::time::timeout(Duration::from_secs(2), answer).await else {
+                panic!("fails {fails}: not answered at the deadline");
+            };
+            let expected = if fails { 500 } else { 503 };
+            assert_eq!(status.as_u16(), expected, "fails {fails}: {body}");
+            assert!(body.contains(&format!("<p>failed {expected}</p>")), "fails {fails}: {body}");
+        }
+    }
+
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
         // A route of Corten's own takes `Req`, which starts the reads before its answer is known.
@@ -15082,8 +15134,9 @@ mod layout_reads {
     }
 
     /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
-    /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
-    /// instructions per request. Run in release:
+    /// process, one at a time; with `READ_MODE=nav`, a navigation's `<main>` in the same app, which
+    /// draws none. Counting it under callgrind at two numbers of requests gives the instructions per
+    /// request. Run in release:
     /// `READ_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
     #[test]
     #[ignore]
@@ -15109,9 +15162,15 @@ mod layout_reads {
             .middleware(AsViewer(Some("ada")))
             .router();
         let (path, count) = if gives { ("/cart", 7) } else { ("/page", 3) };
+        let nav = std::env::var("READ_MODE").is_ok_and(|v| v == "nav");
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..pages {
+                if nav {
+                    let (status, _, body) = call_with(router.clone(), "GET", path, Some("nav"), None).await;
+                    assert!(status == StatusCode::OK && body.contains("<p>page</p>") && !body.contains("count"), "{body}");
+                    continue;
+                }
                 let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
                 assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
             }
