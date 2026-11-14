@@ -22,6 +22,21 @@ test("mixed complete failures retain healthy functional apps without inventing t
   }
 });
 
+test("catalog and JSON complete negative attempts retain passed peers without bypassing global timing or accepted audit gates", () => {
+  for (const group of ["catalog-page", "json-api"]) {
+    const b = { ...binding, request: { group }, latestStable: policy(group) }, n = { ...native,
+      outcomes: native.outcomes.map((row) => ({ ...row, outcome: row.outcome === "unsupported" ? "passed" : row.outcome })), comparisonEligibleApps: [] };
+    const host = { cleanupComplete: true, resources: "verified" };
+    const result = composePhase(b, n, host, [command]);
+    assert.equal(result.outcome, "native-validated");
+    assert.deepEqual(result.appOutcomes.map(({ comparisonEligible, ...row }) => row), n.outcomes);
+    assert.ok(result.appOutcomes.every((r) => !r.comparisonEligible));
+    for (const [observation, audit] of [[host, false], [{ ...host, cleanupComplete: false }, true]])
+      assert.notEqual(composePhase(b, n, observation, [command], audit).outcome, "native-validated");
+    assert.notEqual(composePhase(b, n, host, [{ ...command, code: 0 }]).outcome, "native-validated");
+  }
+});
+
 test("mixed comparisons require replayed timing eligibility as well as existing policy and apparatus gates", () => {
   const b = { ...binding, request: { group: "mixed-production" }, latestStable: policy("mixed-production") };
   const n = { ...native, status: "verified", outcomes: native.outcomes.map((row) => ({ ...row, outcome: "passed" })), comparisonEligibleApps: ["a", "c"] };

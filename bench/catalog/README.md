@@ -243,6 +243,21 @@ that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
 bench/catalog/cleanup.test.mjs` in a shell that supports this environment-variable syntax (or
 set the variable separately in PowerShell). The ordinary harness tests do not require Docker.
 
+For the registry group, saved raw replay can also establish a complete negative attempt
+without establishing a baseline. The bounded failure is an observed initial JSON record
+response violation, replayed from `checks.json.failure.json` (`record-json-attempt/v1`)
+against canonical records. Every started request must have a complete response, the upstream
+must be reset/observed healthy, and the owned checker must have normally exited one, without
+OOM, timeout or cancellation. `checker.json` retains actual checker/app/upstream identity,
+source, CPU/memory and lifetime observations; unrelated image environment is omitted.
+Every selected app/source is still checked. Any proven negative gates all group timing;
+no successful subset is measured. Saved `validateSaved` verification is raw-attempt
+verification, not baseline success: its report exposes `attemptComplete`, per-app `outcomes`
+and empty `comparisonEligibleApps` for a negative, with `baseline: false`. The native runner
+still exits one. Missing artifacts, browser assertions, network/harness errors, incomplete
+cleanup or absent source/host proof cannot be promoted through this path. Other failure
+classes remain incomplete until their native observations support equally strict replay.
+
 This first suite measures server rendering, JSON, cold start and CPU/memory under load. Its
 browser checks prove parity and functionality, not interactive timing; marketplace build,
 byte, instruction and browser-timing tables remain historical. Do not relabel them as catalog

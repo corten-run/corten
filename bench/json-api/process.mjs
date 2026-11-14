@@ -21,6 +21,7 @@ export function commands(cwd) {
     async command(binary, args, { timeout = 30000, file, cleanup = false, input } = {}) {
       if (interrupted && !cleanup) throw new Error("JSON run interrupted");
       if (input !== undefined && !Buffer.isBuffer(input)) throw new TypeError("command input must be a Buffer");
+      const startedAt = Date.now();
       const child = spawn(binary, args, { cwd, windowsHide: true, detached: process.platform !== "win32", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
       children.add(child); let output = "", error = "", expired = false;
       let inputError;
@@ -32,8 +33,12 @@ export function commands(cwd) {
       child.stderr.on("data", (c) => { error = (error + c).slice(-65536); if (file) appendFileSync(file, c); });
       const timer = setTimeout(() => { expired = true; kill(child); }, timeout);
       try {
-        const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
-        if (code !== 0 || expired || inputError || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? "timeout" : `exit ${code}`}\n${inputError?.message || error || output}`);
+        const exit = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal, expired, interrupted: interrupted && !cleanup })); });
+        if (exit.code !== 0 || expired || inputError || exit.interrupted) {
+          const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? "timeout" : `exit ${exit.code}`}\n${inputError?.message || error || output}`);
+          if (!inputError) { failure.exit = exit; failure.clock = { startedAt, finishedAt: Date.now() }; }
+          throw failure;
+        }
         return output.trim();
       } finally { clearTimeout(timer); children.delete(child); }
     },
