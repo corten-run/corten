@@ -687,6 +687,68 @@ fn a_key_in_a_template_a_component_writes_into_an_outer_svg_is_not_checked() {
     let html = OuterSvgKeys {}.to_html();
     assert_eq!(html.matches(r#"<g data-ref="mark" data-key="a">"#).count(), 2, "{html}");
 }
+/// Writes its children in an `<svg>`'s `<desc>`, whose children are HTML's.
+#[component]
+fn Description(children: impl Render) -> impl Render {
+    html! { <desc>{children}</desc> }
+}
+
+/// A keyed label in the page, and its copy in a `<template>` among `Description`'s children in an
+/// `<svg>`: the children are written in `<desc>`, so the template is HTML's and the runtime's
+/// query does not reach the copy.
+#[component]
+fn DescribedKeys() -> impl Render {
+    let label = refs();
+    html! {
+        <div>
+            <span ref={label} key="a">"visible"</span>
+            <svg>
+                <Description>
+                    <template><span ref={label} key="a">"hidden"</span></template>
+                </Description>
+            </svg>
+        </div>
+    }
+}
+
+/// The other side of the limit `docs/design.md#choice-ref-values` states: a component's children
+/// do not see where it writes them, so a `<template>` among them is not taken for an `<svg>`'s,
+/// and the check lets its keys pass rather than stop a correct render.
+#[test]
+fn a_key_in_a_template_among_a_component_s_children_is_not_checked() {
+    let html = DescribedKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="label" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// Writes its children in a `<div>`.
+#[component]
+fn Boxed(children: impl Render) -> impl Render {
+    html! { <div>{children}</div> }
+}
+
+/// Marks in an `<svg>` written among `Boxed`'s children, one in its `<template>`: a literal
+/// `<svg>` is SVG's wherever the children land, so the runtime finds both.
+#[component]
+fn BoxedSvgKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <Boxed>
+                <svg>
+                    <g ref={mark} key="a"></g>
+                    <template><g ref={mark} key="a"></g></template>
+                </svg>
+            </Boxed>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one boxed-svg-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_an_svg_s_template_among_a_component_s_children() {
+    BoxedSvgKeys {}.to_html();
+}
 
 /// A key written as it is by an `AttrValue` of the app's, which Corten's escapers would not write.
 struct RawKey(&'static str);

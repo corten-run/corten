@@ -1511,6 +1511,11 @@ struct Gen {
     /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where an `<a>`
     /// is SVG's.
     svg: bool,
+    /// In a component's children, which the component may write anywhere (in an `<svg>`, its
+    /// `<desc>`, a `<template>`), until a literal `<svg>` inside them: whether a browser makes an
+    /// element there SVG's or HTML's is not known, so the key check takes no `<template>`'s or
+    /// `<noscript>`'s content there for the page's.
+    unknown_context: bool,
     /// The locals declared so far that hold a debug build's record while markup is written.
     debug_locals: usize,
 }
@@ -1710,7 +1715,7 @@ impl Gen {
             fields.extend(q("__A0: __A1,", &[field.clone(), value]));
         }
         if let Some(children) = children {
-            let body = stream([self.body(children, false)]);
+            let body = stream([self.body_in(children, false, true)]);
             let capture = if moving { "move " } else { "" };
             fields.extend(q(
                 &format!("children: ::corten::view::Html::child({capture}|__OUT: &mut ::std::string::String| __A0),"),
@@ -1805,7 +1810,12 @@ impl Gen {
     }
 
     fn body(&self, nodes: &[Node], raw: bool) -> TokenTree {
-        let mut gen = Gen { svg: self.svg, ..Gen::default() };
+        self.body_in(nodes, raw, self.unknown_context)
+    }
+
+    /// `nodes` written in a block of their own, in a context not known when `unknown_context`.
+    fn body_in(&self, nodes: &[Node], raw: bool, unknown_context: bool) -> TokenTree {
+        let mut gen = Gen { svg: self.svg, unknown_context, ..Gen::default() };
         gen.nodes(nodes, raw);
         TokenTree::Group(Group::new(Delimiter::Brace, gen.finish()))
     }
@@ -2063,14 +2073,20 @@ impl Gen {
                     // any other, whose children the query finds, except in what an element whose
                     // children are HTML's holds (`SVG_HTML_POINTS`). A component's markup does
                     // not see an `<svg>` its parent writes it into, so it takes its `<template>`
-                    // for HTML's: the check misses those keys rather than stop a render it cannot
-                    // be sure of.
-                    let unqueried = !self.svg && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
+                    // for HTML's, and a component's children do not see where it writes them
+                    // (`unknown_context`), so theirs are taken for HTML's too: the check misses
+                    // those keys rather than stop a render it cannot be sure of.
+                    let svg_element = self.svg && !self.unknown_context;
+                    let unqueried =
+                        !svg_element && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
                     let content = unqueried.then(|| self.debug_local("::corten::script::__private::UnqueriedContent::open()"));
-                    let outer = self.svg;
+                    let (outer, outer_context) = (self.svg, self.unknown_context);
                     self.svg = within_svg(outer, name);
+                    // A literal `<svg>` is SVG's wherever its markup lands.
+                    self.unknown_context = outer_context && !name.eq_ignore_ascii_case("svg");
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
+                    self.unknown_context = outer_context;
                     if let Some(content) = content {
                         self.out.extend(q("__A0.end();", &[content]));
                     }
