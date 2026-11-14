@@ -233,3 +233,30 @@ test("snapshot setup consumes the existing validation deadline rather than exten
   t.mock.timers.tick(9); assert.equal(retained, false);
   t.mock.timers.tick(1); await rejected; assert.equal(retained, true);
 });
+
+test("fixed Git reads forbid promisor lazy fetch and replacement even under inherited overrides", { timeout: 15000 }, async (t) => {
+  const h = await fakeNative(t, 'export function validateCampaign() { return {}; }');
+  const previous = process.env.GIT_NO_LAZY_FETCH;
+  process.env.GIT_NO_LAZY_FETCH = "0";
+  const seen = [];
+  try {
+    const snapshot = captureValidation(h.input.commit, { root: h.repo, readGit(command, args, options) {
+      assert.equal(command, "git"); assert.equal(args[0], "--no-replace-objects");
+      assert.equal(options.env.GIT_NO_LAZY_FETCH, "1"); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
+      assert.equal(options.env.GIT_TERMINAL_PROMPT, "0"); assert.equal(options.shell, false); assert.equal(options.timeout, 5000);
+      seen.push(args[3]); return spawnSync(command, args, options);
+    } });
+    const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
+      constructor(entry, options) {
+        assert.equal(options.env.GIT_NO_LAZY_FETCH, "1"); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
+        assert.equal(options.env.GIT_TERMINAL_PROMPT, "0"); assert.equal(options.env.NODE_OPTIONS, ""); assert.equal(options.env.NODE_PATH, "");
+        super(entry, options);
+      }
+    } });
+    assert.deepEqual(await task.result, {});
+  } finally {
+    if (previous === undefined) delete process.env.GIT_NO_LAZY_FETCH;
+    else process.env.GIT_NO_LAZY_FETCH = previous;
+  }
+  assert.deepEqual(seen, ["rev-parse", "cat-file"]);
+});

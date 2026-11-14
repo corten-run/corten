@@ -158,9 +158,11 @@ const entryPath = "bench/workloads/cloud-validation-worker.mjs";
 const hash = (source) => createHash("sha256").update(source).digest("hex");
 export const validationFailure = () => new Error("native campaign validation unavailable or invalid; evidence/host preserved");
 const text = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-function head(root) {
-  const result = spawnSync("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
+const gitEnvironment = () => ({ ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" });
+function head(root, readGit = spawnSync) {
+  const result = readGit("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
     encoding: "utf8", timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false,
+    env: gitEnvironment(),
   });
   if (result.status !== 0 || result.error || !/^[a-f0-9]{40}\s*$/.test(result.stdout ?? "")) throw validationFailure();
   return result.stdout.trim();
@@ -172,15 +174,17 @@ const installedCommit = head(checkout);
 // Reading immutable Git objects, not checkout files, binds the entire executable
 // closure to the already-approved measured commit, including nested worker entry.
 // One process, bounded time/output, no fetch, filters, hooks or working-tree writes.
-export function captureValidation(commit, { root = checkout } = {}) {
+// root/readGit are trusted local test seams, never options read from evidence.
+export function captureValidation(commit, { root = checkout, readGit = spawnSync } = {}) {
   try {
     assert.match(commit, /^[a-f0-9]{40}$/);
     root = realpathSync(root);
-    assert.equal(commit, root === checkout ? installedCommit : head(root));
-    const result = spawnSync("git", ["--no-replace-objects", "-C", root, "cat-file", "--batch"], {
+    assert.equal(commit, root === checkout ? installedCommit : head(root, readGit));
+    const result = readGit("git", ["--no-replace-objects", "-C", root, "cat-file", "--batch"], {
       input: validationPaths.map((path) => `${commit}:${path}\n`).join(""),
       encoding: null, timeout: 5000, maxBuffer: 32 * 1024 * 1024,
       windowsHide: true, shell: false,
+      env: gitEnvironment(),
     });
     assert.equal(result.status, 0); assert.ok(!result.error);
     let offset = 0;
@@ -231,7 +235,7 @@ export function validationTask(input, { snapshot = captureValidation(input.commi
     const entry = sources.find((row) => row.path === entryPath);
     const worker = new WorkerClass(new URL("data:text/javascript;base64," + Buffer.from(entry.source).toString("base64")), {
       workerData: { input, root, sources }, stdout: true, stderr: true, execArgv: [],
-      env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
+      env: { ...gitEnvironment(), NODE_OPTIONS: "", NODE_PATH: "" },
     });
     worker.stdout.resume(); worker.stderr.resume();
     const stop = () => { try { void worker.terminate().catch(() => {}); } catch {} };
