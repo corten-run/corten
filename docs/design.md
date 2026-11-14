@@ -3104,16 +3104,23 @@ rules something out.
     its component have keys the browser reads as equal (as `getAttribute` returns them, so
     `key={true}` and `key=""` are one, and so are a carriage return and a line feed), or a
     `key={..}` writes none (`None`), as they stop on an integer past 2^53; release builds keep no
-    record. The check counts the elements the runtime's query finds, so one in a `<template>`'s or
-    a `<noscript>`'s content is not counted (in an `<svg>` both are elements like any other, and
-    what they hold is), and an element's ref and key are noted on it until its tag is written, so a
-    view an attribute's expression renders meanwhile notes its own. It decodes the five references
-    Corten's escapers write and no others, and leaves out a key written with any other `&` (only an
-    app's own `AttrValue` writes one), since guessing at what a browser reads there would repeat
-    HTML's character reference rules or stop correct markup. Whether it runs is `corten-run`'s own
-    debug-assertions setting: the code `html!` writes calls it in every build, and a release build
-    of Corten makes those calls empty, so a per-package setting cannot leave half of it on. The
-    runtime is unchanged:
+    record. It never stops a correct render: where it cannot know what a browser makes of the
+    markup, it lets a duplicate pass. The check counts the elements the runtime's query finds, so
+    one in a `<template>`'s or a `<noscript>`'s content is not counted (in an `<svg>` both are
+    elements like any other, and what they hold is, except in its `<foreignObject>`, `<desc>` and
+    `<title>`, the HTML standard's integration points, whose children are HTML's), and an element's
+    ref and key are noted on it until its tag is written, so a view an attribute's expression
+    renders meanwhile notes its own. Its limit: a component's markup does not see an `<svg>` its
+    parent writes it into, so it takes its own `<template>` there for HTML's, and the keys in it,
+    which the runtime finds, are not checked; following the namespace across components would have
+    every element's markup report it to the check, for a duplicate few apps can write. It follows
+    markup where `html!` writes it, not where a browser moves an HTML element written straight into
+    an `<svg>`. It decodes the five references Corten's escapers write and no others, and leaves
+    out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
+    at what a browser reads there would repeat HTML's character reference rules or stop correct
+    markup. Whether it runs is `corten-run`'s own debug-assertions setting: the code `html!` writes
+    calls it in every build, and a release build of Corten makes those calls empty, so a
+    per-package setting cannot leave half of it on. The runtime is unchanged:
     a check of the live page's keys there would cost every user bytes to report a mistake the debug check finds
     in the render that makes it, and rows a patch or a script adds later carry the keys the server
     or the script gives them.
@@ -3172,7 +3179,8 @@ rules something out.
     Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
     brotli at quality 11, once each build; the item page's bytes from `render_cost` in
     `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
-    card-market and seller-desk, two runs of each build alternated, the base first); platform (a
+    card-market and seller-desk, two runs of each build alternated, the base first, and on
+    watchlist's `key_check_cost` for the key check); platform (a
     `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
     script its decoded value); reasoned (the runtime already finds a ref's elements in the page's
     order for `*` and `#`, so a value is one attribute read per element when the handler runs and
@@ -3181,7 +3189,8 @@ rules something out.
     another, is a type error, as its fourth is for a key on one element and none on another; a debug
     build's record of keys is per render of a component, as the runtime finds a ref's elements under
     the component's root nearest them, and leaves out a `<template>`'s or a `<noscript>`'s content,
-    which its query does not reach); bet (values are given today in five places: card-market's listing
+    which its query does not reach, but not an `<svg>`'s outside its `<foreignObject>`, `<desc>` and
+    `<title>`, which it does); bet (values are given today in five places: card-market's listing
     sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
     `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
     `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
@@ -3206,12 +3215,18 @@ rules something out.
     `data-sort` and the attributes beside it onto ref values. If that issue is still open on
     2027-11-13, the first condition alone decides on that date.
 
-    Last checked: 2026-11-14, the release cost of the key check on markup that has it, watchlist's
-    `LivePrices` (`key={..}` on two refs) and a component with a static `key=".."`, a `<template>`
-    and a `<noscript>`, on `de46e974b` against `eba4134cf`: callgrind (valgrind 3.19.0), three
-    alternated runs each, counted 134,032,179 instructions for `LivePrices` and 19,149,000 for the
-    other in every run, and both compile to the same instructions (1,262 lines each, differing only
-    in the mangled name of `data_ref`, which names the key's type);
+    Last checked: 2026-11-14, the release cost of the key check on markup that has it,
+    `key_check_cost` in `examples/watchlist/src/home.rs` (`LivePrices` with 50 rows and two keyed
+    cells each, and `KeyedMarkup`, with cells keyed by `key={..}` and by a static `key=".."`, a
+    `<template>` and a `<noscript>`, 1,000 renders each), on `e59c32c28` with the test added
+    against `2178db6eb`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
+    instructions for `render_live_prices` and 7,579,107 for `render_keyed_markup` in every run of
+    both, the same bytes, and both compile to the same instructions (1,611 lines each, differing
+    only in the mangled name of `data_ref`, which names the key's type);
+    2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), a
+    `<template>` in an `<svg>`'s `<desc>` or `<title>` is HTML's and its content is not found, and
+    one in an `<svg>` is SVG's and its content is, as the tests beside `DescTemplateKeys` and
+    `OuterSvgKeys` hold the check to;
     2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), a
     `<noscript>`'s content is not found, an `<svg>`'s `<template>` content is, and `&#128;`,
     `&#+97;`, `&#97`, `&nbsp;`, `&#0;`, `&#xD800;` and `&#x110000;` read as U+20AC, the text itself,
