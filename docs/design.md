@@ -2032,7 +2032,7 @@ rules something out.
     differential and area-scope tests passed in the merged workspace's full debug tests at
     `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
-    passed again in the full debug tests of `0653768e1`.
+    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -3382,12 +3382,14 @@ rules something out.
     suffix in its segment; crates.io's release dates for 0.8.6, 0.9.0, 0.9.1 and 0.9.2; Cargo
     unifies semver-compatible versions, so one 0.9.x per build); measured (callgrind 3.19.0,
     release with thin LTO and glibc's allocator, three alternating runs each of
-    `tests/router_cost.rs`, 1,200 requests less 200 divided by 1,000, `0653768e1` against main
-    `d2f885c3e`, whose `crates/` and root manifests are `9c867b5e7`'s: a matched `/items/7/edit`
-    request 17,412.966 instructions (17,412.872 to 17,413.075) against 17,362.948 (17,362.904 to
-    17,363.042), and a 404 at `/items/7/unknown` 19,095.004 (19,094.872 to 19,095.004) against
-    19,083.886 (19,083.754 to 19,085.502)); measured (the same runs built with line tables, one
-    each, giving the same +50.0 and +11.2, split by source file: the whole request is one
+    `tests/router_cost.rs`, 1,200 requests less 200 divided by 1,000, the merge `4c6ac3e3d`
+    against main `de46e974b`: a matched `/items/7/edit` request 17,413.113 instructions
+    (17,412.966 to 17,413.119) against 17,362.966 (17,362.943 to 17,363.075), and a 404 at
+    `/items/7/unknown` 19,095.113 (19,095.042 to 19,095.119) against 19,083.825 (19,083.792 to
+    19,083.919); the same at `0653768e1` against main `d2f885c3e`, before main's patch
+    stylesheets: 17,412.966 against 17,362.948 and 19,095.004 against 19,083.886); measured
+    (those two commits built with line tables, one run each, giving the same +50.0 and +11.2,
+    split by source file: the whole request is one
     inlined closure, and in the matched request matchit's `tree.rs` counts 10 more and its
     `params.rs` 9 more, standard-library slice, `Vec` and comparison code inlined beside them
     about 21 more, `memcmp` 9 more and `memcpy` 10 fewer, and no Corten file more than 3; in
@@ -3419,10 +3421,12 @@ rules something out.
     2026-11-14, the 0.8.6 and 0.9.2 sources diffed file by file, and the order-dependent
     conflict run on both (0.8.6 takes every pair in both orders); 2026-11-14, crates.io's
     matchit versions read (0.9.2 the newest, published 2026-04-08); 2026-11-14, the matched and
-    unknown requests counted at `0653768e1` against `d2f885c3e`, with the same harness copied
-    into the base snapshot, rustc 1.99.1 and valgrind 3.19.0, and the cost split by source file;
+    unknown requests counted at `4c6ac3e3d` against `de46e974b` and at `0653768e1` against
+    `d2f885c3e`, with the same harness copied into each base snapshot, rustc 1.99.1 and
+    valgrind 3.19.0, and the cost split by source file at the second pair;
     2026-11-14, the six direct matching tests, 17 dispatch tests, scope differential and the
-    hand-written order-dependent conflict test passed in the full debug tests of `0653768e1`.
+    hand-written order-dependent conflict test passed in the full debug tests of `0653768e1`
+    and of the merge `4c6ac3e3d`.
 
 ## Rules
 
