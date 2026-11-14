@@ -1,14 +1,14 @@
 // Synthetic orchestration only: no provider, credentials, SSH or native benchmark.
 import assert from "node:assert/strict";
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setImmediate as turn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness } from "./cloud-fixtures.mjs";
-import { fleetMain, parseFleetArgs, productionChild } from "./fleet.mjs";
+import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild } from "./fleet.mjs";
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
@@ -193,7 +193,7 @@ test("real isolated worker event loops overlap synchronous blocking tasks and dr
     let spawned = 0;
     class SyntheticWorker extends Worker {
       constructor(url, options) {
-        assert.equal(url.href, new URL("./fleet-worker.mjs", import.meta.url).href);
+        assert.ok(url.href.startsWith("data:text/javascript;base64,"));
         const slot = spawned++;
         super(new URL("./fleet-worker-fixture.mjs", import.meta.url), { ...options,
           workerData: { ...options.workerData, controls, slot, uncertain: cancel && slot === 0, holdExit: !cancel } });
@@ -258,4 +258,42 @@ test("fixed worker rejects malformed messages/startup uncertainty without exposi
   });
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("./fleet.mjs", import.meta.url)), "PRIVATE_ARGV_PROVIDER"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
   assert.equal(result.status, 2); assert.equal(result.stdout, ""); assert.equal(result.stderr.trim(), "fleet-operation-failed");
+});
+
+test("production snapshot bootstrap executes captured entry/closure bytes and denies unlisted imports before evaluation", async (t) => {
+  for (const change of ["positive", "entry", "production-dependency", "unlisted"]) {
+    const p = fixture(t); await fleetMain(p.prepare(), p.deps);
+    const root = join(p.h.temp, "snapshot"), marker = join(p.h.temp, "PRIVATE_MARKER");
+    const module = `import {parseDropletArgs} from './cloud-options.mjs';
+      export function parseProductionArgs(args) { const at=args.indexOf('--approve-reviewed-merged-ready');
+        return {options:parseDropletArgs(args.slice(0,at)),approval:args[at+1],preview:false}; }
+      export async function productionMain() { return 3; }`;
+    const sources = fleetWorkerPaths.map((path) => {
+      const target = join(root, path); mkdirSync(dirname(target), { recursive: true });
+      const source = path === "bench/workloads/cloud-production.mjs" ? module : readFileSync(resolve(path), "utf8");
+      writeFileSync(target, source);
+      return { path, url: pathToFileURL(target).href, sha256: digest(source), source };
+    });
+    if (change === "unlisted") {
+      const dependency = sources.find((s) => s.path === "bench/workloads/cloud-production.mjs");
+      dependency.source = `import './unlisted.mjs';\n${dependency.source}`; dependency.sha256 = digest(dependency.source);
+      writeFileSync(join(root, "bench/workloads/unlisted.mjs"), `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)},'unsafe');`);
+    }
+    class ReplaceAfterCapture extends Worker {
+      constructor(bootstrap, options) {
+        assert.ok(bootstrap.href.startsWith("data:text/javascript;base64,"));
+        if (["entry", "production-dependency"].includes(change)) {
+          const path = join(root, "bench/workloads", change === "entry" ? "fleet-worker.mjs" : "cloud-production.mjs");
+          writeFileSync(path, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)},'unsafe'); throw new Error('PRIVATE');`);
+        }
+        super(bootstrap, options);
+      }
+    }
+    const group = groupNames[0], args = ["r21", "--state-dir", join(p.h.base, group), "--detach", "--commit", commit, "--ssh-key", "42",
+      "--account-id", accountId, "--context", context, "--group", group, "--fleet", join(p.h.base, "fleet-r21.json"), "--approve-reviewed-merged-ready", "f".repeat(64)];
+    const operation = productionChild(args, { cancellation: new SharedArrayBuffer(4), sources, WorkerClass: ReplaceAfterCapture });
+    if (change === "unlisted") await assert.rejects(operation, /group-bootstrap-invalid/);
+    else assert.equal(await operation, 3);
+    assert.ok(!existsSync(marker), `${change}: mutable source must never evaluate`);
+  }
 });

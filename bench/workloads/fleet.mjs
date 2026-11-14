@@ -2,19 +2,29 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { fleetPlan, roundName, selection } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { full, providerIdentity } from "./cloud-options.mjs";
-import { productionPlan, productionSignals } from "./cloud-production.mjs";
+import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
+import { providerFiles } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { fleetRoot, present, readFleet, readGroup } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((name) => `bench/workloads/${name}`);
-const loadedSources = new Map(ownPaths.map((path) => [path, regular(join(checkout, path), 1024 * 1024).toString("utf8").replaceAll("\r\n", "\n")]));
+export const fleetWorkerPaths = [...new Set([...ownPaths, ...controllerPaths,
+  ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/workloads/registry.mjs", "bench/json-api/contract.mjs",
+  "bench/catalog/fixtures.mjs", "bench/marketplace/fixtures.mjs", "bench/catalog/stats.mjs", "bench/load-tool.mjs"])].sort();
+// Capture bytes once, before approval. Both the commit comparison and worker
+// execution use this same read, not a mutable entry/dependency path later.
+const installedSources = fleetWorkerPaths.map((path) => {
+  const bytes = regular(join(checkout, path), 1024 * 1024);
+  return { path, url: pathToFileURL(join(checkout, path)).href, sha256: digest(bytes), source: bytes.toString("utf8") };
+});
+const loadedSources = new Map(installedSources.map(({ path, source }) => [path, source.replaceAll("\r\n", "\n")]));
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
 export function parseFleetArgs(args) {
@@ -45,7 +55,7 @@ async function exactSource(repo, run) {
   assert.equal(realpathSync((await run("git", ["rev-parse", "--show-toplevel"])).stdout.trim()), repo);
   const head = full((await run("git", ["rev-parse", "HEAD"])).stdout.trim(), /[a-f0-9]{40}/, "fleet-source");
   assert.equal((await run("git", ["status", "--porcelain", "--untracked-files=all"])).stdout, "", "fleet-source-dirty");
-  for (const path of ownPaths) assert.equal((await run("git", ["show", `${head}:${path}`])).stdout, loadedSources.get(path), "fleet-source-mismatch");
+  for (const path of fleetWorkerPaths) assert.equal((await run("git", ["show", `${head}:${path}`])).stdout, loadedSources.get(path), "fleet-source-mismatch");
   return head;
 }
 function rootRecords(fleet) {
@@ -77,13 +87,17 @@ function childArgs(options, hash) {
 
 // WorkerClass is a synthetic test boundary, never an option or saved field.
 // Separate event loops are required: production SSH/SCP uses spawnSync.
-export function productionChild(args, { cancellation, WorkerClass = Worker } = {}) {
+export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources } = {}) {
   return new Promise((resolve, reject) => {
     let worker, message, messages = 0, failed = false;
     const uncertain = () => Object.assign(new Error("group-control-uncertain"), { controlTreeUncertain: true, controlUncertain: true });
     try {
       assert.ok(cancellation instanceof SharedArrayBuffer && cancellation.byteLength === 4);
-      worker = new WorkerClass(new URL("./fleet-worker.mjs", import.meta.url), { workerData: { args, cancellation }, stdout: true, stderr: true });
+      assert.deepEqual(sources.map((s) => s.path), fleetWorkerPaths);
+      for (const source of sources) assert.equal(digest(source.source), source.sha256);
+      const entry = sources.find((s) => s.path === "bench/workloads/fleet-worker.mjs");
+      const bootstrap = new URL(`data:text/javascript;base64,${Buffer.from(entry.source).toString("base64")}`);
+      worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url }, stdout: true, stderr: true, execArgv: [] });
     } catch { reject(uncertain()); return; }
     worker.stdout.resume(); worker.stderr.resume();
     worker.on("message", (value) => { message = value; messages++; });
@@ -94,8 +108,8 @@ export function productionChild(args, { cancellation, WorkerClass = Worker } = {
       if (failed || code !== 0 || messages !== 1 || message?.schema !== "benchmark-group-fleet-worker-result/v1") { reject(uncertain()); return; }
       const fields = Object.keys(message).sort();
       if (JSON.stringify(fields) === '["code","schema"]' && [0, 1, 3].includes(message.code)) resolve(message.code);
-      else if (JSON.stringify(fields) === '["error","schema","uncertain"]' && message.error === "group-operation-failed" && typeof message.uncertain === "boolean")
-        reject(message.uncertain ? uncertain() : new Error("group-operation-failed"));
+      else if (JSON.stringify(fields) === '["error","schema","uncertain"]' && ["group-operation-failed", "group-bootstrap-invalid"].includes(message.error) && typeof message.uncertain === "boolean")
+        reject(message.uncertain ? uncertain() : new Error(message.error));
       else reject(uncertain());
     });
   });
