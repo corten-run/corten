@@ -28,6 +28,9 @@ navigation cleanup. CDP sessions are local to the runner's owned Chromium browse
   is not included in that page session's coverage.
 - Browser `Target.targetCreated`, `targetInfoChanged`, `targetDestroyed`: target ID, type,
   browser-context ID and opener ID when available. No auto-attach pause or target termination.
+- Successful `Target.setDiscoverTargets({discover:true})`: host command start/completion and
+  actual empty native result, before the initial inventory. A coverage flag or successful
+  inventory cannot supply this receipt; a failed command records an observation failure.
 
 ## What this proves
 

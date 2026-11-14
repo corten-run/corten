@@ -9,6 +9,26 @@ import { PlatformLifecycle, validatePlatformRetirement } from "./lifecycle.mjs";
 import { performance } from "node:perf_hooks";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 
+test("target discovery records only its acknowledged native command boundary", async () => {
+  const page = new EventEmitter(), targets = new EventEmitter(), calls = [];
+  page.send = async () => ({ targetInfo: { targetId: "page", browserContextId: "context", type: "page" } });
+  targets.send = async (method, params) => { calls.push({ method, params }); return {}; };
+  const journal = new PlatformLifecycle(page, targets);
+  const before = performance.now(); await journal.enable(); const after = performance.now();
+  const receipts = journal.snapshot().events.filter((e) => e.event === "Target.setDiscoverTargets");
+  assert.equal(receipts.length, 1);
+  assert.deepEqual(calls, [{ method: "Target.setDiscoverTargets", params: { discover: true } }]);
+  assert.deepEqual(receipts[0].params, { discover: true }); assert.deepEqual(receipts[0].result, {});
+  assert.ok(before <= receipts[0].startedAt && receipts[0].startedAt <= receipts[0].receivedAt && receipts[0].receivedAt <= after);
+  assert.equal(journal.snapshot().coverage.browserTargetDiscovery, true);
+  targets.send = async () => { throw new Error("native discovery failed"); };
+  const failed = new PlatformLifecycle(page, targets);
+  await assert.rejects(failed.enable(), /native discovery failed/);
+  assert.equal(failed.snapshot().coverage.browserTargetDiscovery, false);
+  assert.equal(failed.snapshot().events.some((e) => e.event === "Target.setDiscoverTargets"), false);
+  assert.equal(failed.snapshot().observationFailures.at(-1)?.phase, "target-discovery");
+});
+
 test("only the specific unique-context protocol rejection is terminal evidence", async () => {
   for (const [message, expected] of [["cdpSession.send: Protocol error (Runtime.evaluate): uniqueContextId not found", "context-not-found"],
     ["cdpSession.send: Protocol error (Runtime.evaluate): Cannot find context with specified id", "context-not-found"],
@@ -54,6 +74,9 @@ test("CDP correlates real realms/frames/worker targets and WebSocket closure wit
       assert.equal((await journal.probeRealm("unobserved-realm")).outcome, "unavailable");
       await journal.finishObservation({ observationMs: 25, realms: [before.realm] });
       const snapshot = journal.snapshot(), old = snapshot.realms.find((r) => r.realm === before.realm), next = snapshot.realms.find((r) => r.realm === after.realm);
+      const discovery = snapshot.events.filter((e) => e.event === "Target.setDiscoverTargets");
+      assert.equal(discovery.length, 1); assert.deepEqual(discovery[0].params, { discover: true }); assert.deepEqual(discovery[0].result, {});
+      assert.ok(discovery[0].startedAt <= discovery[0].receivedAt && discovery[0].receivedAt <= snapshot.events.find((e) => e.event === "Target.getTargets" && e.phase === "initial").startedAt);
       assert.ok(old && next); assert.notEqual(old.uniqueId, next.uniqueId); assert.equal(old.frame, next.frame); assert.notEqual(old.loader, next.loader);
       assert.ok(snapshot.events.some((e) => e.event === "Runtime.executionContextDestroyed" && e.context === old.context
         || e.event === "Runtime.executionContextsCleared" && e.contexts.some((c) => c.uniqueId === old.uniqueId)));

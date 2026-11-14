@@ -19,13 +19,13 @@ import { discoverReactEndpoint } from "./bindings.mjs";
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
-test("mounted native React endpoint resolution is independent and fails closed", () => {
-  const handlerSource = 'async e=>{e.preventDefault();await fetch("/api/marketplace/"+encodeURIComponent(r.id)+"?locale="+l,{method:"POST",body:e});}';
+test("React endpoint syntax controls are independent and fail closed", () => {
+  const handlerSource = 'async e=>{e.preventDefault();await fetch("/api/marketplace/"+encodeURIComponent(r.id)+"?locale="+l,{method:"POST",body:"safe"});}';
   const observed = { handlerSource, componentSource: `function M({record:r,locale:l}){const submit=${handlerSource};return null}`,
     recordId: "item_2", locale: "fr-FR", action: "http://local/marketplace/fr-FR/item_2", base: "http://local/marketplace/fr-FR/item_2", basis: "mounted-react-onSubmit-and-owning-fiber-props" };
   const result = discoverReactEndpoint([observed]);
   assert.equal(result.path, "/api/marketplace/item_2"); assert.equal(result.locale, "fr-FR"); assert.equal(result.handlerSha256.length, 64);
-  for (const source of [handlerSource.replace("POST", "GET"), handlerSource.replace("r.id", '"item_1"'),
+  for (const source of [handlerSource.replace("POST", "GET"), handlerSource.replace('body:"safe"', 'body:e'), handlerSource.replace("r.id", '"item_1"'),
     handlerSource.replace("/api/marketplace/", "https://attacker.invalid/api/marketplace/"),
     'e=>fetch(unknown(r.id),{method:"POST"})', 'e=>{const r={id:"item_2"};fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}']) {
     assert.equal(discoverReactEndpoint([{ ...observed, handlerSource: source, componentSource: `function M({record:r,locale:l}){const submit=${source};return null}` }]), null);

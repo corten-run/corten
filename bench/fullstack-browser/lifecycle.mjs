@@ -75,7 +75,17 @@ export class PlatformLifecycle {
   async enable() {
     const { targetInfo: t } = await this.cdp.send("Target.getTargetInfo");
     this.target = { target: t.targetId, context: t.browserContextId ?? null, type: t.type };
-    if (this.targets) { await this.targets.send("Target.setDiscoverTargets", { discover: true }); this.discovery = true; }
+    if (this.targets) {
+      const startedAt = performance.now(), params = { discover: true };
+      try {
+        const result = await boundedSend(this.targets, "Target.setDiscoverTargets", params);
+        this.events.push({ event: "Target.setDiscoverTargets", startedAt, receivedAt: performance.now(), params, result });
+        this.discovery = true;
+      } catch (error) {
+        this.observationFailures.push({ phase: "target-discovery", at: performance.now(), error: error.message });
+        throw error;
+      }
+    }
   }
   async inventory(phase) {
     const startedAt = performance.now();
