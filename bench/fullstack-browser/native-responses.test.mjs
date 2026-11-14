@@ -182,6 +182,83 @@ test("unsupported private sources and noncanonical guard metadata fail before re
   });
 });
 
+test("native template private fields cannot enter sealed unchanged htmlFor guards", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const [name, source] of [
+    ["input", '<template><input type="hidden" value="TOKEN"></template>'],
+    ["nested-input", '<template><template><input type="hidden" value="TOKEN"></template></template>'],
+    ["meta", '<template><meta content="TOKEN"></template>'],
+    ["textarea", '<template><textarea hidden>TOKEN</textarea></template>'],
+    ["nested-select", '<template><template><select><option value="">Choose</option><option value="TOKEN">Private</option></select></template></template>'],
+  ]) await t.test(name, async () => {
+    const token = `template-private-${name}-canary`;
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", `${source.replaceAll("TOKEN", token)}</body>`));
+    const { identity } = await f.read();
+    await f.page.evaluate((token) => { document.querySelector("article label").htmlFor = token; }, token);
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    const observation = await collectBrowserDOM(f.page, identity), expected = expectation(observation);
+    const { root, store } = fixture(t), receipt = retainBrowserDOMProjection(store, observation, expected);
+    const ref = store.record("template-private", receipt); store.seal(); const reader = openEvidence(root);
+    const result = replayResponse(reader, reader.json(ref), expected); reader.finish();
+    assert.equal(result.extractionComplete, false); assert.equal(observation.failure, "credential-filter-blocked");
+    assert.deepEqual(observation.events, []); assert.ok(!JSON.stringify(observation).includes(token));
+  });
+});
+
+test("native template inventory shares bounds and allows unreflected private fields", async (t) => {
+  const f = await browserDOMFixture(t), token = "unreflected-template-private-canary";
+  f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>",
+    `<template><template><input value="${token}"><meta content="${token}"><textarea>${token}</textarea></template></template></body>`));
+  const { observation } = await f.read();
+  assert.equal(observation.failure, null);
+  comparePage(replayBrowserDOM(observation, expectation(observation)).page, records().item_2, "en-US");
+  assert.ok(!JSON.stringify(observation).includes(token));
+  for (const kind of ["fields", "options"]) await t.test(kind, async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US")); const { identity } = await f.read();
+    await f.page.evaluate((kind) => {
+      const template = document.createElement("template"); document.body.append(template);
+      const parent = kind === "options" ? template.content.appendChild(document.createElement("select")) : template.content;
+      for (let i = 0; i < 10000; i++) parent.append(document.createElement(kind === "options" ? "option" : "input"));
+    }, kind);
+    const read = await collectBrowserDOM(f.page, identity);
+    assert.equal(read.failure, "credential-filter-blocked"); assert.deepEqual(read.events, []);
+    assert.equal(replayBrowserDOM(read, expectation(read)).extractionComplete, false);
+  });
+});
+
+test("missing error content-visibility policy rejects own descendant and ancestor skipping", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const [name, html] of [
+    ["own-hidden", '<h1 style="content-visibility:hidden">Not found</h1>'],
+    ["inline-block-hidden", '<h1>Not <span style="display:inline-block;content-visibility:hidden">found</span></h1>'],
+    ["block-hidden", '<h1>Not <span style="display:block;content-visibility:hidden">found</span></h1>'],
+    ["ancestor-hidden", '<section style="content-visibility:hidden"><h1>Not found</h1></section>'],
+    ["non-atomic-inline-hidden", '<h1>Not <span style="content-visibility:hidden">found</span></h1>'],
+    ["own-auto", '<h1 style="content-visibility:auto">Not found</h1>'],
+    ["descendant-auto", '<h1>Not <span style="content-visibility:auto">found</span></h1>'],
+    ["ancestor-auto", '<section style="content-visibility:auto"><h1>Not found</h1></section>'],
+  ]) await t.test(name, async () => {
+    f.setBody(`<body>${html}</body>`); const { observation, response } = await f.read("/marketplace/en-US/item_missing");
+    assert.equal(response.status(), 404);
+    // Native diagnostics only: these are never a production read or fallback.
+    if (["own-hidden", "inline-block-hidden", "block-hidden"].includes(name)) {
+      const native = await f.page.locator("h1").evaluate((el) => ({
+        visible: el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true }),
+        rendered: el.innerText.trim(),
+      }));
+      assert.equal(native.visible, true); assert.notEqual(native.rendered, "Not found");
+    }
+    const { root, store } = fixture(t), expected = expectation(observation), receipt = retainBrowserDOMProjection(store, observation, expected);
+    const ref = store.record("content-visibility", receipt); store.seal(); const reader = openEvidence(root);
+    const result = replayResponse(reader, reader.json(ref), expected); reader.finish();
+    assert.equal(result.extractionComplete, false); assert.equal(observation.failure, "public-error-unavailable");
+    assert.deepEqual(observation.events, []);
+  });
+  f.setBody('<body><h1>Not <span style="content-visibility:visible">found</span></h1></body>');
+  const { observation } = await f.read("/marketplace/en-US/item_missing");
+  assert.equal(observation.failure, null); assert.equal(replayBrowserDOM(observation, expectation(observation)).error.text, "Not found");
+});
+
 test("missing error cannot use text from CSS-hidden descendants", async (t) => {
   const f = await browserDOMFixture(t);
   for (const style of ["display:none", "visibility:hidden", "opacity:0"]) await t.test(style, async () => {
@@ -205,6 +282,8 @@ test("ordered reads, fixed source, original response and unique observation iden
     (o) => { o.snapshotSha256 = sha256(snapshotMixedPage.toString()); },
     // ce2's old digest did not bind the collector privacy policy.
     (o) => { o.snapshotSha256 = "c9ea53976efe041ed2d9f9133a62460e7ec4c266775238eb6eaf52172ecdf79e"; },
+    // 5b's collector omitted template contents and own content-visibility.
+    (o) => { o.snapshotSha256 = "a0a1287f59874809d24f3d1df432989684178397e69287c0f326474e62550197"; },
     (o) => { o.events.find((e) => e.key === "getAttribute" && e.args[0]?.scalar === "aria-hidden").result = { scalar: "private-guard-canary" }; },
     (o) => { o.source = "()=>document.cookie"; }, (o) => { o.context = "other-context"; },
     (o) => { o.originatingResponse.sha256 = "0".repeat(64); }, (o) => { o.scopeObservation.after = "new-scope"; },

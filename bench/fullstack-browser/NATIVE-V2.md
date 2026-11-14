@@ -202,16 +202,26 @@ Error reads expose only `publicMissingTag` (allowlisted tag or null) and
 tag names, ARIA attributes or arbitrary computed style values. Unknown neighboring
 error elements cannot leak text/metadata into an otherwise successful capture.
 Every descendant must also pass native visibility (including CSS display,
-visibility, opacity and content-visibility). A candidate with a hidden descendant
-is unsupported rather than assembling a phrase from its hidden textContent.
-Visible inline spans remain supported; no raw innerText/HTML fallback is used.
+visibility and opacity). Computed content-visibility must be `visible` on the
+candidate, every descendant and their ancestors, each ancestor walk bounded by
+the existing 10,000-member limit. `hidden` and `auto` are unsupported, including
+non-atomic inline elements where a browser might still paint the text; native
+checkVisibility alone does not check an element's own skipped contents. A
+candidate with a hidden or unsupported descendant is refused rather than
+assembling a phrase from its hidden textContent. Visible inline spans remain
+supported; no raw innerText/HTML fallback is used.
 
 Public page routes are fixed marketplace locales and item_1 through item_500 or
 item_missing. Canonically encoded queries allow only seller ''/Alice, sort
 asc/desc, offers all; missing-item has no query. Duplicate/unknown/secret query,
 credentials and fragments reject. Attribute URLs are validated before reads.
 All meta elements, including itemprop/content-only metadata, are inventoried
-transiently. Native input/textarea/select controls are private when hidden,
+transiently. The inventory also visits native HTMLTemplateElement.content
+fragments iteratively, including nested templates. Templates, fields and private
+select options share the existing aggregate 10,000-member limit; unsupported
+template objects fail closed. All inert template input/textarea/select values
+are private, regardless of their own computed style. No template content or
+source names are retained. Native input/textarea/select controls are private when hidden,
 password-bearing, ARIA-hidden or not natively visible (including ancestors and
 CSS opacity/visibility/display). Their actual live values, value attributes,
 default values and private select option values are filtered, never serialized.
