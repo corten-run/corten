@@ -13,6 +13,14 @@ import { digest, inside, inspectEvidence, tree } from "./evidence.mjs";
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
 const fixture = result(), s = fixture.summary;
+// Synthetic independent image observations for the saved-audit equality controls.
+const images = descriptor().apps.flatMap((app) => descriptor().payloads.map((payload) => {
+  const saved = s.apps[app].images[payload];
+  return { app, payload, imageId: saved.imageId, labels: saved.labels,
+    config: { entrypoint: saved.execution.Entrypoint, cmd: saved.execution.Cmd } };
+}));
+images.push({ tool: "node", imageId: s.tools.node.imageId,
+  config: { entrypoint: s.toolExecutions.node.Entrypoint, cmd: s.toolExecutions.node.Cmd } });
 const receipts = descriptor().apps.flatMap((app) => descriptor().cases.map((p) => fixture.load(s.apps[app].checks[p.key].native).receipt));
 for (const app of descriptor().apps) for (const p of descriptor().cases) {
   const { files } = fixture.load(s.apps[app].checks[p.key].native);
@@ -35,7 +43,7 @@ test("actual native raw functional replay can stage only an honestly blocked che
   const prepared = inspectPreparation(binding, native);
   assert.equal(prepared.report.baseline, false); assert.equal(s.options.build, true); assert.equal(s.options.checkOnly, true);
   const manifest = snapshotSources({ sources: { files: sourceFiles } }, source, sealedSources);
-  subject = auditSubject({ campaignSha256: "campaign", commit: s.commit, sourceSha256: "sources" }, prepared, tree(native), manifest, []);
+  subject = auditSubject({ campaignSha256: "campaign", commit: s.commit, sourceSha256: "sources" }, prepared, tree(native), manifest, images);
   assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 36);
   for (const mutate of [(x) => x.cleanupFailures.push({ resource: "leaked" }), (x) => x.failures.pop(),
     (x) => { x.apps.corten.checks[descriptor().cases[0].key].nativeSourceVerified = true; }, (x) => { x.dirtyAfter = true; }]) {
@@ -66,12 +74,19 @@ test("replayed negative preparation can await the same independent image/source 
 test("exact current built image identity is required, not generic source presence", () => {
   const inspect = mock.method(childProcess, "execFileSync", (binary, args, options) => {
     assert.equal(binary, "docker"); assert.deepEqual(args.slice(0, 2), ["image", "inspect"]); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
-    const saved = Object.values(s.apps).flatMap((a) => Object.values(a.images)).find((i) => i.imageId === args[2]);
-    return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
+    const saved = images.find((i) => i.imageId === args[2]);
+    return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Entrypoint: saved.config.entrypoint,
+      Cmd: saved.config.cmd, Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
   });
   syncBuiltinESMExports();
   try {
-    const images = imageProof(s); assert.equal(images.length, 18); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    const images = imageProof(s); assert.equal(images.length, 19); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    for (const owner of [s.apps.express.images[descriptor().payloads[0]], s.toolExecutions]) {
+      const key = owner === s.toolExecutions ? "node" : "execution", before = owner[key];
+      owner[key] = { ...before, Cmd: ["/unreviewed/node", "--eval", "process.exit(1)"] };
+      assert.throws(() => imageProof(s), "same image ID cannot excuse changed saved execution");
+      owner[key] = before;
+    }
     inspect.mock.mockImplementation(() => '[{"Id":"sha256:wrong"}]'); assert.throws(() => imageProof(s));
   } finally { inspect.mock.restore(); syncBuiltinESMExports(); }
 });
@@ -104,6 +119,38 @@ test("all timed native audits must equal the accepted receipts and sealed source
   delete checked.native; save();
   assert.equal(validateTimingAudit(timingBinding, folder, subject, bundle, sealedSources).complete, false, "missing failed cells are not fabricated or promoted");
 });
+test("consistent negative runtime/image rewrites still differ from independently inspected accepted images", () => {
+  for (const role of ["app", "upstream"]) {
+    const f = failedResult("express"), summary = f.summary, folder = join(temporary, `execution-${role}`); mkdirSync(folder);
+    const b = { request: { group: "json-api", round: summary.round, commit: summary.commit },
+      execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } };
+    const bundle = { schema: "json-api-native-audits/v1", receipts };
+    const save = () => {
+      for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+      writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+    };
+    save(); assert.equal(validateTimingAudit(b, folder, subject, bundle, sealedSources).complete, true);
+    const payload = descriptor().payloads[0];
+    const execution = role === "app" ? summary.apps.express.images[payload].execution : summary.toolExecutions.node;
+    if (role === "app") execution.Cmd = ["/unreviewed/node", "--eval", "process.exit(1)"];
+    else execution.Entrypoint = ["/unreviewed/node"];
+    for (const [app, entry] of Object.entries(summary.apps)) for (const profile of descriptor().cases) {
+      if (role === "app" && (app !== "express" || profile.payload !== payload)) continue;
+      const checked = entry.checks[profile.key], raw = f.load(checked.raw);
+      const cfg = (role === "app" ? raw.runtime : raw.participants.upstream).configuration;
+      if (role === "app") cfg.command = execution.Cmd;
+      cfg.entrypoint = execution.Entrypoint;
+      const argv = [...(cfg.entrypoint ?? []), ...(cfg.command ?? [])]; cfg.path = argv[0]; cfg.args = argv.slice(1);
+      checked.raw = f.put(raw);
+    }
+    save();
+    const native = inspectEvidence(b, folder);
+    assert.equal(native.attemptComplete, true, "intrinsic consistency alone is insufficient for accepted execution binding");
+    assert.equal(native.baseline, false);
+    assert.throws(() => validateTimingAudit(b, folder, subject, bundle, sealedSources), /timing execution differs/);
+  }
+});
+
 test("independent review data must match all 36 actual subjects and sealed source bytes", () => {
   const delivery = { schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject.subjectSha256,
     review: { reviewer: "independent-human", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },

@@ -82,6 +82,16 @@ payload, duration, mode, rate and users. Every mount is retained and checked aga
 allowed set; additional root/executable/source overlays or image volumes are not ignored.
 Missing or contradictory observations fail closed.
 
+Actual image inspections retain `Entrypoint` and `Cmd`, without image environment values.
+Every app receipt must use that image's unmodified default execution; upstream, probe and
+load receipts must use their complete fixed native commands and inspected tool entrypoints.
+All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
+and `Args`. A same-image replacement command or executable is invalid apparatus, not a
+complete observed framework failure. Historical captures without these fields remain incomplete.
+The isolated audit handoff independently inspects all 18 app images and the Node tool image;
+timing execution metadata must also equal those accepted image observations, not just a
+consistently rewritten runtime snapshot. No default command is invented by the runner.
+
 Each pass starts a fresh native container and probes only `/api/catalog/record_1` or
 `/api/marketplace/item_1`. Cold time is Docker-host container-start to the first complete
 200, not process exec. Warmup defaults to 30 seconds, then 60-second fixed-rate (150/s),

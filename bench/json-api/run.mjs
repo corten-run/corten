@@ -61,7 +61,7 @@ export async function run(args) {
     let image;
     try { image = JSON.parse(await docker(["image", "inspect", tag]))[0]; }
     catch { await docker(["pull", tag], { timeout: 10 * 60 * 1000, file: join(folder, "pull.log") }); image = JSON.parse(await docker(["image", "inspect", tag]))[0]; }
-    return { image: tag, imageId: image.Id };
+    return { image: tag, imageId: image.Id, execution: c.imageCommandEvidence(image) };
   };
   const apiReads = async (payload) => {
     const r = await fetch(`${upstreams[payload].url}/__${c.payloads[payload].path}/control`, { redirect: "manual", signal: AbortSignal.timeout(5000) });
@@ -155,7 +155,8 @@ export async function run(args) {
       summary.fixtures[payload] = write(`${payload}-fixture.json`, records); fixtureDirs[payload] = dirname(join(repo, p.fixture));
     }
     summary.host.docker = await docker(["version", "--format", "{{.Server.Version}}"]);
-    summary.tools.node = await imageTool(c.nodeImage);
+    const { execution, ...node } = await imageTool(c.nodeImage);
+    summary.tools.node = node; summary.toolExecutions = { node: execution };
     await docker(["network", "create", "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, network]);
     for (const [payload, p] of Object.entries(c.payloads)) {
       const name = `${runId}-${p.path}-api`;
@@ -174,7 +175,8 @@ export async function run(args) {
           assert.equal(Boolean(await command("git", ["status", "--porcelain"])), summary.dirty, "tree cleanliness changed during build");
         }
         const image = JSON.parse(await docker(["image", "inspect", build.image]))[0];
-        summary.apps[app].images[payload] = { ...build, imageId: image.Id, labels: Object.fromEntries(Object.keys(labels).map((key) => [key, image.Config.Labels?.[key] ?? null])) };
+        summary.apps[app].images[payload] = { ...build, imageId: image.Id, execution: c.imageCommandEvidence(image),
+          labels: Object.fromEntries(Object.keys(labels).map((key) => [key, image.Config.Labels?.[key] ?? null])) };
         c.verifyImage(summary.apps[app].images[payload], summary.commit, app, payload); save();
       },
       async check(app, profile) {
@@ -224,6 +226,9 @@ export async function run(args) {
         else if (!options.checkOnly) {
           summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`],
             { pullLog: join(folder, "pull-k6.log") });
+          const image = JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0];
+          assert.equal(image.Id, summary.tools.k6.imageId);
+          summary.toolExecutions.k6 = c.imageCommandEvidence(image);
           save();
           await own(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host",
             "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount, summary.tools.node.imageId, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);

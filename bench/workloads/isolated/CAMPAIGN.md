@@ -261,6 +261,13 @@ to regular content-addressed `audit-sources/blobs/<sha256>` files by the source 
 they are not unsafe archive path names. Environment values are not forwarded from Docker image configuration.
 `json-audit-subject.json` binds those images, 36 identities, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
+The retained image list includes the 18 app images and the actual Node tool image.
+App and tool image-default entrypoint/command observations are compared with actual Docker
+image inspection during staging and with the accepted subject during timing. Native JSON
+receipts retain every role's entrypoint, command, effective executable and arguments: app
+defaults are exact, and upstream/probe/load commands are the full fixed native invocations.
+Missing fields or substitutions cannot be attributed as a complete target failure; old
+captures need new evidence, not a waiver. Image environment values are not copied.
 
 While the process stays alive, the authorized parent/operator may deliver exactly
 `<campaign-id>/json-audit-delivery.json`, at most 16 MiB, regular/no-hardlink, same UID and

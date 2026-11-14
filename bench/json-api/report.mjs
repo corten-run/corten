@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
@@ -49,6 +49,7 @@ export function inspectJson(summary, { load, commit } = {}) {
     for (const tool of ["node", ...(summary.options.checkOnly || gated ? [] : ["k6"])]) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
       assert.equal(summary.tools[tool].image, tool === "node" ? nodeImage : k6Image, "wrong tool image reference");
+      verifyImageExecution(summary.toolExecutions?.[tool]);
     }
     if ((!summary.options.checkOnly && !gated) || summary.tools.k6 !== undefined) verifyK6Provenance(summary.tools.k6);
   });
