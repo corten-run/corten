@@ -878,6 +878,21 @@ and fails with any of five lines of `handover.sh` changed: the names refused, gz
 package's `cli.ini` left out, a release required, and the bit that runs a file as its owner
 dropped.
 
+A fourth review found that nothing in the repository ran the relay, or the lines of
+`provision.sh` that write in the deploy user's directories, and that six lines of
+`handover.sh` could go with its test still passing. It also ran the relay with a handover
+key that is not a key, which read as the serving machine's refusal and would have moved the
+address first, and with a serving machine that has another host key, which failed every
+apply without saying why. At `2f0d2706d` `infra/handover.test.sh`, `provision.test.sh` and
+`infra/relay.test.sh` pass (55, 18 and 45 lines), and each fails with one line of what it
+guards changed, eighteen such changes tried one at a time: among them root's writes put
+back in `provision.sh`, a refusal read as a machine that could not be asked, the key not
+checked, and the site asked three times where it is now asked twelve. The relay's test,
+before that commit, found the relay as first changed for it asking a site that does not
+answer without end. A whole replacement in the rig at that commit ended with none of 132
+requests unanswered, the relay done 107 seconds after the new machine was made, and a
+deploy to the new machine served.
+
 What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
 the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
 signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
