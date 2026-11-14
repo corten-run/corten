@@ -2,17 +2,18 @@
 # The toolchain alone, which bench/fullstack/build.mjs builds the app with.
 FROM rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 AS tools
 # The Topcoat CLI bundles the assets the binary declares (stylesheets, the runtime's script).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo install topcoat-cli --version =0.12.1 --locked
+RUN --mount=type=cache,target=/var/cache/cargo \
+    CARGO_HOME=/var/cache/cargo cargo install topcoat-cli --version =0.12.1 --locked --root /usr/local/cargo
 
 FROM tools AS build
 WORKDIR /src
 COPY . .
-# Every build on this machine shares the target cache: one at a time (`locked`), and with the
+ENV CARGO_HOME=/var/cache/cargo
+# Builds of this app share its target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
 # would get that build's crates.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id=bench-fullstack-topcoat.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && cargo build --release --locked && topcoat asset bundle --release \
     && mkdir -p /out && cp target/release/item-page-topcoat /out/server && cp -r target/release/assets /out/assets

@@ -1,0 +1,2 @@
+<%= turbo_stream.update "rows" do %><%= render partial: "row", collection: state.fetch(:rows).values %><% end %>
+<%= render partial: "counter", locals: { state: state } %>

@@ -6,14 +6,40 @@ import { chromium } from "playwright";
 import { journey, serve, qualifyAndMeasure } from "./run.mjs";
 import { socketFixture } from "./socket-fixture.mjs";
 import { selectedApps } from "../workloads/registry.mjs";
+import { closeObserved } from "./evidence.mjs";
+import { replayV2 } from "./replay-v2.mjs";
+import { launchBrowser } from "./launch.mjs";
 
 const directory = process.env.CLIENT_NATIVE_DIR;
+
+test("real browser deadline interruption observes context, browser and server closure", { skip: !directory && "Set CLIENT_NATIVE_DIR to a runner's native build directory", timeout: 30000 }, async (t) => {
+  const dir = resolve(directory), workload = JSON.parse(await readFile(join(dir, "workload.json"), "utf8"));
+  const server = await serve(dir), terminal = [];
+  let browser, launched, pass;
+  try {
+    launched = await launchBrowser(chromium); browser = launched.browser;
+    pass = await journey(browser, server.url, "react", workload, { maxCleanupMs: 2000, cleanupObservationMs: 100 }, 3000,
+      (page) => page.evaluate(() => new Promise(() => {})), true);
+  } finally {
+    if (browser) terminal.push(await closeObserved("browser", launched.close, () => !browser.isConnected()
+      && (launched.process.exitCode !== null || launched.process.signalCode !== null)));
+    terminal.push(await closeObserved("server", () => server.close(), () => server.isClosed()));
+  }
+  assert.equal(pass.lifecycle.deadline.aborted, true); assert.ok(pass.lifecycle.deadline.firedAt !== null);
+  assert.equal(pass.lifecycle.close.returned, true); assert.equal(pass.lifecycle.close.observed, true);
+  assert.equal(pass.readyMs, null); assert.equal(pass.actions, null);
+  assert.equal(replayV2(pass, "react", "measurement", workload, { maxCleanupMs: 2000, cleanupObservationMs: 100 }, 3000, performance.timeOrigin).timings, null);
+  assert.ok(terminal.every((r) => r.returned && r.observed && r.failure === null));
+  // Actual diagnostic receipts, not a campaign attempt, source/build review or
+  // a claim that this test received an OS SIGINT/SIGTERM.
+  t.diagnostic(JSON.stringify({ schema: "client-heavy-native-interruption-diagnostic/v1", pass, terminal }));
+});
 test("all six native assets qualify and pass a separate measured journey", { skip: !directory && "Set CLIENT_NATIVE_DIR to a runner's native build directory", timeout: 180000 }, async (t) => {
   const dir = resolve(directory), workload = JSON.parse(await readFile(join(dir, "workload.json"), "utf8"));
   const server = await serve(dir);
-  let browser;
+  let browser, launched;
   try {
-    browser = await chromium.launch({ headless: true });
+    launched = await launchBrowser(chromium); browser = launched.browser;
     for (const app of selectedApps("client-heavy")) await t.test(app, async () => {
       const calls = [];
       const result = await qualifyAndMeasure((phase) => {
@@ -25,7 +51,9 @@ test("all six native assets qualify and pass a separate measured journey", { ski
       assert.equal(result.qualification.actions, null);
       assert.equal(result.measurement.actions.length, workload.operations.length);
     });
-  } finally { try { await browser?.close(); } finally { await server.close(); } }
+  } finally { try { await launched?.close(); } finally { await server.close(); } }
+  assert.equal(browser.isConnected(), false);
+  assert.ok(launched.process.exitCode !== null || launched.process.signalCode !== null);
 });
 
 test("an invisible measured journey releases no timings after a clean qualification", { skip: !directory && "Set CLIENT_NATIVE_DIR to a runner's native build directory", timeout: 30000 }, async () => {

@@ -969,8 +969,10 @@ function modulesOf(node) {
  * Applies a patch: every top-level element in `html` replaces the element with its id, a
  * `<template id="row-7" data-remove>` removes it, a `<template id="rows" data-append>` adds
  * its content at the end of it, and a `<template data-corten-read-again>` reads the patch again
- * ({@link readPatchAgain}). The modules the new markup's handlers name are
- * imported first, so its handlers run from the first event. The server's markup wins, except for
+ * ({@link readPatchAgain}). The modules the new markup's handlers name are imported first, so its
+ * handlers run from the first event, and so are the section stylesheets of the handler's area
+ * (`Area::components`) the page lacks ({@link stylesOf}), so a patch from another area's handler
+ * is styled when it appears. The server's markup wins, except for
  * what the user is doing: a field they edited keeps their text, a dialog, `<details>` or popover
  * they opened stays open (a modal dialog modal) unless the server changed it, and focus stays where
  * it was, or near it when the patch takes its element away ({@link focusNear}).
@@ -996,7 +998,9 @@ export function patch(html, signal) {
  */
 async function apply(html, signal, sent, took, own = true, asked) {
   const content = parse(html, own);
-  await modulesOf(content);
+  // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
+  // the next patch that links it tries again.
+  await Promise.all([modulesOf(content), stylesOf(content)]);
   if (signal?.aborted) return;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
@@ -1937,23 +1941,47 @@ function viewOf(root, fresh) {
 }
 
 /**
- * Moves the section stylesheets a page response links (`Area::components`) out of it, adds those this
- * document lacks to <head> and resolves when they have loaded: true, or false when one failed.
- * They are never removed: their rules only match their own components' classes.
+ * The section stylesheets {@link stylesOf} added to <head> that have not loaded yet, by URL, so a
+ * second answer that links one (a patch while another is in flight, a navigation) waits for the
+ * same load rather than take a link in the head for a loaded stylesheet.
+ * @type {Map<string, Promise<boolean>>}
+ */
+const loadingStyles = new Map();
+
+/**
+ * Moves the section stylesheets a page or a patch links (`Area::components`) out of it, adds those
+ * this document lacks to <head> and resolves when they have loaded: true, or false when one
+ * failed, which is taken out again so a later answer that links it tries again. Those that load
+ * are never removed: their rules only match their own components' classes. One that neither
+ * loads nor fails holds the answer, as the browser holds a page on a stylesheet.
  * @param {DocumentFragment} content
  * @returns {Promise<boolean>}
  */
 async function stylesOf(content) {
-  const have = Array.from(document.head.querySelectorAll("link[data-corten-style]"), (link) => link.getAttribute("href"));
   const links = /** @type {NodeListOf<HTMLLinkElement>} */ (content.querySelectorAll("link[data-corten-style]"));
+  if (!links.length) return true;
+  const have = Array.from(document.head.querySelectorAll("link[data-corten-style]"), (link) => link.getAttribute("href"));
   const loads = Array.from(links, (link) => {
     link.remove();
-    if (have.includes(link.getAttribute("href"))) return true;
+    const href = link.getAttribute("href") ?? "";
+    const loading = loadingStyles.get(href);
+    if (loading) return loading;
+    if (have.includes(href)) return true;
     document.head.append(link);
-    return new Promise((resolve) => {
-      link.onload = () => resolve(true);
-      link.onerror = () => resolve(false);
+    /** @type {Promise<boolean>} */
+    const load = new Promise((resolve) => {
+      link.onload = () => {
+        loadingStyles.delete(href);
+        resolve(true);
+      };
+      link.onerror = () => {
+        loadingStyles.delete(href);
+        link.remove();
+        resolve(false);
+      };
     });
+    loadingStyles.set(href, load);
+    return load;
   });
   return (await Promise.all(loads)).every(Boolean);
 }

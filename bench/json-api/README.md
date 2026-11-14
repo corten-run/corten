@@ -82,6 +82,20 @@ payload, duration, mode, rate and users. Every mount is retained and checked aga
 allowed set; additional root/executable/source overlays or image volumes are not ignored.
 Missing or contradictory observations fail closed.
 
+Actual image inspections retain `Entrypoint` and `Cmd`, without image environment values.
+Every app receipt must use that image's unmodified default execution; upstream, probe and
+load receipts must use their complete fixed native commands and inspected tool entrypoints.
+All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
+and `Args`. A same-image replacement command or executable is invalid apparatus, not a
+complete observed framework failure. Historical captures without these fields remain incomplete.
+The isolated audit handoff independently inspects all 18 app images and both Node/k6 tool images;
+timing execution metadata must also equal those accepted image observations, not just a
+consistently rewritten runtime snapshot. No default command is invented by the runner.
+Both tools are prepared before checks, including check-only and negative attempts. The
+pinned k6 executable runs only its version command during preparation, never load before
+the full functional/source gate. Missing tool provenance or execution observations block
+preparation rather than leaving a mutable entrypoint expectation for timing.
+
 Each pass starts a fresh native container and probes only `/api/catalog/record_1` or
 `/api/marketplace/item_1`. Cold time is Docker-host container-start to the first complete
 200, not process exec. Warmup defaults to 30 seconds, then 60-second fixed-rate (150/s),
@@ -125,6 +139,21 @@ Functional replay prepares expected record bytes once per case: an exact respons
 already the required JSON value; differing whitespace or key order still takes the full parsed
 structural comparison. Every app's identity, status, content type, sweep and source controls
 remain independently checked. This is report-side validation work, not application output caching.
+
+An initial record-sweep violation may instead produce `functional.json.failure.json`.
+Its `record-json-attempt/v1` observations bind the canonical fixture hash, ordered request
+intents, response bytes and complete request boundaries. Saved replay derives the violation
+from status/content type/JSON/value, never from the checker's assertion message. The runner
+retains the actual normal child exit one and clock alongside raw responses and existing
+image/source/CPU/upstream context. Missing responses, timeouts, control failures and errors
+outside this bounded sweep remain incomplete attempts, not failed-target qualification.
+All 36 cells are attempted and all native source audits remain required, even for a negative
+cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
+with empty runs/aggregates and retained owned-container/network cleanup inventory.
+`inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
+separately from `baseline`. A complete negative attempt has `baseline: false`, no eligible
+comparisons and process exit one. Check-only preparation remains unqualified pending the
+independent exact-image audit, whether its observed functional outcome passed or failed.
 
 This implementation has unit/fake-operation and HTTP test coverage, not a measured nine-app
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,

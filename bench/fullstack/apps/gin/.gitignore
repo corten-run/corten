@@ -1,2 +1,3 @@
 # templ generate writes these in the Docker build.
 *_templ.go
+/results/trace-proof/row7-*.ndjson

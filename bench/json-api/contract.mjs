@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps } from "../fullstack/inventory.mjs";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 import { aggregate, cpuSettings as catalogCpus, phases, readLoad } from "../catalog/contract.mjs";
 import { records as catalogRecords } from "../catalog/fixtures.mjs";
@@ -81,6 +81,19 @@ export function imageLabels(commit, dirty, app, payload) {
 export function verifyImage(image, commit, app, payload) {
   assert.match(image?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, "missing immutable native image identity");
   assert.deepEqual(image.labels, imageLabels(commit, false, app, payload), "native image build provenance differs or is dirty");
+  verifyImageExecution(image.execution);
+}
+export function verifyImageExecution(execution) {
+  assert.ok(execution && typeof execution === "object" && !Array.isArray(execution), "image execution observation missing");
+  assert.deepEqual(Object.keys(execution).sort(), ["Cmd", "Entrypoint"]);
+  for (const value of [execution.Entrypoint, execution.Cmd]) assert.ok(value === null
+    || Array.isArray(value) && value.every((s) => typeof s === "string" && !s.includes("\0")), "invalid image execution observation");
+  const argv = [...(execution.Entrypoint ?? []), ...(execution.Cmd ?? [])];
+  assert.ok(argv.length && argv[0].length, "image executable missing");
+}
+export function imageCommandEvidence(image) {
+  const execution = { Entrypoint: image.Config?.Entrypoint, Cmd: image.Config?.Cmd };
+  verifyImageExecution(execution); return execution;
 }
 export function appArgs({ name, profile, imageId, network, upstream, fixtures, cpus }) {
   const p = payloads[profile.payload], prefix = p.path.toUpperCase();
@@ -95,7 +108,9 @@ export function runtimeContext(summary, profile) {
   const p = payloads[profile.payload];
   return { checkout, runId: summary.runId, network: `${summary.runId}-net`, fixtureSource: `${checkout}/${p.fixture.slice(0, p.fixture.lastIndexOf("/"))}`,
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
-    nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId };
+    nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
+    toolExecutions: summary.toolExecutions,
+    appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
 function observedConfiguration(info, expected, context, role) {
   assert.ok(context?.fixtureSource && context?.apiBase && context?.network, "owned runtime context required");
@@ -112,22 +127,26 @@ function observedConfiguration(info, expected, context, role) {
     .sort((a, b) => a.destination.localeCompare(b.destination));
   return { name: info.Name, network: Object.keys(info.NetworkSettings?.Networks ?? {}).sort(),
     owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) ? { env } : {}),
-    ...(role !== "app" ? { command: info.Config?.Cmd } : {}) };
+    entrypoint: info.Config?.Entrypoint, command: info.Config?.Cmd, path: info.Path, args: info.Args };
 }
 function expectedConfiguration(expected, context, role) {
   assert.ok(context?.fixtureSource && context?.apiBase && context?.network, "owned runtime context required");
   const p = payloads[expected.payload], prefix = p.path.toUpperCase();
   const mount = (source, destination) => ({ type: "bind", source, destination, writable: false });
   const names = { app: `${context.runId}-app`, upstream: `${context.runId}-${p.path}-api`, load: `${context.runId}-k6`, probe: `${context.runId}-app-probe` };
+  const image = role === "app" ? context.appExecutions?.[expected.app] : context.toolExecutions?.[role === "load" ? "k6" : "node"];
+  verifyImageExecution(image);
+  const command = role === "app" ? image.Cmd : role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`]
+    : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)]
+    : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"];
+  const argv = [...(image.Entrypoint ?? []), ...(command ?? [])];
   return { name: `/${names[role]}`, network: [context.network], owner: context.runId,
     mounts: role === "app" ? [mount(context.fixtureSource, "/fixtures")]
       : [...(role === "upstream" ? [mount(context.fixtureSource, "/fixtures")] : []), mount(`${context.checkout}/bench`, "/bench")].sort((a, b) => a.destination.localeCompare(b.destination)),
     ...(role === "app" ? { env: { [`${prefix}_SOURCE`]: expected.source, [`${prefix}_FIXTURE_PATH`]: `/fixtures/${p.path}.json`, API_BASE: context.apiBase, PROFILE: "" } }
       : role === "load" ? { env: { BASE: `http://${context.runId}-app:8080`, PAYLOAD: expected.payload, DURATION: `${context.load.seconds}s`,
         MODE: context.load.mode, RATE: String(context.load.rate), VUS: String(context.load.vus) } } : {}),
-    ...(role === "upstream" ? { command: ["node", `/bench/${p.path}/upstream.mjs`] }
-      : role === "probe" ? { command: ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] }
-      : role === "load" ? { command: ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"] } : {}) };
+    entrypoint: image.Entrypoint, command, path: argv[0], args: argv.slice(1) };
 }
 export function runtimeReceipt(info, expected, context) {
   const observed = { containerId: info.Id, imageId: info.Image, source: expected.source, payload: expected.payload,
