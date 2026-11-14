@@ -5,6 +5,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
+  listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
+  return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
+  spurious missing-heartbeat errors. Record the dependency-driven MSRV policy and the
+  deliberate hold on SQLx 0.8 in the design choices and cluster documentation.
+- Link auction-room against a patched system SQLite instead of SQLx's bundled copy, which
+  is affected by RUSTSEC-2026-0459. Its Docker image and workspace CI install checksum-verified
+  upstream SQLite 3.54.1 (the fix first shipped in 3.54.0). Local builds now need patched
+  SQLite development files; version-only lockfile scans still flag the unbundled FFI crate.
+
 - Make generated catalog fixtures and Gin's public static assets readable by native
   non-root image users under a private job umask. Preserve original catalog checker
   errors when negative-response receipts are missing or invalid, without accepting

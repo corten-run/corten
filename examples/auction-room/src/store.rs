@@ -377,6 +377,14 @@ impl Store {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn system_sqlite_is_patched() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let version: String = sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&pool).await.unwrap();
+        let parts: Vec<u32> = version.split('.').map(|part| part.parse().unwrap()).collect();
+        assert!(parts.as_slice() >= [3, 54, 0].as_slice(), "SQLite {version} predates the WAL disclosure fix");
+    }
+
     fn card(id: &str, ends_at: SystemTime) -> Lot {
         Lot {
             id: id.into(),

@@ -13,6 +13,10 @@ a client navigation, a form patch and a JSON data request.
 
 ## Rules
 
+Use Rust 1.89 or later; the [MSRV policy](../../docs/design.md#choice-msrv) records the floor
+and the dependency fixes that can move it. The auction-room example also needs a patched
+system SQLite, not SQLx's bundled copy (see its README).
+
 These are what the framework is built around. Code that breaks them fights the framework.
 
 1. **No strings at a seam.** URLs are `#[derive(Route)]` types, form field names come from

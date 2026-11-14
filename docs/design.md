@@ -3454,6 +3454,57 @@ rules something out.
     0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
     `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
 
+49. <a id="choice-msrv"></a>**The Rust floor moves for a needed dependency fix, not for freshness alone.**
+    The minimum supported Rust version (MSRV) is the oldest compiler Corten promises to
+    build on, including the workspace's examples and all-feature/all-target CI check. It is
+    not a recommendation to stay off newer stable Rust. Move it when a dependency release
+    Corten needs for correctness, security or a maintained line requires a newer compiler,
+    and record that dependency and need here. Keep the new floor at a Rust release at least
+    about six months old at the time of the move, so routine dependency refreshes do not
+    force apps onto a just-released compiler. A conflict between that guard and an urgent
+    correctness or security fix reopens this Choice rather than silently bypassing it.
+
+    The floor is now Rust 1.89, released 2025-08-07, more than six months before this move.
+    async-nats moves from 0.50.0 to 0.52.0: a received carriage return in a header value
+    could panic a subscriber's connection task, so a publisher could stop its subscribers.
+    0.52 fixes that; 0.51 also fixes spurious missing heartbeats and pull-consumer hot loops
+    and bounds JetStream API requests. These affect the cluster's feed path. Both releases
+    require Rust 1.89. There is no claim that 0.50 is abandoned: its missing fixes suffice.
+
+    SQLx stays on 0.8.6. 0.9.0 requires Rust 1.94 without a fix Corten's Postgres feed needs,
+    and its SQLite driver permits only `libsqlite3-sys >=0.30.1, <0.38.0`, below the 0.39.0
+    that fixes RUSTSEC-2026-0459's bundled SQLite. auction-room instead enables
+    `sqlite-unbundled` and links system SQLite 3.54.0 or later; its image and CI install
+    checksum-verified upstream 3.54.1. Bookworm's 3.40.1 does not meet that requirement.
+    The 0.30.1 FFI crate remains locked without its bundled source enabled: a version-only
+    advisory scan still reports it, so the exception is paired with a feature-tree check
+    and a test of the linked SQLite version, not hidden with an audit ignore.
+
+    Stands on: platform (crates.io declares Rust 1.89.0 for async-nats 0.51.0 and 0.52.0,
+    and Rust 1.94.0 for SQLx 0.9.0; the
+    [async-nats changelog](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md)
+    describes the header panic and JetStream fixes; SQLx 0.9.0's SQLite dependency range
+    excludes libsqlite3-sys 0.39.0; the
+    [SQLite advisory](https://rustsec.org/advisories/RUSTSEC-2026-0459.html) fixes the bundled
+    source in libsqlite3-sys 0.39.0 / SQLite 3.54.0; upstream's
+    [download page](https://www.sqlite.org/download.html) publishes SQLite 3.54.1's source
+    checksum); reasoned (requiring a named fix and an older compiler keeps the build promise
+    useful without making it a reason to retain a known failure; unbundling transfers
+    responsibility for the C library's patch level to the app's build and deploy);
+    value (correctness and reliability first, deliberate dependencies and verified claims,
+    Values 6 and 9).
+
+    Revisit when: SQLx permits libsqlite3-sys 0.39 or later, a held dependency line needs a
+    correctness or security fix or loses maintenance, the Rust floor moves for another needed
+    dependency, an urgent fix requires a compiler less than about six months old, or a build
+    enables bundled SQLite again or links an older system library. Re-read release notes,
+    compiler requirements and advisories before moving either driver, and record the reason
+    and the new floor here with its checked build.
+
+    Last checked: 2026-11-14, crates.io metadata for SQLx 0.9.0, sqlx-sqlite 0.9.0,
+    async-nats 0.51.0 and 0.52.0, their release notes, Rust 1.89.0's release date,
+    RUSTSEC-2026-0459 and SQLite 3.54.1's published source checksum, against `7d232f93d`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

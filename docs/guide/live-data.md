@@ -388,8 +388,12 @@ URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff 
 once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
-runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream): in the
-failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
+runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream).
+It requires Rust 1.89 and uses async-nats 0.52, whose
+header parsing no longer lets a publisher's carriage return panic a subscriber's connection
+task. SQLx remains on 0.8 because 0.9 needs Rust 1.94 without a fix this Postgres-only crate
+needs; see the [MSRV policy](../design.md#choice-msrv) for what reopens the hold.
+In the failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
 with clients back on the other instance after 1.1 s at the median (measured,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200

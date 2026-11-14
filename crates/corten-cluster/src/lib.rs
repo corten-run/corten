@@ -18,6 +18,20 @@
 //!
 //! The app provides its rows through [`Source`] and writes through [`begin`] / [`Write::commit`],
 //! with an optional idempotency key so a retried request commits once.
+//!
+//! # Driver versions and supported Rust
+//!
+//! Rust 1.89 is the oldest supported compiler. async-nats 0.52 fixes a received carriage
+//! return in a header value panicking the connection task; 0.51 also bounds JetStream
+//! requests and fixes spurious missing heartbeats and pull-consumer hot loops. These are
+//! correctness fixes on this crate's feed path, not a compiler bump just for freshness.
+//! SQLx stays on 0.8: 0.9 needs Rust 1.94 without a fix this crate needs, and even its SQLite
+//! driver cannot select the advisory-fixed libsqlite3-sys 0.39. This crate enables only
+//! Postgres; auction-room separately uses a patched system SQLite, never the bundled copy.
+//! Revisit the hold when SQLx permits libsqlite3-sys 0.39 or later, a held line needs a
+//! correctness/security fix, or the compiler floor moves for another needed dependency.
+//! See the dependency-driven MSRV policy in `docs/design.md#choice-msrv` and the upstream
+//! [async-nats changelog](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md).
 
 mod hub;
 mod relay;

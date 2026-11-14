@@ -12,6 +12,15 @@ use corten::feed::Change;
 
 use super::*;
 
+#[test]
+fn nats_header_line_breaks_do_not_panic() {
+    let mut headers = async_nats::HeaderMap::new();
+    // The same conversion is used for incoming headers: a publisher must not be able to
+    // panic a subscriber's connection task with a carriage return in a header value.
+    headers.insert("X-Test", "first\rsecond");
+    assert_eq!(headers.get("X-Test").unwrap().as_str(), "first second");
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Row)]
 struct Item {
     #[row(id)]
