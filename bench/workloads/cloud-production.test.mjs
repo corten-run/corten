@@ -251,7 +251,8 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 16);
+  assert.equal(controllerPaths.length, 17);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];

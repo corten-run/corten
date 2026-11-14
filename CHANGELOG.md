@@ -12,6 +12,8 @@ Corten is pre-1.0, so any minor version may change the API.
   Run controllers on isolated parallel worker event loops from verified source
   snapshots, collect each host independently, and replay the full roster read-only.
   Match failed inspections to the exact reserved selection before cleanup.
+  Keep parallel Git proofs on exact observed commits without shared-ref writes,
+  and bind nested native validation to captured committed code and a pinned parser.
   Existing all-group reservations and uncertain-host recovery remain separate;
   local workload verification files run serially without changing measurements.
 

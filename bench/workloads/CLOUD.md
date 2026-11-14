@@ -142,9 +142,11 @@ bytes for collect/delivery, and exact audit delivery bytes and approved audit
 subject for delivery. Preview uses local Git and read-only files only; it creates
 no state and contacts no provider. It returns 2 with explicit missing integration
 paths, otherwise 3 awaiting approval, never qualified exit 0. Execution requires
-the exact subject, checks clean loaded/committed controller bytes, fetches only the
-fixed public source repository's main ref, checks ancestry, then repeats the
-snapshot checks. The first provider access repeats approval under the core's
+the exact subject, checks clean loaded/committed controller bytes, reads the fixed
+public source repository's main advertisement and fetches only that exact object.
+Parallel children never update shared tracking refs or `FETCH_HEAD`. Both the
+outer and locked launch ancestry checks use the same observed main SHA, then repeat
+the snapshot checks. The first provider access repeats approval under the core's
 exclusive lock, closing the concurrent-collector snapshot race.
 The current native verifier reconstructs bindings against its measured checkout,
 so collect/delivery must use that same integrated source commit, not a newer
@@ -194,8 +196,14 @@ absent if deletion was in flight; it is never reported confirmed by a cancelled
 path. There is no rollback, remote stop, retry launch, repeated deletion or live
 lock takeover. Direct test seams are responsible for eventual settlement of
 their injected process promises; production keeps its existing bounded calls.
-The fixed default validator is a lazy local import in a local worker, never
-downloaded code. Its API remains exactly:
+The fixed default validator runs in a separate local worker, never downloaded
+code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure from
+immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
+reads. The fixed TypeScript bundle is captured once and checked against its pinned
+package hash. The nested worker executes captured entry bytes and installs a
+deny-unlisted loader before project or package code evaluates; it never reopens
+mutable executable paths or falls back to a package loader. The snapshot helper is
+also part of the outer controller/fleet approval closure. Its API remains exactly:
 
 ```js
 validateCampaign({ folder, round, commit })
@@ -207,7 +215,7 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each inspection has a fixed 60-second deadline and a 25-millisecond cancellation
+Each inspection has a fixed 60-second deadline, including snapshot setup, and a 25-millisecond cancellation
 check. The default worker is terminated on completion, timeout or cancellation;
 no successful report is consumed before its exit is confirmed. Worker stdout,
 stderr and exceptions are not forwarded. Termination confirmation gets at most
