@@ -195,6 +195,12 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       }
       fail("Unsupported binding pattern");
     };
+    const reserveDeclarations = (list, env, joinedBranch = false) => {
+      for (const s of list) if (ts.isVariableStatement(s)) for (const d of s.declarationList.declarations) for (const name of names(d.name)) {
+        if (joinedBranch && env.has(name)) fail("Unsupported shadow declaration in joined render branch");
+        env.set(name, { kind: "uninitialized" });
+      }
+    };
     const moduleEnvironment = (entry) => {
       const factory = nativeModules.owner(entry), key = factory?.id ?? entry.script.path;
       if (modules.has(key)) return modules.get(key);
@@ -218,7 +224,9 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         scan(factory.node.body);
         return env;
       }
-      for (const s of factory?.node.body.statements ?? entry.script.file.statements) {
+      const list = factory?.node.body.statements ?? entry.script.file.statements;
+      reserveDeclarations(list, env);
+      for (const s of list) {
         if (factory && ts.isExpressionStatement(s) && ts.isStringLiteral(s.expression) && s.expression.text === "use strict") continue;
         if (factory && ts.isExpressionStatement(s) && loaderCall(s.expression, "s")) {
           assert.ok(s.expression.arguments.length <= 2 && ts.isArrayLiteralExpression(s.expression.arguments[0]), "Unsupported native export registration");
@@ -253,7 +261,11 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       return env;
     };
     const resolve = (name, env, entry) => {
-      if (env.has(name)) return env.get(name);
+      if (env.has(name)) {
+        const value = env.get(name);
+        if (value.kind === "uninitialized") fail("Unsupported read before lexical initialization or from a stale closure snapshot");
+        return value;
+      }
       if (name === "undefined") return nil;
       const lexical = [...frames.values()].filter((f) => {
         const outer = index.functions.get(f.function);
@@ -346,7 +358,11 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         derivation.push({ function: entry.id, result: result.kind }); return result;
       } finally { stack.delete(node); }
     };
-    const statements = (list, env, entry) => {
+    const statements = (list, env, entry, joinedBranch = false) => {
+      // A late local declaration must mask same-named outer/native bindings.
+      // Snapshots containing this marker reject on read; no live lexical-cell
+      // or temporal-dead-zone interpreter is inferred from a captured value.
+      reserveDeclarations(list, env, joinedBranch);
       const returns = [];
       for (const s of list) {
         if (ts.isEmptyStatement(s)) continue;
@@ -357,8 +373,8 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         else if (ts.isIfStatement(s)) {
           const condition = expression(s.expression, env, entry);
           const yes = new Map(env), no = new Map(env);
-          const a = statements(ts.isBlock(s.thenStatement) ? s.thenStatement.statements : [s.thenStatement], yes, entry);
-          const b = s.elseStatement ? statements(ts.isBlock(s.elseStatement) ? s.elseStatement.statements : [s.elseStatement], no, entry) : {};
+          const a = statements(ts.isBlock(s.thenStatement) ? s.thenStatement.statements : [s.thenStatement], yes, entry, true);
+          const b = s.elseStatement ? statements(ts.isBlock(s.elseStatement) ? s.elseStatement.statements : [s.elseStatement], no, entry, true) : {};
           // Check both paths, then join conservatively. A fresh array on one
           // branch cannot make a borrowed array on the other branch sortable.
           const known = truth(condition), selected = known === true ? yes : known === false ? no : null;
@@ -423,6 +439,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
       if (ts.isBinaryExpression(node)) {
         if (ts.isAssignmentOperator(node.operatorToken.kind)) {
           if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ts.isIdentifier(node.left) || !env.has(node.left.text)) fail("Write to borrowed/nonlocal state");
+          if (env.get(node.left.text).kind === "uninitialized") fail("Unsupported assignment before lexical initialization");
           const value = expression(node.right, env, entry); env.set(node.left.text, value); return value;
         }
         if (node.operatorToken.kind === ts.SyntaxKind.CommaToken) { expression(node.left, env, entry); return expression(node.right, env, entry); }

@@ -387,8 +387,14 @@ test("native callback defaults and copied lexical scopes cannot hide retained re
     ["component live closure alias", 'let retained=null;const save=()=>cache.set("retained",retained);retained=items;save();', true],
     ["closure writes captured alias", 'const result=items.map((value,index,array)=>{let retained=null;const save=()=>{retained=array;return value.id;};save();cache.set("retained",retained);return value.id;});', true],
     ["undefined destructuring default", 'const result=items.map((value,index,array)=>{const save=({retained=array})=>{cache.set("retained",retained);return value.id;};return save({retained:undefined});});', true],
+    ["late let shadow", 'const retained=null;const result=items.map((value,index,array)=>{const save=()=>{cache.set("retained",retained);return value.id;};let retained=array;return save();});', true],
+    ["late const shadow", 'const retained=null;const result=items.map((value,index,array)=>{const save=()=>{cache.set("retained",retained);return value.id;};const retained=array;return save();});', true],
+    ["late destructuring shadow", 'const retained=null;const result=items.map((value,index,array)=>{const save=()=>{cache.set("retained",retained);return value.id;};const {alias:retained}={alias:array};return save();});', true],
+    ["joined branch shadow", 'const result=items.map((value,index,array)=>{let retained=array;if(true){const retained=null;}cache.set("retained",retained);return value.id;});', true],
     ["own field", 'const value=r.id;', false],
     ["immutable closure", 'const result=items.map(value=>{const id=value.id;const read=()=>id;return read();});', false],
+    ["provided own scalar default", 'const result=items.map(value=>{const read=({retained=cache.set("retained",items)})=>retained;return read({retained:value.id});});', false],
+    ["standalone local shadow", 'const result=items.map((value,index,array)=>{let retained=array;{const retained=null;cache.set("retained",retained);}return value.id;});', false],
   ];
   let scripts, browser; const posts = [];
   const server = createServer((req, res) => {

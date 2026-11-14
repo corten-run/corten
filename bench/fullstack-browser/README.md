@@ -180,8 +180,12 @@ disable a native default. Destructuring defaults require a definitely supplied n
 The bounded environment model does not implement mutable lexical cells: captured local names
 that are assigned, writes to outer bindings, and assignments inside copied conditional-expression
 or standalone-block scopes reject rather than reusing a stale snapshot. Immutable scalar closures
-remain supported. Native controls retain and mutate the actual record before calling the captured
-handler, independently of whether static discovery succeeds.
+remain supported. Each modeled scope reserves its declaration names before evaluation; a closure
+snapshot cannot fall through a later local `let`, `const` or destructuring initialization to a
+same-named outer value. Reading that uninitialized snapshot rejects rather than inferring a live
+lexical cell. Shadow declarations in joined conditional branches also reject; standalone block-local
+shadows remain supported. Native controls retain and mutate the actual record before calling the
+captured handler, independently of whether static discovery succeeds.
 The portable JSX-adapter helper control uses the committed pre-hook page snapshot in
 `test-fixtures/marketplace-page.snapshot.tsx`, not a transformed current production page.
 It still imports the repository's actual helper source and checks renamed/effectful substitutions.
