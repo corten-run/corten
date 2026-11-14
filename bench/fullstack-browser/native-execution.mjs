@@ -103,6 +103,9 @@ function config(snapshot, role) {
   return l.NanoCpus === 1000000000 && l.Memory === (role === "upstream" ? 256 : 1024) * 1024 ** 2
     && l.CpusetCpus === "" && l.CpuQuota === 0 && l.CpuPeriod === 0;
 }
+const neverStarted = (stamp) => stamp === "" || typeof stamp === "string" && /^0001-01-01T00:00:00(?:\.0+)?Z$/.test(stamp);
+const executionHistory = (snapshot) => snapshot.state.Running || snapshot.state.Pid > 0 || snapshot.restartCount > 0
+  || !neverStarted(snapshot.state.StartedAt) || !neverStarted(snapshot.state.FinishedAt) || snapshot.state.Status !== "created";
 export function replayExecution(reader, receipt) {
   const value = reader.json(receipt); exact(value, ["schema", "task", "commit", "startedAt", "endedAt", "events"]);
   assert.equal(value.schema, "native-browser-execution/v2"); assert.match(value.task, /^browser-[a-f0-9-]+$/); assert.match(value.commit, /^[a-f0-9]{40}$/);
@@ -110,13 +113,33 @@ export function replayExecution(reader, receipt) {
   assert.ok(Array.isArray(value.events) && value.events.length <= 10000);
   const resources = new Map(), participants = new Map(), blocked = [], processWindows = [], inventories = new Map(), commands = [];
   const block = (why) => { if (!blocked.includes(why)) blocked.push(why); };
+  let unidentifiedCreation = false;
+  const resource = (kind, id, at) => {
+    const key = `${kind}/${id}`;
+    if (!resources.has(key)) resources.set(key, { kind, id, owned: true, createdAt: at, removedAt: null, absentAt: null, creationObserved: false });
+    const r = resources.get(key); assert.equal(r.owned, true); r.createdAt = Math.min(r.createdAt, at); return r;
+  };
+  const participant = (e, id) => {
+    if (!participants.has(id)) participants.set(id, { id, role: e.role, app: e.app, case: e.case,
+      imageId: null, createdAt: e.at, snapshots: [], createdObserved: false, artifactExecuted: false });
+    const p = participants.get(id); assert.deepEqual([p.role, p.app, p.case], [e.role, e.app, e.case]);
+    p.createdAt = Math.min(p.createdAt, e.at); return p;
+  };
   let at = value.startedAt;
   value.events.forEach((e, seq) => {
     eventShape(e); assert.equal(e.seq, seq); assert.ok(e.at >= at && e.at <= value.endedAt); at = e.at;
     if (e.event === "command") {
+      if (["create", "build"].includes(e.operation)) {
+        if (e.id === null && e.code === 0) { unidentifiedCreation = true; block("successful-creation-original-id-missing"); }
+        if (e.id !== null) {
+          resource(e.operation === "create" ? "container" : "image", e.id, e.at);
+          if (e.operation === "create") participant(e, e.id);
+        }
+      }
       if (["start", "copy"].includes(e.operation)) {
         const p = participants.get(e.id); assert.ok(p && !p.terminal);
         assert.deepEqual([p.role, p.app, p.case], [e.role, e.app, e.case]);
+        if (e.operation === "start" && p.role === "artifact") { p.artifactExecuted = true; block("artifact-executed"); }
       }
       commands.push(e); return;
     }
@@ -125,15 +148,16 @@ export function replayExecution(reader, receipt) {
       processWindows.push({ kind: "browser", app: e.app, case: e.case, startedAt: e.startedAt, endedAt: e.endedAt }); return;
     }
     if (e.event === "participant") {
-      const s = e.snapshot, key = `container/${s.id}`;
+      const s = e.snapshot;
       assert.deepEqual(s.owner, { agent: "codex", task: value.task }); assert.equal(s.image.id, s.imageId);
       if (e.phase === "created") {
-        assert.ok(!participants.has(s.id));
-        participants.set(s.id, { id: s.id, role: e.role, app: e.app, case: e.case, imageId: s.imageId, createdAt: e.at, snapshots: [] });
-        assert.ok(!resources.has(key)); resources.set(key, { kind: "container", id: s.id, owned: true, createdAt: e.at, removedAt: null, absentAt: null });
+        const p = participant(e, s.id); assert.equal(p.createdObserved, false); p.createdObserved = true;
+        resource("container", s.id, e.at).creationObserved = true;
       }
       const p = participants.get(s.id); assert.ok(p && !p.terminal);
+      if (p.imageId === null) p.imageId = s.imageId;
       assert.deepEqual([p.role, p.app, p.case, p.imageId], [e.role, e.app, e.case, s.imageId]);
+      if (p.role === "artifact" && executionHistory(s)) { p.artifactExecuted = true; block("artifact-executed"); }
       if (!config(s, p.role)) block("participant-configuration-mismatch");
       if (e.phase === "running") {
         assert.ok(p.role !== "artifact" && !p.runningAt); p.runningAt = e.at;
@@ -154,8 +178,11 @@ export function replayExecution(reader, receipt) {
       return;
     }
     if (e.event === "created") {
-      assert.ok(e.kind !== "container" && e.kind !== "volume"); const key = `${e.kind}/${e.id}`; assert.ok(!resources.has(key));
-      resources.set(key, { kind: e.kind, id: e.id, owned: e.owned, createdAt: e.at, removedAt: null, absentAt: null }); return;
+      assert.ok(e.kind !== "container" && e.kind !== "volume"); const key = `${e.kind}/${e.id}`, prior = resources.get(key);
+      assert.ok(!prior?.creationObserved);
+      if (prior) { assert.equal(prior.owned, e.owned); prior.creationObserved = true; }
+      else resources.set(key, { kind: e.kind, id: e.id, owned: e.owned, createdAt: e.at, removedAt: null, absentAt: null, creationObserved: true });
+      return;
     }
     if (e.event === "remove") {
       const r = resources.get(`${e.kind}/${e.id}`); assert.ok(r && r.owned && !r.removedAt);
@@ -172,17 +199,20 @@ export function replayExecution(reader, receipt) {
     inventories.set(`${e.kind}/${e.scope}`, e);
     if (e.code !== 0) { block("docker-inventory-command-failed"); return; }
     if (e.scope === "all") for (const r of resources.values()) {
-      if (r.kind === e.kind && r.owned && r.removedAt !== null && !e.ids.includes(r.id)) r.absentAt = e.at;
+      if (r.kind === e.kind && r.owned && r.removedAt !== null) r.absentAt = e.ids.includes(r.id) ? null : e.at;
     }
   });
   const terminalBlocked = [];
+  if (unidentifiedCreation) terminalBlocked.push("successful-creation-original-id-missing");
   for (const r of resources.values()) if (r.owned && (r.removedAt === null || r.absentAt === null)) terminalBlocked.push("original-id-removal-or-absence-missing");
+  for (const r of resources.values()) if (r.kind === "image" && !r.creationObserved) block("image-created-observation-missing");
   const lastRemoval = Math.max(value.startedAt, ...[...resources.values()].map((r) => r.removedAt ?? value.startedAt));
   for (const kind of kinds) {
     const inv = inventories.get(`${kind}/owned`);
     if (!inv || inv.code !== 0 || inv.ids.length || inv.at < lastRemoval) terminalBlocked.push("final-owned-inventory-incomplete");
   }
   for (const p of participants.values()) if (!p.terminal) terminalBlocked.push("participant-pre-removal-observation-missing");
+  for (const p of participants.values()) if (!p.createdObserved) block("participant-created-observation-missing");
   for (const p of participants.values()) if (p.role !== "artifact") {
     const starts = commands.filter((e) => e.operation === "start" && e.id === p.id);
     if (starts.length !== 1) block("participant-start-acknowledgement-missing-or-duplicate");
@@ -192,7 +222,7 @@ export function replayExecution(reader, receipt) {
   return { executionWindow: { startedAt: value.startedAt, endedAt: value.endedAt }, processWindows,
     participants: [...participants.values()].map((p) => ({ id: p.id, role: p.role, app: p.app, case: p.case, imageId: p.imageId,
       // Cover the pre-start boundary too, not just the first post-start poll.
-      window: p.role === "artifact" || commands.some((e) => e.operation === "start" && e.id === p.id && e.code !== 0)
+      window: p.role === "artifact" && p.createdObserved && p.terminal && !p.artifactExecuted || p.role !== "artifact" && commands.some((e) => e.operation === "start" && e.id === p.id && e.code !== 0)
         && p.terminal?.state.Running === false && p.terminal.state.Pid === 0 && !p.runningAt
         ? null : { startedAt: p.createdAt, endedAt: p.terminalAt ?? value.endedAt }, terminal: p.terminal ?? null })),
     commands, cleanupComplete: terminalBlocked.length === 0, blocked, subjectSha256: sha256(encoded(value)) };

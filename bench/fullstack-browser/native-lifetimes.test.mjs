@@ -69,3 +69,32 @@ test("ordinary loadingFailed is a terminal observation, not an invented passing 
   const peers = replayPeerApplicability(j, replayWorkerAbsence(j)); assert.equal(peers.status, "verified");
   assert.equal("outcome" in peers, false);
 });
+
+function redirectFixture() {
+  const j = journalFixture(), first = { ...j.events[6], path: "/start", urlSha256: "a".repeat(64), redirectStatus: null, redirectResponse: null };
+  const final = { ...first, receivedAt: 30, at: 1.02, path: "/final", urlSha256: "b".repeat(64), redirectStatus: 302, redirectHasExtraInfo: true,
+    redirectResponse: { scheme: "http:", path: "/start", urlSha256: first.urlSha256, status: 302, timing: { requestTime: 1.011 } } };
+  j.events.splice(6, 3, first,
+    { event: "Network.requestWillBeSentExtraInfo", request: "r1", receivedAt: 22, at: 1.011 }, final,
+    { event: "Network.requestWillBeSentExtraInfo", request: "r1", receivedAt: 32, at: 1.021 },
+    { ...j.events[7], receivedAt: 40, at: 1.03 },
+    { event: "Page.frameNavigated", receivedAt: 41, frame: "page", loader: "l1", scheme: "http:", path: "/final" },
+    { ...j.events[8], receivedAt: 50, at: 1.04 });
+  j.documents = [{ frame: "page", loader: "l1", path: "/final", observedAt: 60,
+    identityObservation: { documentSha256: final.urlSha256 }, assets: [], preloads: [] }];
+  return j;
+}
+test("retained redirect, ExtraInfo and document observations prevent deleted Network success", async (t) => {
+  const original = redirectFixture();
+  assert.equal(replayPeerApplicability(original, replayWorkerAbsence(original)).status, "verified");
+  for (const [name, mutate] of [
+    ["predecessor", (j) => { j.events.splice(j.events.findIndex((e) => e.event === "Network.requestWillBeSent"), 1); }],
+    ["main-stream", (j) => { j.events = j.events.filter((e) => !["Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished"].includes(e.event)); }],
+    ["whole-stream", (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.")); }],
+    ["parser-only", (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.") && e.event !== "Page.frameNavigated"); }],
+    ["orphan-extra", (j) => { j.events = j.events.filter((e) => !e.event.startsWith("Network.") || e.event === "Network.requestWillBeSentExtraInfo"); j.events = j.events.filter((e) => e.event !== "Page.frameNavigated"); j.documents = []; }],
+  ]) await t.test(name, () => {
+    const j = structuredClone(original); mutate(j);
+    assert.equal(replayPeerApplicability(j, replayWorkerAbsence(j)).status, "blocked");
+  });
+});

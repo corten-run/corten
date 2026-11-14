@@ -76,3 +76,60 @@ test("read-only native inventory helper fixes commands and retains no Docker err
   const failure = await collectDockerInventory(async () => ({ code: 1, stdout: "private-canary" }), "container", task, "owned");
   assert.deepEqual(failure.ids, []); assert.doesNotMatch(JSON.stringify(failure), /private-canary/);
 });
+test("short-lived or restarted artifact execution cannot be erased into a stopped null window", (t) => {
+  for (const history of ["start-ack", "timestamps", "restart"]) {
+    const { info, image } = participantFixture(), base = { event: "participant", role: "artifact", app: "corten", case: null };
+    const events = [{ ...base, phase: "created", at: 110, snapshot: participantSnapshot(info, image) }];
+    if (history === "start-ack") events.push({ event: "command", operation: "start", role: "artifact", app: "corten", case: null, id: cid, code: 0, at: 120 });
+    info.State = { ...info.State, Status: "exited", StartedAt: "2026-11-13T01:00:00Z", FinishedAt: "2026-11-13T01:00:01Z" };
+    if (history === "restart") info.RestartCount = 1;
+    events.push({ ...base, phase: "terminal", at: 200, snapshot: participantSnapshot(info, image) },
+      ...fixture().filter((e) => ["remove", "inventory"].includes(e.event)));
+    const result = replay(t, events);
+    assert.ok(result.blocked.includes("artifact-executed"), history);
+    assert.notEqual(result.participants[0].window, null, history);
+    assert.equal(result.cleanupComplete, true);
+  }
+});
+test("successful create/build original IDs retain missing-observation and cleanup obligations", async (t) => {
+  for (const operation of ["create", "build"]) await t.test(operation, (t) => {
+    const result = replay(t, [
+      { event: "command", operation, role: "artifact", app: "corten", case: null, id: operation === "create" ? cid : imageId, code: 0, at: 110 },
+      ...fixture().filter((e) => e.scope === "owned"),
+    ]);
+    assert.equal(result.cleanupComplete, false);
+    assert.ok(result.blocked.length > 0);
+    if (operation === "create") { assert.equal(result.participants[0].id, cid); assert.notEqual(result.participants[0].window, null); }
+  });
+});
+test("later ALL presence revokes original anonymous-volume absence despite empty owned inventories", (t) => {
+  const events = fixture(), volume = "f".repeat(64);
+  for (const e of events.filter((v) => v.event === "participant")) e.snapshot.mounts.push({ type: "volume", destination: "/data", readOnly: false, volume, sourceSha256: "0".repeat(64) });
+  events.push({ event: "inventory", at: 240, kind: "volume", scope: "all", code: 0, ids: [] });
+  assert.equal(replay(t, events).cleanupComplete, true);
+  events.push({ event: "inventory", at: 250, kind: "volume", scope: "all", code: 0, ids: [volume] });
+  assert.equal(replay(t, events).cleanupComplete, false);
+});
+test("never-started artifact and matched create/build acknowledgements remain valid", (t) => {
+  const { info, image } = participantFixture(), base = { event: "participant", role: "artifact", app: "corten", case: null },
+    create = { event: "command", operation: "create", role: "artifact", app: "corten", case: null, id: cid, code: 0, at: 110 };
+  for (const commandFirst of [true, false]) {
+    const snapshot = { ...base, phase: "created", at: 110, snapshot: participantSnapshot(info, image) };
+    const events = [...(commandFirst ? [create, snapshot] : [snapshot, create]),
+      { ...base, phase: "terminal", at: 200, snapshot: participantSnapshot(info, image) }, ...fixture().filter((e) => ["remove", "inventory"].includes(e.event))];
+    const result = replay(t, events); assert.deepEqual(result.blocked, []); assert.equal(result.cleanupComplete, true); assert.equal(result.participants[0].window, null);
+  }
+  const result = replay(t, [
+    { event: "command", operation: "build", role: "artifact", app: "corten", case: null, id: imageId, code: 0, at: 110 },
+    { event: "created", kind: "image", id: imageId, owned: true, at: 120 },
+    { event: "remove", kind: "image", id: imageId, code: 0, at: 210 },
+    { event: "inventory", kind: "image", scope: "all", ids: [], code: 0, at: 220 }, ...fixture().filter((e) => e.scope === "owned"),
+  ]); assert.deepEqual(result.blocked, []); assert.equal(result.cleanupComplete, true);
+});
+test("unknown successful creation and known IDs on failed commands do not lose cleanup obligations", (t) => {
+  for (const [code, id] of [[0, null], [1, cid]]) {
+    const result = replay(t, [{ event: "command", operation: "create", role: "artifact", app: "corten", case: null, id, code, at: 110 },
+      ...fixture().filter((e) => e.scope === "owned")]);
+    assert.equal(result.cleanupComplete, false); assert.ok(result.blocked.length > 0);
+  }
+});

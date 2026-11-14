@@ -161,6 +161,11 @@ start acknowledgement, running readback, and pre-removal terminal readback.
 Every application/upstream has exactly one start acknowledgement, including failed
 start. Create/build failure may have id:null; start/copy bind an original created ID.
 Commands retain exact observed code, never command text or error diagnostics.
+Every known create/build command original ID remains in the resource population
+even if its inspect receipt is lost (including a known ID returned on command
+failure). Successful create/build without an original ID is incomplete. Successful
+commands must reconcile with created participant/image observations; empty owned
+inventories cannot substitute for those missing receipts or original-ID cleanup.
 Record every volume revealed by mounts; remove containers with anonymous volumes.
 Container remove event means the fixed actual `docker rm -f -v` acknowledgement,
 not arbitrary remove arguments. That acknowledgement covers associated anonymous
@@ -174,6 +179,9 @@ can be spread into an inventory event with actual collection time. Positive `all
 inventory after successful removal must omit the original ID; arbitrary failed
 inspect is not proof of absence. After all removals, all four `owned` inventories
 must succeed and be empty. Failed commands remain observations, never empty success.
+Original-ID absence derives from the latest successful ALL inventory for that
+resource kind after removal. Later positive presence revokes prior absence even
+if the final label-filtered owned inventory is empty.
 `.finish({endedAt})` records the ledger and returns its ref.
 
 `replayExecution(reader,ref)` returns
@@ -185,6 +193,12 @@ Observed target leaks/failures do not become strict qualification merely because
 the apparatus was eventually removed. Runtime config/source identity blockers stay
 separate from terminal cleanup. Unknown/malformed/contradictory records throw.
 Missing observations return blocked, not a completed failed attempt.
+Blocked results retain acknowledged-but-unobserved containers as participants,
+with imageId/terminal null where missing; those results cannot form a verified
+hostSubject. A stopped artifact has no start attempt, restarts or execution
+timestamps/state. Any artifact start acknowledgement or execution history blocks
+the stopped-artifact contract and preserves a conservative non-null window, even
+when the process exited before terminal inspect. Event fields/exports are unchanged.
 
 ## Workers and peer applicability
 
@@ -215,6 +229,11 @@ is NOT waived by CDP close, target destruction, context teardown or cleanup.
 This minimal leaf accepts no nonempty peer proof: observed peers remain blocked
 until matched actual endpoint receipts collected pre-teardown have a reviewed
 contract/collector. Existing full native redirect replay rules are retained.
+An orphan redirect continuation blocks, as do retained ExtraInfo observations
+without all matching dispatch hops. Retained HTTP frame commits and parsed
+document identities must reconcile with completed document Network receipts;
+deleting the entire main Network stream cannot turn those observations into an
+empty-set success. This reconciles existing observations, not new coverage flags.
 Neither leaf proves retired DOM/event probes or relaxes strict browser capture.
 
 ## Core composition
@@ -232,7 +251,8 @@ Owner forms hostSubject only from replayed leaves, never saved claims:
 Browser windows must be actual journal bounds converted with actual timeOrigin;
 participant window conservatively spans created through pre-removal terminal
 receipt, not only first running poll. Stopped artifacts and observed failed-start
-without running observation have null window. Original full IDs are mandatory.
+without running observation have null window; an artifact with a start attempt or
+execution history never gets a stopped-artifact null window. Original full IDs are mandatory.
 Core independently observes/binds actual host Node/Chromium and all running Docker
 participant process identities/cgroups, controls and terminal state. One scope
 cannot discharge another. Core owns OS helper/host-lifetime/native-replay/composition;
