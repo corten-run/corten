@@ -30,7 +30,7 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
-id=$(docker run -d --pull=never --label agent.owner=codex --label "agent.task=$task" \
+id=$(docker run -d --pull=never --network none --label agent.owner=codex --label "agent.task=$task" \
   --cpus 1 --memory 1g "$image" node -e 'setInterval(()=>{},1000)')
 [[ "$id" =~ ^[a-f0-9]{64}$ ]]
 
