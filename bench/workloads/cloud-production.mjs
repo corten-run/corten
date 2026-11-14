@@ -90,9 +90,13 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
-  // Read remote Git only after explicit approval. Never trust a stale local merge ref.
-  await run("git", ["fetch", "--no-tags", sourceUrl, "+refs/heads/main:refs/remotes/origin/main"], 120000);
-  await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, "origin/main"]);
+  // Each parallel controller observes main independently, but must not race a
+  // shared reference or FETCH_HEAD. Fetch only that exact advertised object.
+  const advertisement = (await run("git", ["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"], 120000)).stdout;
+  full(advertisement, /[a-f0-9]{40}\trefs\/heads\/main\n/, "remote main advertisement unavailable or ambiguous");
+  const remoteHead = advertisement.slice(0, 40);
+  await run("git", ["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead], 120000);
+  await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
   const repeated = await productionPlan(options, { repo, run });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);

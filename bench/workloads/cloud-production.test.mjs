@@ -9,6 +9,7 @@ import { controllerPaths, nativePaths, parseProductionArgs, productionMain } fro
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
+import { sourceUrl } from "./cloud-remote.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -307,4 +308,26 @@ test("changing the fleet between preview and merged-source gate refuses allocati
   flags.afterFetch = () => writeFileSync(g.path, `${JSON.stringify(g.fleet)}\n`);
   await assert.rejects(productionMain(args, g.p.deps));
   assert.equal(g.p.h.creates, 0); assert.ok(g.p.calls.every(([binary]) => binary === "git"));
+});
+
+test("fresh remote proof fetches only advertised objects without a shared reference or FETCH_HEAD write", async (t) => {
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead });
+  assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
+  const git = p.calls.filter(([binary]) => binary === "git").map(([, argv]) => argv);
+  assert.deepEqual(git.filter((argv) => argv[0] === "ls-remote"),
+    [["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"]]);
+  assert.deepEqual(git.filter((argv) => argv[0] === "fetch"),
+    [["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead]]);
+  assert.ok(git.some((argv) => JSON.stringify(argv) === JSON.stringify(["merge-base", "--is-ancestor", commit, remoteHead])));
+  assert.ok(!git.some((argv) => argv.some((arg) => arg.includes(":refs/") || arg === "FETCH_HEAD")));
+});
+
+test("missing, malformed or ambiguous remote main advertisements refuse before cloud access", async (t) => {
+  for (const remoteLine of ["", `${commit}\trefs/heads/other\n`, `${commit}\trefs/heads/main\n${commit}\trefs/heads/main\n`,
+    `${commit.slice(1)}\trefs/heads/main\n`, `${commit}\trefs/heads/main\nPRIVATE`]) {
+    const p = productionHarness(t, { remoteLine });
+    await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /remote main advertisement/);
+    assert.equal(p.h.creates, 0); assert.ok(p.calls.every(([binary]) => binary === "git"));
+    assert.ok(!p.calls.some(([binary, argv]) => binary === "git" && argv[0] === "fetch"));
+  }
 });
