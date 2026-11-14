@@ -20,7 +20,8 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - Run grouped benchmark evidence, isolated adapters and browser proof controls in
-  dedicated serial CI suites. These replay checks do not stand in for native
+  dedicated serial CI suites, plus required real Linux process and Docker-participant
+  controls in disposable delegated units. These checks do not stand in for native
   framework qualification or an official benchmark run.
 
 - Preserve native passed-but-comparison-ineligible outcomes during grouped collection,

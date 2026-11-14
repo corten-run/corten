@@ -63,15 +63,18 @@ Grouped benchmark replay and observer controls also run in the separate
 `npm run check:groups:evidence:contracts` and `npm run check:groups:evidence:browser`.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
 the full repository history and the integrity-checked npm cache used by `npm ci`.
-The workflow uses the existing Git-capable Playwright image and serial test files;
-it does not mount a Docker socket or qualify native framework images. The actual
-Docker/native controls and official campaign remain separate checks, not skipped
-qualifications disguised as passing evidence tests.
+The portable jobs use the existing Git-capable Playwright image and serial test files;
+they do not mount a Docker socket or qualify native framework images. A separate
+required native Linux job runs disposable kernel fixtures on the runner host, not
+an official campaign or framework performance test.
 
-The portable core selection excludes `bench/workloads/isolated/host-lifetime-linux.test.mjs`:
-its real kernel controls require an explicitly owned delegated systemd test unit,
-and must run there separately before host-lifetime changes are qualified. A static
-coverage check rejects any other omitted core test file. Browser CI runs every
+The portable core selection excludes only `host-lifetime-linux.test.mjs` and
+`host-participant-linux.test.mjs` under `bench/workloads/isolated/`. The native job
+uses `scripts/benchmark-kernel-ci.sh` with fresh delegated systemd test units and
+one owned, digest-pinned Docker fixture. It exercises real process accounting and
+cancellation, matched Docker PID/cgroup observations and a private-PID-namespace
+negative. Any skipped or cancelled native control fails the job. A static coverage
+check rejects any other omitted core test file. Browser CI runs every
 portable saved-verifier test, excluding only the optional historical `retained real w28`
 capture test. Native production-image and Docker collector controls are also separate;
 their absence cannot establish framework or host qualification.

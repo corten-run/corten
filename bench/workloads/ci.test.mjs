@@ -50,11 +50,29 @@ test("evidence suites cover isolated adapters, record failures and portable brow
 
 test("portable core selection excludes delegated-kernel controls but cannot omit another test file", () => {
   const command = packageJSON.scripts["check:groups:evidence:core"];
+  const native = ["host-lifetime-linux.test.mjs", "host-participant-linux.test.mjs"];
   assert.ok(!command.includes("bench/workloads/isolated/*.test.mjs"));
-  assert.ok(!command.includes("host-lifetime-linux.test.mjs"));
+  for (const file of native) assert.ok(!command.includes(file));
   const files = readdirSync(new URL("bench/workloads/isolated/", root))
-    .filter((name) => name.endsWith(".test.mjs") && name !== "host-lifetime-linux.test.mjs");
+    .filter((name) => name.endsWith(".test.mjs") && !native.includes(name));
   for (const file of files) assert.ok(command.includes(`bench/workloads/isolated/${file}`), `portable test missing from CI: ${file}`);
+});
+
+test("real Linux controls have a required host job and cannot pass through fixture skips", () => {
+  const job = workflow.jobs.kernel;
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  assert.equal(job.if, undefined);
+  assert.equal(job["continue-on-error"], undefined);
+  const step = job.steps.find((s) => s.run?.includes("scripts/benchmark-kernel-ci.sh"));
+  assert.equal(step.if, undefined);
+  assert.equal(step["continue-on-error"], undefined);
+  assert.equal(step.run, 'sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"');
+  const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  for (const required of ["supervisorBootstrap", "for suite in lifetime participant", "Delegate=cpu cpuset memory pids",
+    "DelegateSubgroup=supervisor", "BROWSER_PARTICIPANT_NAMESPACE=matched", "BROWSER_PARTICIPANT_NAMESPACE=mismatched",
+    "unshare --fork --pid --mount-proc", "# skipped 0", "# cancelled 0", "# fail 0", "--test-reporter=tap"])
+    assert.ok(driver.includes(required), `native CI obligation missing: ${required}`);
+  assert.ok(!driver.includes("continue-on-error") && !driver.includes("--privileged"));
 });
 
 test("actual Node CLI executes portable verifier sentinels and excludes historical capture", () => {
