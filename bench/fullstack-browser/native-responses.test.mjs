@@ -400,6 +400,7 @@ test("native boundary retains complete typed population and UA roots but rejects
     (o) => { const c = o.boundaryObservation.commands.find((c) => c.nodes?.some((n) => n.templateContent)); c.nodes.find((n) => n.templateContent).templateContent = 999999; },
     (o) => { o.snapshotSha256 = "220e441a44d3fdd628383d1cd891b347e2f2d56d3c393652fcb2e1a86d735696"; },
     (o) => { o.snapshotSha256 = "083e43c875d6ffd071c6a532743604384afc61663d651b5e6c8d2847c87bcb55"; },
+    (o) => { o.snapshotSha256 = "5bfe4e773143a96ca228eaaecbe722b891a5ccb4cb815289cd8ecbd7c829ede5"; },
   ]) { const changed = structuredClone(observation); mutate(changed); assert.throws(() => replayBrowserDOM(changed, expected)); }
   const changed = structuredClone(observation), native = changed.boundaryObservation.commands.flatMap((c) => c.nodes ?? []).find((n) => n.nodeType === 3);
   native.backendNodeId += 1000000;
@@ -541,6 +542,82 @@ test("native observer recovery refuses foreign ownership changed documents and u
         }, [owner]), true);
       }
     } finally { context.newCDPSession = original; await diagnostic.detach(); }
+  });
+});
+
+test("native observer teardown owns late acquisitions and detaches after read deadline exhaustion", async (t) => {
+  const f = await browserDOMFixture(t), delay = (ms) => new Promise((done) => setTimeout(done, ms));
+  const bounded = async (promise, ms) => {
+    let timer;
+    try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error("fixture settlement timeout")), ms); })]); }
+    finally { clearTimeout(timer); }
+  };
+  for (const variant of ["late-acquisition", "native-stall", "late-teardown", "late-initial", "after-teardown-deadline"]) await t.test(variant, async () => {
+    const { identity } = await f.read(), context = f.page.context(), original = context.newCDPSession;
+    const diagnostic = await original.call(context, f.page), sessions = [], deliveries = [];
+    let acted = false, owner, blocked, semanticReads = 0, delivered;
+    const recoveryDelivered = new Promise((done) => { delivered = done; });
+    context.newCDPSession = async function (page) {
+      const index = sessions.length;
+      if (index === 0 && variant === "late-initial" || index === 1 && ["late-acquisition", "after-teardown-deadline"].includes(variant)) {
+        await delay(variant === "after-teardown-deadline" ? 30250 : 15250);
+      }
+      const session = await original.call(this, page), send = session.send.bind(session), detach = session.detach.bind(session);
+      let detached; const detachedPromise = new Promise((done) => { detached = done; });
+      const receipt = { session, detachCalls: 0, detachedPromise }; sessions.push(receipt);
+      if (index === 1) delivered(receipt);
+      session.detach = async () => { receipt.detachCalls++; try { return await detach(); } finally { detached(); } };
+      session.send = async (method, params) => {
+        if (params?.functionDeclaration?.startsWith("function startNativeMutations(")) owner = params.arguments[0].value;
+        if (params?.arguments?.[0]?.value?.context) semanticReads++;
+        if (!acted && !["late-teardown", "late-initial"].includes(variant) && method === "DOM.resolveNode") {
+          acted = true; await session.detach();
+          if (variant === "native-stall") blocked = diagnostic.send("Runtime.evaluate", {
+            expression: "(()=>{const end=Date.now()+15400;while(Date.now()<end){}return true})()", returnByValue: true });
+        }
+        const result = await send(method, params);
+        if (!acted && variant === "late-teardown" && method === "DOM.disable") { acted = true; const delivery = delay(15250); deliveries.push(delivery); await delivery; }
+        return result;
+      };
+      return session;
+    };
+    try {
+      await assert.rejects(() => collectBrowserDOM(f.page, identity));
+      if (blocked) assert.equal((await blocked).result.value, true);
+      await Promise.all(deliveries);
+      if (variant === "after-teardown-deadline") {
+        // The actual acquisition may arrive after the collector's bounded teardown wait.
+        const recovery = await bounded(recoveryDelivered, 20000);
+        await bounded(recovery.detachedPromise, 2000);
+      }
+      context.newCDPSession = original;
+      assert.equal(sessions.length, ["late-teardown", "late-initial"].includes(variant) ? 1 : 2);
+      assert.equal(semanticReads, variant === "late-teardown" ? 1 : 0);
+      for (const { session, detachCalls } of sessions) { assert.ok(detachCalls > 0); await assert.rejects(() => session.send("Page.getFrameTree")); }
+      const { frameTree } = await diagnostic.send("Page.getFrameTree");
+      const { executionContextId } = await diagnostic.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "corten-native-dom-boundary" });
+      const state = await diagnostic.send("Runtime.callFunctionOn", { executionContextId,
+        functionDeclaration: "function(){return !!globalThis.__cortenNativeDOMBoundary}", returnByValue: true });
+      assert.ok(!state.exceptionDetails); assert.equal(state.result.value, false);
+      const next = await collectBrowserDOM(f.page, identity); assert.equal(next.failure, null);
+      comparePage(sealedBrowserDOM(t, next).page, records().item_2, "en-US");
+    } finally {
+      context.newCDPSession = original;
+      if (blocked) await blocked;
+      await Promise.all(deliveries);
+      // Red controls leave only this fixture's exact observer; never remove a foreign one.
+      if (owner) {
+        const { frameTree } = await diagnostic.send("Page.getFrameTree");
+        const { executionContextId } = await diagnostic.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "corten-native-dom-boundary" });
+        const cleared = await diagnostic.send("Runtime.callFunctionOn", { executionContextId, functionDeclaration: function (owner) {
+          const state = globalThis.__cortenNativeDOMBoundary;
+          if (state) { if (state.observer !== owner || state.document !== document) throw Error("wrong fixture owner"); state.watch.disconnect(); delete globalThis.__cortenNativeDOMBoundary; }
+        }.toString(), arguments: [{ value: owner }], returnByValue: true });
+        assert.ok(!cleared.exceptionDetails);
+      }
+      for (const { session } of sessions) await session.detach().catch(() => {});
+      await diagnostic.detach();
+    }
   });
 });
 

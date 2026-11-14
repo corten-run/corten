@@ -244,14 +244,21 @@ function clearNativeMutations(observer) {
 async function readNativeBoundary(page, identity, collect, observer, startedAt) {
   const failed = () => ({ roots: { document: 0, location: 1, global: 2 }, events: [], result: unknown(),
     failure: "native-dom-snapshot-failed", scopeObservation: null, urlObservation: null, boundaryObservation: null });
-  let session, candidate = failed(), changed = false, pending = null, bytes = 0, frameId, world, ownedDocument, watching = false;
+  let session, opening, closing = false, teardownUntil, candidate = failed(), changed = false, pending = null, bytes = 0, frameId, world, ownedDocument, watching = false;
   const commands = [], nodes = new Map(), ids = new Set(), backends = new Set();
-  const budget = async (operation) => {
-    const remaining = 15000 - (Date.now() - startedAt); assert.ok(remaining > 0);
+  const limit = 15000, readUntil = startedAt + limit, detachments = new WeakMap();
+  const within = async (operation, until) => {
     let timer;
-    try { return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(Error("native-dom-snapshot-failed")), remaining); })]); }
+    try { return await Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(Error("native-dom-snapshot-failed")), Math.max(0, until - Date.now())); })]); }
     finally { clearTimeout(timer); }
   };
+  const budget = (operation) => { assert.ok(Date.now() < readUntil); return within(operation(), readUntil); };
+  const detach = (active, until) => {
+    // Invoke even when no wait remains; keep the actual acknowledgement consumed.
+    if (!detachments.has(active)) detachments.set(active, Promise.resolve().then(() => active.detach()));
+    return within(detachments.get(active), until);
+  };
+  const disposalUntil = () => Date.now() < teardownUntil ? teardownUntil : Date.now() + limit;
   const check = () => { assert.equal(changed, false); assert.ok(Date.now() - startedAt <= 15000); };
   const measure = (raw) => {
     // This transient size check is never written to evidence or diagnostics.
@@ -270,8 +277,8 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     }
     return records;
   };
-  const clearOwned = async (active) => {
-    const send = (method, params = {}) => budget(() => active.send(method, params));
+  const clearOwned = async (active, until) => {
+    const send = (method, params = {}) => { assert.ok(Date.now() < until); return within(active.send(method, params), until); };
     const { frameTree } = measure(await send("Page.getFrameTree")); assert.equal(frameTree.frame.id, ownedDocument.frameId);
     const { root } = measure(await send("DOM.getDocument", { depth: 0, pierce: false }));
     assert.equal(root.nodeType, 9); assert.equal(root.backendNodeId, ownedDocument.backendNodeId);
@@ -285,7 +292,13 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     await send("Runtime.releaseObjectGroup", { objectGroup: observer }); await send("DOM.disable"); watching = false;
   };
   try {
-    session = await page.context().newCDPSession(page); check();
+    // Ownership is installed before the raced wait, including a late original attach.
+    opening = Promise.resolve().then(() => page.context().newCDPSession(page)).then(async (active) => {
+      session = active;
+      if (closing) await detach(active, disposalUntil());
+      return active;
+    });
+    session = await budget(() => opening); check();
     const send = (method, params = {}) => budget(() => session.send(method, params));
     await send("DOM.enable"); commands.push({ method: "DOM.enable" });
     const invalidate = () => { changed = true; };
@@ -348,19 +361,27 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     candidate = { ...read.result.value, boundaryObservation: read.result.value.failure === null ? boundaryObservation : null };
   } catch { candidate = failed(); }
   finally {
+    closing = true; teardownUntil = Math.max(readUntil, Date.now()) + limit;
+    if (!session && opening) {
+      try { await within(opening, teardownUntil); } catch { candidate = failed(); }
+    }
     if (session) {
       try {
         if (world && watching) {
-          try { await clearOwned(session); }
+          try { await clearOwned(session, teardownUntil); }
           catch {
             candidate = failed();
-            let recovery;
-            try { recovery = await budget(() => page.context().newCDPSession(page)); await clearOwned(recovery); }
-            finally { if (recovery) await budget(() => recovery.detach()); }
+            // The continuation owns late resources even after our bounded wait ends.
+            const recovery = Promise.resolve().then(() => page.context().newCDPSession(page)).then(async (active) => {
+              const until = disposalUntil();
+              try { await clearOwned(active, until); }
+              finally { await detach(active, until); }
+            });
+            await within(recovery, teardownUntil);
           }
         }
       } catch { candidate = failed(); }
-      try { await budget(() => session.detach()); } catch { candidate = failed(); }
+      try { await detach(session, teardownUntil); } catch { candidate = failed(); }
     }
   }
   return candidate;

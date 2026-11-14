@@ -349,8 +349,8 @@ Missing replies, document replacement or lost session return unknown with no
 partial reads. A clean final tree or a saved coverage flag is not accepted instead.
 
 Failure cleanup first attempts the original native session. If that cannot
-complete, at most one fresh session may recover this capture's owned observer,
-within the same remaining read budget. It checks the current main frame and native
+complete, at most one fresh session may recover this capture's owned observer.
+It checks the current main frame and native
 document backend against the pre-install identity, reopens the same isolated
 execution context, and resolves only that original document backend. The fixed
 cleanup function refuses unless its receiver is both the current document and the
@@ -361,8 +361,28 @@ cleanup stays unknown; apparatus cleanup remains a separate integrating obligati
 After successful recovery, a later independent same-document capture can start
 normally, without an application action or production retry inside this leaf.
 
-All preparation/read/check/cleanup remains inside the existing 15-second read
-budget. Native ordinary/template/UA-root identities share the 10,000-node cap;
+Semantic preparation/read/check retains the original 15-second deadline. Timeout
+is sticky failure, never an extended semantic interval or a clamped/fabricated
+observation. An exceeded observation interval still rejects instead of qualifying.
+Failure teardown may settle already-started native apparatus until 15 seconds
+after the later of that original deadline and actual teardown entry. Thus an
+on-time stop normally has an overall awaited bound of read-start plus 30 seconds;
+this disposal allowance cannot authorize another semantic read. It reuses the
+fixed 15-second limit, with no caller setting or CLI/measurement budget change.
+
+Acquisition ownership is attached before any raced await. A late original session
+is disposal-only; a late recovery session retains its guarded cleanup/finally
+continuation even after the collector's bounded wait has stopped. Arrival after
+the teardown wait permits at most 15 seconds of per-resource disposal, not a new
+semantic capture or recovery acquisition. Detach is invoked even with no wait
+remaining, and its actual acknowledgement promise remains consumed. Other native
+replies that outlive a timed await cannot resume semantic work; late cleanup still
+requires the exact original document and observer. If native ownership checks or
+disposal cannot settle, cleanup is uncertain and never qualifies; the integrating
+context/target owner remains responsible for that outer apparatus lifetime. This
+does not claim synchronous disposal of a permanently unresponsive renderer.
+
+Native ordinary/template/UA-root identities share the 10,000-node cap;
 transient native payloads and the final observation each obey 32 MiB. Unstable or
 over-bound pages remain proof-missing, not semantic failures. The installed digest
 includes every fixed native helper and the receiver-binding collector wrapper.
