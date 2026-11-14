@@ -3241,7 +3241,14 @@ rules something out.
     `6caa34f39`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
     instructions for `render_live_prices` and 7,668,108 for `render_keyed_markup` in every run of
     both, the same bytes, and both compile to the same instructions (1,809 lines each, differing
-    only in the mangled name of `data_ref`, which names the key's type);
+    only in the mangled name of `data_ref`, which names the key's type), and on `9be6fe5dc` against
+    `1960d19f3`, which counts a key only against the render whose string it is written into, the
+    same counts and bytes and the same instructions to the line;
+    2026-11-14, a key a view writes into a string of its own (`html! { .. }.to_html()` and a
+    `render` into a string of the app's as an attribute's value, and a component's
+    `children.to_html()`) not counted against its component's render, and two equal keys in that
+    render beside one still counted, on `1960d19f3`, as the tests beside `TitledKeys`,
+    `ChildTitledKeys` and `TitledTwiceKeys` hold the check to;
     2026-11-14, a `<template>` among a component's children, which the component writes into an
     `<svg>`'s `<desc>`, not counted, and one in an `<svg>` the children write themselves counted,
     on `7c2fba42a`, as the tests beside `DescribedKeys` and `BoxedSvgKeys` hold the check to;
