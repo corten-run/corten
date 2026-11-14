@@ -197,6 +197,10 @@ found`, `404`, `404 Not Found`, `404: Not Found`, `This page could not be found.
 may be retained. Result is `{kind:'missing-item',page:null,error:{code:'not-found',
 text,tag},articleCount:0,extractionComplete:true}`. Unknown text is never saved and
 cannot be treated as a target failure. No raw body innerText/HTML is collected.
+Error reads expose only `publicMissingTag` (allowlisted tag or null) and
+`publicMissingText` (native-visible allowlisted phrase or null), not raw custom
+tag names, ARIA attributes or arbitrary computed style values. Unknown neighboring
+error elements cannot leak text/metadata into an otherwise successful capture.
 
 Public page routes are fixed marketplace locales and item_1 through item_500 or
 item_missing. Canonically encoded queries allow only seller ''/Alice, sort

@@ -81,12 +81,12 @@ test("actual strict page/Alice observations replay installed snapshot and preser
 });
 test("actual missing-item captures article absence and exact visible error, never arbitrary body text", async (t) => {
   const f = await browserDOMFixture(t);
-  f.setBody('<!doctype html><html><body><input type="hidden" value="csrf-private-canary"><meta name="csrf-token" content="csrf-private-canary"><h1>Not found</h1><p>arbitrary diagnostic text that must not be retained</p></body></html>');
+  f.setBody('<!doctype html><html><body><input type="hidden" value="csrf-private-canary"><meta name="csrf-token" content="csrf-private-canary"><h1>Not found</h1><p>arbitrary diagnostic text that must not be retained</p><x-private-tag-canary role="alert">unknown text</x-private-tag-canary><p aria-hidden="attribute-private-canary">unknown text</p></body></html>');
   const { observation, response } = await f.read("/marketplace/en-US/item_missing"), result = replayBrowserDOM(observation, expectation(observation));
   assert.equal(response.status(), 404);
   assert.equal(observation.failure, null);
   assert.deepEqual(result, { kind: "missing-item", page: null, error: { code: "not-found", text: "Not found", tag: "h1" }, articleCount: 0, extractionComplete: true });
-  assert.doesNotMatch(JSON.stringify(observation), /csrf-private-canary|arbitrary diagnostic/);
+  assert.doesNotMatch(JSON.stringify(observation), /csrf-private-canary|arbitrary diagnostic|private-tag-canary|attribute-private-canary/);
   for (const html of [
     '<body><h1>unknown private error text</h1></body>',
     '<body><section hidden><h1>Not found</h1></section></body>',

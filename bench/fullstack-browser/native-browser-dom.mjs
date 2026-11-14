@@ -24,19 +24,19 @@ function missingSnapshot() {
   if (articleCount !== 0) throw Error("native-dom-snapshot-failed");
   const matches = [];
   for (const el of document.querySelectorAll('h1,h2,p,[role="alert"]')) {
-    if (!["h1", "h2", "p", "div", "section", "span"].includes(el.localName)) continue;
-    const style = getComputedStyle(el);
-    if (el.hidden || el.getAttribute("aria-hidden") === "true" || style.display === "none" || style.visibility !== "visible" || Number(style.opacity) === 0) continue;
-    // Collector exposes only an allowlisted exact phrase, never body innerText.
+    const tag = el.publicMissingTag;
+    if (tag === null) continue;
+    // Collector exposes only a visible allowlisted phrase/tag, never arbitrary
+    // tag names, ARIA/style strings or body innerText from an error document.
     const text = el.publicMissingText;
-    if (text !== null) matches.push({ code: "not-found", text, tag: el.localName });
+    if (text !== null) matches.push({ code: "not-found", text, tag });
   }
   if (!matches.length) throw Error("public-error-unavailable");
   return { kind: "missing-item", page: null, error: matches[0], articleCount, extractionComplete: true };
 }
 const errorTexts = ["Not found", "Not Found", "Page not found", "Item not found", "Record not found", "404", "404 Not Found", "404: Not Found", "This page could not be found."];
 const methods = ["querySelector", "querySelectorAll", "matches", "getAttribute", "contains", "cloneNode", "remove"];
-const properties = ["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingText"];
+const properties = ["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"];
 const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), errorTexts]));
 const cases = definition("fullstack-browser").cases.map((c) => c.key);
 function identityFields(value) {
@@ -102,10 +102,13 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
           const result = encode(target[key](...args.map((v) => originals.get(v) ?? v)), key === "getAttribute" ? args[0] : key);
           push({ target: idFor(target), kind: "call", key, args: args.map(arg), result }); return decode(result);
         };
-        if (!["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingText"].includes(key)) throw Error("native-dom-snapshot-failed");
+        if (!["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"].includes(key)) throw Error("native-dom-snapshot-failed");
         let value;
-        if (key === "publicMissingText") {
-          if (!target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || target.textContent.length > 256) value = null;
+        if (key === "publicMissingTag") value = ["h1", "h2", "p", "div", "section", "span"].includes(target.localName) ? target.localName : null;
+        else if (key === "publicMissingText") {
+          if (!target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || target.closest('[aria-hidden="true"]')
+            || target.querySelector('input[type="hidden"],input[type="password"],meta,script,style,template,[hidden],[aria-hidden="true"]')
+            || target.textContent.length > 256) value = null;
           else { const text = target.textContent.replace(/[\t\n\r\f ]+/g, " ").trim(); value = phrases.includes(text) ? safe(text, key) : null; }
         } else {
           if (key === "textContent" && (target.matches('input[type="hidden"],input[type="password"],meta,script,style,template,[hidden],[aria-hidden="true"]')
@@ -175,6 +178,7 @@ export function replayBrowserDOM(observation, expectedIdentity) {
     const e = observation.events[at++]; assert.ok(e); exact(e, ["target", "kind", "key", "args", "result"]);
     assert.deepEqual([e.target, e.kind, e.key, e.args], [target, kind, key, args.map(encode)]);
     if (key === "publicMissingText") assert.ok(e.result.scalar === null || errorTexts.includes(e.result.scalar));
+    if (key === "publicMissingTag") assert.ok(e.result.scalar === null || ["h1", "h2", "p", "div", "section", "span"].includes(e.result.scalar));
     return decode(e.result);
   };
   const wrap = (id) => {
