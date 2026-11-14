@@ -251,13 +251,16 @@ fn AlertList<'a>(t: Msg, alerts: &'a [Alert]) -> impl Patch {
 /// (without JavaScript the browser reads the whole page again); once the write is in, the page
 /// stops asking. The alerts are not sent: a
 /// real app tells the user from a task of its own.
+///
+/// The runtime's read of it gets a patch, never the page (`HtmlResult<Patches>`): the route says
+/// `patches`, so `ReadAgain::from` takes it.
 pub(crate) async fn page(
     req: Req,
     viewer: Option<Caller<Viewer>>,
     State(store): State<AlertStore>,
     visitor: Visitor,
     Params(at): Params<url::Alerts>,
-) -> HtmlResult {
+) -> HtmlResult<Patches> {
     let read = store.read(Instant::now(), visitor.known(), at.saved);
     let t: Msg = req.t();
     // A read again from a write's patch: the status line and the list, asking again from this
