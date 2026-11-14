@@ -1505,6 +1505,8 @@ struct Gen {
     id_shape: Option<TokenStream>,
     /// Inside an `<svg>` (and not its `<foreignObject>`), where an `<a>` is SVG's.
     svg: bool,
+    /// The locals declared so far that hold a debug build's record while markup is written.
+    debug_locals: usize,
 }
 
 /// The locals a view's shape is gathered in: one `Option` per body of a `for`, `if` or `match`
@@ -1590,6 +1592,18 @@ impl Gen {
             Level::Page => self.out.extend(q("if __PART != ::corten::view::Part::Title __A0", &[block])),
             Level::Layout => self.out.extend(q("if __PART == ::corten::view::Part::Full __A0", &[block])),
         }
+    }
+
+    /// Declares a local that holds a debug build's record (`open`, an expression) while the
+    /// markup after it is written, and is let go by a statement after that markup. It is declared
+    /// outside the parts' `if`s, so it lives through them, and before the static markup not yet
+    /// written, which has no refs. Release builds compile neither.
+    fn debug_local(&mut self, open: &str) -> TokenStream {
+        self.debug_locals += 1;
+        let name: TokenStream =
+            TokenTree::Ident(Ident::new(&format!("__corten_debug_{}", self.debug_locals), Span::call_site())).into();
+        self.out.extend(q(&format!("#[cfg(debug_assertions)] let __A0 = {open};"), std::slice::from_ref(&name)));
+        name
     }
 
     /// Switches the parts what follows is written in.
@@ -1804,6 +1818,9 @@ impl Gen {
         let is_key = |attr: &str| attr.eq_ignore_ascii_case("data-key");
         let keyed = attrs.iter().any(|a| matches!(a, Attr::Expr(attr, _) | Attr::Static(attr, _) if is_key(attr)));
         let has_ref = attrs.iter().any(|a| matches!(a, Attr::Ref(..)));
+        // A keyed ref's element: debug builds note its ref and key on it until its tag is written,
+        // whatever an attribute's expression renders meanwhile.
+        let tag = (has_ref && keyed).then(|| self.debug_local("::corten::script::__private::KeyTag::open()"));
         for attr in attrs {
             match attr {
                 Attr::Bare(attr) => {
@@ -2012,6 +2029,9 @@ impl Gen {
                 }
             }
         }
+        if let Some(tag) = tag {
+            self.out.extend(q("#[cfg(debug_assertions)] __A0.close();", &[tag]));
+        }
         self.text.push('>');
     }
 
@@ -2032,10 +2052,18 @@ impl Gen {
                 }
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
+                    // A `<template>`'s content, which the runtime's query for a ref's elements does
+                    // not reach: debug builds record none of its keys.
+                    let content = name
+                        .eq_ignore_ascii_case("template")
+                        .then(|| self.debug_local("::corten::script::__private::TemplateContent::open()"));
                     let outer = self.svg;
                     self.svg = within_svg(outer, name);
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
+                    if let Some(content) = content {
+                        self.out.extend(q("#[cfg(debug_assertions)] ::core::mem::drop(__A0);", &[content]));
+                    }
                     self.text.push_str(&format!("</{name}>"));
                 }
                 if part {

@@ -572,6 +572,171 @@ fn debug_builds_stop_on_an_element_of_a_keyed_ref_without_a_key() {
     KeyedCells { ids: &[Some("a"), None] }.to_html();
 }
 
+/// A keyed cell in the page and one with the same key in a `<template>`'s content, which the
+/// runtime's query for the ref's elements does not reach.
+#[component]
+fn TemplateKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table>
+                <tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="a">"1"</td></tr></tbody>
+            </table>
+            <template>
+                <table><tbody><tr><td ref={cell} key="a">"2"</td></tr></tbody></table>
+            </template>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_template_s_content_is_not_one_of_the_page_s() {
+    let html = TemplateKeys {}.to_html();
+    assert_eq!(html.matches(r#"<td data-ref="cell" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// A component with a keyed ref, the key written before the ref, rendered while another's
+/// element is half written.
+#[component]
+fn InnerKeys() -> impl Render {
+    let inner = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(inner, "inner")}><tr><td key="inner" ref={inner}>"i"</td></tr></tbody>
+        </table>
+    }
+}
+
+/// The key, after rendering [`InnerKeys`] when `inner` is set.
+fn rendering_inner_keys(key: &str, inner: bool) -> &str {
+    if inner {
+        InnerKeys {}.to_html();
+    }
+    key
+}
+
+/// Cells keyed by `keys`, each one's key written after its ref, rendering [`InnerKeys`] in its
+/// `key={..}` when told to.
+#[component]
+fn NestedKeys<'a>(keys: &'a [(&'a str, bool)]) -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                for (key, inner) in keys.iter() {
+                    <tr><td ref={cell} key={rendering_inner_keys(key, *inner)}>"1"</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+fn a_render_inside_a_key_leaves_the_element_s_ref_and_key_together() {
+    let html = NestedKeys { keys: &[("a", true), ("inner", false)] }.to_html();
+    assert_eq!(html.matches(r#"data-ref="cell""#).count(), 2, "{html}");
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one nested-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_whatever_renders_inside_a_key() {
+    NestedKeys { keys: &[("a", true), ("a", false)] }.to_html();
+}
+
+/// Two cells whose keys are written differently and read the same: `true` and `""` both read as
+/// the empty string.
+#[component]
+fn BlankKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "")}>
+                <tr>
+                    <td ref={cell} key={true}>"1"</td>
+                    <td ref={cell} key="">"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one blank-keys have the key \"\"")]
+fn debug_builds_stop_on_keys_a_browser_reads_as_the_same_empty_one() {
+    BlankKeys {}.to_html();
+}
+
+/// Two cells whose keys differ in a carriage return, which the browser reads as a line feed.
+#[component]
+fn NewlineKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                <tr>
+                    <td ref={cell} key={"a\rb"}>"1"</td>
+                    <td ref={cell} key={"a\nb"}>"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one newline-keys have the key \"a\\nb\"")]
+fn debug_builds_stop_on_keys_a_browser_reads_as_one_after_its_line_breaks() {
+    NewlineKeys {}.to_html();
+}
+
+/// The key, or a panic when `fails` is set.
+fn failing_key(key: &str, fails: bool) -> &str {
+    assert!(!fails, "a key that fails");
+    key
+}
+
+/// A keyed cell in a `<template>`'s content whose key's expression may panic.
+#[component]
+fn FailingKeys(fails: bool) -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table><tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="b">"1"</td></tr></tbody></table>
+            <template>
+                <table><tbody><tr><td ref={cell} key={failing_key("a", fails)}>"2"</td></tr></tbody></table>
+            </template>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+fn a_render_that_unwinds_inside_a_template_and_a_tag_leaves_the_next_render_checked() {
+    let failed = std::panic::catch_unwind(|| FailingKeys { fails: true }.to_html());
+    assert!(failed.is_err());
+    // Neither the template's content nor the half-written tag is still open: equal keys stop the
+    // next render, and distinct ones do not.
+    FailingKeys { fails: false }.to_html();
+    let repeated = std::panic::catch_unwind(|| KeyedCells { ids: &[Some("a"), Some("a")] }.to_html());
+    let message = repeated.expect_err("equal keys stop the render");
+    let message = message.downcast_ref::<String>().map_or("", String::as_str);
+    assert!(message.contains("two elements of ref qty in one keyed-cells have the key \"a\""), "{message}");
+}
+
+/// Release builds keep no record of keys: equal keys and a missing one render as written.
+#[test]
+#[cfg(not(debug_assertions))]
+fn release_builds_do_not_check_keys() {
+    let html = KeyedCells { ids: &[Some("a"), Some("a"), None] }.to_html();
+    assert_eq!(html.matches(r#"<td data-key="a" data-ref="qty">"#).count(), 2, "{html}");
+    assert_eq!(html.matches(r#"<td data-ref="qty">"#).count(), 1, "{html}");
+    let html = NestedKeys { keys: &[("a", true), ("a", false)] }.to_html();
+    assert_eq!(html.matches(r#"data-key="a""#).count(), 2, "{html}");
+    BlankKeys {}.to_html();
+    NewlineKeys {}.to_html();
+}
 // The doctests' script for rows that give their script a value (`Ref::with`), shared here.
 script::script!(mod priced = "../price_list.js");
 

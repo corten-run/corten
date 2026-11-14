@@ -3101,9 +3101,13 @@ rules something out.
     ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)).
     Equal keys cannot be seen when the
     crate compiles, so debug builds stop a render in which two elements of a ref in one render of
-    its component write the same key, or a `key={..}` writes none (`None`), as they stop on an
-    integer past 2^53; release builds keep no record. The runtime is unchanged: a check of the
-    live page's keys there would cost every user bytes to report a mistake the debug check finds
+    its component have keys the browser reads as equal (as `getAttribute` returns them, so
+    `key={true}` and `key=""` are one, and so are a carriage return and a line feed), or a
+    `key={..}` writes none (`None`), as they stop on an integer past 2^53; release builds keep no
+    record. The check counts the elements the runtime's query finds, so one in a `<template>`'s
+    content is not counted, and an element's ref and key are noted on it until its tag is written,
+    so a view an attribute's expression renders meanwhile notes its own. The runtime is unchanged:
+    a check of the live page's keys there would cost every user bytes to report a mistake the debug check finds
     in the render that makes it, and rows a patch or a script adds later carry the keys the server
     or the script gives them.
 
@@ -3169,7 +3173,8 @@ rules something out.
     ref, so a ref given text on one element and a number on another, or a value on one and none on
     another, is a type error, as its fourth is for a key on one element and none on another; a debug
     build's record of keys is per render of a component, as the runtime finds a ref's elements under
-    the component's root nearest them); bet (values are given today in five places: card-market's listing
+    the component's root nearest them, and leaves out a `<template>`'s content, which its query does
+    not reach); bet (values are given today in five places: card-market's listing
     sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
     `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
     `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
@@ -3194,7 +3199,11 @@ rules something out.
     `data-sort` and the attributes beside it onto ref values. If that issue is still open on
     2027-11-13, the first condition alone decides on that date.
 
-    Last checked: 2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
+    Last checked: 2026-11-14, the debug check's keys against what the runtime finds, in Chromium,
+    Firefox and WebKit: an element in a `<template>`'s content is not found, and `key={true}` and
+    `key=""`, and a carriage return and a line feed, are one key of the handler's `Map`, as the
+    tests beside `TemplateKeys`, `NestedKeys`, `BlankKeys` and `NewlineKeys` now hold the check
+    to; 2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
     render with two equal keys stopped in a debug build, on the change for
     [#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)
     against `0ff569c69`, where the first compiled (`compile_fail` doctests on `ts::Map` and

@@ -2451,73 +2451,86 @@ thread_local! {
 }
 
 /// Debug builds: the keys a component's keyed refs have had while it renders, so two elements of
-/// one ref with equal keys, or one whose `key={..}` wrote none (`None`), stop the render, as an
-/// integer past 2^53 does. A handler's `Map<string, El>` would hold one entry for the two, or one
-/// under `null`. The page's other renders (a patch, rows a script adds) are not seen.
+/// one ref whose keys the browser reads as equal, or one whose `key={..}` wrote none (`None`),
+/// stop the render, as an integer past 2^53 does. A handler's `Map<string, El>` would hold one
+/// entry for the two, or one under `null`. Keys follow the runtime's query for a ref's elements:
+/// those in a `<template>`'s content are not the page's and are not recorded. The page's other
+/// renders (a patch, rows a script adds) are not seen.
 #[cfg(debug_assertions)]
 mod keys {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashSet;
 
     /// A ref of a component: its component's name and its own.
     type RefName = (&'static str, &'static str);
-    /// A component's refs' keys so far, by ref, each as its attribute is written (` data-key="a"`).
+    /// A component's refs' keys so far, by ref, each as the browser reads it.
     type Keys = HashSet<(&'static str, String)>;
-    /// The keyed ref and the key of the element whose tag is being written, whichever came first in
-    /// its markup.
+    /// The keyed ref and the key (as written, ` data-key="a"`) of an element whose tag is being
+    /// written.
     type Tag = (Option<RefName>, Option<String>);
 
     thread_local! {
         /// Each component rendering (`scoped`), innermost last, with its refs' keys.
         static RENDERING: RefCell<Vec<(&'static str, Keys)>> = const { RefCell::new(Vec::new()) };
-        static TAG: RefCell<Tag> = const { RefCell::new((None, None)) };
+        /// The keyed elements whose tags are being written, innermost last: a render in a ref's
+        /// or a key's expression writes its own above the element's.
+        static TAGS: RefCell<Vec<Tag>> = const { RefCell::new(Vec::new()) };
+        /// How many `<template>`s' content is being written.
+        static TEMPLATE: Cell<usize> = const { Cell::new(0) };
     }
 
     pub(super) fn enter(scope: &'static str) {
-        RENDERING.with(|r| {
-            let mut r = r.borrow_mut();
-            // A render that starts afresh drops what one that panicked mid-tag left.
-            if r.is_empty() {
-                TAG.with(|t| *t.borrow_mut() = (None, None));
-            }
-            r.push((scope, HashSet::new()))
-        });
+        RENDERING.with(|r| r.borrow_mut().push((scope, HashSet::new())));
     }
 
     pub(super) fn leave() {
         RENDERING.with(|r| r.borrow_mut().pop());
     }
 
-    pub(super) fn ref_written(at: RefName) {
-        noted(|tag| tag.0 = Some(at));
+    /// A keyed element's tag begins: its ref and key are noted on it until it ends.
+    pub(super) fn open() {
+        TAGS.with(|t| t.borrow_mut().push((None, None)));
     }
 
-    pub(super) fn key_written(written: &str) {
-        noted(|tag| tag.1 = Some(written.to_owned()));
-    }
-
-    /// Notes the tag's ref or key, and checks the two once both are written.
-    fn noted(note: impl FnOnce(&mut Tag)) {
-        let both = TAG.with(|t| {
-            let mut t = t.borrow_mut();
-            note(&mut t);
-            if t.0.is_some() && t.1.is_some() {
-                std::mem::take(&mut *t)
-            } else {
-                (None, None)
-            }
-        });
-        if let (Some(at), Some(key)) = both {
-            check(at, &key);
+    /// Its tag ends: checks its key, or, when a render unwinds (`checked` is false), drops it.
+    pub(super) fn close(checked: bool) {
+        let tag = TAGS.with(|t| t.borrow_mut().pop());
+        if !checked || TEMPLATE.with(Cell::get) > 0 {
+            return;
+        }
+        if let Some((Some(at), Some(written))) = tag {
+            check(at, &written);
         }
     }
 
+    pub(super) fn ref_written(at: RefName) {
+        TAGS.with(|t| {
+            if let Some(tag) = t.borrow_mut().last_mut() {
+                tag.0 = Some(at);
+            }
+        });
+    }
+
+    pub(super) fn key_written(written: &str) {
+        TAGS.with(|t| {
+            if let Some(tag) = t.borrow_mut().last_mut() {
+                tag.1 = Some(written.to_owned());
+            }
+        });
+    }
+
+    /// A `<template>`'s content is being written, or is no longer.
+    pub(super) fn template(inside: bool) {
+        TEMPLATE.with(|t| t.set(if inside { t.get() + 1 } else { t.get().saturating_sub(1) }));
+    }
+
     fn check((scope, name): RefName, written: &str) {
-        assert!(
-            !written.is_empty(),
-            "an element of ref {name} in {scope} has a key={{..}} that wrote no key (None or false), so a handler's \
-             Map<string, ..> would get it under null: give every element of the ref a key"
-        );
+        let Some(key) = read(written) else {
+            panic!(
+                "an element of ref {name} in {scope} has a key={{..}} that wrote no key (None or false), so a handler's \
+                 Map<string, ..> would get it under null: give every element of the ref a key"
+            )
+        };
         // The innermost render of the ref's component holds it, as the page's `data-scope` root
         // nearest the element does.
         let repeated = RENDERING.with(|r| {
@@ -2525,18 +2538,60 @@ mod keys {
                 .iter_mut()
                 .rev()
                 .find(|(at, _)| *at == scope)
-                .is_some_and(|(_, seen)| !seen.insert((name, written.to_owned())))
+                .is_some_and(|(_, seen)| !seen.insert((name, key.clone())))
         });
         if repeated {
-            let key = written.split_once('=').map_or("", |(_, v)| v.trim_matches('"'));
             panic!(
-                "two elements of ref {name} in one {scope} have the key \"{key}\", so a handler's Map<string, ..> would hold \
-                 only the later: give each element of the ref a key of its own"
+                "two elements of ref {name} in one {scope} have the key {key:?} as the browser reads it, so a handler's \
+                 Map<string, ..> would hold only the later: give each element of the ref a key of its own"
             );
         }
     }
-}
 
+    /// What `getAttribute` returns for a key as written: nothing for no attribute, `""` for one
+    /// without a value (`key={true}`), and a value with its line breaks as the parser reads them
+    /// (CR LF and CR are LF, NUL is U+FFFD) and its character references decoded.
+    fn read(written: &str) -> Option<String> {
+        if written.is_empty() {
+            return None;
+        }
+        let Some((_, value)) = written.split_once('=') else { return Some(String::new()) };
+        let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
+        let value = value.replace("\r\n", "\n").replace(['\r'], "\n").replace('\0', "\u{FFFD}");
+        let mut read = String::with_capacity(value.len());
+        let mut rest = value.as_str();
+        while let Some(at) = rest.find('&') {
+            read.push_str(&rest[..at]);
+            rest = &rest[at..];
+            let end = rest.find(';');
+            let named = end.and_then(|end| match &rest[1..end] {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                number => match number.strip_prefix('#') {
+                    Some(hex) if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16).ok(),
+                    Some(decimal) => decimal.parse().ok(),
+                    None => None,
+                }
+                .and_then(char::from_u32),
+            });
+            match (named, end) {
+                (Some(c), Some(end)) => {
+                    read.push(c);
+                    rest = &rest[end + 1..];
+                }
+                _ => {
+                    read.push('&');
+                    rest = &rest[1..];
+                }
+            }
+        }
+        read.push_str(rest);
+        Some(read)
+    }
+}
 /// The module of numbers, money and dates for a script (`js/format.js`, minified into
 /// `js/dist/format.js`): served with the app's scripts, and loaded by the pages whose handlers
 /// take a format (`t.js().money(USD)`), not by every page with the runtime. Not a name a
@@ -2861,14 +2916,66 @@ pub mod __private {
     }
 
     /// ` data-key=".."` as written on an element with a keyed ref: debug builds stop when two of
-    /// the ref's elements in one render of its component have the same key, or one has none. The
-    /// code `html!` writes calls it in debug builds only.
+    /// the ref's elements in one render of its component have keys the browser reads as equal,
+    /// or one has none. The code `html!` writes calls it in debug builds only, between a
+    /// [`KeyTag`]'s `open` and `close`.
     #[inline]
     pub fn key_written(_written: &str) {
         #[cfg(debug_assertions)]
         keys::key_written(_written);
     }
 
+    /// The start tag of an element with a keyed ref, held while its attributes are written, so
+    /// its ref and key are checked together even when an attribute's expression renders another
+    /// view. The code `html!` writes holds it in debug builds only; one dropped without `close`
+    /// (a render that unwinds) is let go unchecked.
+    pub struct KeyTag(());
+
+    impl KeyTag {
+        #[inline]
+        pub fn open() -> Self {
+            #[cfg(debug_assertions)]
+            keys::open();
+            KeyTag(())
+        }
+
+        /// Its attributes are written: checks its key.
+        #[inline]
+        pub fn close(self) {
+            std::mem::forget(self);
+            #[cfg(debug_assertions)]
+            keys::close(true);
+        }
+    }
+
+    impl Drop for KeyTag {
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            keys::close(false);
+        }
+    }
+
+    /// A `<template>`'s content, held while it is written: the runtime's query for a ref's
+    /// elements does not reach it, so debug builds record none of its keys. The code `html!`
+    /// writes holds it in debug builds only, and dropping it ends the content, a render that
+    /// unwinds included.
+    pub struct TemplateContent(());
+
+    impl TemplateContent {
+        #[inline]
+        pub fn open() -> Self {
+            #[cfg(debug_assertions)]
+            keys::template(true);
+            TemplateContent(())
+        }
+    }
+
+    impl Drop for TemplateContent {
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            keys::template(false);
+        }
+    }
     /// ` data-on='click:m.f(..) input:m.g(..)'`, or nothing when no handler is there. Single-quoted,
     /// so the JSON in its arguments keeps its quotes as they are (`docs/design.md#choice-data-on-single-quoted`).
     pub fn data_on(out: &mut String, binds: &[(&str, &dyn Bind)]) {

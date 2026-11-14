@@ -319,8 +319,10 @@ Corten is pre-1.0, so any minor version may change the API.
   the error says to add `key={..}`, where it compiled and the handler got a one-entry `Map`. A ref
   now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
   fixed by the markup as its value's kind is. Debug builds stop a render in which two elements of a
-  ref in one render of its component have the same key, or a `key={..}` writes none (`None`),
-  since the `Map` would hold one entry for them; release builds do not check, and the runtime is
+  ref in one render of its component have keys the browser reads as equal (`key={true}` and
+  `key=""` are one, and so are a carriage return and a line feed), or a `key={..}` writes none
+  (`None`), since the `Map` would hold one entry for them, counting the elements the runtime finds
+  (none in a `<template>`'s content); release builds do not check, and the runtime is
   unchanged
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
   [design Choice 46](docs/design.md#choice-ref-values)). **Breaking:** a component that puts a
