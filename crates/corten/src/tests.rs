@@ -4089,29 +4089,30 @@ fn a_route_reaches_an_api_through_a_parameter_before_it() {
     assert!(!reaches("/{*rest}", "/"), "nothing is outside the root");
 }
 
-/// `/api/items`'s routes that can match under it with no empty value, so in every matchit 0.8.
+/// Routes that can match at or under `/api/items` with nonempty parameter values.
 const CAN_UNDER_API_ITEMS: [&str; 7] =
     ["/{*rest}", "/api/{id}", "/api/{*rest}", "/{a}/{b}", "/{a}/items/{id}", "/a{x}/{b}", "/ap{*rest}"];
 
 /// Each prefix, a route written outside it, and whether the route can match a path at or under
-/// the prefix, as matchit 0.8.4 matches (#1213).
+/// the prefix, as matchit 0.9.2 matches.
 fn can_match_under_cases() -> Vec<(&'static str, &'static str, bool)> {
     let mut cases = Vec::new();
     let mut add = |prefix: &'static str, can: bool, routes: &[&'static str]| {
         cases.extend(routes.iter().map(|&route| (prefix, route, can)));
     };
     add("/api/items", true, &CAN_UNDER_API_ITEMS);
-    // An empty value before a `/` (`/api{x}/items` matches `/api/items`), and one byte at the end.
-    add("/api/items", true, &["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}", "/api/item{x}"]);
+    // A parameter always needs one byte, even before a `/`.
+    add("/api/items", true, &["/api/item{x}"]);
+    add("/api/items", false, &["/api{x}/items", "/api{x}/{b}", "/api/items{x}/{b}"]);
     add("/api/items", false, &["/{id}", "/page", "/api/ping", "/{a}/other", "/apis/{id}", "/x{a}/{b}", "/api/items/{id}"]);
     // A value that ends the route is never empty: `/api{x}` is never `/api`.
     add("/api/items", false, &["/b{*rest}", "/api{x}", "/api/items{x}"]);
     // Corten's own `/corten/` holds only paths with a segment after it.
-    add("/corten/", true, &["/{a}/{b}", "/{*rest}", "/{a}/", "/corten{x}/{b}", "/cor{x}/{b}"]);
-    add("/corten/", false, &["/{slug}", "/cor{x}", "/corten{x}", "/x/{a}", "/corten/{file}"]);
+    add("/corten/", true, &["/{a}/{b}", "/{*rest}", "/{a}/", "/cor{x}/{b}"]);
+    add("/corten/", false, &["/{slug}", "/cor{x}", "/corten{x}", "/corten{x}/{b}", "/x/{a}", "/corten/{file}"]);
     // Beside an inner area at `/shop/desk`, and beside one at `/shop`.
-    add("/shop/desk", true, &["/shop/{id}", "/shop{x}/desk", "/{a}/{b}", "/shop/{id}/more"]);
-    add("/shop/desk", false, &["/{slug}", "/shop/x{id}", "/{a}/x/{b}", "/shops/{id}"]);
+    add("/shop/desk", true, &["/shop/{id}", "/{a}/{b}", "/shop/{id}/more"]);
+    add("/shop/desk", false, &["/{slug}", "/shop{x}/desk", "/shop/x{id}", "/{a}/x/{b}", "/shops/{id}"]);
     add("/shop", true, &["/{slug}"]);
     // Text after a parameter, which the router does not hold: one byte or more before it.
     add("/api/a.json", true, &["/api/{x}.json"]);
@@ -4122,8 +4123,8 @@ fn can_match_under_cases() -> Vec<(&'static str, &'static str, bool)> {
 }
 
 /// Counted by segment, a route can match under a prefix only where each of its segments can
-/// match the prefix's, as matchit 0.8.4 matches: a parameter the rest of one segment after the
-/// text before it, empty only before a `/` the route goes on with, a catch-all the rest (#1213).
+/// match the prefix's, as matchit 0.9.2 matches: a parameter at least one byte of one segment
+/// after the text before it, a catch-all the rest.
 #[test]
 fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
     for (prefix, route, can) in can_match_under_cases() {
@@ -4131,9 +4132,20 @@ fn a_route_can_match_under_a_prefix_only_segment_by_segment() {
     }
 }
 
+/// matchit's insertion error still names the existing route when the app stops at startup.
+#[test]
+#[should_panic(
+    expected = "corten: the route \"/prefix{id}\" cannot be routed beside the app's others: Insertion failed due to conflict with previously registered route: /{id}suffix"
+)]
+fn a_router_conflict_names_both_routes() {
+    let _router = crate::Router::from(
+        Table::new().route("/{id}suffix", get(|| async { "suffix" })).route("/prefix{id}", get(|| async { "prefix" })),
+    );
+}
+
 /// Never a false no: with each route alone in a router of the matchit this build resolves, every
 /// path at or under a prefix that it matches is one `can_match_under` says it can reach. A route
-/// that matchit refuses (text after a parameter, before 0.8.6) is left out (#1213).
+/// must be accepted; a changed insertion rule must not silently remove a case.
 #[test]
 fn can_match_under_never_says_no_where_matchit_matches() {
     use crate::api::{can_match_under, under};
@@ -4147,9 +4159,7 @@ fn can_match_under_never_says_no_where_matchit_matches() {
     let (mut held, mut matched) = (Vec::new(), std::collections::BTreeSet::new());
     for route in routes {
         let mut router = matchit::Router::new();
-        if router.insert(route, ()).is_err() {
-            continue;
-        }
+        router.insert(route, ()).unwrap();
         held.push(route);
         for &prefix in &prefixes {
             // A route written inside the prefix is the prefix's own, never asked about.

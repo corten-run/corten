@@ -2605,9 +2605,9 @@ pub(crate) fn chosen(routes: &[(&'static str, bool)], path: &str) -> Option<(&'s
         .filter(|(pattern, _)| routes_path(pattern, path))
 }
 
-/// Whether `path` is one `pattern` routes, as the router (matchit) matches it: `{name}` is one segment,
-/// which may be empty when another follows (`/items//edit` is `/items/{id}/edit`) but not when it
-/// is the last; `{*rest}` is the rest of the path (not empty); `{name}text` is a segment that
+/// Whether `path` is one `pattern` routes, as the router (matchit) matches it: `{name}` is one
+/// nonempty segment (`/items//edit` does not match `/items/{id}/edit`);
+/// `{*rest}` is the rest of the path (not empty); `{name}text` is a segment that
 /// ends in the text with something before it (Corten checks the text, as the router matches `{name}`);
 /// and the text is compared as it is written, so `/items/` is not `/items`. These are all the
 /// shapes a route macro takes.
@@ -2626,7 +2626,7 @@ fn segments_match(pattern: &str, path: &str, text: bool) -> bool {
             }
             (Some(want), Some(got)) if want.starts_with('{') => {
                 let after = if text { want.split_once('}').map_or("", |(_, after)| after) } else { "" };
-                if after.is_empty() && got.is_empty() && pattern.clone().next().is_none() {
+                if got.is_empty() {
                     return false;
                 }
                 if !after.is_empty() {
@@ -2660,9 +2660,9 @@ mod local_tests {
             ("/items", "/items/", false),
             ("/items/{id}", "/items/7", true),
             ("/items/{id}", "/items/", false),
-            ("/items/{id}/edit", "/items//edit", true),
+            ("/items/{id}/edit", "/items//edit", false),
             ("/a/{x}/{y}", "/a//", false),
-            ("/a/{x}/{y}", "/a//2", true),
+            ("/a/{x}/{y}", "/a//2", false),
             ("/items/{id}", "/items/7/edit", false),
             ("/items/{id}/edit", "/items/7/edit", true),
             ("/files/{*rest}", "/files/a/b", true),
@@ -4699,8 +4699,8 @@ pub mod __private {
         /// A whole segment, first or last in the path (`/{user}/posts`, `/items/{id}`): the router
         /// has no segment for an empty value there.
         pub const EDGE: u8 = 0;
-        /// A whole segment between two others (`/items/{id}/offers`, `/shelves/{id}/`), where an
-        /// empty value reads back.
+        /// A whole segment between two others (`/items/{id}/offers`, `/shelves/{id}/`),
+        /// nonempty as an edge segment is.
         pub const INNER: u8 = 1;
         /// Followed by text in its segment (`{page}.xml`), so never a dot segment; an empty value
         /// leaves the text alone, which the route does not read.
@@ -4722,8 +4722,7 @@ pub mod __private {
         #[inline(always)]
         fn refuses(value: &[u8], dotless: bool) -> bool {
             match PLACE {
-                place::EDGE => value.len() <= 2 && matches!(value, b"" | b"." | b".."),
-                place::INNER => value.len() <= 2 && matches!(value, b"." | b".."),
+                place::EDGE | place::INNER => value.len() <= 2 && matches!(value, b"" | b"." | b".."),
                 place::TEXT => value.is_empty(),
                 _ => value.is_empty() || (!dotless && dot_segment(value)),
             }
@@ -4748,7 +4747,7 @@ pub mod __private {
         static LOGGED: RwLock<Vec<(&str, &str)>> = RwLock::new(Vec::new());
         let message = || {
             format!(
-                "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+                "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router requires a nonempty path parameter, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
                 param.route,
                 param.field,
                 &out[start..]
@@ -5289,6 +5288,12 @@ mod tests {
             (Box::new(|| Posts { user: ".." }.href()), "/..%FF/posts", "Posts cannot carry user"),
             (Box::new(|| Feed { name: "" }.href()), "/feeds/%FF.xml", "Feed cannot carry name"),
             (Box::new(|| Shelf { id: ".." }.href()), "/shelves/..%FF/", "Shelf cannot carry id"),
+            (Box::new(|| Shelf { id: "" }.href()), "/shelves/%FF/", "Shelf cannot carry id"),
+            (
+                Box::new(|| Offers { id: "", page: None, sort: "new" }.href()),
+                "/items/%FF/offers?sort=new",
+                "Offers cannot carry id",
+            ),
             (
                 Box::new(|| File { path: "public/../private/report.pdf".into() }.href()),
                 "/files/public/..%FF/private/report.pdf",
@@ -5328,8 +5333,7 @@ mod tests {
                 }
             }
         }
-        // A value that only contains dots is no dot segment, and an empty one between two
-        // segments reads back (`/notes//edit`): both are written as they are.
+        // A value that only contains dots is no dot segment and is written as it is.
         for (href, want) in [
             (Item { id: "a.b" }.href(), "/items/a.b"),
             (Item { id: "..." }.href(), "/items/..."),
@@ -5340,10 +5344,6 @@ mod tests {
             (Posts { user: "x" }.href(), "/x/posts"),
             (Item { id: "%2e" }.href(), "/items/%252e"),
             (Item { id: "./" }.href(), "/items/.%2F"),
-            (Offers { id: "", page: None, sort: "new" }.href(), "/items//offers?sort=new"),
-            // Before a trailing `/` too, which the router reads back as empty
-            // (`a_value_between_two_segments_may_be_empty` in `tests/dispatch.rs`).
-            (Shelf { id: "" }.href(), "/shelves//"),
             (Posts { user: "..." }.href(), "/.../posts"),
             (Feed { name: "." }.href(), "/feeds/..xml"),
             (Feed { name: ".." }.href(), "/feeds/...xml"),
