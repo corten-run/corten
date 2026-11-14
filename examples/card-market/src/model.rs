@@ -195,13 +195,13 @@ pub fn art(id: &str) -> Option<Asset> {
 }
 
 /// The cents a listing sorts by: its price, or after every price when it has none
-/// (`listing_sort.js` reads the same number from the row's view).
+/// (`listing_sort.js` reads the same number, which each row gives its ref).
 pub fn sort_cents(listing: &Listing) -> u64 {
     listing.cents.unwrap_or(NO_PRICE)
 }
 
 /// What a listing without a price sorts as: the largest integer a JavaScript number holds
-/// exactly, so the row's view carries it as is.
+/// exactly, so the value its row gives the sort script carries it as is.
 pub const NO_PRICE: u64 = (1 << 53) - 1;
 
 /// The listings by price, borrowed: sorting a page's rows copies no strings. Listings with the

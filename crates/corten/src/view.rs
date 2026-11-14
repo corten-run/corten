@@ -1635,16 +1635,26 @@ impl<T: Attrs> Attrs for Option<T> {
     }
 }
 
+/// The attributes a spread of pairs skips, compared as whole names in any case: the script
+/// wiring, `data-ref`, `data-ref-value`, `data-on` and `data-scope`, which only `ref=`, `on:` and a
+/// component's root write, and `data-vars`, which only `style={..}` writes. These are not every
+/// name `html!` refuses written by hand: `data-nav`, `data-nav-group` and `data-corten-page` still
+/// pass through a spread.
+const PRINTED_BY_CORTEN: [&str; 5] = ["data-vars", "data-ref", "data-ref-value", "data-on", "data-scope"];
+
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's
-/// code; a name with characters an attribute name cannot have is skipped, and so is `data-vars`,
-/// which only `style={..}` writes (a full page's style block has rules for its values alone).
+/// code; a name with characters an attribute name cannot have is skipped, and so are the names in
+/// `PRINTED_BY_CORTEN`: the script wiring (`data-ref`, `data-ref-value`, `data-on`, `data-scope`),
+/// so a spread cannot hand a script a value its ref's type does not hold, and `data-vars` (a full
+/// page's style block has rules for its values alone). Each pair costs at most five comparisons,
+/// each one a length check before any bytes; spreads of other kinds compare nothing.
 impl<N: AsRef<str>, V: AttrValue> Attrs for [(N, V)] {
     fn render_attrs(&self, out: &mut String) {
         for (name, value) in self {
             let name = name.as_ref();
             if !name.is_empty()
                 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.'))
-                && !name.eq_ignore_ascii_case("data-vars")
+                && !PRINTED_BY_CORTEN.iter().any(|printed| name.eq_ignore_ascii_case(printed))
             {
                 value.write_attr(&format!(" {name}"), out);
             }

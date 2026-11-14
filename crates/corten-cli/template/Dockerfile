@@ -7,13 +7,16 @@ COPY . .
 # debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
 # this line.
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
-# Every build on this machine shares the target cache: one at a time (`locked`), and with the
-# sources touched first, since cargo goes by file times and a checkout older than the last build
-# would get that build's crates.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target,sharing=locked \
+# The target directory is a cache of this app's own (`id`; without one, every image built on this
+# machine with a /src/target would share it): builds of this app take turns (`locked`) and other
+# apps build alongside. The sources are touched first, since cargo goes by file times and a
+# checkout older than the last build would get that build's crates. Downloaded crates are one
+# cache for every app, mounted as cargo's whole home, where cargo keeps its lock on them, so two
+# builds wait for each other only while one fetches crates.
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id={{name}}-target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && cargo build --release && cp target/release/{{name}} /server
+    && CARGO_HOME=/var/cache/cargo cargo build --release && cp target/release/{{name}} /server
 
 FROM debian:bookworm-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished

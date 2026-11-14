@@ -74,6 +74,10 @@
 //!   argument wherever the handlers need the same elements.
 //! - **Keys.** `key={item.id}` on the elements of a ref makes a parameter typed
 //!   `Map<string, HTMLTableCellElement>` get them by key, for rows a feed updates by id.
+//! - **Values.** `ref={row.with(cents)}` gives each element of a ref a value, and a parameter
+//!   typed `Map<HTMLTableRowElement, number>` gets every one with its value ([`Ref::with`]), for
+//!   rows a script sorts or filters by what the server gave them, never a `data-` attribute it
+//!   reads by name.
 //! - **Typed events.** A parameter typed with a class imported from `"corten/events"` takes only
 //!   the `event` of an `on:` for that `#[event]` type (which must be in scope in the
 //!   component's module).
@@ -1559,14 +1563,23 @@ pub trait DomEvent {
 /// (`@param {Holds<Row, HTMLTableSectionElement>} body`): [`RowsOf`] when every child the
 /// markup puts in it is that `#[component(view)]` (`for line in lines { <Row .. /> }`, or the one
 /// `<Row .. />` of a `<template>`), [`NoRows`] otherwise.
-pub struct Ref<T = el::HTMLElement, V = NoRows> {
+///
+/// `W` is the kind of value each element gives its script, for a handler that takes the elements
+/// with their values (`@param {Map<HTMLTableRowElement, number>} rows`): [`ts::Number`],
+/// [`ts::String`] or [`ts::Boolean`] when the markup puts it on every element with a value,
+/// `ref={row.with(cents)}` ([`Ref::with`]), [`NoValue`] when it gives none.
+pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue> {
     scope: &'static str,
     name: &'static str,
     kind: PhantomData<fn() -> (T, V)>,
+    value: PhantomData<fn() -> W>,
 }
 
 /// A ref whose element the markup fills with something other than one view's rows.
 pub enum NoRows {}
+
+/// A ref whose elements give their script no value: put as `ref={row}`, not `ref={row.with(..)}`.
+pub enum NoValue {}
 
 /// A ref whose element holds only rows of one `#[component(view)]`, named by [`view_id`] of its
 /// name: the type a component's prop names for such a ref,
@@ -1691,21 +1704,21 @@ pub const fn view_id(name: &str) -> u64 {
     hash
 }
 
-impl<T, V> Clone for Ref<T, V> {
+impl<T, V, W> Clone for Ref<T, V, W> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, V> Copy for Ref<T, V> {}
+impl<T, V, W> Copy for Ref<T, V, W> {}
 
-impl<T, V> std::fmt::Debug for Ref<T, V> {
+impl<T, V, W> std::fmt::Debug for Ref<T, V, W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Ref({}/{})", self.scope, self.name)
     }
 }
 
-impl<T, V> Ref<T, V> {
+impl<T, V, W> Ref<T, V, W> {
     /// The element with this ref that holds the event's target, like the DOM's
     /// `event.target.closest(..)`: one handler on a list's container gets the row that was
     /// clicked. A handler with a `closest()` argument runs only for events inside such an
@@ -1741,7 +1754,114 @@ impl<T, V> Ref<T, V> {
     /// # }
     /// ```
     pub const fn closest(self) -> Closest<T> {
-        Closest(Ref { scope: self.scope, name: self.name, kind: PhantomData })
+        Closest(Ref { scope: self.scope, name: self.name, kind: PhantomData, value: PhantomData })
+    }
+
+    /// This ref, put on an element with a value for its script: `ref={row.with(cents)}`. A
+    /// handler parameter typed `Map<HTMLTableRowElement, number>` (or `string`, or `boolean`) gets
+    /// every element with the ref and its value, in the page's order, so rows a script only puts
+    /// in another order carry what they sort by without a `data-` attribute the script names as
+    /// text. The value is named once, here: the script reads it from the map, and the call is
+    /// checked as any ref's is. A number is a number in the script, written as a handler's number
+    /// argument is: an integer past 2^53 stops debug builds, and a float that is NaN or infinite
+    /// arrives as `null`, since JSON has neither.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// // price_list.js: export function sort(body, rows), body an HTMLTableSectionElement and
+    /// // rows a Map<HTMLTableRowElement, number>, each row with the cents it gives its ref.
+    /// #[component(js)]
+    /// fn PriceList<'a>(prices: &'a [(&'a str, u32)]) -> impl Render {
+    ///     let (body, row) = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody ref={body} on:dblclick={js::sort(body, row)}>
+    ///                 for (name, cents) in prices.iter() {
+    ///                     <tr ref={row.with(*cents)}><td>{*name}</td></tr>
+    ///                 }
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let html = PriceList { prices: &[("Lamp", 1250), ("Rug", 900)] }.to_html();
+    /// assert!(html.contains(r#"<tbody data-ref="body" data-on='dblclick:price_list.sort(@body,=row)'>"#), "{html}");
+    /// assert!(html.contains(r#"<tr data-ref="row" data-ref-value='1250'><td>Lamp</td></tr>"#), "{html}");
+    /// # }
+    /// ```
+    ///
+    /// Every element with the ref gives a value of one kind, which the handler's parameter names.
+    /// Rows that give none, or text where the handler takes numbers, do not compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[component(js)]
+    /// fn PriceList<'a>(prices: &'a [(&'a str, u32)]) -> impl Render {
+    ///     let (body, row) = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody ref={body} on:dblclick={js::sort(body, row)}>
+    ///                 for (name, _) in prices.iter() { <tr ref={row}><td>{*name}</td></tr> }
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail,E0271
+    /// use corten::prelude::*;
+    ///
+    /// #[component(js)]
+    /// fn PriceList<'a>(prices: &'a [(&'a str, u32)]) -> impl Render {
+    ///     let (body, row) = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody ref={body} on:dblclick={js::sort(body, row)}>
+    ///                 for (name, _) in prices.iter() { <tr ref={row.with(*name)}><td>{*name}</td></tr> }
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// Nor does a ref given a value on some elements and not on others:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[component(js)]
+    /// fn PriceList<'a>(prices: &'a [(&'a str, u32)]) -> impl Render {
+    ///     let (body, row) = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody ref={body} on:dblclick={js::sort(body, row)}>
+    ///                 for (name, cents) in prices.iter() { <tr ref={row.with(*cents)}><td>{*name}</td></tr> }
+    ///                 <tr ref={row}><td>"Total"</td></tr>
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// The attribute is Corten's, as `data-ref` is: markup that writes it by hand does not compile.
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[component]
+    /// fn PriceRow() -> impl Render {
+    ///     html! { <tr data-ref-value="1250"><td>"Lamp"</td></tr> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X> {
+        Valued { at: self, value }
     }
 }
 
@@ -1755,6 +1875,67 @@ impl<T> Clone for Closest<T> {
 }
 
 impl<T> Copy for Closest<T> {}
+
+/// What [`Ref::with`] returns: the ref, put on an element with its value.
+pub struct Valued<T, V, X: RefValue> {
+    at: Ref<T, V, X::Kind>,
+    value: X,
+}
+
+/// A value an element gives its ref's handlers ([`Ref::with`]): a number ([`ts::Number`]), text
+/// ([`ts::String`]) or a `bool` ([`ts::Boolean`]), the kinds a handler's `Map<El, number>`,
+/// `Map<El, string>` or `Map<El, boolean>` takes. It is sealed: an app's own type gives the
+/// number or text it stands for.
+#[diagnostic::on_unimplemented(
+    message = "an element gives its script a number, text or a bool with its ref, not {Self}",
+    label = "the value of ref={{row.with(..)}}",
+    note = "give the number or text it stands for, the one the script compares"
+)]
+pub trait RefValue: value::Sealed {
+    /// What the handler's parameter calls it.
+    type Kind;
+    #[doc(hidden)]
+    fn write_value(&self, out: &mut String);
+}
+
+mod value {
+    /// Implemented by the values [`super::RefValue`] is, and nothing outside Corten.
+    pub trait Sealed {}
+}
+
+macro_rules! ref_values {
+    ($kind:ty: $($t:ty),*) => {$(
+        impl value::Sealed for $t {}
+        impl RefValue for $t {
+            type Kind = $kind;
+            #[inline]
+            fn write_value(&self, out: &mut String) {
+                Arg::<$kind>::write_arg(self, &__private::Ctx { current: None, home: None }, out)
+            }
+        }
+    )*};
+}
+ref_values!(ts::Number: u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
+ref_values!(ts::Boolean: bool);
+ref_values!(ts::String: String, std::borrow::Cow<'_, str>);
+
+impl value::Sealed for str {}
+impl RefValue for str {
+    type Kind = ts::String;
+    #[inline]
+    fn write_value(&self, out: &mut String) {
+        __private::json_str(self, out)
+    }
+}
+
+impl<X: RefValue + ?Sized> value::Sealed for &X {}
+impl<X: RefValue + ?Sized> RefValue for &X {
+    type Kind = X::Kind;
+    #[inline]
+    fn write_value(&self, out: &mut String) {
+        (**self).write_value(out)
+    }
+}
 
 /// `let (rows, rest) = refs();` at the top of a component's body names the elements its script
 /// uses. `#[component]` replaces the call with each ref; anywhere else it does not compile.
@@ -1855,7 +2036,7 @@ pub mod el {
                 const TS: &'static str = stringify!($name);
             }
             $(impl SubOf<$parent> for $name {})+
-            impl<T: SubOf<$name>, V> super::__private::RefParam<T, V> for $name {
+            impl<T: SubOf<$name>, V, W> super::__private::RefParam<T, V, W> for $name {
                 const SIGIL: &'static str = "@";
             }
         };
@@ -2012,6 +2193,9 @@ pub mod ts {
     /// Elements by their `key`: `Map<string, HTMLTableCellElement>`, a ref put with
     /// `key={item.id}` on elements in a loop.
     pub struct Map<T>(std::marker::PhantomData<T>);
+    /// Elements with their values: `Map<HTMLTableRowElement, number>` (`K` is [`Number`],
+    /// [`String`] or [`Boolean`]), a ref put with `ref={row.with(cents)}` on each element.
+    pub struct Valued<T, K>(std::marker::PhantomData<(T, K)>);
     /// `Holds<Row, HTMLTableSectionElement>` (from `corten/views`): an element `T` whose children
     /// are rows of the view `Row` ([`super::view_id`] of its name), what `rows(body, Row)` takes.
     pub struct Holds<T, const VIEW: u64>(std::marker::PhantomData<T>);
@@ -2390,8 +2574,8 @@ pub mod __private {
 
     /// `let (rows, rest) = refs();`: each name, made by `#[component]`.
     #[inline]
-    pub const fn new_ref<T, V>(scope: &'static str, name: &'static str) -> Ref<T, V> {
-        Ref { scope, name, kind: PhantomData }
+    pub const fn new_ref<T, V, W>(scope: &'static str, name: &'static str) -> Ref<T, V, W> {
+        Ref { scope, name, kind: PhantomData, value: PhantomData }
     }
 
     /// A ref of another component's markup is written with its component: `offer-list/rows`.
@@ -2402,20 +2586,55 @@ pub mod __private {
         }
     }
 
-    /// ` data-ref="rows"` on an element of interface `E` that holds `V`, which makes `rows` a
-    /// `Ref<E, V>`.
+    /// What `ref={..}` takes: a ref, which gives its element no value, or a ref with one
+    /// (`row.with(cents)`).
+    #[diagnostic::on_unimplemented(
+        message = "every element of a ref gives its script a value of one kind, or none, and a ref={{..}} here does not: {Self}",
+        label = "a ref={{..}} in this markup gives what the ref's other elements or its handlers do not take",
+        note = "a handler parameter typed Map<El, number> takes a ref whose every element gives a number, ref={{row.with(cents)}}; \
+                ref={{row}} gives none"
+    )]
+    pub trait RefAttr<E, V> {
+        fn write_ref(&self, out: &mut String);
+    }
+    /// ` data-ref="rows"`.
     #[inline]
-    pub fn ref_attr<E, V>(r: &Ref<E, V>, out: &mut String) {
+    fn data_ref<T, V, W>(r: &Ref<T, V, W>, out: &mut String) {
         out.push_str(" data-ref=\"");
         qualified(out, r.scope, SCOPE.with(Cell::get));
         out.push_str(r.name);
         out.push('"');
     }
+    impl<E, V> RefAttr<E, V> for Ref<E, V> {
+        #[inline]
+        fn write_ref(&self, out: &mut String) {
+            data_ref(self, out)
+        }
+    }
+    /// ` data-ref-value='1250'`: the value as JSON, single-quoted as `data-on` is, so a string
+    /// keeps its quotes (`docs/design.md#choice-ref-values`).
+    impl<E, V, X: RefValue> RefAttr<E, V> for Valued<E, V, X> {
+        #[inline]
+        fn write_ref(&self, out: &mut String) {
+            data_ref(&self.at, out);
+            out.push_str(" data-ref-value='");
+            self.value.write_value(out);
+            out.push('\'');
+        }
+    }
+
+    /// ` data-ref="rows"` on an element of interface `E` that holds `V`, which makes `rows` a
+    /// `Ref<E, V>` (with ` data-ref-value='..'` for `rows.with(..)`, whose value fixes its third
+    /// type).
+    #[inline]
+    pub fn ref_attr<E, V>(r: &impl RefAttr<E, V>, out: &mut String) {
+        r.write_ref(out)
+    }
 
     /// `ref={trigger as HTMLElement}` on an element of interface `E`: `trigger` is a `Ref<W>`,
     /// and every `E` it is on must be a `W`.
     #[inline]
-    pub fn ref_attr_as<E: el::SubOf<W>, W, V>(r: &Ref<W, V>, out: &mut String) {
+    pub fn ref_attr_as<E: el::SubOf<W>, W, V>(r: &impl RefAttr<W, V>, out: &mut String) {
         ref_attr(r, out)
     }
 
@@ -2467,26 +2686,31 @@ pub mod __private {
     #[derive(Clone, Copy)]
     pub struct ScopeKw;
 
-    /// What a parameter type gets for a ref of an `T` that holds `V`: the first element (`@`),
-    /// every one (`*`), or every one by its key (`#`).
+    /// What a parameter type gets for a ref of an `T` that holds `V`, whose elements give values
+    /// of kind `W`: the first element (`@`), every one (`*`), every one by its key (`#`), or every
+    /// one with its value (`=`).
     #[diagnostic::on_unimplemented(
-        message = "the handler's JSDoc type {Self} does not fit this ref, an {T} that holds {V}",
-        label = "a ref of an {T} that holds {V}",
+        message = "the handler's JSDoc type {Self} does not fit this ref, an {T} that holds {V} and gives {W}",
+        label = "a ref of an {T} that holds {V} and gives {W}",
         note = "Holds<Row, ..> takes a ref whose element the markup fills with Row views only (a for loop of <Row .. />, \
-                or one <Row .. /> in a <template>); RowsOf and Holds name the view by view_id(\"Row\")"
+                or one <Row .. /> in a <template>); RowsOf and Holds name the view by view_id(\"Row\"); \
+                Map<El, number> takes a ref whose every element gives a number, ref={{row.with(cents)}}"
     )]
-    pub trait RefParam<T, V> {
+    pub trait RefParam<T, V, W> {
         const SIGIL: &'static str;
     }
-    // An element type takes the first element: `impl RefParam<T, V> for HTMLButtonElement` and the
+    // An element type takes the first element: `impl RefParam<T, V, W> for HTMLButtonElement` and the
     // others, from `el`'s list (one impl each, so a mismatched Holds gets this trait's message).
-    impl<T: el::SubOf<P>, P: el::Elem, V> RefParam<T, V> for ts::Array<P> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, W> RefParam<T, V, W> for ts::Array<P> {
         const SIGIL: &'static str = "*";
     }
-    impl<T: el::SubOf<P>, P: el::Elem, V> RefParam<T, V> for ts::Map<P> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, W> RefParam<T, V, W> for ts::Map<P> {
         const SIGIL: &'static str = "#";
     }
-    impl<T: el::SubOf<P>, P: el::Elem, const VIEW: u64> RefParam<T, RowsOf<VIEW>> for ts::Holds<P, VIEW> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, K> RefParam<T, V, K> for ts::Valued<P, K> {
+        const SIGIL: &'static str = "=";
+    }
+    impl<T: el::SubOf<P>, P: el::Elem, const VIEW: u64, W> RefParam<T, RowsOf<VIEW>, W> for ts::Holds<P, VIEW> {
         const SIGIL: &'static str = "@";
     }
 
@@ -2494,7 +2718,7 @@ pub mod __private {
     pub trait OneParam<T> {}
     impl<T: el::SubOf<P>, P: el::Elem> OneParam<T> for P {}
     impl<T> OneParam<T> for ts::Any {}
-    impl<T, V> RefParam<T, V> for ts::Any {
+    impl<T, V, W> RefParam<T, V, W> for ts::Any {
         const SIGIL: &'static str = "@";
     }
 
@@ -2503,7 +2727,7 @@ pub mod __private {
     impl<E: ev::SubOf<P>, P: ev::EventType> EventParam<E> for P {}
     impl<E> EventParam<E> for ts::Any {}
 
-    impl<T, V, P: RefParam<T, V>> Arg<P> for Ref<T, V> {
+    impl<T, V, W, P: RefParam<T, V, W>> Arg<P> for Ref<T, V, W> {
         fn write_arg(&self, ctx: &Ctx, out: &mut String) {
             out.push_str(P::SIGIL);
             qualified(out, self.scope, ctx.current);
@@ -2656,17 +2880,18 @@ pub mod __private {
         )*};
     }
     values!(ts::String, |v, out| json_str(v, out); &str, String, std::borrow::Cow<'_, str>);
-    values!(ts::Number, |v, out| { use std::fmt::Write; let _ = write!(out, "{v}"); }; u8, u16, u32, i8, i16, i32);
+    // An integer is written as markup writes one (`Render`), the same digits as `Display` without
+    // the formatter: a ref value is one per row.
+    values!(ts::Number, |v, out| crate::view::Render::render(v, out); u8, u16, u32, i8, i16, i32);
     // A JavaScript number holds integers exactly up to 2^53; past that the browser would get a
     // different number, silently. Debug builds and tests stop there: pass such a value (a 64-bit
     // id) as a string.
     values!(ts::Number, |v, out| {
-        use std::fmt::Write;
         debug_assert!(
             (*v as i128).unsigned_abs() <= MAX_SAFE_INTEGER,
             "handler argument {v} is beyond what a JavaScript number holds exactly (2^53 - 1); pass it as a string"
         );
-        let _ = write!(out, "{v}");
+        crate::view::Render::render(v, out);
     }; u64, usize, i64, isize);
     // JSON has no NaN or infinity.
     values!(ts::Number, |v, out| if v.is_finite() { use std::fmt::Write; let _ = write!(out, "{v}"); } else { out.push_str("null") }; f32, f64);

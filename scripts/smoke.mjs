@@ -500,7 +500,9 @@ async function run(browser) {
     );
   }
   // A handler is given its text and JSON arguments as the server had them, with an apostrophe
-  // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them.
+  // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them, and so are the text and
+  // the booleans elements give their refs (`ref={said.with(..)}`, `data-ref-value`, JSON read with
+  // `JSON.parse`), in the page's order.
   {
     const quoted = await browser.newPage();
     await quoted.goto(`${base}/smoke/quoted`);
@@ -512,8 +514,18 @@ async function run(browser) {
     const written = `It&#39;s \\"&lt;b&gt;\\" &amp; more`;
     check(
       "a handler gets text and JSON arguments with an apostrophe, quotes, & and < in them as the server had them",
-      got === JSON.stringify([text, [text]]) && served.includes(`data-on='connect:quoted.show($t,"${written}",["${written}"])'`),
+      got !== null &&
+        JSON.stringify(JSON.parse(got).slice(0, 2)) === JSON.stringify([text, [text]]) &&
+        served.includes(`data-on='connect:quoted.show($t,"${written}",["${written}"],=said,=held)'`),
       `${got} ${/data-on='[^']*'/.exec(served)?.[0] ?? "no data-on"}`,
+    );
+    check(
+      "a handler gets the text and the booleans elements give their refs, an apostrophe, quotes, &, < and > in the text, as the server had them",
+      got !== null &&
+        JSON.stringify(JSON.parse(got).slice(2)) === JSON.stringify([[text, "plain"], [true, false]]) &&
+        served.includes(`<li data-ref="said" data-ref-value='"${written}"'>`) &&
+        served.includes(`<li data-ref="held" data-ref-value='true'>`),
+      `${got} ${/<li data-ref="said"[^>]*>/.exec(served)?.[0] ?? "no ref value"}`,
     );
     await quoted.close();
   }

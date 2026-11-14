@@ -204,6 +204,27 @@ fn a_float_argument_is_written_as_display_writes_it() {
     }
 }
 
+/// An integer argument, and a ref's integer value, are the digits `Display` writes for the types,
+/// signs and values here, though they are written as markup writes a number, without the
+/// formatter. That writer is `Render`'s, and `integers_render_as_display_writes_them` in
+/// `view/tests.rs` holds it to `Display` at every width and both ends of each type.
+#[test]
+fn an_integer_argument_is_written_as_display_writes_it() {
+    let ints: [i64; 10] = [0, 7, 10, 99, 100, 1250, -1, -100, 9_007_199_254_740_991, -9_007_199_254_740_991];
+    for n in ints {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+    for n in [0u8, 9, 255] {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+    for n in [i32::MIN, i32::MAX] {
+        let html = scoped("x", || html! { <p on:click={shared::log("x", n, true)}></p> }.to_html());
+        assert!(html.contains(&format!("shared.log(\"x\",{n},true)")), "{html}");
+    }
+}
+
 /// `data-on` is single-quoted, so a JSON argument keeps its quotes; an apostrophe, `&`, `<` and
 /// `>` in it are entities, and the browser reads the same JSON back.
 #[cfg(feature = "json")]
@@ -495,6 +516,67 @@ fn closest_groups_keyed_refs_and_typed_event_handlers_are_written_compactly() {
             r#"<tfoot data-on='connect:stock_grid.show(#qty,"a")'></tfoot></table>"#,
         )
     );
+}
+
+// The doctests' script for rows that give their script a value (`Ref::with`), shared here.
+script::script!(mod priced = "../price_list.js");
+
+/// Rows that each give their ref a value, a number for one handler and text for the other.
+#[component]
+fn PriceList<'a>(prices: &'a [(&'a str, f64)]) -> impl Render {
+    let (body, row, named) = refs();
+    html! {
+        <table>
+            <tbody ref={body} on:dblclick={priced::sort(body, row)}>
+                for (name, cents) in prices.iter() {
+                    <tr ref={row.with(*cents)}><td>{*name}</td></tr>
+                }
+            </tbody>
+            <tfoot on:click={priced::sortByName(body, named)}>
+                for (name, _) in prices.iter() {
+                    <tr ref={named.with(*name)}><td>{*name}</td></tr>
+                }
+            </tfoot>
+        </table>
+    }
+}
+
+#[test]
+fn a_ref_with_values_writes_each_as_json_beside_the_ref() {
+    let html = PriceList { prices: &[("Lamp", 1250.0), ("It's \"<b>\" & more", f64::NAN)] }.to_html();
+    assert_eq!(
+        html,
+        concat!(
+            r#"<table data-scope="price-list"><tbody data-ref="body" data-on='dblclick:price_list.sort(@body,=row)'>"#,
+            r#"<tr data-ref="row" data-ref-value='1250'><td>Lamp</td></tr>"#,
+            r#"<tr data-ref="row" data-ref-value='null'><td>It&#39;s &quot;&lt;b&gt;&quot; &amp; more</td></tr></tbody>"#,
+            r#"<tfoot data-on='click:price_list.sortByName(@body,=named)'>"#,
+            r#"<tr data-ref="named" data-ref-value='"Lamp"'><td>Lamp</td></tr>"#,
+            r#"<tr data-ref="named" data-ref-value='"It&#39;s \"&lt;b&gt;\" &amp; more"'><td>It&#39;s &quot;&lt;b&gt;&quot; &amp; more</td></tr>"#,
+            r#"</tfoot></table>"#,
+        )
+    );
+}
+
+/// A ref's value a JavaScript number cannot hold exactly stops debug builds, as a handler's
+/// number argument does.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "beyond what a JavaScript number holds exactly")]
+fn a_ref_value_javascript_cannot_hold_exactly_stops_debug_builds() {
+    #[component]
+    fn Ids<'a>(ids: &'a [u64]) -> impl Render {
+        let (body, row) = refs();
+        html! {
+            <table>
+                <tbody ref={body} on:dblclick={priced::sort(body, row)}>
+                    for id in ids.iter() { <tr ref={row.with(id)}></tr> }
+                </tbody>
+            </table>
+        }
+    }
+    assert!(Ids { ids: &[(1 << 53) - 1] }.to_html().contains("data-ref-value='9007199254740991'"));
+    Ids { ids: &[u64::MAX] }.to_html();
 }
 
 /// A view, for the page test below.
@@ -857,6 +939,7 @@ fn handlers_write_the_shared_wire_vectors() {
         Form {}.to_html(),
         Tallies {}.to_html(),
         StockGrid { rows: &[("a", 1)] }.to_html(),
+        PriceList { prices: &[("a", 1.0)] }.to_html(),
         scoped("x", || {
             html! {
                 <p on:click={shared::log("hi", 2, true)}></p>
