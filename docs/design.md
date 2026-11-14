@@ -1169,7 +1169,8 @@ rules something out.
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
        answer's bytes, naming no router type, for matching (a segment of text chosen over a
        parameter, the path before the method, nothing decoded before matching, an empty segment
-       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for a
+       before another segment, which on axum's matchit 0.8.4 matched a parameter as an empty
+       value and since matches none, as an empty segment at the end never did), `HEAD`, `405` with `Allow` for a
        method the route lacks, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
        an API's prefix, every path under an API's prefix being its own, an API's failures, the
        host check, and an unstaged route's. It passes on axum now, and every later step passes it
@@ -1179,6 +1180,9 @@ rules something out.
        axum's router answered `405` with the route's `Allow`, which 15.5.6 keeps for a method the
        server implements and the resource lacks
        ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+       The deliberate matchit 0.9.2 upgrade later made every path parameter nonempty: an empty
+       segment no longer matches it, though another route such as a catch-all may answer
+       ([Choice 48](#choice-matchit)); the dispatch suite now requires that rule.
        The path is still matched first, so an unknown URL is a `404` whatever its method: RFC 9110
        sets no order among its errors when more than one applies, and the `404` keeps the app's
        own not-found page for a mistyped address, where a `501` would say nothing about it.
@@ -1471,7 +1475,7 @@ rules something out.
     error page, tag, compression or layout reads); measured, one pair of runs (functions named for
     axum, tower or matchit 1.7% of the item page's user instructions, 2.5% with their code inside
     Corten's, the item's JSON 3.8%, on `b79a6b23`); platform (hyper 1.12 reads and writes
-    HTTP/1.1, matchit 0.8 matches paths, and `http` 1 is the type hyper and its clients share);
+    HTTP/1.1, matchit 0.9.2 matches paths ([Choice 48](#choice-matchit)), and `http` 1 is the type hyper and its clients share);
     platform (rustc names the argument no request can fill for one impl per arity, where one impl
     over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
     holds a router of Corten's to what axum does without naming either); measured (the partial
@@ -1487,8 +1491,7 @@ rules something out.
     weaken a security bound even though the no-proxy live app already fails).
 
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
-    (other than the `501` for a method no route in the app has, RFC 9110 9.1, which migration
-    step 1 records), or
+    (other than the deliberate `501` and empty-segment changes migration step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
     hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
@@ -1530,7 +1533,10 @@ rules something out.
     step 1 with main at `f12d3daa`; 2026-11-13, hyper
     1.12.0, hyper-util 0.1.21 and h2 0.4.20, prototype `1a8adcb5f` and driver `70e523f3b`
     against `ecbef5eb`, with the corrected watch semantics read in `watch.rs` and `app.rs`,
-    and the untried connection-level alternative distinguished from the measured send stall.
+    and the untried connection-level alternative distinguished from the measured send stall;
+    2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
+    17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
+    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -1741,9 +1747,8 @@ rules something out.
     path under another prefix, an area's, an API's or one of Corten's own (`/corten/`, the
     assets'), look it up by the request's path, a scan of those prefixes. Which routes can is
     counted segment by segment when the router is built (`api::can_match_under`), as matchit
-    0.8.4 matches: a parameter takes the rest of its segment after any text before it, empty only
-    where the route goes on with a `/` (0.8.5 and 0.8.6 refuse even that, which only narrows what
-    matches), a catch-all the rest of the path, and a prefix of Corten's own holds only paths with
+    0.9.2 matches: a parameter takes at least one byte of its segment after any text before it,
+    a catch-all the nonempty rest of the path, and a prefix of Corten's own holds only paths with
     a segment after it. So a page's `/{*rest}` looks up by path, as does `/{slug}` beside an area
     at `/shop` (it matches `/shop`) and `/shop/{id}` beside one at `/shop/desk`, while `/{slug}`
     in an app with no areas, or beside `/shop/desk` alone, has its scope. The count reads each
@@ -1916,19 +1921,17 @@ rules something out.
     API's routes are held to `route::route_shaped` when the app compiles, and text after a
     parameter is stripped before the router holds the path (`suffixed`); a `Route` written by hand
     and given to the hidden `Routes::__route` can put text before one, and the count follows
-    matchit 0.8.4 for that too); platform (matchit, read in its source: an app's `Cargo.lock` names
-    the version it holds, which `crates/corten/Cargo.toml`'s caret `0.8.4` lets be any of 0.8.4 to
-    0.8.6, the newest published; this workspace holds 0.8.4, which axum 0.8.9 pins for
-    `examples/card-market`, and a new app, whose `corten new` template asks for no axum, resolves
-    the newest, 0.8.6, when cargo first writes its lock. In all three a parameter takes the rest of
-    its segment after any text before it, a segment holds one parameter, and a catch-all takes the
-    rest of the path; 0.8.4 lets a value before a `/` be empty and 0.8.5 and 0.8.6 do not, and
-    0.8.6 adds text after a parameter, which Corten never holds, so for Corten's routes the later
-    two match no path 0.8.4 does not, and the count, which allows the empty value, is never short
-    for any of them. It is not exact: a static route beside a route may answer first the paths it
-    counts, and under 0.8.5 or 0.8.6 a hand-written `/corten{x}/{b}` is counted for `/corten/b`,
-    which it no longer matches. `tests::can_match_under_never_says_no_where_matchit_matches` checks
-    the count against the matchit a build resolves, so CI runs it on 0.8.4); measured (callgrind,
+    matchit 0.9.2 for that too; such a route can also meet 0.9.2's order-dependent conflict,
+    a known limit [Choice 48](#choice-matchit) records); platform (matchit 0.9.2, exactly pinned by
+    [Choice 48](#choice-matchit), read in `tree.rs`: a parameter takes at least one byte after
+    any text before it and before any suffix, a segment holds one parameter, and a catch-all
+    takes the nonempty rest of the path. Corten still strips suffixes before insertion, so
+    0.9's tightened prefix/suffix conflicts do not change the shapes its macros insert.
+    `Router::new` still reports every insertion error with the rejected path and matchit's
+    conflicting route. The count now refuses empty parameter values, including a hand-written
+    `/corten{x}/{b}` against `/corten/`. It is not exact: a static route beside a route may
+    answer first the paths it counts. `tests::can_match_under_never_says_no_where_matchit_matches`
+    checks the count against 0.9.2 and requires every tested route to insert); measured (callgrind,
     release, three runs each, every run the same, an uncommitted variant of `fa0b1525` whose
     `laned` adds the headers as it takes the handler's answer: 7,022
     and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each with
@@ -1983,13 +1986,12 @@ rules something out.
     an app route there, beyond the 667 measured at `084db982` (19,236.7 through the catch-all
     against 18,569.8 at the route, a catch-all's match counted in it); or a route whose every
     path is outside the other prefixes is sent by path for a reason other than a static route
-    beside it answering those paths first or, for a hand-written route, an empty value before a
-    `/` that the matchit it is held in refuses, which says the segment count has grown looser
+    beside it answering those paths first, which says the segment count has grown looser
     than it reads; or one is given a scope while one of its paths is under another prefix, which a
     request would then answer with the wrong area's settings; or
     `tests::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
-    build resolves matches a path the count says a route cannot reach; or a matchit 0.8 release
-    after 0.8.6 is published, whose rules were not read, or Corten's requirement moves past 0.8;
+    build resolves matches a path the count says a route cannot reach; or Corten's exact
+    matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
 
@@ -2024,7 +2026,13 @@ rules something out.
     against 0.8.4's and 0.8.6's, the versions crates.io lists for 0.8 (0.8.6 the newest), and the
     workspace's `Cargo.lock` (matchit 0.8.4, axum 0.8.9 requiring `=0.8.4`), with the
     differential test in the commit that adds it, which fails when the count is made to refuse an
-    empty value before a `/`.
+    empty value before a `/`; 2026-11-13, matchit 0.9.2's `tree.rs`, `error.rs` and insertion
+    tests read against 0.8.4 and 0.8.6, and `Router::new` and `api::can_match_under` re-read
+    against them for the exact pin ([Choice 48](#choice-matchit)); 2026-11-14, the matching
+    differential and area-scope tests passed in the merged workspace's full debug tests at
+    `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
+    conflict a hand-written prefixed route can meet, and the differential and area-scope tests
+    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -3316,7 +3324,137 @@ rules something out.
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
     `stylesOf` (`9c722e27`) put back in this head's runtime.
 
-48. <a id="choice-asked-open-state"></a>**A patch keeps what the user opened or closed, except that the element a `data-patch`
+48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
+    `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
+    fixes [#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368):
+    with `0.8`, a fresh app's lockfile took 0.8.6 while the workspace's held 0.8.4, and a patch
+    release (0.8.5) had changed what an empty segment matches, so no looser requirement holds
+    every app to the matcher Corten's tests ran. A later matchit release, a patch included, is
+    taken only by changing the pin and running the edge-path tests again.
+
+    Which version is the smaller question. For the routes Corten's macros and areas insert,
+    0.8.6 and 0.9.2 match and insert alike: `Node::at` is the same in both, and every conflict
+    check 0.9 adds needs a parameter with text before or after it in its segment, which no such
+    route has (`route_shaped` and `parse_path` refuse text before a parameter, and Corten strips
+    the text after one before inserting it). 0.9.2 was chosen as the maintained line: 0.8.6
+    (January 2025) is 0.8's last release, and 0.9.0 to 0.9.2 have followed since October 2025,
+    so a fix lands where the pin can take it without a minor-version move. `=0.8.4` was weighed:
+    it keeps the matcher every app has tested with and costs no instructions. It lost on
+    correctness and reliability, which the conflict order puts before the instructions. Upstream
+    calls its empty-value matching a bug: matchit 0.8.5's release note says "Fixed a bug where
+    empty route parameters were accepted"
+    ([ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60)).
+    The bug gives a wrong answer: under 0.8.4 an empty value lets a parameter route shadow a
+    catch-all, so `/x//y` reaches a POST-only `/x/{a}/y` instead of a `/{*page}` page, and a
+    GET there fails (`tests::serves_agrees_with_the_router` now requires the page to answer it).
+    And 0.8 gets no more fixes; they ship only on 0.9.x, so a pin on 0.8.4 would take the next
+    one only through a forced minor-version move. 0.8.4 also matches an empty value in some
+    places and not others: as the first segment (`//posts` reaches `/{user}/posts` with `user`
+    empty) and between segments (`/items//edit` reaches `/items/{id}/edit`), but not at the end
+    (`/items/` reaches no `/items/{id}`). That inconsistency alone is a Value 5 point, which
+    ranks below the instructions, and is not why 0.8.4 lost. Links already refused an empty
+    value at both ends, for different reasons: at the start because a browser reads `//posts`
+    as another host, at the end because the router missed it. Corten no longer
+    depends on axum, so card-market's comparison-only axum 0.8.9 keeps its own matchit 0.8.4.
+
+    This is breaking for apps tested with 0.8.4: a parameter must be nonempty even before a
+    slash (`/items//edit` no longer matches `/items/{id}/edit`), and links refuse that empty
+    value as they already refuse one at the start or end. Without another matching route it is a
+    404; a catch-all can now answer where an empty parameter used to shadow it, including a
+    POST-only parameter route that previously caused a GET to fail. Catch-alls still carry
+    empty inner segments.
+    Corten keeps one suffix convention: it inserts `{name}text` as `{name}` and checks the
+    suffix itself, so suffix-only alternatives remain conflicts, and no fallback catches a
+    missing suffix. A `Route` written by hand and given to the hidden `Routes::__route` can put
+    text before a parameter (`/a{x}/{y}`); such a route meets 0.9.2's conflict rules, and
+    `Router::new` names the rejected path and the conflicting route at startup.
+
+    Known limit: for those hand-written routes 0.9.2 refuses some pairs in one insertion order
+    and takes them in the other, though no path is ambiguous between them. `/{z}/b` added after
+    `/a{x}/{y}` stops the app, and added before it starts and answers each route's own paths;
+    likewise `/{z}/b` after `/a{x}`, and `/{slug}/more` after `/shop{x}/desk` (0.8.6 takes all
+    three in either order). Reorder the routes, or drop the text before the parameter, which no
+    derived route has anyway. `tests/matchit.rs` and
+    `tests::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
+    that fixes it fails them and this paragraph goes.
+
+    What the exact pin costs: Cargo allows one semver-compatible version of a crate in a build,
+    one 0.9.x here, so an app with another dependency that requires matchit 0.9.3 or later (a
+    future axum, say) cannot resolve until Corten moves the pin; and a matchit fix, a security
+    fix included, reaches apps only in a Corten release. The matched request costs about 50
+    instructions more (0.29%), and an unknown path about 11 more (0.06%), measured below. The
+    cost most likely arrived with 0.8.6, not 0.9: 0.8.6 rewrote `tree.rs` and changed
+    `params.rs`, while from 0.8.6 to 0.9.2 `Node::at` is unchanged and `params.rs` only gains
+    `Debug` impls, so `=0.8.6` would likely cost about the same (reasoned from the sources, not
+    measured).
+    Correctness and reliability take those costs first: no app changes matcher with its
+    lockfile, and every app matches as Corten's tests do.
+
+    Stands on: platform (matchit 0.8.4, 0.8.6 and 0.9.2 registry sources: 0.8.4 admits empty
+    values before `/`, 0.8.6 and 0.9.2 refuse them; the 0.8.6 to 0.9.2 diff of `tree.rs` leaves
+    `Node::at` alone and adds only insertion checks, each for a parameter with a prefix or
+    suffix in its segment; crates.io's release dates for 0.8.6, 0.9.0, 0.9.1 and 0.9.2; Cargo
+    unifies semver-compatible versions, so one 0.9.x per build; matchit 0.8.5's release note,
+    "Fixed a bug where empty route parameters were accepted", from
+    [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60));
+    measured (a probe of matchit 0.8.4 and 0.9.2, one router per question: on 0.8.4 `//posts`
+    reaches `/{user}/posts` with `user` empty and `/x//y` reaches `/x/{id}/y` beside
+    `/{*rest}` with `id` empty, while `/items/` reaches no `/items/{id}`; on 0.9.2 `//posts`
+    and `/items/` reach nothing and `/x//y` reaches `/{*rest}`); measured (callgrind 3.19.0,
+    release with thin LTO and glibc's allocator, three alternating runs each of
+    `tests/router_cost.rs`, 1,200 requests less 200 divided by 1,000, the merge `4c6ac3e3d`
+    against main `de46e974b`: a matched `/items/7/edit` request 17,413.113 instructions
+    (17,412.966 to 17,413.119) against 17,362.966 (17,362.943 to 17,363.075), and a 404 at
+    `/items/7/unknown` 19,095.113 (19,095.042 to 19,095.119) against 19,083.825 (19,083.792 to
+    19,083.919); the same at `0653768e1` against main `d2f885c3e`, before main's patch
+    stylesheets: 17,412.966 against 17,362.948 and 19,095.004 against 19,083.886); measured
+    (those two commits built with line tables, one run each, giving the same +50.0 and +11.2,
+    split by source file: the whole request is one
+    inlined closure, and in the matched request matchit's `tree.rs` counts 10 more and its
+    `params.rs` 9 more, standard-library slice, `Vec` and comparison code inlined beside them
+    about 21 more, `memcmp` 9 more and `memcpy` 10 fewer, and no Corten file more than 3; in
+    the 404 `tree.rs` counts 21 more, slice iteration 9 more, `params.rs` 5 fewer, `memcmp` 14
+    fewer and `memcpy` 10 fewer: the cost is matchit's lookup and parameter code, not Corten's);
+    reasoned (that lookup and parameter code is 0.8.6's: `tree.rs` differs by 954 changed lines
+    from 0.8.4 to 0.8.6, and by 267 from 0.8.6 to 0.9.2, none of those 267 in `Node::at`;
+    `params.rs` by 55 and then 11, the 11 being `Debug` impls; so `=0.8.6` would likely cost
+    the same; not measured); reasoned (an exact pin makes a new app
+    and the workspace resolve the same matcher, independently of axum; `tests/matchit.rs` asks
+    matchit itself about values, catch-alls, trailing slashes, `%2F`, the fallback from a
+    refused empty value to a catch-all, longest prefixes and suffixes, conflicts in either
+    order, the order-dependent conflict above, an empty route and the nonconflicting suffix
+    cases fixed in 0.9.1 and 0.9.2; the scope differential test checks that no matched path
+    loses its area's or API's settings); value (correctness and reliability first, then
+    measured request work, with one matching convention and a deliberate dependency, Values 1,
+    5, 6 and 9).
+
+    Revisit when: the pin changes, a matchit fix affects a route Corten accepts, the direct
+    matching or scope tests fail, or an app needs suffixed alternatives that Corten's
+    whole-segment convention refuses; matchit publishes any release after 0.9.2, or an advisory
+    names 0.9.2 (read it, and take a fix in a Corten release); an app reports that it cannot
+    resolve beside a dependency that needs a later 0.9.x; or a derived, area or API route may
+    put text before a parameter, which would bring the order-dependent conflict to every app.
+    Re-read insertion errors and the scope count with any version change, and measure matched
+    and unknown requests before taking it.
+
+    Last checked: 2026-11-13, matchit 0.8.4, 0.8.6 and 0.9.2 registry source read, including
+    `tree.rs`, 0.9.2's `error.rs`, `lib.rs` and `tests/insert.rs`, against Corten at `0ff569c69`;
+    2026-11-13, the four direct matching tests failed on 0.8.4 and passed on the exact 0.9.2
+    pin, with all 17 dispatch tests passing after the deliberate empty-value change;
+    2026-11-14, the 0.8.6 and 0.9.2 sources diffed file by file, and the order-dependent
+    conflict run on both (0.8.6 takes every pair in both orders); 2026-11-14, crates.io's
+    list of matchit releases read, matchit 0.9.2 the newest (published 2026-04-08) after 0.9.1,
+    0.9.0 and 0.8.6; 2026-11-14, the matched and
+    unknown requests counted at `4c6ac3e3d` against `de46e974b` and at `0653768e1` against
+    `d2f885c3e`, with the same harness copied into each base snapshot, rustc 1.99.1 and
+    valgrind 3.19.0, and the cost split by source file at the second pair;
+    2026-11-14, the six direct matching tests, 17 dispatch tests, scope differential and the
+    hand-written order-dependent conflict test passed in the full debug tests of `0653768e1`
+    and of the merge `4c6ac3e3d`; 2026-11-14, matchit's release notes for 0.8.4, 0.8.5 and
+    0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
+    `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
+
+49. <a id="choice-asked-open-state"></a>**A patch keeps what the user opened or closed, except that the element a `data-patch`
     answer replaces takes the answer's open state when the user asked for it from outside it.** A
     patch carries a `<dialog>`, `<details>` or popover the user opened or closed into the fresh
     markup unless the server changed it from what it sent before
@@ -3479,7 +3617,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    element with an id, the same name; focus also follows an element without either to the same
    place). A field without an id or a unique name takes the server's value. A `<dialog>`,
    `<details>` or popover the user opened or closed stays so, unless the server changed it or the
-   user asked for the element from outside it ([Choice 48](#choice-asked-open-state)). Other
+   user asked for the element from outside it ([Choice 49](#choice-asked-open-state)). Other
    browser state inside a replaced element (scroll position) resets, so keep targets small.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
@@ -3728,9 +3866,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     back as. A browser resolves a `.` or `..` segment away before it asks (the URL Standard, which
     reads `%2e` as a dot there too), so `/items/..` opens `/` and the `{*rest}` key
     `public/../private/x` opens `/files/private/x`; and the router has no segment for an empty
-    value first or last in the path (`//posts` is another host to a browser, `/items/` matches no
-    `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
-    `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
+    parameter anywhere (`//posts` is another host to a browser, `/items/` matches no `{id}`,
+    and `/notes//edit` matches no `/notes/{title}/edit`). So `.`,
+    `..`, a `{*rest}` value with such a segment, and an empty path parameter are not
     written as they are by a `#[derive(Route)]` link: a debug build panics when the link is
     written, naming the route by its module path (`shop::url::Item`) and the field, and a release
     build writes `%FF` after the value (`/items/..%FF`, `/files/public/..%FF/private/x`,
@@ -3750,8 +3888,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
     browser resolves: the refusal is kept, since it costs nothing where no value has such a
     segment and the value means a path above the route's. A value that only contains dots
-    (`a.b`, `...`, `.hidden`) is written as it is, and so is an empty one between two segments
-    (`/notes//edit`, or `/shelves//` for `/shelves/{id}/`), which reads back. A route's own path
+    (`a.b`, `...`, `.hidden`) is written as it is. Empty segments inside a nonempty catch-all
+    still read back (`/files/a//b`). A route's own path
     cannot have a `.` or `..` segment, or that text after a parameter: with `#[derive(Route)]`
     neither compiles, and a `Route` written by hand does not build with that text after a
     parameter in its `WRITTEN` path, or with a dot segment in its `PATH` where an area or an API

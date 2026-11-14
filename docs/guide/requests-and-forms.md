@@ -374,6 +374,14 @@ module a route with a parameter in its path holds each of its handlers to taking
 `Params`: one that reads the path another way (axum's `Path`), or reads another route's, does
 not compile.
 
+A path parameter matches a nonempty value: `/items//edit` does not match
+`/items/{id}/edit`, and `/shelves//` does not match `/shelves/{id}/`. A catch-all must
+also be nonempty, but may contain empty segments (`/files/a//b`); it can answer a path such as
+`/items//edit` when the parameter route does not match. Without another matching route the
+answer is 404. Matching is case-sensitive
+and keeps trailing slashes distinct. Corten pins the matchit version it tests, so a fresh app
+gets these same rules ([design Choice 48](../design.md#choice-matchit)).
+
 A parameter may be followed by plain text in its segment, as a file's extension is:
 `#[route("/sitemap/{kind}/{page}.xml")] pub struct SitemapPage<'a> { pub kind: &'a str, pub page: u32 }`
 links to `/sitemap/items/3.xml`, and `Params` reads `page` as `3`. A segment that does not end in
@@ -404,9 +412,9 @@ so neither is an open redirect.
 Nor does a link open another page of the site than the one its values name, so some values cannot
 be a path parameter ([the limit on path values](../design.md#limit-path-values)): `.` and `..`,
 which a browser resolves away before it asks (`/items/..` opens `/`, and `%2e` is a dot to it
-too), a `{*rest}` value with such a segment (`public/../private/x`), and an empty value first or
-last in the path, before text in its segment, or as a whole `{*rest}` value, where the router has
-no segment for it (`/{user}/posts` would be `//posts`, another host). A debug build panics when
+too), a `{*rest}` value with such a segment (`public/../private/x`), and an empty path parameter
+anywhere, which the router does not match (`/{user}/posts` would also be `//posts`, another host).
+A debug build panics when
 such a link is written, naming the route by its module path (`shop::url::Item`) and the field; a
 release build writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400,
 and logs that as an error once for each route and field. A refusal counts only when the subscriber
@@ -414,8 +422,7 @@ then in place takes an error event of Corten's, as Corten's default subscriber a
 target filter do; a subscriber that filters on an event's message text or its line can disagree
 with that check either way: a refusal it drops still uses up the one line, and one it would log
 may never be logged. A value that only contains dots
-(`a.b`, `.hidden`) is written as it is, as is an empty one between two segments (`/shelves//`
-for `/shelves/{id}/`), which reads back. Refuse these values where the app stores them (a slug, a
+(`a.b`, `.hidden`) is written as it is. Refuse unreadable values where the app stores them (a slug, a
 user name, a file key), so no link reaches the check. A route's own path with a `.` or `..`
 segment, or that text after a parameter, does not compile. These are checks of
 `#[derive(Route)]` links: a `Route` written by hand writes its own values in `write_href`, and

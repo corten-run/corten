@@ -43,8 +43,8 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # layer (a rate limit, a trace span) goes around the app.
 tower-layer = "0.3"
 tower-service = "0.3"
-# The path to its route, for Corten's router (`corten::Router`).
-matchit = "0.8.4"
+# The path to its route. Matching changes require a deliberate upgrade (docs/design.md#choice-matchit).
+matchit = "=0.9.2"
 # A path parameter's percent-decoding, after the path is matched.
 percent-encoding = "2"
 # Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`).

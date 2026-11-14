@@ -179,9 +179,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 let place = match (segment, segments.get(n + 1)) {
                     (Segment::Rest(_), _) => "REST",
                     (_, Some(Segment::Static(next))) if !next.starts_with('/') => "TEXT",
-                    (_, None) => "EDGE",
-                    _ if first && n == 1 => "EDGE",
-                    _ => "INNER",
+                    _ => "WHOLE",
                 };
                 // The route is named by its module path (`shop::url::Item`), so two routes of one
                 // name in two modules are logged apart when a value is refused.

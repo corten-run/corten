@@ -39,21 +39,33 @@ environment site-machine
 # half, under the site's name, so a machine that replaces another is still the host it trusts.
 # All four halves or none: a run that stopped between them leaves keys nothing can be matched
 # to, and they are made again.
+work=$(mktemp -d)
+# The private halves do not outlast the run, however it ends: sh runs the EXIT trap for a
+# signal only when the signal is caught.
+trap 'rm -rf "$work"' EXIT
+trap 'exit 1' INT TERM HUP
 if has_secret site SITE_SSH_KEY && has_secret site-machine SITE_HOST_KEY &&
     has_variable site-machine SITE_DEPLOY_KEY && has_variable site-machine SITE_HOST_KEY_PUBLIC; then
     echo "the keys are already there, and are kept"
 else
-    work=$(mktemp -d)
-    # The private halves do not outlast the run, however it ends: sh runs the EXIT trap for a
-    # signal only when the signal is caught.
-    trap 'rm -rf "$work"' EXIT
-    trap 'exit 1' INT TERM HUP
     ssh-keygen -q -t ed25519 -N "" -C corten-site-deploy -f "$work/deploy"
     ssh-keygen -q -t ed25519 -N "" -C corten-site -f "$work/host"
     gh secret set SITE_SSH_KEY --env site < "$work/deploy"
     gh secret set SITE_HOST_KEY --env site-machine < "$work/host"
     gh variable set SITE_DEPLOY_KEY --env site-machine --body "$(cat "$work/deploy.pub")"
     gh variable set SITE_HOST_KEY_PUBLIC --env site-machine --body "$(cat "$work/host.pub")"
+fi
+# A third key, the workflow's that makes machines and no machine's: with it that workflow
+# carries the certificate and the release from a machine to the one that replaces it, so the
+# new one serves before the address moves (handover.sh, relay.sh). Each machine lets its
+# public half run that one command. Made apart from the others, so a repository set up before
+# there was one gets it from a second run, and keeps the rest.
+if has_secret site-machine SITE_HANDOVER_KEY && has_variable site-machine SITE_HANDOVER_KEY_PUBLIC; then
+    echo "the handover key is already there, and is kept"
+else
+    ssh-keygen -q -t ed25519 -N "" -C corten-site-handover -f "$work/handover"
+    gh secret set SITE_HANDOVER_KEY --env site-machine < "$work/handover"
+    gh variable set SITE_HANDOVER_KEY_PUBLIC --env site-machine --body "$(cat "$work/handover.pub")"
 fi
 # The Site workflow reaches the machine by the site's name, and knows it by the host key.
 host=$(gh variable get SITE_HOST_KEY_PUBLIC --env site-machine)

@@ -474,16 +474,14 @@ pub(crate) fn reaches(route: &str, prefix: &str) -> bool {
 }
 
 /// Whether `route` (as the router holds it), outside `prefix`, can match a path at `prefix` or
-/// under it, segment by segment as matchit 0.8.4 matches: a parameter matches the text before it
-/// in its segment and then the rest of that segment, which may be empty where the route goes on
-/// after it but not where it ends the route (`/shop{x}/desk` matches `/shop/desk`, `/cor{x}`
-/// never `/cor`); a catch-all, the text before it and at least one more byte of the path.
-/// matchit 0.8.5 and 0.8.6 refuse an empty value before a `/`, which only narrows what matches.
+/// under it, segment by segment as matchit 0.9.2 matches: a parameter matches the text before it
+/// in its segment and then at least one byte of that segment (`/shop{x}/desk` never matches
+/// `/shop/desk`); a catch-all, the text before it and at least one more byte of the path.
 /// A `prefix` that ends in `/` (Corten's own, `/corten/`) holds only the paths with a segment
 /// after it. Narrower than [`reaches`], which counts only the text before the first parameter:
 /// `/{slug}` reaches `/shop/desk` but cannot match under it. The router holds no text after a
-/// parameter (Corten strips it, and matchit 0.8.4 refuses it); were there some, the parameter
-/// would match one byte or more before it, as matchit 0.8.6 matches it. It reads the route alone:
+/// parameter (Corten strips it); were there some, the parameter would match one byte or more
+/// before it, as matchit 0.9.2 matches it. It reads the route alone:
 /// a static route beside it may answer such a path first.
 pub(crate) fn can_match_under(route: &str, prefix: &str) -> bool {
     if !route.contains('{') || under(prefix.strip_suffix('/').filter(|p| !p.is_empty()).unwrap_or(prefix), route) {
@@ -503,9 +501,7 @@ pub(crate) fn can_match_under(route: &str, prefix: &str) -> bool {
         let fits = match (segment.find('{'), segment.rfind('}')) {
             (Some(open), Some(close)) if open < close => {
                 let (before, after) = (&segment[..open], &segment[close + 1..]);
-                // Empty only before a `/` the route goes on with, as matchit 0.8.4 matches.
-                let value = usize::from(i + 1 == segments.len() || !after.is_empty());
-                want.len() >= before.len() + after.len() + value && want.starts_with(before) && want.ends_with(after)
+                want.len() > before.len() + after.len() && want.starts_with(before) && want.ends_with(after)
             }
             _ => segment == want,
         };
