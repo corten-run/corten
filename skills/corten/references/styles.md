@@ -63,6 +63,8 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
    components there, `.area(|area| admin::area(area).components(&[..]))`: their
    stylesheet is linked from pages under that prefix only, and from the patches its handlers
    answer (a `data-patch` form elsewhere whose action is in the area gets it with the patch), so
-   list a patch's components in its handler's area. A component used in several areas
+   list a patch's components in its handler's area. A page outside the area fetches that
+   stylesheet for any patch from the area's handlers, even one that draws none of its components,
+   and loads it under its own CSP, not `Area::policy`'s. A component used in several areas
    is listed in each (they share a file of its rules); one most pages use stays in
    `App::components`, and so do tokens. Details: `docs/guide/styles.md`, "Areas".

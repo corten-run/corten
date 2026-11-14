@@ -453,13 +453,24 @@ App::new(routes)
 - A patch brings the stylesheets of its handler's area, linked after its elements, as a
   navigation's answer does: a `data-patch` form on `/search` whose action is `/items/{slug}/save`
   gets its dialog styled by the `/items` area's stylesheet, which the runtime adds and waits for
-  before it puts the patch in place. List a patch's components where its handler is, as a page's
-  are listed where the page is; a debug build checks them against the handler's path. A patch
-  answered on a page that already links the stylesheet costs the link's bytes and no request (the
-  runtime skips one it has); a stylesheet that fails to load leaves the patch in place unstyled,
-  since the patch is a write's answer, and the next patch that links it tries again. Why the
-  server links by the handler's path rather than being told the page's, and what it costs:
-  [design Choice 46](../design.md#choice-patch-brings-area-styles).
+  before it puts the patch in place; a second patch or a navigation that links it while it loads
+  waits for the same load. List a patch's components where its handler is, as a page's are listed
+  where the page is; a debug build checks them against the handler's path.
+- A patch answered on a page that already links the stylesheet costs the link's bytes and no
+  request (the runtime skips one it has). On a page that lacks it, the page fetches the area's
+  stylesheet and the answer waits for it, even when the patch draws none of the area's
+  components (one that only removes a row, or draws components from `App::components`): the
+  link goes by the handler's path, not by what the patch draws. A handler whose patches mostly
+  land outside its area is cheaper routed where its pages are.
+- A stylesheet that fails to load leaves the patch in place unstyled, since the patch is a
+  write's answer, and the next patch that links it tries again. One that neither loads nor fails
+  holds the answer as it holds a navigation, with no timeout of Corten's own.
+- The stylesheet is loaded under the policy of the page the patch lands on, not the area's: an
+  image or font it loads from a source only `Area::policy` adds is refused on a page outside the
+  area. An area stylesheet that needs such a source does not carry over to those patches: add the
+  source to the app's policy, or answer them from a handler on the page's side.
+- Why the server links by the handler's path rather than being told the page's, and what it
+  costs: [design Choice 47](../design.md#choice-patch-brings-area-styles).
 
 Splitting has a price: two files compress worse than one, and entering the area costs a
 request. Measured on the item page (release build, brotli at its file level): one

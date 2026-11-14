@@ -411,10 +411,17 @@ Corten is pre-1.0, so any minor version may change the API.
   the answer links its handler's section stylesheets after its elements, as a navigation's
   answer does, and the runtime loads the ones the page lacks with the patch's modules before it
   puts the patch in place, so a `data-patch` form on a page outside the area no longer draws the
-  area's components unstyled. One that fails to load is taken out again and the patch goes in
-  unstyled; the next patch that links it tries again. The debug check of a patch's components,
-  which read the handler's path while the page the patch lands on linked other stylesheets, is
-  now right for that path, and its message says it was a patch
+  area's components unstyled. A second patch or a navigation that links a stylesheet still
+  loading waits for the same load. One that fails to load is taken out again and the patch goes in
+  unstyled; the next patch that links it tries again. The link goes by the handler's path, not by
+  what the patch draws, so a page outside the area fetches the area's stylesheet, and the answer
+  waits for it, for any patch from the area's handlers, even one that only removes a row; the
+  stylesheet is under that page's CSP, not `Area::policy`'s. The debug check of a patch's
+  components, which read the handler's path while the page the patch lands on linked other
+  stylesheets, is now right for that path, and its messages say it was a patch. **Breaking:**
+  every patch whose handler is under an area with a stylesheet ends with that `<link>`, so an
+  app's test that compares such a patch's body whole changes (the watchlist's Load more test now
+  splits it off)
   ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
 
 - The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
