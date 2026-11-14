@@ -139,8 +139,10 @@ pub struct AnyAnswer;
 /// [`Req::patch`](crate::Req::patch), [`Req::patch_with_status`](crate::Req::patch_with_status),
 /// [`Req::patch_or`](crate::Req::patch_or), [`Req::invalid`](crate::Req::invalid) and
 /// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
-/// route that says `patches` returns, so a part of a page [`crate::ReadAgain::from`] reads
-/// again from that route always gets a patch:
+/// route that says `patches` returns, so the handler's answer to the runtime's read of a part of
+/// a page ([`crate::ReadAgain::from`]) is a patch. What answers before the handler (a stage, an
+/// extractor such as a `Caller` that refuses someone signed out) and a response the handler
+/// replaces through `DerefMut` are not checked:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -197,7 +199,7 @@ pub struct Patches;
 #[diagnostic::on_unimplemented(
     message = "the route says `patches`, and its get handler's `{Self}` may answer the runtime's read with a page or a redirect",
     label = "this handler",
-    note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+    note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
 )]
 pub trait OnlyPatches {}
 impl<For> OnlyPatches for HtmlResponse<For, Patches> {}
@@ -380,16 +382,14 @@ pub trait ForEveryone: IntoResponse {
     fn for_all(self) -> <Self::Named as Shareable>::ForAll;
 }
 
-impl ForEveryone for HtmlResponse<ForAll, AnyAnswer> {
-    type Named = HtmlResponse<ForOne, AnyAnswer>;
-
-    fn for_all(self) -> Self {
-        self
-    }
-}
-
-impl ForEveryone for HtmlResponse<ForAll, Patches> {
-    type Named = HtmlResponse<ForOne, Patches>;
+// One impl for every `Kind`, so `Public::new(age, req.patch(..))` finds its `For` and `Kind` from
+// the handler's `Public<HtmlResult>` (or `Public<HtmlResult<Patches>>`): with one impl per kind,
+// `For` stays open and the call needs a turbofish.
+impl<Kind> ForEveryone for HtmlResponse<ForAll, Kind>
+where
+    HtmlResponse<ForOne, Kind>: Shareable<ForAll = Self>,
+{
+    type Named = HtmlResponse<ForOne, Kind>;
 
     fn for_all(self) -> Self {
         self
@@ -483,8 +483,9 @@ where
 }
 
 /// What a page handler returns: `async fn item(req: Req) -> HtmlResult`. A failure is the app's
-/// error page for a browser. `HtmlResult<Patches>` is one that is always a patch when the runtime
-/// asks ([`Patches`]), for the `get` of a route that says `patches`.
+/// error page for a browser. `HtmlResult<Patches>` is one made only by the `Req` methods that
+/// answer a patch when the runtime asks ([`Patches`]), for the `get` of a route that says
+/// `patches`.
 pub type HtmlResult<Kind = AnyAnswer> = crate::Result<HtmlResponse<ForOne, Kind>>;
 
 /// What a JSON handler returns: `async fn price(..) -> JsonResult<Quote>`. Every failure of the
@@ -1433,6 +1434,50 @@ impl<A: Shareable> Public<A> {
     ///     Public::new(Duration::from_secs(60), home_page(&req))
     /// }
     /// # let _: Methods = get(home);
+    /// ```
+    ///
+    /// A public answer may be a patch, and `Public::new` finds its type around `req.patch` and
+    /// `req.patch_or` as around `req.page`, with no turbofish, for a `Public<HtmlResult>` and for
+    /// the `Public<HtmlResult<Patches>>` of a route that says `patches`
+    /// ([`Patches`](crate::Patches)):
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/price", get = price)]
+    ///     pub struct Price;
+    ///
+    ///     #[route("/quote", get = quote)]
+    ///     pub struct Quote;
+    ///
+    ///     #[route("/status", get = status, patches)]
+    ///     pub struct Status;
+    /// }
+    ///
+    /// #[derive(Id)]
+    /// struct PriceId;
+    ///
+    /// fn page(req: &Req) -> corten::Result<corten::HtmlResponse<corten::ForAll>> {
+    ///     req.page(html! { <html><head><title>"Price"</title><Corten /></head><body><main>"$12"</main></body></html> })
+    /// }
+    ///
+    /// async fn price(req: Req) -> Public<HtmlResult> {
+    ///     Public::new(Duration::from_secs(60), req.patch(html! { <p id={PriceId}>"$12"</p> }))
+    /// }
+    ///
+    /// async fn quote(req: Req) -> Public<HtmlResult> {
+    ///     let part = html! { <p id={PriceId}>"$12"</p> };
+    ///     Public::new(Duration::from_secs(60), req.patch_or(part, || async { page(&req) }).await)
+    /// }
+    ///
+    /// async fn status(req: Req) -> Public<HtmlResult<Patches>> {
+    ///     let part = html! { <p id={PriceId}>"$12"</p> };
+    ///     Public::new(Duration::from_secs(60), req.patch_or(part, || async { page(&req) }).await)
+    /// }
+    /// # let _ = App::new(url::router()).router();
     /// ```
     pub fn new<T: ForEveryone<Named = A>>(max_age: Duration, answer: T) -> Self {
         Public { cache: Cache::public(max_age), answer: answer.for_all(), headers: None }

@@ -19,6 +19,27 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A value the markup gives an element for its script is the element's ref's: `ref={row.with(cents)}`
+  (a number, text or a `bool`), and a handler parameter typed `Map<HTMLTableRowElement, number>`
+  gets every element of the ref with its value, a number as a number. The call is checked as any
+  ref's is, so a ref whose elements give no value, give one of another type, or give one on some
+  elements and not others does not compile, where a `data-` attribute read through `dataset` was
+  text on both sides that nothing checked. `examples/card-market`'s listing sort reads its cents
+  this way, and the scripts guide recommends it for rows a script only reorders;
+  `examples/corten-site`'s wall, `apart.js` and `answer.js` read their values the same way. Measured
+  against `main`: the runtime is 107 bytes larger raw, 21 with gzip and 24 with brotli;
+  card-market's item page, whose 22 listing rows (on average) each give a value, is 418 bytes larger
+  and takes about 930 instructions more to render (2.4%); a page whose elements give no value is
+  unchanged, to the instruction ([design Choice 46](docs/design.md#choice-ref-values)). An integer
+  handler argument is now written as markup writes a number, with the same digits as before.
+  **Breaking:** `data-ref-value` is printed by Corten, as `data-ref` is, so markup that writes it by
+  hand no longer compiles; give the value with the element's ref. A spread of pairs (`{..attrs}`)
+  now skips `data-ref-value`, `data-ref`, `data-on` and `data-scope`, whole names in any case, as it
+  skipped `data-vars`, so pairs that wrote them are dropped; it costs at most five length-checked
+  comparisons per pair, on pair spreads only. corten-ui's `rows::sort` still reads the `data-sort`
+  an app writes (moving it onto ref values is
+  [#1387](https://github.com/corten-run/corten/issues/1387)).
+
 - Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
   images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
   and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
@@ -295,19 +316,27 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
-  `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the runtime's read of the route
-  always gets a patch. Before, any route compiled, and one whose handler answered its page left
+  `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
+  runtime's read of the route is a patch (what answers before the handler, a stage or an
+  extractor such as a `Caller` refusal, and a response replaced through `DerefMut` are not
+  checked). Before, any route compiled, and one whose handler answered its page left
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
-  the call or at the handler's name ([design Choice 46](docs/design.md#choice-patch-routes)). A
+  the call or at the handler's name ([design Choice 47](docs/design.md#choice-patch-routes)). A
   route given by hand (`Area::route`, a `#[derive(Route)]` struct) is never one. **Breaking:** an
   app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
   its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
   has a second type parameter (`Kind`, `AnyAnswer` by default), which `req.patch`,
   `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` take after
-  `For`, so a call that names `For` with a turbofish names it too
-  (`req.patch::<ForOne, AnyAnswer>(..)`), as does a closure handler whose result nothing else
-  fixes. Nothing changes at run time: the marker is zero-sized and the check a `const` with
+  `For`. A handler's return type fixes it, around `Public::new(age, req.patch(..))` and
+  `NoStore::new(..)` too; a call that names `For` with a turbofish names `Kind` after it:
+  `req.patch::<ForOne, AnyAnswer>(..)` and `req.patch_with_status::<ForOne, AnyAnswer>(..)`
+  (were `::<ForOne>`), `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` and
+  `req.invalid::<ForOne, AnyAnswer, _, _>(..)` (were `::<ForOne, _, _>`), and
+  `req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(..)`, six type arguments with its lifetime
+  left out (was `::<ForOne, _, _, _, _>`). A closure handler whose result nothing else fixes
+  names them too, `get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(..) })`, and is
+  `E0283` (type annotations needed) without them. Nothing changes at run time: the marker is zero-sized and the check a `const` with
   nothing to run (callgrind, a `patch_or` request in process: 20,375 instructions for the patch
   before and after, 24,019 before and 24,003 after for the page). The requests guide now says
   what a `data-patch` form gets from a handler that answers its page: the page swapped in, as a

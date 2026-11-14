@@ -446,6 +446,54 @@
       ]
     },
     {
+      "name": "every element of a ref with its value",
+      "attr": "dblclick:price_list.sort(@body,=row)",
+      "parsed": [
+        {
+          "type": "dblclick",
+          "module": "price_list",
+          "name": "sort",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "body"
+            },
+            {
+              "kind": "=",
+              "owner": null,
+              "name": "row"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "every element of another ref with its value, text",
+      "attr": "click:price_list.sortByName(@body,=named)",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "price_list",
+          "name": "sortByName",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "body"
+            },
+            {
+              "kind": "=",
+              "owner": null,
+              "name": "named"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
       "name": "a library's module",
       "attr": "invalid:ui.combo_box.invalid($e,$c)",
       "parsed": [

@@ -11,6 +11,8 @@
 //! 5. A part read again from a route whose handler may answer its page, and a route that says
 //!    `patches` whose `get` handler may, are refused in Corten's words, the second at the
 //!    handler's name (#1342).
+//! 6. `patches` on a route with no `get`, on an `unstaged` route or on a route with a type
+//!    parameter is refused with a message that says which (#1342).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -163,4 +165,38 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
     );
     let (ok, stderr) = build_main("patches-message", &app(true, "HtmlResult<Patches>"));
     assert!(ok, "the same app with HtmlResult<Patches>: {stderr}");
+}
+
+/// `patches` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
+/// parameter. Each is refused by the routes module with its own reason, which the `compile_fail`
+/// doctests on `corten::routes` cannot tell apart (#1342).
+#[test]
+fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
+    let app = |route: &str, handler: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    {route}\n}}\n\n#[allow(unused_variables)]\n{handler}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+        )
+    };
+    let patch = "async fn alerts(req: Req) -> HtmlResult<Patches> {\n    req.patch(html! {})\n}";
+    for (route, handler, said) in [
+        (
+            "#[route(\"/alerts\", post = alerts, patches)]\n    pub struct Alerts;",
+            patch,
+            "patches says what Alerts's get answers when the runtime reads it, and it has no get",
+        ),
+        (
+            "#[route(\"/alerts\", get = alerts, unstaged, patches)]\n    pub struct Alerts;",
+            "async fn alerts() -> &'static str {\n    \"alerts\"\n}",
+            "unstaged serves Alerts with a handler that takes no Req, so it cannot answer a patch",
+        ),
+        (
+            "#[route(\"/alerts\", get = alerts, patches)]\n    pub struct Alerts<T> {\n        pub after: Option<T>,\n    }",
+            patch,
+            "Alerts has a type parameter, so it cannot say patches",
+        ),
+    ] {
+        let (ok, stderr) = build_main("patches-where-message", &app(route, handler));
+        assert!(!ok, "{route} compiled");
+        assert!(stderr.contains(said), "the reason for {route}: {stderr}");
+    }
 }

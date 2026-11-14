@@ -2577,6 +2577,41 @@ async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
     assert_eq!((page.status(), page.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/saved"));
 }
 
+/// What a request through `req.patch_or` costs: `PATCH_REQUESTS` (200) requests in process, one
+/// at a time, read by the runtime (`corten: action`, the patch) or, with `PATCH_MODE=document`, by
+/// a browser without JavaScript (the page), to a handler that returns `HtmlResult` or, with
+/// `PATCH_KIND=patches`, `HtmlResult<Patches>` (design Choice 47). Counting it under callgrind at
+/// two numbers of requests gives the instructions per request. A build from before `Patches`
+/// counts the `HtmlResult` handler with this function less `cost_patches`. The test binary has no
+/// global allocator, so preload the one to count with. Run in release: `cargo test --release -p corten-run --all-features --lib --no-run`,
+/// then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_or_request_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_or_request_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let page = std::env::var("PATCH_MODE").is_ok_and(|m| m == "document");
+    let patches = std::env::var("PATCH_KIND").is_ok_and(|k| k == "patches");
+    async fn cost_part(req: Req) -> HtmlResult {
+        let part = html! { <p id={MsgId}>"Saved " {42u32}</p> };
+        req.patch_or(part, || async { req.test_page("Part", html! { <p>"part"</p> }) }).await
+    }
+    async fn cost_patches(req: Req) -> HtmlResult<crate::Patches> {
+        let part = html! { <p id={MsgId}>"Saved " {42u32}</p> };
+        req.patch_or(part, || async { req.test_page("Part", html! { <p>"part"</p> }) }).await
+    }
+    let handler = if patches { get(cost_patches) } else { get(cost_part) };
+    let router = App::new(Routes::from(Table::new().route("/part", handler))).router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, headers, _) = call_with(router.clone(), "GET", "/part", (!page).then_some("action"), None).await;
+            assert!(status == StatusCode::OK && headers.contains_key("corten-patch") != page, "{status} {headers:?}");
+        }
+    });
+}
+
 /// Browsers keep a full load's `Refresh` after the runtime navigates away, then load it again.
 #[cfg(debug_assertions)]
 #[tokio::test]

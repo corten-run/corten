@@ -3072,7 +3072,120 @@ rules something out.
     five with main first and three with the change first); 2026-11-11, the CSP in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
-46. <a id="choice-patch-routes"></a>**A route a part is read again from says `patches`, and its `get` handler's type says
+46. <a id="choice-ref-values"></a>**A value an element gives its script is its ref's,
+    `ref={row.with(cents)}`, written as JSON in `data-ref-value` and read as a `Map` from each
+    element to its value.** A script that reorders or filters rows the server drew compares
+    something each row carries (a price in cents, a count in stock). A `data-` attribute read
+    through `dataset` named it as text twice, in the markup and in the script, so a misspelled or
+    renamed name compiled, passed `tsc` and read `undefined`, and the value reached the script as a
+    string to convert. A ref already ties a handler's parameter to the elements it names, checked
+    when the crate compiles ([Choice 5](#choice-handlers-checked-where-called)), so the value goes
+    on the ref: `row.with(x)` fixes the ref's third type parameter from `x`'s Rust type (a number,
+    text or a `bool`: `ts::Number`, `ts::String`, `ts::Boolean`), every element given the ref gives
+    a value of that one type, and a parameter typed `Map<El, number>` (or `string`, `boolean`) takes
+    only such a ref, as `El` takes only a ref on that tag. A ref given a value on some elements and
+    none on others, or text where the handler takes `number`, does not compile (`compile_fail`
+    doctests on `Ref::with`). The call names it `=row`, and the runtime gives the handler every
+    element with the ref, in the page's order, with `JSON.parse` of its `data-ref-value`. The server
+    writes the value with the writers a handler's arguments use, single-quoted
+    ([Choice 45](#choice-data-on-single-quoted)), so a number is a number in the script, and an
+    integer past 2^53 stops debug builds as an argument's does. The one name the markup and the
+    script share is the ref's, which the compiler already holds them to; `data-ref-value` is the
+    runtime's own, written only by `ref=`.
+
+    Not chosen: the row's key (`ref={rows} key={..}` and a `Map<string, El>`). A key is a row's
+    identity, which two rows with the same price cannot share, and it is text, so taking it for the
+    value would change what a keyed ref means and still convert in the script. A typed `dataset`
+    (a declaration generated from the component): the attribute's name stays text in the markup,
+    and it is a second way to hand a script data beside its arguments and refs (Value 5). A
+    `#[component(view)]`'s holes: they type rows a script makes, and would bring the views module
+    to a page that only reorders. A handler argument with the values in the rows' order: the list
+    and the rows are tied only by position, which a reorder or a patch to one row breaks. A value is
+    one number, text or `bool` an element gives, not a record: a script that needs more about a row
+    reads the row it has, or takes the records as a `ToJson` argument. `data-` is HTML's place
+    for a page's private data and `data-ref-value` is read only by Corten's runtime, so it needs no
+    standard ([Rule 10](#rule-standard-formats)); a `data-` attribute written for CSS or for the
+    runtime (`data-selected`, `data-reload`) is unchanged.
+
+    What it costs every user is the runtime's reader, the `=` kind in `on.js` and its case in
+    `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
+    (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
+    `immutable`, and nothing on a load: the value is read only when a handler that takes it runs.
+    What it costs a page that uses it is the value written on each element: card-market's item page,
+    whose listings each give their ref their cents (22 rows a page on average), is 418 bytes larger
+    (8,818 to 9,236), since each row now carries its ref's name beside its value (`data-ref="row"
+    data-ref-value='1250'` where it had `data-cents="1250"`), and 21 bytes larger with zstd (2,181
+    to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with gzip (2,512 to 2,511), the bytes a
+    user receives. Rendering its main part costs about 930 instructions more a page, about 42 a row,
+    2.4% (callgrind: `ItemDetail`'s render took 2,363.8 and 2,368.9 million instructions over the
+    test's 60,000 renders before, 2,424.5 and 2,419.7 million after); the whole test, compression of
+    the larger pages included, is 0.8% more (28,332.8 and 28,354.7 million to 28,576.2 and 28,575.3
+    million). An integer value is written as markup writes a number (`Render`), not through
+    `Display`'s formatter, which had made the same render 13.5% more. A page whose elements give no
+    value costs nothing: seller-desk's desk took 2,080,520,197 instructions to render in every run
+    of both builds.
+
+    Value 1 comes first. It says no to features that cost every user to help a few, and on it
+    [Choice 45](#choice-data-on-single-quoted) refused a 41-byte reader whose help went only to the
+    few pages that hand a script tens of kilobytes. This reader's help does not go to a few: under
+    the bet in Stands on, it goes to every app whose script reads back a value its markup wrote,
+    which a script that reorders, filters or follows rows the server drew does. Its cost, in
+    [Choice 45](#choice-data-on-single-quoted)'s terms, is 21 bytes with gzip, 168 bits, about 0.1
+    ms at 1.6 Mbit/s, downloaded once a release and cached after, since the runtime's URL is
+    versioned and `immutable`; the render cost falls only on a page whose elements give values, and
+    a page that gives none is unchanged to the instruction. So Value 1 does not refuse it, and Value
+    4, mistakes failing at compile time, decides: a value a script reads back is checked when the
+    crate compiles, where with a `data-` attribute a misspelled or renamed name compiled, passed
+    `tsc` and gave the script `undefined` with no error anywhere (a sort that subtracts gets NaN,
+    which `sort` takes as equal, and leaves the rows as they were), and a number came as text the
+    script had to convert (one compared with `<` orders `"999"` after `"1250"`). No change without a
+    reader in the runtime does that: a value read through `dataset` is text the compiler cannot see,
+    and the ways not chosen above each give up a row's identity or its order. One way for a script
+    to get what an element carries, its ref, is Value 5's. If the bet fails, the help goes to a few
+    after all, and the Revisit-when reopens the 21 bytes on Value 1.
+
+    Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
+    brotli at quality 11, once each build; the item page's bytes from `render_cost` in
+    `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
+    card-market and seller-desk, two runs of each build alternated, the base first); platform (a
+    `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
+    script its decoded value); reasoned (the runtime already finds a ref's elements in the page's
+    order for `*` and `#`, so a value is one attribute read per element when the handler runs and
+    nothing on a load; the ref's third type parameter is one type wherever the component uses the
+    ref, so a ref given text on one element and a number on another, or a value on one and none on
+    another, is a type error); bet (values are given today in five places: card-market's listing
+    sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
+    `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
+    `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
+    `quoted.js`. Apps beyond these five places hand their scripts values on elements the scripts
+    reorder, filter or follow, so the reader helps every such app, not a few); value (that help, at
+    a cost every user pays of 21 bytes with gzip once a release, which Value 1 does not refuse; a
+    mistake in a value a script reads fails when the crate compiles, and no name is text at a seam,
+    Values 4; one way for a script to get what an element carries, its ref, Values 5; a value on a
+    ref, not a new concept, Values 6).
+
+    Revisit when: an app's script needs a record per element rather than one number, text or `bool`
+    (then the value might be any `ToJson` with its generated declaration), or the platform gives
+    elements typed custom data a script can read without a name as text, or something outside Corten
+    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal. The bet
+    fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
+    each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
+    things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value
+    (`ref={name.with(..)}`, on one line or split over several) beyond the five places named in
+    Stands on, and their tests and docs; a search for `.with(` lists the candidates, and each is
+    read, since a search alone misses markup split over lines. Second,
+    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving corten-ui's
+    `data-sort` and the attributes beside it onto ref values. If that issue is still open on
+    2027-11-13, the first condition alone decides on that date.
+
+    Last checked: 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
+    2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
+    `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
+    and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
+    card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
+    `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
+
+47. <a id="choice-patch-routes"></a>**A route a part is read again from says `patches`, and its `get` handler's type says
     it answers a patch: `HtmlResult<Patches>`.** `ReadAgain::from` has the runtime fetch a route
     with `corten: action` and apply the patch it answers; a page or a redirect there gives it
     nothing to apply, so the part stops updating with an error in the console and no build or test
@@ -3089,9 +3202,14 @@ rules something out.
     redirects and patches (a write's) stays an `HtmlResult`; only the handler a part is read from
     names `Patches`, and there a redirect or page goes on `patch_or`'s other side, for a browser
     without JavaScript. The macro cannot read a handler's return type (it sees the handler's
-    name), and a trait impl on the route cannot depend on the type of a function it names, so the
-    route says `patches` and the macro checks it, as `rows = Level` is said and checked against
-    `FeedResponse<Level>`. A route given by hand (`Area::route`, `Routes` built from `Methods`, a
+    name), and stable Rust cannot name that type where the macro writes the route's impl, so no
+    trait the route implements can follow its handler; a `const` there can, but only as a value,
+    which only an assertion after monomorphization can refuse (Not chosen, below). So the route
+    says `patches` and the macro checks it, as `rows = Level` is said and checked against
+    `FeedResponse<Level>`. The trait the macro implements for such a route,
+    `route::__private::AnswersPatch`, is public only because that impl is written in the app's
+    crate and must name it; it is hidden and not an API, and an app that implements it by hand has
+    stepped around the check, as with any `__private` item. A route given by hand (`Area::route`, `Routes` built from `Methods`, a
     `#[derive(Route)]` struct) is never a `PatchRoute`: nothing ties its type to its handler, so
     `ReadAgain::from` refuses it rather than trusting it. The cost to every app is that the
     patch-making methods have one more type parameter, which a handler's return type fixes; a
@@ -3104,13 +3222,23 @@ rules something out.
     `corten dev` and only while the read happens; a `patches` word with no type behind it, which
     a refactor could leave standing on a handler that no longer patches; returning `Patches` from
     every patch-making method, which every handler that redirects on one path and patches on
-    another would have to convert; and requiring `patches` of a `data-patch` form's route, which
-    would refuse forms that work.
+    another would have to convert; requiring `patches` of a `data-patch` form's route, which
+    would refuse forms that work; and a `const PATCHES: bool = false` on `Answer` beside `PAGE`,
+    true for `HtmlResponse<ForOne, Patches>`, which the routes macro could copy onto every route
+    from its `get` handler with no word (a `const` in the route's impl calling a generic
+    `const fn` with `&handler`, as the `patches` check does) and `ReadAgain::from` could refuse
+    with an inline `const { assert!(R::PATCHES, ..) }`. That works on stable, but the assertion
+    fails only when the call is monomorphized: `cargo check` and rust-analyzer show nothing, only
+    `cargo build` (or a test) fails, and its message is the assertion's, with no
+    `on_unimplemented` wording at the route or the handler, where a trait bound fails where it is
+    written, in the editor.
 
     Stands on: platform (a procedural macro gets the tokens of `#[route(..)]`, so `get = alerts`
     and not `alerts`'s signature, and stable Rust has no way to name a function's return type in
-    an impl, `type_alias_impl_trait` being unstable, so the route's marker cannot come from the
-    handler alone); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
+    an impl, `type_alias_impl_trait` being unstable, so no trait the route implements can follow
+    its handler without a word on the route; a `const` in the impl can follow it as a value, and
+    a `const { assert!(..) }` that reads it fails only after monomorphization, under
+    `cargo build` and not `cargo check`, with no `on_unimplemented` wording); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
     `Patches` answer but through the methods that answer a patch to the runtime; the marker types
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
@@ -3126,7 +3254,10 @@ rules something out.
 
     Revisit when: Rust can name a function's return type where the macro writes the route's impl
     (`type_alias_impl_trait` or return-type notation for functions stable), so the marker could
-    follow the handler without `patches`; or an app needs `ReadAgain::from` on a route given by
+    follow the handler without `patches`; or `cargo check` and rust-analyzer report an inline
+    `const` assertion that fails after monomorphization, and it can carry a diagnostic of the
+    crate's own, which would make the word-free `const PATCHES` as early and as clear as a bound;
+    or an app needs `ReadAgain::from` on a route given by
     hand; or a `data-patch` form whose handler lost its patch is reported as sending whole pages
     unnoticed, which would make the form's route worth checking too.
 

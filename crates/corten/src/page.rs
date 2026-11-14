@@ -3023,8 +3023,9 @@ impl ReadAgain {
     /// `data-patch` form would (`corten: action`) and applies the patch it answers, which asks
     /// again while it is behind. The route says `patches` and its `get` handler returns
     /// `HtmlResult<Patches>` ([`crate::Patches`]), answering with [`Req::patch_or`] (the part,
-    /// or the page without JavaScript), so the read always gets a patch; its URL carries what the
-    /// read waits for (the write's receipt), since the page's own address does not.
+    /// or the page without JavaScript), so the handler's answer to the read is a patch (what
+    /// answers before the handler, a stage or an extractor, is not checked); its URL carries what
+    /// the read waits for (the write's receipt), since the page's own address does not.
     ///
     /// The read waits while the tab is hidden or a form's answer is on its way, keeps what the
     /// user typed, opened and focused as any patch does, and stops once an element the patch put

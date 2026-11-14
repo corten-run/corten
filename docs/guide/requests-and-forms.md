@@ -1745,7 +1745,11 @@ page without JavaScript, at the same URL. The route says `patches`, and its `get
 `patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
 and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
 build rather than the page. A route given by hand (`Area::route`, a `#[derive(Route)]` struct) is
-not one: the compiler cannot see the handler that serves it.
+not one: the compiler cannot see the handler that serves it. What is checked is the handler's
+answer. Two things can still answer the read otherwise: a stage or an extractor that answers
+before the handler runs (a `Caller` that refuses someone signed out answers `Mode::Action` with a
+`204` and `corten-location`, sending the browser to sign in), and a handler that replaces its
+answer's response through `DerefMut` (`*res = ..`), which its type does not see.
 
 ```rust,ignore
 #[corten::routes]
@@ -1776,8 +1780,9 @@ page is replaced (a later patch of it, a navigation away) or a read fails. A rea
 patch (the error page: the server has logged it) or offline stops them quietly and leaves the
 part as it was; any answer that is a patch is applied whatever its status, so a handler whose
 read failed after the write can say so in place (`req.patch_with_status(StatusCode::BAD_GATEWAY,
-..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which a route
-that says `patches` cannot answer, is logged in the console and stops the reads.
+..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which the
+handler of a route that says `patches` does not answer (but a stage before it, or a response
+replaced through `DerefMut`, can), is logged in the console and stops the reads.
 
 A page can ask the same of its parts, with the same `ReadAgain::from` among its markup: when the
 whole page would be the wrong thing to read again (a form the user is filling in, a payment

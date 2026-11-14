@@ -724,8 +724,8 @@ pub use corten_macros::UrlValue;
 /// A route a part of a page is read again from ([`crate::ReadAgain::from`]) says `patches`: the
 /// runtime reads it with `corten: action` and can apply nothing but a patch, so its `get`
 /// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `req.patch`,
-/// `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the route is then one
-/// `ReadAgain::from` takes ([`PatchRoute`]):
+/// `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the
+/// route is then one `ReadAgain::from` takes ([`PatchRoute`]):
 ///
 /// ```
 /// use std::time::Duration;
@@ -770,7 +770,10 @@ pub use corten_macros::UrlValue;
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
-/// and a route without a `get` has nothing to say it of:
+/// A route without a `get` has nothing to say it of, an `unstaged` route's handler takes no
+/// `Req` to answer a patch with, and a route with a type parameter cannot be named for the check,
+/// so each of these does not compile, with a message that says which
+/// (`tests/handler_message.rs` holds the three):
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -782,6 +785,38 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn save(req: Req) -> HtmlResult<Patches> {
+///     req.patch(html! {})
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", get = alerts, unstaged, patches)]
+///     pub struct Alerts;
+/// }
+///
+/// async fn alerts() -> &'static str {
+///     "alerts"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", get = alerts, patches)]
+///     pub struct Alerts<T> {
+///         pub after: Option<T>,
+///     }
+/// }
+///
+/// async fn alerts(req: Req) -> HtmlResult<Patches> {
 ///     req.patch(html! {})
 /// }
 /// # fn main() { let _ = url::router(); }
