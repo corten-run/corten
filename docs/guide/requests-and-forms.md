@@ -85,6 +85,13 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
+A `data-patch` form may send to any route. One whose handler answers its page in
+`Mode::Action` (`req.page`, no `patch_or`) gets that page swapped in, its title and `<main>`, as a
+navigation's would be: the form works, and every submit sends and draws the whole page, which a
+small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
+the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
+is the one thing that needs one, so it takes only a route that says `patches`.
+
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer
 sends the browser to another page, until that page is), and for a navigation `<main>` and the
@@ -1732,9 +1739,21 @@ returns it. After the delay the runtime fetches the route as a
 GET `data-patch` form would (`corten: action`) and applies the patch it answers, which asks again
 while it is still behind. The route's URL carries what the read waits for (the write's receipt),
 since the page's address does not; its handler answers the part with `req.patch_or`, and so the
-page without JavaScript, at the same URL:
+page without JavaScript, at the same URL. The route says `patches`, and its `get` handler returns
+`HtmlResult<Patches>`, which only `req.patch`, `req.patch_with_status`, `req.patch_or`,
+`req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
+`patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
+and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
+build rather than the page. A route given by hand (`Area::route`, a `#[derive(Route)]` struct) is
+not one: the compiler cannot see the handler that serves it.
 
 ```rust,ignore
+#[corten::routes]
+mod url {
+    #[route("/alerts", get = alerts, patches)]
+    pub struct Alerts<'a> { pub after: Option<&'a str> }
+}
+
 async fn pause(req: Req, Params(at): Params<url::Pause<'_>>) -> HtmlResult {
     let receipt = alerts::pause(&at.id).await?;
     let from = url::Alerts { after: Some(&receipt) };
@@ -1746,7 +1765,7 @@ async fn pause(req: Req, Params(at): Params<url::Pause<'_>>) -> HtmlResult {
     req.patch(html! { <AlertList alerts={&alerts} /> {again} })
 }
 
-async fn alerts(req: Req, Params(at): Params<url::Alerts<'_>>) -> HtmlResult {
+async fn alerts(req: Req, Params(at): Params<url::Alerts<'_>>) -> HtmlResult<Patches> {
     // With patch_or: the list, with `ReadAgain::from` while behind, as the patch; the page otherwise.
 }
 ```
@@ -1757,8 +1776,8 @@ page is replaced (a later patch of it, a navigation away) or a read fails. A rea
 patch (the error page: the server has logged it) or offline stops them quietly and leaves the
 part as it was; any answer that is a patch is applied whatever its status, so a handler whose
 read failed after the write can say so in place (`req.patch_with_status(StatusCode::BAD_GATEWAY,
-..)` in `Mode::Action`: "Saved; reload to see it"). Only a success that is not a patch is logged
-in the console: the route answered its page, not the part.
+..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which a route
+that says `patches` cannot answer, is logged in the console and stops the reads.
 
 A page can ask the same of its parts, with the same `ReadAgain::from` among its markup: when the
 whole page would be the wrong thing to read again (a form the user is filling in, a payment

@@ -721,6 +721,72 @@ pub use corten_macros::UrlValue;
 /// # fn main() {}
 /// ```
 ///
+/// A route a part of a page is read again from ([`crate::ReadAgain::from`]) says `patches`: the
+/// runtime reads it with `corten: action` and can apply nothing but a patch, so its `get`
+/// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `req.patch`,
+/// `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the route is then one
+/// `ReadAgain::from` takes ([`PatchRoute`]):
+///
+/// ```
+/// use std::time::Duration;
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", get = alerts, patches)]
+///     pub struct Alerts {
+///         pub saved: Option<u64>,
+///     }
+/// }
+///
+/// #[derive(Id)]
+/// struct ListId;
+///
+/// async fn alerts(req: Req, Params(at): Params<url::Alerts>) -> HtmlResult<Patches> {
+///     let again = at.saved.map(|saved| ReadAgain { after: Duration::from_secs(1) }.from(url::Alerts { saved: Some(saved) }));
+///     let list = html! { <ul id={ListId}></ul> {again} };
+///     req.patch_or(list, || async {
+///         req.page(html! { <html><head><title>"Alerts"</title><Corten /></head><body><main>"Alerts"</main></body></html> })
+///     })
+///     .await
+/// }
+/// # let _ = App::new(url::router()).router();
+/// ```
+///
+/// Its `get` handler is held to that, so one that may answer its page does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", get = alerts, patches)]
+///     pub struct Alerts;
+/// }
+///
+/// async fn alerts(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Alerts"</title><Corten /></head><body><main>"Alerts"</main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// and a route without a `get` has nothing to say it of:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", post = save, patches)]
+///     pub struct Alerts;
+/// }
+///
+/// async fn save(req: Req) -> HtmlResult<Patches> {
+///     req.patch(html! {})
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
 /// A route whose answer must cost as little as the server allows, and is the same for everyone
 /// who can reach it (a public figure a CDN fronts, a value clients poll), says `unstaged`: it goes through
 /// none of the app's stages ([`crate::middleware`]), so no same-origin check, no signal or
@@ -1535,6 +1601,26 @@ impl<R: Route + ?Sized> Route for &R {
         (**self).may_prefetch()
     }
 }
+
+/// A route whose `get` handler answers a patch whenever the runtime asks
+/// ([`crate::Patches`]): what [`crate::ReadAgain::from`] reads. `#[corten::routes]` makes a route
+/// one when it says `patches` ([`crate::routes`]), and checks its `get` handler returns
+/// `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it). No other route is one: the
+/// compiler cannot tie a route given by hand (`Area::route`, a `#[derive(Route)]` struct) to the
+/// handler that serves it.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a route `ReadAgain::from` can read: nothing holds its get handler to answering a patch",
+    label = "its route does not say `patches`",
+    note = "say `patches` on the route in its #[corten::routes] module, #[route(\"/alerts\", get = alerts, patches)], and return HtmlResult<Patches> from its get handler (req.patch_or, with the page for a browser without JavaScript)"
+)]
+pub trait PatchRoute: Route + patch_route::Sealed {}
+
+mod patch_route {
+    pub trait Sealed {}
+}
+
+impl<R: Route + __private::AnswersPatch + ?Sized> patch_route::Sealed for R {}
+impl<R: Route + __private::AnswersPatch + ?Sized> PatchRoute for R {}
 
 /// The path an area or an API is under (`#[corten::routes(area = Docs)]`'s `Docs`): every
 /// [`Route`], for an area with a page at its prefix, and the prefix route of an area's module
@@ -4093,6 +4179,28 @@ pub mod __private {
     /// A route with a `post` (or `any`) handler in a module that requires no caller: one a
     /// browser can post a report to (`Policy::report_to`).
     pub trait Posts {}
+
+    /// A route that says `patches`, whose `get` handler [`patches`] checked: what
+    /// [`super::PatchRoute`] is made of.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is not a route `ReadAgain::from` can read: nothing holds its get handler to answering a patch",
+        label = "its route does not say `patches`",
+        note = "say `patches` on the route in its #[corten::routes] module, #[route(\"/alerts\", get = alerts, patches)], and return HtmlResult<Patches> from its get handler (req.patch_or, with the page for a browser without JavaScript)"
+    )]
+    pub trait AnswersPatch {}
+    impl<R: AnswersPatch + ?Sized> AnswersPatch for &R {}
+
+    /// `patches`: the route's `get` handler answers a patch whenever the runtime asks
+    /// ([`crate::Patches`]). A `const` with nothing to run: the bounds are the check, at the
+    /// handler's name in `#[route(..)]`.
+    #[inline]
+    pub const fn patches<H, T, S>(_: &H)
+    where
+        H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Out: crate::answer::OnlyPatches,
+    {
+    }
 
     /// A routes module's `prefetch = cheap`: the function, named where the module is declared (as
     /// its handlers are), that says which of the route's URLs a hover may fetch.

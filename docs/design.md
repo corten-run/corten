@@ -3072,6 +3072,68 @@ rules something out.
     five with main first and three with the change first); 2026-11-11, the CSP in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
+46. <a id="choice-patch-routes"></a>**A route a part is read again from says `patches`, and its `get` handler's type says
+    it answers a patch: `HtmlResult<Patches>`.** `ReadAgain::from` has the runtime fetch a route
+    with `corten: action` and apply the patch it answers; a page or a redirect there gives it
+    nothing to apply, so the part stops updating with an error in the console and no build or test
+    failing. A handler's result now carries what the runtime's read can get, as a second parameter
+    of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
+    patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
+    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (each a
+    patch in `Mode::Action` and its caller's page or redirect otherwise), since `HtmlResponse`'s
+    constructor is the crate's own. A route says `patches` in its routes module; the module checks
+    its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
+    at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
+    `ReadAgain::from` takes. So a refactor that drops a `patch_or` fails the build. It is one
+    handler model: the same `Req` methods, `?` on any `corten::Error`, and a handler that both
+    redirects and patches (a write's) stays an `HtmlResult`; only the handler a part is read from
+    names `Patches`, and there a redirect or page goes on `patch_or`'s other side, for a browser
+    without JavaScript. The macro cannot read a handler's return type (it sees the handler's
+    name), and a trait impl on the route cannot depend on the type of a function it names, so the
+    route says `patches` and the macro checks it, as `rows = Level` is said and checked against
+    `FeedResponse<Level>`. A route given by hand (`Area::route`, `Routes` built from `Methods`, a
+    `#[derive(Route)]` struct) is never a `PatchRoute`: nothing ties its type to its handler, so
+    `ReadAgain::from` refuses it rather than trusting it. The cost to every app is that the
+    patch-making methods have one more type parameter, which a handler's return type fixes; a
+    closure handler whose result nothing fixes, or a call that names `For` with a turbofish,
+    names it too (`req.patch::<ForOne, AnyAnswer>`). A `data-patch` form takes any route, as
+    before: one whose handler answers its page gets that page swapped in, a working form that
+    sends and draws the whole page, and the [requests guide](guide/requests-and-forms.md#request-modes)
+    says so. Not chosen: a debug build answering 500, or `dev.js` saying so on the page, when a
+    `ReadAgain::from` read gets a page, which finds the mistake only on a page someone opens under
+    `corten dev` and only while the read happens; a `patches` word with no type behind it, which
+    a refactor could leave standing on a handler that no longer patches; returning `Patches` from
+    every patch-making method, which every handler that redirects on one path and patches on
+    another would have to convert; and requiring `patches` of a `data-patch` form's route, which
+    would refuse forms that work.
+
+    Stands on: platform (a procedural macro gets the tokens of `#[route(..)]`, so `get = alerts`
+    and not `alerts`'s signature, and stable Rust has no way to name a function's return type in
+    an impl, `type_alias_impl_trait` being unstable, so the route's marker cannot come from the
+    handler alone); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
+    `Patches` answer but through the methods that answer a patch to the runtime; the marker types
+    are zero-sized `PhantomData`, so the response and every method's work are what they were, and
+    the check is a `const` with nothing to run); measured (callgrind, release, instructions per
+    request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, three
+    alternate runs of each build on `d1cb28f9` and on the commit that made this choice: the patch
+    (`Mode::Action`) 20,375.07 before (20,375.05 to 20,375.08) and 20,375.10 after (20,375.09 to
+    20,375.19); the page (`Mode::Document`) 24,018.99 before (24,018.98 to 24,019.09) and
+    24,003.11 after (24,003.07 to 24,004.65), 16 fewer, a difference in how the generic page side
+    was inlined rather than work removed); bet (the routes a part is read from are few and
+    declared in a routes module, so the one word and the one return type cost an app little, and
+    no app reads a part again from a route given by hand); value (mistakes fail at compile time,
+    Values 4).
+
+    Revisit when: Rust can name a function's return type where the macro writes the route's impl
+    (`type_alias_impl_trait` or return-type notation for functions stable), so the marker could
+    follow the handler without `patches`; or an app needs `ReadAgain::from` on a route given by
+    hand; or a `data-patch` form whose handler lost its patch is reported as sending whole pages
+    unnoticed, which would make the form's route worth checking too.
+
+    Last checked: 2026-11-13, rustc 1.99.1 and 1.88 (`rust-version`), `type_alias_impl_trait`
+    still unstable, and the `compile_fail` doctests on `ReadAgain::from`, `Patches` and
+    `corten::routes` with the messages `tests/handler_message.rs` holds, written on `d1cb28f9`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

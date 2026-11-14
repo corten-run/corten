@@ -8,6 +8,9 @@
 //!    there (#1111).
 //! 4. A wrong argument deep in a long handler call is refused in Corten's words, at the argument,
 //!    and no error is about the private trait that holds the arguments (#1100).
+//! 5. A part read again from a route whose handler may answer its page, and a route that says
+//!    `patches` whose `get` handler may, are refused in Corten's words, the second at the
+//!    handler's name (#1342).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -130,4 +133,34 @@ fn a_wrong_argument_in_a_long_call_is_refused_at_the_argument() {
     }
     let (ok, stderr) = build_main("args-message", &app("\"n\""));
     assert!(ok, "the same call with a string there: {stderr}");
+}
+
+/// `ReadAgain::from` of a route that does not say `patches`, and a `patches` route whose `get`
+/// handler returns a plain `HtmlResult`, each say what is missing; the second points at the
+/// handler's name in `#[route(..)]` (#1342).
+#[test]
+fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
+    let app = |patches: bool, answer: &str| {
+        let patches = if patches { ", patches" } else { " " };
+        format!(
+            "use std::time::Duration;\nuse corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/alerts\", get = alerts{patches})]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> {answer} {{\n    let again = ReadAgain {{ after: Duration::from_secs(1) }}.from(url::Alerts);\n    req.patch(html! {{ <ul id={{ListId}}></ul> {{again}} }})\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+        )
+    };
+    let (ok, stderr) = build_main("patches-message", &app(false, "HtmlResult"));
+    assert!(!ok, "ReadAgain::from of a route that does not say patches compiled");
+    assert!(stderr.contains("is not a route `ReadAgain::from` can read"), "Corten's message: {stderr}");
+    assert!(stderr.contains("say `patches` on the route"), "the note on what to do: {stderr}");
+    let (ok, stderr) = build_main("patches-message", &app(true, "HtmlResult"));
+    assert!(!ok, "a patches route whose get handler returns HtmlResult compiled");
+    assert!(
+        stderr.contains("the route says `patches`, and its get handler's `HtmlResponse` may answer"),
+        "Corten's message: {stderr}"
+    );
+    // `alerts` in `get = alerts` on line 6, at column 30.
+    assert!(
+        stderr.contains("src/main.rs:6:30") || stderr.contains("src\\main.rs:6:30"),
+        "the error points at the handler's name: {stderr}"
+    );
+    let (ok, stderr) = build_main("patches-message", &app(true, "HtmlResult<Patches>"));
+    assert!(ok, "the same app with HtmlResult<Patches>: {stderr}");
 }

@@ -293,6 +293,26 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
+  handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
+  `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the runtime's read of the route
+  always gets a patch. Before, any route compiled, and one whose handler answered its page left
+  the part as it was with an error in the console, found only when the page ran; now that route,
+  or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
+  the call or at the handler's name ([design Choice 46](docs/design.md#choice-patch-routes)). A
+  route given by hand (`Area::route`, a `#[derive(Route)]` struct) is never one. **Breaking:** an
+  app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
+  its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
+  has a second type parameter (`Kind`, `AnyAnswer` by default), which `req.patch`,
+  `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` take after
+  `For`, so a call that names `For` with a turbofish names it too
+  (`req.patch::<ForOne, AnyAnswer>(..)`), as does a closure handler whose result nothing else
+  fixes. Nothing changes at run time: the marker is zero-sized and the check a `const` with
+  nothing to run (callgrind, a `patch_or` request in process: 20,375 instructions for the patch
+  before and after, 24,019 before and 24,003 after for the page). The requests guide now says
+  what a `data-patch` form gets from a handler that answers its page: the page swapped in, as a
+  navigation's
+  ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a

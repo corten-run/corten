@@ -554,7 +554,8 @@ use crate::{
 
 pub use ahead::Ahead;
 pub use answer::{
-    Answer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Public, Relay,
+    Answer, AnyAnswer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Patches,
+    Public, Relay,
 };
 #[cfg(feature = "json")]
 pub use answer::{JsonError, JsonResponse, JsonResult};
@@ -805,8 +806,8 @@ pub mod prelude {
         style::ClassList,
         view::Id,
         Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
-        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain,
-        Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
+        ReadAgain, Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};

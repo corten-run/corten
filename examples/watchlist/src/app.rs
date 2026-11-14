@@ -173,8 +173,9 @@ pub mod url {
     pub struct Picks;
 
     /// The alerts page; `saved` is the receipt of a write the page waits for (see
-    /// `alerts::page`), which reads it back as `Params<url::Alerts>`.
-    #[route("/alerts", get = alerts::page, post = alerts::save)]
+    /// `alerts::page`), which reads it back as `Params<url::Alerts>`. Its status line and list are
+    /// read again from it as a patch (`ReadAgain::from`), so its `get` says `patches`.
+    #[route("/alerts", get = alerts::page, post = alerts::save, patches)]
     pub struct Alerts {
         pub saved: Option<u64>,
     }

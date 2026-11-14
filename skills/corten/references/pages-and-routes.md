@@ -62,8 +62,11 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    redirect, whole, so the layout's values are drawn as the reads find them; with the page's
    notice sent back, so `req.notice()` draws it again and the read is not a change). A
    `data-patch` answer in the same state puts `{ReadAgain { after }.from(route)}` in the patch,
-   where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
-   or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
+   where `route` carries the write's receipt, says `patches` (`#[route("/alerts", get = alerts,
+   patches)]`) and its `get` handler returns `HtmlResult<Patches>`, answering `req.patch_or(..)`
+   (the part, or the page without JavaScript): `ReadAgain::from` takes no other route, and a page
+   or redirect outside `patch_or` there does not compile. Keep every other handler `HtmlResult`;
+   never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
    elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element

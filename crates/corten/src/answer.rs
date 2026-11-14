@@ -115,7 +115,12 @@ pub enum NotAFeed {}
 /// `For` is who the answer is for, read from where it goes: [`ForOne`], the visitor who asked
 /// (an [`HtmlResult`]), or [`ForAll`], inside a [`Public`]. The `Req` methods that make one
 /// take it from there, so a handler never names it.
-pub struct HtmlResponse<For = ForOne>(pub(crate) Response, PhantomData<For>);
+///
+/// `Kind` is what a request from the runtime ([`crate::Mode::Action`]) can get: [`AnyAnswer`], a
+/// page, a patch or a redirect, or [`Patches`], a patch and nothing else, which only the `Req`
+/// methods that answer one make. A handler names it in its return type, `HtmlResult<Patches>`,
+/// for a route that says `patches` ([`crate::routes`]).
+pub struct HtmlResponse<For = ForOne, Kind = AnyAnswer>(pub(crate) Response, PhantomData<(For, Kind)>);
 
 /// An answer for the visitor who asked: it may set a cookie. What [`HtmlResult`] holds.
 pub struct ForOne;
@@ -123,6 +128,82 @@ pub struct ForOne;
 /// An answer for everyone, inside a [`Public`]: a cache gives it to anyone, so it sets no
 /// cookie, and [`HtmlResponse::with_cookie`] there does not compile.
 pub struct ForAll;
+
+/// An answer that may be a page, a patch or a redirect, whatever the request: what
+/// [`HtmlResult`] is, and what [`Req::page`](crate::Req::page) and
+/// [`Req::redirect`](crate::Req::redirect) make.
+pub struct AnyAnswer;
+
+/// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
+/// or a redirect only without JavaScript: `HtmlResult<Patches>`, which only
+/// [`Req::patch`](crate::Req::patch), [`Req::patch_with_status`](crate::Req::patch_with_status),
+/// [`Req::patch_or`](crate::Req::patch_or), [`Req::invalid`](crate::Req::invalid) and
+/// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
+/// route that says `patches` returns, so a part of a page [`crate::ReadAgain::from`] reads
+/// again from that route always gets a patch:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// #[derive(Id)]
+/// struct StatusId;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     let part = html! { <p id={StatusId}>"Saved"</p> };
+///     req.patch_or(part, || async {
+///         req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+///     })
+///     .await
+/// }
+/// # let _ = App::new(url::router()).router();
+/// ```
+///
+/// A page or a redirect would answer the runtime's read with something it cannot apply, so
+/// either alone does not compile there: without JavaScript, it is `patch_or`'s other side.
+///
+/// ```compile_fail,E0308
+/// use corten::prelude::*;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+/// }
+/// ```
+///
+/// ```compile_fail,E0308
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.redirect(&url::Status)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+pub struct Patches;
+
+/// The answer of the `get` handler of a route that says `patches`: a patch whenever the runtime
+/// asked ([`Patches`]).
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "the route says `patches`, and its get handler's `{Self}` may answer the runtime's read with a page or a redirect",
+    label = "this handler",
+    note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+)]
+pub trait OnlyPatches {}
+impl<For> OnlyPatches for HtmlResponse<For, Patches> {}
+impl<A: OnlyPatches> OnlyPatches for Result<A, Error> {}
+impl<A: OnlyPatches + Shareable> OnlyPatches for Public<A> {}
+impl<A: OnlyPatches> OnlyPatches for NoStore<A> {}
 
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
@@ -143,9 +224,15 @@ mod sealed {
     impl Immutable for Result<super::Media, super::Error> {}
 }
 
-impl<For> HtmlResponse<For> {
+impl<For, Kind> HtmlResponse<For, Kind> {
     pub(crate) fn new(res: Response) -> Self {
         HtmlResponse(res, PhantomData)
+    }
+
+    /// The same answer, said to be of another kind: for the `Req` methods whose answer is a patch
+    /// in [`crate::Mode::Action`] and the page their caller drew otherwise.
+    pub(crate) fn of<K>(self) -> HtmlResponse<For, K> {
+        HtmlResponse(self.0, PhantomData)
     }
 
     /// The page's own value for a [`crate::LayoutRead`] its layout draws, drawn in place of the
@@ -174,7 +261,7 @@ impl<For> HtmlResponse<For> {
     }
 }
 
-impl<For: SetsCookies> HtmlResponse<For> {
+impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
     /// The answer with a `Set-Cookie` header, built by [`SetCookie`](crate::security::cookie::SetCookie)
     /// so its safe flags are the default: `Ok(req.redirect(&url::Home)?.with_cookie(SetCookie::new("session", &token)))`.
     /// Each call adds one; an answer that sets a cookie is never stored by a shared cache. This is
@@ -226,13 +313,13 @@ impl<For: SetsCookies> HtmlResponse<For> {
     }
 }
 
-impl<For> IntoResponse for HtmlResponse<For> {
+impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
     fn into_response(self) -> Response {
         self.0
     }
 }
 
-impl<For> Deref for HtmlResponse<For> {
+impl<For, Kind> Deref for HtmlResponse<For, Kind> {
     type Target = Response;
 
     fn deref(&self) -> &Response {
@@ -240,13 +327,22 @@ impl<For> Deref for HtmlResponse<For> {
     }
 }
 
-impl<For> DerefMut for HtmlResponse<For> {
+impl<For, Kind> DerefMut for HtmlResponse<For, Kind> {
     fn deref_mut(&mut self) -> &mut Response {
         &mut self.0
     }
 }
 
-impl Answer for HtmlResponse {
+impl Answer for HtmlResponse<ForOne, AnyAnswer> {
+    const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
+    type Inputs = AnyInputs;
+    type Rows = NotAFeed;
+}
+
+/// Without JavaScript it is still the page (`patch_or`'s other side), so the route starts the
+/// layout's reads as any page route does.
+impl Answer for HtmlResponse<ForOne, Patches> {
     const FORMAT: Format = Format::Html;
     const PAGE: bool = true;
     type Inputs = AnyInputs;
@@ -284,8 +380,16 @@ pub trait ForEveryone: IntoResponse {
     fn for_all(self) -> <Self::Named as Shareable>::ForAll;
 }
 
-impl ForEveryone for HtmlResponse<ForAll> {
-    type Named = HtmlResponse;
+impl ForEveryone for HtmlResponse<ForAll, AnyAnswer> {
+    type Named = HtmlResponse<ForOne, AnyAnswer>;
+
+    fn for_all(self) -> Self {
+        self
+    }
+}
+
+impl ForEveryone for HtmlResponse<ForAll, Patches> {
+    type Named = HtmlResponse<ForOne, Patches>;
 
     fn for_all(self) -> Self {
         self
@@ -341,8 +445,12 @@ impl<T> Shareable for corten_feed::FeedResponse<T> {
     type ForAll = Self;
 }
 
-impl Shareable for HtmlResponse {
-    type ForAll = HtmlResponse<ForAll>;
+impl Shareable for HtmlResponse<ForOne, AnyAnswer> {
+    type ForAll = HtmlResponse<ForAll, AnyAnswer>;
+}
+
+impl Shareable for HtmlResponse<ForOne, Patches> {
+    type ForAll = HtmlResponse<ForAll, Patches>;
 }
 
 impl<A: Shareable> Shareable for Result<A, Error> {
@@ -375,8 +483,9 @@ where
 }
 
 /// What a page handler returns: `async fn item(req: Req) -> HtmlResult`. A failure is the app's
-/// error page for a browser.
-pub type HtmlResult = crate::Result<HtmlResponse>;
+/// error page for a browser. `HtmlResult<Patches>` is one that is always a patch when the runtime
+/// asks ([`Patches`]), for the `get` of a route that says `patches`.
+pub type HtmlResult<Kind = AnyAnswer> = crate::Result<HtmlResponse<ForOne, Kind>>;
 
 /// What a JSON handler returns: `async fn price(..) -> JsonResult<Quote>`. Every failure of the
 /// route, a path or body that does not parse included, is JSON. Its error is a [`JsonError`], so
