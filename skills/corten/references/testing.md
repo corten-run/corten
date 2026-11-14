@@ -15,7 +15,7 @@ mod tests {
     async fn greeting_is_a_patch_for_the_runtime() {
         let app = app().test();
         let res = app
-            .post(&url::Greet)
+            .post(&url::Home)
             .mode(Mode::Action) // what the runtime sends for a data-patch form
             .field(GreetForm::FIELDS.name, "Ada")
             .await;

@@ -478,9 +478,10 @@ impl Failure {
     /// What went wrong, for the developer: set under `corten dev`, and logged instead in
     /// production. A debug build's error about the app's own code that the page's answer raises (a
     /// component the page draws that the app does not serve, a `Refresh` header, a write
-    /// redirected outside `form-action`, a layout read the route says it gives and the page did
-    /// not, a page whose answer type is not a page) keeps it outside `corten dev` too, so an app's
-    /// router test names it; when the error page fails as well, its plain text keeps it.
+    /// redirected outside `form-action`, a page answering a post to a path with no `GET`, a layout
+    /// read the route says it gives and the page did not, a page whose answer type is not a page)
+    /// keeps it outside `corten dev` too, so an app's router test names it; when the error page
+    /// fails as well, its plain text keeps it.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Failure::Rejected { detail, .. }
@@ -2476,6 +2477,47 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     .into_response()
 }
 
+/// A page answering a browser's post, with a success status, at a path whose route has no `GET`
+/// handler: the browser shows it at that address, which answers 405 when it is opened again
+/// from a bookmark or a link. A form that belongs to one page posts to that page's route; a write
+/// with a path of its own redirects once it is done and draws a page only to refuse. The handler's
+/// cookies and `Clear-Site-Data` go out with the error page, as the browser would have acted on them
+/// with the page; the page's other headers describe the page the error replaces and do not.
+///
+/// What it does not see: it reads the routes `#[corten::routes]` declares (`route::chosen` on
+/// `Shared::pages`), so a hand-built `Table` router's paths are not checked, and a page a
+/// hand-built route serves at a path a post-only macro route also matches is taken for that
+/// route's, a false 500; an `unstaged` route skips the stages this runs in, so it is not checked;
+/// an `any = ..` route answers `GET` too; and a release build compiles none of it, so it never
+/// runs in a production image or a smoke test against one.
+#[cfg(debug_assertions)]
+fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response {
+    if !res.status().is_success()
+        || !res.headers().contains_key(SHELL_HEADER)
+        || res.extensions().get::<crate::answer::Relayed>().is_some()
+        || shared.not_pages.contains(path)
+    {
+        return res;
+    }
+    let Some((route, false)) = crate::route::chosen(&shared.pages, path) else { return res };
+    let (parts, _) = res.into_parts();
+    let mut error = unserved(
+        shared.dev,
+        format!(
+            "a browser's post to {route}, which has no GET handler, was answered with a page, so the browser shows it at an address that answers 405 when it is opened again: post a form that belongs to one page to that page's route (get = .., post = ..), or answer this write with req.redirect or req.redirect_with_notice once it is done and draw a page only to refuse it (req.invalid)"
+        ),
+    )
+    .into_response();
+    // What the browser would have done with the page's cookies and stored data, it does with the
+    // error's; the page's other headers are the page's own, which the error page's replace.
+    for name in [header::SET_COOKIE, HeaderName::from_static("clear-site-data")] {
+        for value in parts.headers.get_all(&name) {
+            error.headers_mut().append(name.clone(), value.clone());
+        }
+    }
+    error
+}
+
 /// A write's redirect to an origin the form's page does not allow in `form-action`: Chromium
 /// and WebKit stop the submission there, on the form's page, with only a console error, while
 /// every test passes. A debug build answers it as an error that says so; a release build sends
@@ -2655,9 +2697,14 @@ async fn page_or_error<S: crate::app::Steps>(
     let mut req = req;
     #[cfg(debug_assertions)]
     let check = req.extensions_mut().remove::<crate::security::FormCheck>();
+    // A browser's plain form post, which leaves it at the address it posted to.
+    #[cfg(debug_assertions)]
+    let plain_post = browser && !fetched && mode == Mode::Document && req.method() == http::Method::POST;
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
+    #[cfg(debug_assertions)]
+    let res = if plain_post { page_where_no_page_is(res, shared, asked.path()) } else { res };
     #[cfg(debug_assertions)]
     let mut res = redirect_outside_form_action(res, check.as_ref(), shared.dev);
     #[cfg(not(debug_assertions))]
