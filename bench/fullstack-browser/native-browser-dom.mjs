@@ -37,7 +37,7 @@ function missingSnapshot() {
 const errorTexts = ["Not found", "Not Found", "Page not found", "Item not found", "Record not found", "404", "404 Not Found", "404: Not Found", "This page could not be found."];
 const methods = ["querySelector", "querySelectorAll", "matches", "getAttribute", "contains", "cloneNode", "remove"];
 const properties = ["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"];
-const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), errorTexts]));
+const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), recordBrowserDOM.toString(), errorTexts]));
 const cases = definition("fullstack-browser").cases.map((c) => c.key);
 function identityFields(value) {
   for (const key of ["context", "scope"]) assert.match(value[key], /^[a-zA-Z0-9_.:-]{1,128}$/);
@@ -69,8 +69,33 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
     const urlBefore = publicURL(location.href, location.href, true);
     if (JSON.stringify(urlBefore) !== JSON.stringify(identity.url)) throw Error("native-scope-mismatch");
     if (scopeBefore !== identity.scope) throw Error("native-scope-mismatch");
-    const secrets = new Set([...document.querySelectorAll('input[type="hidden"],input[type="password"],meta[name],meta[property],meta[http-equiv]')]
-      .flatMap((el) => [el.getAttribute("value"), el.getAttribute("content")]).filter((value) => value));
+    const visible = (el) => el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })
+      && !el.closest('[hidden],[aria-hidden="true"]');
+    const secrets = new Set(); let privateBytes = 0;
+    const privateValue = (value) => {
+      if (value === undefined || value === null || value === "") return;
+      if (typeof value !== "string" || value.length > 131072 || (privateBytes += value.length * 2) > 32 * 1024 ** 2) throw Error("credential-filter-blocked");
+      secrets.add(value);
+    };
+    // Inventory actual private native fields before recording anything. Never
+    // return these values, source names, or a diagnostic containing them.
+    const privateSources = document.querySelectorAll("input,textarea,select,meta");
+    if (privateSources.length > 10000) throw Error("credential-filter-blocked");
+    let privateMembers = privateSources.length;
+    for (const el of privateSources) {
+      if (el.localName === "meta") {
+        if (el.childNodes.length) throw Error("credential-filter-blocked");
+        privateValue(el.getAttribute("value")); privateValue(el.content);
+      } else {
+        if (el.localName === "input" && el.type === "file" && el.files?.length) throw Error("credential-filter-blocked");
+        if (el.type !== "hidden" && el.type !== "password" && visible(el)) continue;
+        privateValue(el.getAttribute("value")); privateValue(el.value); privateValue(el.defaultValue);
+        if (el.localName === "select") {
+          if ((privateMembers += el.options.length) > 10000) throw Error("credential-filter-blocked");
+          for (const option of el.options) privateValue(option.value);
+        }
+      }
+    }
     const urls = ["action", "formaction", "href", "src", "data-src"];
     for (const el of document.querySelectorAll("[action],[formaction],[href],[src],[data-src]")) for (const key of urls) {
       if (el.hasAttribute(key)) publicURL(el.getAttribute(key), location.href);
@@ -99,14 +124,18 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
         if (typeof key !== "string") throw Error("native-dom-snapshot-failed");
         if (["querySelector", "querySelectorAll", "matches", "getAttribute", "contains", "cloneNode", "remove"].includes(key)) return (...args) => {
           if (key === "getAttribute" && !["aria-hidden", "role", "data-src", "aria-label", "data-listing-id", "data-offer-id", "href"].includes(args[0])) throw Error("native-dom-snapshot-failed");
-          const result = encode(target[key](...args.map((v) => originals.get(v) ?? v)), key === "getAttribute" ? args[0] : key);
+          const value = target[key](...args.map((v) => originals.get(v) ?? v));
+          if (key === "getAttribute" && args[0] === "aria-hidden" && value !== null && !["true", "false"].includes(value)) throw Error("credential-filter-blocked");
+          const result = encode(value, key === "getAttribute" ? args[0] : key);
           push({ target: idFor(target), kind: "call", key, args: args.map(arg), result }); return decode(result);
         };
         if (!["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"].includes(key)) throw Error("native-dom-snapshot-failed");
         let value;
         if (key === "publicMissingTag") value = ["h1", "h2", "p", "div", "section", "span"].includes(target.localName) ? target.localName : null;
         else if (key === "publicMissingText") {
-          if (!target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || target.closest('[aria-hidden="true"]')
+          const descendants = target.querySelectorAll("*");
+          if (descendants.length > 10000) throw Error("native-dom-snapshot-failed");
+          if (!visible(target) || [...descendants].some((el) => !visible(el))
             || target.querySelector('input[type="hidden"],input[type="password"],meta,script,style,template,[hidden],[aria-hidden="true"]')
             || target.textContent.length > 256) value = null;
           else { const text = target.textContent.replace(/[\t\n\r\f ]+/g, " ").trim(); value = phrases.includes(text) ? safe(text, key) : null; }
@@ -177,6 +206,7 @@ export function replayBrowserDOM(observation, expectedIdentity) {
   const call = (target, kind, key, args) => {
     const e = observation.events[at++]; assert.ok(e); exact(e, ["target", "kind", "key", "args", "result"]);
     assert.deepEqual([e.target, e.kind, e.key, e.args], [target, kind, key, args.map(encode)]);
+    if (key === "getAttribute" && args[0] === "aria-hidden") assert.ok([null, "true", "false"].includes(e.result.scalar));
     if (key === "publicMissingText") assert.ok(e.result.scalar === null || errorTexts.includes(e.result.scalar));
     if (key === "publicMissingTag") assert.ok(e.result.scalar === null || ["h1", "h2", "p", "div", "section", "span"].includes(e.result.scalar));
     return decode(e.result);

@@ -11,7 +11,7 @@ import { records } from "../marketplace/fixtures.mjs";
 import { referenceHtml } from "../marketplace/reference.mjs";
 import { snapshotMixedPage } from "../mixed-production/snapshot.mjs";
 import { collectDOMReads, replayDOMReads } from "../mixed-production/response-evidence.mjs";
-import { snapshotPage } from "../marketplace/check.mjs";
+import { snapshotPage, comparePage } from "../marketplace/check.mjs";
 import { definition } from "../workloads/registry.mjs";
 import { installResourceObserver } from "./resources.mjs";
 import { collectBrowserDOM, replayBrowserDOM } from "./native-browser-dom.mjs";
@@ -58,6 +58,9 @@ test("actual strict page/Alice observations replay installed snapshot and preser
   const alice = await f.read("/marketplace/en-US/item_2?seller=Alice&sort=desc");
   assert.equal(alice.observation.failure, null); assert.deepEqual(alice.observation.url.query, { seller: "Alice", sort: "desc" });
   assert.deepEqual(replayBrowserDOM(alice.observation, expectation(alice.observation)).page, await f.page.evaluate(snapshotPage));
+  await f.page.locator('[name="seller"]').fill("Alice");
+  const publicInput = await collectBrowserDOM(f.page, alice.identity);
+  assert.equal(publicInput.failure, null); assert.deepEqual(replayBrowserDOM(publicInput, expectation(publicInput)).page, page);
   const old = await f.page.evaluate(collectDOMReads, { source: snapshotMixedPage.toString(), readPath: "/marketplace/en-US/item_2" });
   assert.equal(old.failure, "credential-filter-blocked");
   const root = mkdtempSync(join(tmpdir(), "corten-browser-dom-"));
@@ -120,12 +123,89 @@ test("unknown/secret queries, hidden/meta values, wrong scope and caller-selecte
   const wrongForm = await f.read(); assert.equal(wrongForm.observation.failure, "native-dom-snapshot-failed");
   assert.equal(replayBrowserDOM(wrongForm.observation, expectation(wrongForm.observation)).extractionComplete, false);
 });
+test("private source variants cannot leak through semantically unchanged strict snapshot guards", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const [name, source, live] of [
+    ["itemprop-meta", '<meta itemprop="csrf-token" content="TOKEN">'],
+    ["content-only-meta", '<meta content="TOKEN">'],
+    ["hidden-attribute-input", '<input hidden value="TOKEN">'],
+    ["css-hidden-input", '<input style="display:none" value="TOKEN">'],
+    ["css-invisible-input", '<input style="visibility:hidden" value="TOKEN">'],
+    ["css-transparent-input", '<input style="opacity:0" value="TOKEN">'],
+    ["hidden-ancestor-input", '<div hidden><input value="TOKEN"></div>'],
+    ["aria-hidden-ancestor-input", '<div aria-hidden="true"><input value="TOKEN"></div>'],
+    ["hidden-textarea", '<textarea hidden>TOKEN</textarea>'],
+    ["hidden-select", '<select hidden><option value="TOKEN">Private option</option></select>'],
+    ["unselected-private-option", '<select hidden><option value="">Choose</option><option value="TOKEN">Private option</option></select>'],
+    ["password-default-value", '<input type="password" value="TOKEN">'],
+    ["live-password", '<input id="private-source" type="password">', true],
+  ]) for (const guard of ["aria-hidden", "label-for"]) await t.test(`${name}/${guard}`, async () => {
+    const token = `private-inventory-${name}-canary`;
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", `${source.replaceAll("TOKEN", token)}</body>`));
+    const { identity } = await f.read();
+    await f.page.evaluate(({ token, guard, live }) => {
+      if (live) { const input = document.querySelector("#private-source"); input.value = token; if (input.hasAttribute("value")) throw Error("live-only control"); }
+      if (guard === "aria-hidden") { const span = document.createElement("span"); span.setAttribute("aria-hidden", token); document.querySelector("article").append(span); }
+      else document.querySelector("article label").htmlFor = token;
+    }, { token, guard, live: Boolean(live) });
+    // These guard reads are NOT returned in the semantic page object. A strict
+    // result comparison alone therefore cannot protect the retained transcript.
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    const observation = await collectBrowserDOM(f.page, identity), expected = expectation(observation);
+    assert.equal(observation.failure, "credential-filter-blocked");
+    assert.deepEqual(observation.events, []); assert.ok(!JSON.stringify(observation).includes(token));
+    const { root, store } = fixture(t), receipt = retainBrowserDOMProjection(store, observation, expected);
+    const ref = store.record("private-source-blocked", receipt); store.seal(); const reader = openEvidence(root);
+    const result = replayResponse(reader, reader.json(ref), expected);
+    assert.equal(result.extractionComplete, false); assert.equal(result.kind, null); reader.finish();
+  });
+});
+
+test("unsupported private sources and noncanonical guard metadata fail before retention", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const variant of ["meta-child", "file", "oversized-meta", "unknown-guard"]) await t.test(variant, async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US")); const { identity } = await f.read();
+    await f.page.evaluate((variant) => {
+      if (variant === "meta-child" || variant === "oversized-meta") {
+        const meta = document.createElement("meta");
+        if (variant === "meta-child") meta.append(document.createTextNode("private-child-canary")); else meta.content = "x".repeat(131073);
+        document.head.append(meta);
+      } else if (variant === "file") { const input = document.createElement("input"); input.type = "file"; document.body.append(input); }
+      else { const span = document.createElement("span"); span.setAttribute("aria-hidden", "unknown-private-canary"); document.querySelector("article").append(span); }
+    }, variant);
+    if (variant === "file") await f.page.locator('input[type="file"]').setInputFiles({ name: "private-file-canary.txt", mimeType: "text/plain", buffer: Buffer.from("private-file-content-canary") });
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    const observation = await collectBrowserDOM(f.page, identity);
+    assert.equal(observation.failure, "credential-filter-blocked"); assert.deepEqual(observation.events, []);
+    assert.doesNotMatch(JSON.stringify(observation), /private-(?:child|file|content)-canary|unknown-private-canary/);
+    assert.equal(replayBrowserDOM(observation, expectation(observation)).extractionComplete, false);
+  });
+});
+
+test("missing error cannot use text from CSS-hidden descendants", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const style of ["display:none", "visibility:hidden", "opacity:0"]) await t.test(style, async () => {
+    f.setBody(`<body><h1>Not <span style="${style}">found</span></h1></body>`);
+    const { observation, response } = await f.read("/marketplace/en-US/item_missing");
+    assert.equal(response.status(), 404);
+    assert.equal(await f.page.locator("h1 span").evaluate((el) => el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })), false);
+    assert.equal(observation.failure, "public-error-unavailable");
+    assert.equal(replayBrowserDOM(observation, expectation(observation)).extractionComplete, false); assert.deepEqual(observation.events, []);
+  });
+  f.setBody("<body><h1>Not <span>found</span></h1></body>");
+  const { observation } = await f.read("/marketplace/en-US/item_missing");
+  assert.equal(observation.failure, null); assert.equal(replayBrowserDOM(observation, expectation(observation)).error.text, "Not found");
+});
+
 test("ordered reads, fixed source, original response and unique observation identity cannot be substituted", async (t) => {
   const f = await browserDOMFixture(t), { observation } = await f.read(), expected = expectation(observation);
   for (const mutate of [
     (o) => { o.events.push(o.events[0]); }, (o) => { o.events.splice(3, 1); },
     (o) => { o.events[0].key = "innerHTML"; }, (o) => { o.result.page.title = "substituted"; },
     (o) => { o.snapshotSha256 = sha256(snapshotMixedPage.toString()); },
+    // ce2's old digest did not bind the collector privacy policy.
+    (o) => { o.snapshotSha256 = "c9ea53976efe041ed2d9f9133a62460e7ec4c266775238eb6eaf52172ecdf79e"; },
+    (o) => { o.events.find((e) => e.key === "getAttribute" && e.args[0]?.scalar === "aria-hidden").result = { scalar: "private-guard-canary" }; },
     (o) => { o.source = "()=>document.cookie"; }, (o) => { o.context = "other-context"; },
     (o) => { o.originatingResponse.sha256 = "0".repeat(64); }, (o) => { o.scopeObservation.after = "new-scope"; },
     (o) => { o.urlObservation.after.query = { token: "untrusted" }; },

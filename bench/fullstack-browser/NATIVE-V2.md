@@ -173,7 +173,7 @@ Exact observation fields:
 {
   schema: "native-browser-dom-observation/v1",
   ...expected,
-  snapshotSha256, // installed snapshot/missing-observer/public-URL policy digest
+  snapshotSha256, // installed snapshot/missing-observer/collector/URL policy digest
   roots: { document: 0, location: 1, global: 2 },
   events: [{ target, kind, key, args, result }],
   result, failure: null | "credential-filter-blocked" |
@@ -201,13 +201,26 @@ Error reads expose only `publicMissingTag` (allowlisted tag or null) and
 `publicMissingText` (native-visible allowlisted phrase or null), not raw custom
 tag names, ARIA attributes or arbitrary computed style values. Unknown neighboring
 error elements cannot leak text/metadata into an otherwise successful capture.
+Every descendant must also pass native visibility (including CSS display,
+visibility, opacity and content-visibility). A candidate with a hidden descendant
+is unsupported rather than assembling a phrase from its hidden textContent.
+Visible inline spans remain supported; no raw innerText/HTML fallback is used.
 
 Public page routes are fixed marketplace locales and item_1 through item_500 or
 item_missing. Canonically encoded queries allow only seller ''/Alice, sort
 asc/desc, offers all; missing-item has no query. Duplicate/unknown/secret query,
 credentials and fragments reject. Attribute URLs are validated before reads.
-Hidden/password/meta values are inspected transiently only to prevent accidental
-retention, never serialized. Public text reads containing those values or
+All meta elements, including itemprop/content-only metadata, are inventoried
+transiently. Native input/textarea/select controls are private when hidden,
+password-bearing, ARIA-hidden or not natively visible (including ancestors and
+CSS opacity/visibility/display). Their actual live values, value attributes,
+default values and private select option values are filtered, never serialized.
+The inventory precedes every retained read, is bounded by the existing list,
+scalar and JSON limits, and fails closed on unsupported private metadata children
+or populated file controls. It is not a parser for arbitrary scripts, framework
+state or a claim about secrets outside these fixed native field sources.
+Noncanonical aria-hidden guard strings are refused, not normalized into a
+semantic false and retained. Public text/guard reads containing private values or
 hidden/script/style/template/meta descendants fail closed. Existing fixed bounds
 are 30,000 typed reads, 10,000 list members, 131,072-character scalars and 32 MiB
 observation; no runtime budget knobs are added.
@@ -218,9 +231,13 @@ their digest, every ordered operation/argument and all consumed reads/results;
 extra/missing operations, operation/argument/result contradictions or source
 substitution throw. The retained blob digest and sealed manifest also reject
 altered read bytes that would leave the semantic result unchanged; standalone
-transcript replay is not independent observation authenticity. It does not execute
-saved code or reconstruct secret-bearing original HTML. Read transcript and
-actual identity still need the owner's source/execution/native observer binding.
+transcript replay is not independent observation authenticity.
+The policy digest includes the installed collector, so projections collected
+under an older private-value/visibility policy require fresh capture, not replay
+under the new policy with a saved digest or saved source substitute.
+It does not execute saved code or reconstruct secret-bearing original HTML. Read
+transcript and actual identity still need the owner's source/execution/native
+observer binding.
 
 `retainBrowserDOMProjection` is exported by `native-responses.mjs`; exact receipt:
 `{schema:'native-browser-response/v2',type:'public-browser-dom-observation',
