@@ -464,7 +464,9 @@ App::new(routes)
   land outside its area is cheaper routed where its pages are.
 - A stylesheet that fails to load leaves the patch in place unstyled, since the patch is a
   write's answer, and the next patch that links it tries again. One that neither loads nor fails
-  holds the answer as it holds a navigation, with no timeout of Corten's own.
+  holds the answer as it holds a navigation, with no timeout of Corten's own, and so holds every
+  later answer that links it: each later patch from the area's handlers and each later navigation
+  into the area wait on the same load until the page is loaded again.
 - The stylesheet is loaded under the policy of the page the patch lands on, not the area's: an
   image or font it loads from a source only `Area::policy` adds is refused on a page outside the
   area. An area stylesheet that needs such a source does not carry over to those patches: add the

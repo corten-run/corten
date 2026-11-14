@@ -611,6 +611,47 @@ async function run(browser) {
     check("a patch sent while another's area stylesheet is loading waits for that load", /^5px( 5px)*, 1 link$/.test(drawn), drawn);
     await raced.close();
   }
+  // A navigation into an area while a patch's load of the area's stylesheet is in flight waits for
+  // that load too, rather than take the link the patch put in the head for a loaded stylesheet:
+  // the news area's Load more patch, sent on the home page, then a link to the news. A probe with
+  // the news area's class, outside <main>, shows whether its rules applied when the page swapped.
+  if (swaps) {
+    const entered = await browser.newPage();
+    entered.on("pageerror", (e) => errors.push(`navigation during a patch's load: ${e.message}`));
+    await entered.goto(base);
+    await entered.route("**/sections/**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.continue();
+    });
+    await entered.evaluate(async () => {
+      const { patch } = await import("corten");
+      const answer = await fetch("/news?shown=3", { headers: { corten: "action" } }).then((r) => r.text());
+      // The elements the patch replaces, outside <main> so the swap leaves them.
+      const stories = document.createElement("ul");
+      stories.id = "stories";
+      const more = document.createElement("form");
+      more.id = "load-more";
+      const probe = document.createElement("p");
+      probe.className = "disclaimer__note";
+      document.body.append(stories, more, probe);
+      const at = /** @type {any} */ (window);
+      at.__entered = null;
+      new MutationObserver((_, observer) => {
+        if (document.querySelector("main h1")?.textContent !== "Market news") return;
+        at.__entered = getComputedStyle(probe).borderInlineStartWidth;
+        observer.disconnect();
+      }).observe(document.body, { childList: true, subtree: true });
+      // Not awaited: the navigation starts while this patch's stylesheet is still loading.
+      patch(__html(answer)).catch(() => {});
+    });
+    await entered.click('header a[href="/news"]');
+    const border = await entered
+      .waitForFunction(() => (/** @type {any} */ (window)).__entered, undefined, { timeout: 5000 })
+      .then((got) => got.jsonValue(), () => "not swapped");
+    const marked = await entered.evaluate(() => document.head.querySelectorAll('link[data-corten-style][href*="/sections/news"]').length);
+    check("a navigation into an area while a patch is loading its stylesheet waits for that load", border === "4px" && marked === 1, `${border}, ${marked} link`);
+    await entered.close();
+  } else skip("a navigation into an area while a patch is loading its stylesheet waits for that load", noSwaps);
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:

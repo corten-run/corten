@@ -186,7 +186,9 @@ impl<P: Prefix> Area<P> {
     /// Components only this area's pages render: `.components(&[AdminTable, SalesChart])`. Their
     /// stylesheets are joined into a file of the area's own (`sections/admin.css` for `/admin`),
     /// linked after `components.css` from the pages at the prefix and under it, so other pages
-    /// do not download them; their scripts are served as with [`App::components`].
+    /// do not download them, and from the patches the area's handlers answer, so a page outside
+    /// the area downloads it when such a patch lands there (whatever the patch renders); their
+    /// scripts are served as with [`App::components`].
     ///
     /// A client navigation into the area loads its stylesheet before it swaps the page in, and
     /// the stylesheet stays (its rules only match its components' classes). A page under nested
