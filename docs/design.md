@@ -3898,14 +3898,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
 28. <a id="limit-keep-place-identity"></a>A `data-keep-place` navigation restores focus by the
-    control's own id, else its name (and value for a checkbox or radio) and index among all matches
-    inside the nearest ancestor with an id, falling back to `<main>`. Eligibility is checked only
-    after matching, so disabling or enabling preceding controls does not change correspondence.
-    Without the control's own stable id, inserting, removing or reordering matching controls can
-    redirect focus: an index does not identify an item through an order change. For a control
-    without its own id, an absent or ineligible match, including one whose ancestor lost its id,
-    falls back only when exactly one eligible match remains under `<main>`; several candidates
-    leave focus unrestored rather than
-    guessing across forms. Give such a control its own stable `#[derive(Id)]` id.
+    control's own id, else by its name (and value for a checkbox or radio) and its index among the
+    matching controls other than hidden inputs inside the nearest ancestor with an id, else
+    `<main>`. Controls that cannot take focus now (disabled, hidden or inert) are counted, so a
+    preceding control changing state does not move focus. A control still there that cannot take
+    focus is left without it; focus never moves to another control in its place. Only when the
+    ancestor or the control is gone is it looked for by the same name and index in `<main>`, as
+    the runtime did before it used ancestors. Without the control's own stable id, inserting,
+    removing or reordering matching controls ahead of it (in its ancestor, or in `<main>` once
+    that is gone) can still move focus to another control or leave it unrestored: an index does
+    not identify an item through an order change. Give such a control its own stable
+    `#[derive(Id)]` id.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.

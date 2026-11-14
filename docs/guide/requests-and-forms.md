@@ -1492,17 +1492,16 @@ filter as soon as it changes, a handler submits the form (`form.requestSubmit()`
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
 position stays, and focus returns to the control the user is on when the form goes (by id, else
 by its name inside its nearest ancestor with an id, falling back to `<main>`, and its value for
-a checkbox or radio). Among repeated matches there, it keeps the same index, including controls
-that are disabled, hidden or inert, so changing a preceding control's eligibility does not move
-focus. It restores only an eligible control. For a control without its own id, if the indexed
-match is absent or ineligible (including when the ancestor loses its id), it falls back only
-to a single eligible match under `<main>`; hidden inputs and controls disabled, hidden or inert
-in the markup are not eligible.
+a checkbox or radio). Among repeated matches there it keeps the same index, leaving out hidden
+inputs but counting controls that are disabled, hidden or inert, so changing a preceding
+control's state does not move focus. If the control it finds cannot take focus, focus is left
+alone rather than given to another one. Only when the ancestor or the control is gone does it
+look for the control in `<main>`, by the same name and index there.
 Give the filter form or rail a `#[derive(Id)]` id to separate other forms' visible copies.
-**Limit:** Without the control's own stable id, correspondence still depends on matching controls
-keeping their order inside that ancestor. Inserting, removing or reordering matches can redirect focus;
-losing the ancestor with several eligible matches under `<main>` leaves focus unrestored.
-Give a control its own `#[derive(Id)]` id when its matches or ancestor can change
+**Limit:** Without the control's own stable id, correspondence depends on matching controls
+keeping their order, inside that ancestor or in `<main>` once it is gone. Inserting, removing or
+reordering matches ahead of the control can move focus to another one or leave it unrestored.
+Give a control its own `#[derive(Id)]` id when its matches can change
 ([Limit 28](../design.md#limit-keep-place-identity)). Focus returns with its caret to the one they changed, or for
 a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
