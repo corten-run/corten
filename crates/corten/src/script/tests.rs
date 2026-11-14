@@ -932,6 +932,71 @@ fn debug_builds_stop_on_equal_keys_in_the_page_beside_a_view_written_alone() {
     TitledTwiceKeys {}.to_html();
 }
 
+/// A keyed mark in the page, and copies an expression writes as markup into a `<textarea>` and an
+/// HTML `<title>`, whose content a browser reads as text: the ref has one element.
+#[component]
+fn TextOnlyKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <textarea name="note">{html! { <span ref={mark} key="a"></span> }}</textarea>
+            <title>{html! { <span ref={mark} key="a"></span> }}</title>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_textarea_or_title_is_not_one_of_the_page_s() {
+    let html = TextOnlyKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="mark" data-key="a"></span>"#).count(), 3, "{html}");
+}
+
+/// Writes its children as its `<textarea>`'s text.
+#[component]
+fn Note(children: impl Render) -> impl Render {
+    html! { <textarea name="note">{children}</textarea> }
+}
+
+/// A keyed mark in the page, and a copy among `Note`'s children, which it writes into a
+/// `<textarea>`.
+#[component]
+fn NoteKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <Note><span ref={mark} key="a"></span></Note>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_among_children_a_component_writes_into_a_textarea_is_not_the_page_s() {
+    let html = NoteKeys {}.to_html();
+    assert!(html.contains(r#"<textarea name="note"><span data-ref="mark" data-key="a"></span></textarea>"#), "{html}");
+}
+
+/// Two keyed marks, one in an `<svg>`'s `<title>`, which is SVG's: what it holds is HTML's
+/// elements, which the query finds.
+#[component]
+fn SvgTitleKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <svg><title><span ref={mark} key="a">"Chart"</span></title></svg>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one svg-title-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_an_svg_s_title() {
+    SvgTitleKeys {}.to_html();
+}
+
 /// Two cells whose keys are written differently and read the same: `true` and `""` both read as
 /// the empty string.
 #[component]

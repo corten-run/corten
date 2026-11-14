@@ -14,6 +14,12 @@ use crate::tokens::{
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Elements whose text is not HTML (written as is, never escaped).
 const RAW_TEXT: &[&str] = &["script", "style"];
+/// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
+/// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
+/// element written in one is text to the browser, so `html!` refuses it there, and the key
+/// check takes no key written in one (by an expression or a component) for the page's. Inside an
+/// `<svg>` they are SVG's elements (`<title>`) or unknown ones, whose children are elements.
+const TEXT_ONLY: &[&str] = &["textarea", "title", "xmp", "iframe", "noembed", "noframes"];
 /// Rust keywords that need `r#` as a component prop name.
 const KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern", "fn", "for", "if", "impl", "in",
@@ -922,6 +928,30 @@ fn within_svg(outer: bool, name: &str) -> bool {
     }
 }
 
+/// Whether a browser reads the content of `name`, inside an `<svg>` when `svg`, as text:
+/// `<script>` and `<style>`, whose content `html!` holds to literal text everywhere, and outside
+/// an `<svg>` the elements of `TEXT_ONLY`.
+fn reads_as_text(svg: bool, name: &str) -> bool {
+    RAW_TEXT.iter().chain(if svg { &[][..] } else { TEXT_ONLY }).any(|t| name.eq_ignore_ascii_case(t))
+}
+
+/// Why the element `name` does not compile here: inside `holder`, whose content a browser reads
+/// as text, or a `<plaintext>` outside an `<svg>`, which makes the rest of the page text.
+fn text_only_element(holder: Option<&str>, svg: bool, name: &str) -> Option<String> {
+    if let Some(holder) = holder {
+        let instead = if RAW_TEXT.contains(&holder) {
+            "behavior is a #[component(js)], styles a component's CSS file"
+        } else {
+            "put the element beside it, or write text meant to show tags as a string (\"<b>\")"
+        };
+        return Some(format!(
+            "<{holder}> holds only text: a browser reads a <{name}> written in it as text, not as an element; {instead}"
+        ));
+    }
+    (!svg && name.eq_ignore_ascii_case("plaintext"))
+        .then(|| "<plaintext> makes the rest of the page text, its end tag included: write <pre> for preformatted text".into())
+}
+
 struct Cursor {
     tokens: Vec<TokenTree>,
     i: usize,
@@ -929,20 +959,24 @@ struct Cursor {
     /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where elements
     /// are SVG's.
     svg: bool,
+    /// Inside the content of an element a browser reads as text (`RAW_TEXT`, `TEXT_ONLY`), named
+    /// here, where an element does not compile.
+    text_only: Option<String>,
 }
 
 impl Cursor {
     fn new(stream: TokenStream) -> Self {
-        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site(), svg: false }
+        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site(), svg: false, text_only: None }
     }
 
     fn of(group: &Group) -> Self {
-        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close(), svg: false }
+        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close(), svg: false, text_only: None }
     }
 
-    /// The body of a `for`, `if` or `match` here, inside an `<svg>` when this is.
+    /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
+    /// when this is.
     fn inner(&self, group: &Group) -> Self {
-        Cursor { svg: self.svg, ..Cursor::of(group) }
+        Cursor { svg: self.svg, text_only: self.text_only.clone(), ..Cursor::of(group) }
     }
 
     fn peek(&self) -> Option<&TokenTree> {
@@ -1097,6 +1131,11 @@ impl Cursor {
         let is_form = name == "form";
         if component && name.contains('-') {
             return err(name_span, "a component name is a Rust path; element names with - are lowercase");
+        }
+        if !component {
+            if let Some(why) = text_only_element(self.text_only.as_deref(), self.svg, &name) {
+                return err(name_span, why);
+            }
         }
         let mut attrs = Vec::new();
         let mut props = Vec::new();
@@ -1312,8 +1351,12 @@ impl Cursor {
         } else {
             let outer = self.svg;
             self.svg = within_svg(outer, &name);
+            // A component's children go where it writes them, which this markup does not see.
+            let holder = (!component && reads_as_text(outer, &name)).then(|| name.clone());
+            let outer_text = std::mem::replace(&mut self.text_only, holder);
             let children = self.nodes(Some(&name));
             self.svg = outer;
+            self.text_only = outer_text;
             let children = children?;
             self.closing(&name, open)?;
             Some(children)
@@ -1656,7 +1699,10 @@ impl Gen {
                                 self.level(Level::Page);
                                 self.open_tag(name, attrs, children);
                                 self.level(Level::Always);
+                                // Text to a browser, as in `node`.
+                                let content = self.debug_local("::corten::script::__private::UnqueriedContent::open()");
                                 self.nodes(children, false);
+                                self.out.extend(q("__A0.end();", &[content]));
                                 self.level(Level::Page);
                                 self.text.push_str("</title>");
                             }
@@ -2068,8 +2114,10 @@ impl Gen {
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
                     // A `<template>`'s content and a `<noscript>`'s, which the runtime's query for a
-                    // ref's elements does not reach (with scripts on, a `<noscript>` holds text):
-                    // debug builds record none of their keys. In an `<svg>` both are elements like
+                    // ref's elements does not reach (with scripts on, a `<noscript>` holds text),
+                    // and the content of an element a browser reads as text (`TEXT_ONLY`: a
+                    // `<textarea>` holding a component or an expression that writes markup):
+                    // debug builds record none of their keys. In an `<svg>` they are elements like
                     // any other, whose children the query finds, except in what an element whose
                     // children are HTML's holds (`SVG_HTML_POINTS`). A component's markup does
                     // not see an `<svg>` its parent writes it into, so it takes its `<template>`
@@ -2077,8 +2125,10 @@ impl Gen {
                     // (`unknown_context`), so theirs are taken for HTML's too: the check misses
                     // those keys rather than stop a render it cannot be sure of.
                     let svg_element = self.svg && !self.unknown_context;
-                    let unqueried =
-                        !svg_element && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
+                    let unqueried = !svg_element
+                        && (name.eq_ignore_ascii_case("template")
+                            || name.eq_ignore_ascii_case("noscript")
+                            || TEXT_ONLY.iter().any(|t| name.eq_ignore_ascii_case(t)));
                     let content = unqueried.then(|| self.debug_local("::corten::script::__private::UnqueriedContent::open()"));
                     let (outer, outer_context) = (self.svg, self.unknown_context);
                     self.svg = within_svg(outer, name);

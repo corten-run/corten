@@ -3114,21 +3114,29 @@ rules something out.
     `key={..}` writes none (`None`), as they stop on an integer past 2^53; release builds keep no
     record. It never stops a correct render: where it cannot know what a browser makes of the
     markup, it lets a duplicate pass. The check counts the elements the runtime's query finds, so
-    one in a `<template>`'s or a `<noscript>`'s content is not counted (in an `<svg>` both are
-    elements like any other, and what they hold is, except in its `<foreignObject>`, `<desc>` and
-    `<title>`, the HTML standard's integration points, whose children are HTML's). It counts an
+    one in a `<template>`'s or a `<noscript>`'s content is not counted, nor one an expression or a
+    component writes into an element whose content a browser reads as text (`<textarea>`, an HTML
+    `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`); an element written in one of those
+    in the markup itself does not compile, nor in a `<script>` or a `<style>`, nor a `<plaintext>`
+    (in an `<svg>` they are elements like any other, and what they hold is, except in its
+    `<foreignObject>`, `<desc>` and `<title>`, the HTML standard's integration points, whose
+    children are HTML's). It counts an
     element against its component's render only when the element is written into the string that
     render writes, so a view written into a string of its own (`html! { .. }.to_html()` or a
     component's `children.to_html()` as an attribute's value, which the browser reads as text) is
     not counted there, though a component rendered so has a record of its own; and an element's
     ref and key are noted on it until its tag is written, so a view an attribute's expression
     renders meanwhile notes its own. Markup a view writes into its own string and an app then
-    places in the page (`raw`) is not checked against the page's. Its limit is at a component's edge, where the markup on
+    places in the page (`raw`) is not checked against the page's, and Corten does the same with a
+    document's head tags: it renders each expression or component in its `<head>` into scratch
+    storage and copies it into the page (`head_slot` in `crates/corten/src/view.rs`), so equal keys
+    in two of them, or in one and the body, are not checked. Its limit is at a component's edge, where the markup on
     either side cannot know the other's context: a component's markup does not see an `<svg>` its
     parent writes it into, so it takes its own `<template>` there for HTML's, and the keys in it,
     which the runtime finds, are not checked; and a component's children do not see where the
     component writes them (in an `<svg>`'s `<desc>`, say, where a `<template>` is HTML's), so a
-    `<template>`'s or a `<noscript>`'s content among them is not checked either, unless it is in
+    `<template>`'s or a `<noscript>`'s content among them, or a `<textarea>`'s or a `<title>`'s, is
+    not checked either, unless it is in
     an `<svg>` the children write themselves, which is SVG's wherever it lands. Following the
     namespace across components would have every element's markup report it to the check, for a
     duplicate few apps can write. It follows

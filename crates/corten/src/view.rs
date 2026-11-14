@@ -55,6 +55,8 @@
 //! - Void elements (`<input>`, `<br>`, `<img>`, ...) need no closing tag; other elements close
 //!   with `</name>` or `/>`. `<>...</>` groups nodes. `<!DOCTYPE html>` is allowed.
 //! - Text inside `<script>` and `<style>` is written as is.
+//! - An element written inside one whose content a browser reads as text (`<textarea>`,
+//!   `<title>` outside an `<svg>`, `<script>`, `<style>`) does not compile: see [`html!`].
 
 use std::{
     borrow::Cow,
@@ -261,6 +263,50 @@ use std::{
 /// (`href={("/items/", &id)}`) and a `&str` compile, as do a spread, a component's prop, a
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
+///
+/// An element written inside one whose content a browser parsing HTML reads as text does not
+/// compile: the browser would show its tags as text, or put them in a field's value, rather than
+/// make an element. Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
+/// `<xmp>`, `<noembed>` and `<noframes>`, and `<plaintext>` itself does not compile (it makes the
+/// rest of the page text, its end tag included):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <textarea name="note"><b>"Draft"</b></textarea> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <title>"Shop "<span>"3"</span></title> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><title>if true { <em>"New"</em> }</title></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><desc><title><span>"Chart"</span></title></desc></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <plaintext>"Raw"</plaintext> };
+/// ```
+///
+/// Their text and expressions compile (written escaped, which a `<textarea>` and a `<title>`
+/// read back), and so does an element in an `<svg>`'s `<title>`, which is SVG's and holds HTML:
+///
+/// ```
+/// use corten::prelude::*;
+/// let draft = "<b>Draft</b>";
+/// let view = html! { <textarea name="note">{draft}</textarea><svg><title><span>"Chart"</span></title></svg> };
+/// assert_eq!(
+///     view.to_html(),
+///     r#"<textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea><svg><title><span>Chart</span></title></svg>"#
+/// );
+/// ```
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`

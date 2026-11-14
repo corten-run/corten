@@ -481,13 +481,17 @@ Corten is pre-1.0, so any minor version may change the API.
   ref in one render of its component have keys the browser reads as equal (`key={true}` and
   `key=""` are one, and so are a carriage return and a line feed), or a `key={..}` writes none
   (`None`), since the `Map` would hold one entry for them, counting the elements the runtime finds
-  (none in a `<template>`'s or a `<noscript>`'s content, outside an `<svg>` or in its
-  `<foreignObject>`, `<desc>` or `<title>`), leaving out a key written with a reference Corten does
+  (none in a `<template>`'s or a `<noscript>`'s content, or in what an expression or a component
+  writes into an element a browser reads as text, a `<textarea>`, `<title>`, `<iframe>`,
+  `<xmp>`, `<noembed>` or `<noframes>`, outside an `<svg>` or in its `<foreignObject>`,
+  `<desc>` or `<title>`), leaving out a key written with a reference Corten does
   not write (an app's own `AttrValue`) and the keys in a `<template>` whose context the markup
   cannot know: one a component writes into its parent's `<svg>`, and one among a component's
   children, which the component may write in an `<svg>`'s `<desc>` (unless it is in an `<svg>` of
   the children's own), and keys a view writes into a string of its own (`html! { .. }.to_html()` or
-  `children.to_html()` as an attribute's value), which are not its component's; whether it runs is
+  `children.to_html()` as an attribute's value), which are not its component's, or Corten writes
+  so (a document's head tags, each copied into the page, are not checked against each other or the
+  body); whether it runs is
   `corten-run`'s debug-assertions setting, for every crate's markup, release builds do not check,
   and the runtime is unchanged
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
@@ -496,7 +500,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
   gets `key={..}` on each of its elements. A spread of attribute pairs now skips `data-key`, as it
-  skips `data-ref` and `data-ref-value`: a key is `key={..}`'s to write.
+  skips `data-ref` and `data-ref-value`: a key is `key={..}`'s to write. **Breaking:** an element
+  written in `html!` inside an element whose content a browser reads as text no longer compiles
+  (`<textarea><b>..</b></textarea>`, `<title>` outside an `<svg>` or in its `<desc>`, `<iframe>`,
+  `<xmp>`, `<noembed>`, `<noframes>`, `<script>`, `<style>`), nor does `<plaintext>`, where it
+  compiled and the browser showed the tags as text: put the element beside it, or write text meant
+  to show tags as a string.
 
 - A `#[component]`'s own string (`to_html`, which a patch, a refused form's patch and a live
   fragment are rendered with when the view is a component) now starts at the size that component

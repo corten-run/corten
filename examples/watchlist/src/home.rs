@@ -695,8 +695,8 @@ mod tests {
     }
 
     /// Markup with every call the key check puts in what `html!` writes: cells keyed by
-    /// `key={..}`, one keyed by a static `key=".."`, a `<template>`'s and a `<noscript>`'s
-    /// content, and a `<template>` among a component's children in an `<svg>`.
+    /// `key={..}`, one keyed by a static `key=".."`, a `<template>`'s, a `<noscript>`'s and a
+    /// `<textarea>`'s content, and a `<template>` among a component's children in an `<svg>`.
     #[component]
     fn KeyedMarkup<'a>(ids: &'a [String]) -> impl Render {
         let (cell, total, mark) = refs();
@@ -714,6 +714,7 @@ mod tests {
                     <table><tbody><tr><td ref={cell} key="row">"0"</td></tr></tbody></table>
                 </template>
                 <noscript><p>"Prices follow the market with JavaScript on."</p></noscript>
+                <textarea name="note">{ids.len()}</textarea>
                 <svg>
                     <Described>
                         <template><g ref={mark} key="row"></g></template>
