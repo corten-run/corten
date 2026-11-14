@@ -534,7 +534,12 @@ fn KeyedCells<'a>(ids: &'a [Option<&'a str>]) -> impl Render {
 
 #[component]
 fn TwoKeyedGrids() -> impl Render {
-    html! { <div><KeyedCells ids={&[Some("a"), Some("b")]} /><KeyedCells ids={&[Some("a")]} /></div> }
+    html! {
+        <div>
+            <KeyedCells ids={&[Some("a"), Some("b")]} />
+            <KeyedCells ids={&[Some("a")]} />
+        </div>
+    }
 }
 
 #[test]
