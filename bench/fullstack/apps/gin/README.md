@@ -5,6 +5,11 @@ their parsed Go records. They accept GET/HEAD and return JSON 404, 405 and 502
 errors; unsupported methods include `Allow: GET, HEAD` and do not fetch a record.
 Record JSON responses use `Cache-Control: no-store`.
 
+The production image still runs as `nobody`. Its public `static/` files are made readable
+and directories traversable during the image build, independently of checkout umask.
+The catalog generator likewise explicitly sets readable modes on its synthetic fixture
+and mount directory; neither change opens private results or campaign state.
+
 Both record sources use a request-context-aware Go HTTP client with redirects
 disabled and a ten-second whole-response timeout, including JSON body decoding.
 The same sources serve their existing native templ pages; templates, localization,
