@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import { isAbsolute } from "node:path";
 import { roundName, validateState } from "./cloud-contract.mjs";
 
+const providerCodes = ["provider-command", "provider-credential", "provider-output",
+  "account-request", "account-http", "list-request", "list-http", "list-response",
+  "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
+  "create-action-response", "create-action-pending", "delete-request", "delete-http"];
+const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
+// This is the entire public diagnostic vocabulary, not an acceptance/retry policy.
+// Reconstruct data properties only; never copy native exceptions or raw values.
+export function providerDiagnostic(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = Object.getOwnPropertyDescriptors(value), names = Object.keys(fields).sort();
+  if (JSON.stringify(names) !== '["code"]' && JSON.stringify(names) !== '["code","httpStatus"]') return undefined;
+  const code = fields.code.value;
+  if (!providerCodes.includes(code)) return undefined;
+  if (!fields.httpStatus) return { code };
+  const httpStatus = fields.httpStatus.value;
+  if (!code.endsWith("-http") || !providerStatuses.includes(httpStatus)) return undefined;
+  return { code, httpStatus };
+}
+export function providerFailure(error) {
+  return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
+}
+
 export function full(value, pattern, label) {
   assert.equal(typeof value, "string", label);
   const match = pattern.exec(value); assert.ok(match && match[0] === value, label); return value;

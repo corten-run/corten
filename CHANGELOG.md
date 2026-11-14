@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
+  grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
+  raw responses or credentials, or changing provider validation and recovery rules.
+
 - Preserve captured `ProgramData` only for grouped cloud SSH/SCP children so Windows
   OpenSSH can initialize with the sanitized environment. Git/doctl environments and
   credential handling are unchanged; local configuration-only checks make no connection.
