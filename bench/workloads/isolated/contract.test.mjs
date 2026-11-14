@@ -54,7 +54,12 @@ test("client source binding includes the actual complete native committed invent
   assert.ok(historical >= 0);
   for (const mutate of [(b) => { b.sources.files.splice(historical, 1); }, (b) => { b.sources.files[historical].sha256 = "0".repeat(64); }]) {
     const bad = structuredClone(binding); mutate(bad); bad.sources.sha256 = deploymentSha256(bad.sources.files);
-    assert.throws(() => validateBinding(reseal(bad)), /binding differs/);
+    assert.throws(() => validateBinding(reseal(bad)), (error) => {
+      assert.match(error.message, /binding differs/);
+      assert.ok(error.message.length < 256, "rejection must not format the source manifest");
+      assert.equal(error.actual, false); assert.equal(error.expected, true);
+      return true;
+    });
   }
 });
 

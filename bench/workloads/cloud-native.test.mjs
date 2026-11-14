@@ -1,6 +1,7 @@
 // Synthetic source/audit controls through the real integrated core APIs. No
 // provider, benchmark, image build or claim of an independently performed audit.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -61,9 +62,12 @@ for (const group of ["json-api", "mixed-production"]) test(`real core validates 
 });
 
 test("real current core inspection rejects unsealed synthetic evidence through the native worker", { skip: !integrated }, async (t) => {
-  const h = harness(t), report = await inspectCampaign({ folder: h.temp, round: "r21", commit });
+  const currentCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"],
+    { cwd: new URL("../../", import.meta.url), encoding: "utf8", timeout: 5000, windowsHide: true }).trim();
+  assert.match(currentCommit, /^[a-f0-9]{40}$/);
+  const h = harness(t), report = await inspectCampaign({ folder: h.temp, round: "r21", commit: currentCommit });
   assert.equal(report.status, "invalid"); assert.equal(report.deletionAuthorized, false);
-  assert.throws(() => campaignOutcome(report, { round: "r21", commit }, 0));
+  assert.throws(() => campaignOutcome(report, { round: "r21", commit: currentCommit }, 0));
 });
 
 for (const group of ["client-heavy", "mixed-production"]) test(`collector retains actual core ${group} passed-but-ineligible outcomes`, { skip: !integrated }, async () => {

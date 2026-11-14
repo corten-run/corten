@@ -8,10 +8,11 @@ import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
+import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-production.mjs"].map((p) => `bench/workloads/${p}`);
+export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
 const policyPaths = [...new Set([...controllerPaths, ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/json-api/contract.mjs", "bench/workloads/registry.mjs"])];
 const loadedSources = new Map(policyPaths.map((path) => [path, regular(join(checkout, path), 1024 * 1024).toString("utf8").replaceAll("\r\n", "\n")]));
@@ -44,7 +45,13 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
-  let reservationSha256 = null, deliverySha256 = null;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256;
+  if (options.group !== undefined) {
+    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateFleet(JSON.parse(bytes));
+    assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
+    assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
+    fleetSha256 = digest(bytes);
+  }
   if (options.detach) assert.equal(options.commit, head, "launch must measure the approved controller source");
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
@@ -55,7 +62,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
   const subject = { action: options.detach ? "detach" : options.collect ? "collect" : "deliver-audit", controllerCommit: head,
-    options, stateRoot: physicalRequest, reservationSha256, deliverySha256,
+    options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
@@ -83,9 +90,13 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
-  // Read remote Git only after explicit approval. Never trust a stale local merge ref.
-  await run("git", ["fetch", "--no-tags", sourceUrl, "+refs/heads/main:refs/remotes/origin/main"], 120000);
-  await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, "origin/main"]);
+  // Each parallel controller observes main independently, but must not race a
+  // shared reference or FETCH_HEAD. Fetch only that exact advertised object.
+  const advertisement = (await run("git", ["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"], 120000)).stdout;
+  full(advertisement, /[a-f0-9]{40}\trefs\/heads\/main\n/, "remote main advertisement unavailable or ambiguous");
+  const remoteHead = advertisement.slice(0, 40);
+  await run("git", ["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead], 120000);
+  await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
   const repeated = await productionPlan(options, { repo, run });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
@@ -100,7 +111,8 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
     }
     return run(binary, argv, timeout, allowFail);
   };
-  const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted, settle: () => providerRun.close() });
+  const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
+    mergedHead: remoteHead, settle: () => providerRun.close() });
   let result;
   if (options.detach) { await task.launch(); result = 3; }
   else result = options.collect ? await task.collect() : await task.deliverAudit();

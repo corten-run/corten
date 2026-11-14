@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -107,8 +108,8 @@ export function copyEvidence(source, destination) {
   }
   for (const entry of before.entries.filter((e) => e.type === "directory").reverse())
     syncDirectory(join(destination, ...entry.path.split("/").filter(Boolean)));
-  assert.deepEqual(tree(source), before, "source tree mutated during collection");
-  assert.deepEqual(tree(destination), before, "copied evidence differs");
+  assert.ok(isDeepStrictEqual(tree(source), before), "source tree mutated during collection");
+  assert.ok(isDeepStrictEqual(tree(destination), before), "copied evidence differs");
   return before;
 }
 
@@ -136,7 +137,7 @@ export function inspectEvidence(binding, root) {
     report = rawProofBlocked(group, { outcomes: Object.fromEntries(binding.selection.apps.map((app) => [app,
       admitted(summary.apps[app]) ? "admitted-native-outcome" : "excluded-not-timed"])) }, inspectRawSupport(group, summary, root, before));
   }
-  assert.deepEqual(tree(root), before, "snapshot changed during strict inspection");
+  assert.ok(isDeepStrictEqual(tree(root), before), "snapshot changed during strict inspection");
   return report;
 }
 

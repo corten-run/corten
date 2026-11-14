@@ -120,7 +120,7 @@ impl<P: Prefix> Api<P> {
             let json = served.json();
             async move { ([(header::CONTENT_TYPE, HeaderValue::from_static(JSON))], json) }
         });
-        self.route::<R>(crate::Methods(serve, true, None))
+        self.route::<R>(crate::Methods::<(), crate::AnyAnswer>(serve, true, None, std::marker::PhantomData))
     }
 
     /// Without the `types` feature the module's `openapi = ..` is a compile error of its own
@@ -196,7 +196,8 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
-    pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
+    pub fn route<R: TypedRoute>(mut self, methods: crate::Methods<(), impl crate::answer::AnswerKind>) -> Self {
+        crate::route::mounted_with::<R, _, _>(&methods);
         self.place::<R>();
         self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
         if let Some(companion) = methods.2 {

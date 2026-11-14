@@ -22,13 +22,14 @@ cd /bench/repo
 git checkout --detach ${state.commit}
 test "$(git rev-parse HEAD)" = ${state.commit}
 test -z "$(git status --porcelain --untracked-files=all)"`;
-  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign`;
+  const group = state.group === undefined ? "" : ` --group ${quote(state.group)}`;
+  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}`;
   if (!files["job.sh"].includes(original) || files["job.sh"].split(entry).length !== 2)
     throw new Error("fixed provisioning contract changed; review adapter");
   files["job.sh"] = files["job.sh"].replace("set -Eeuo pipefail", "set -Eeuo pipefail\numask 077")
     .replace(original, provenance)
     .replace(entry,
-      `mkdir -m 700 -- '/bench/campaign'\ntest -z "$(git status --porcelain --untracked-files=all)"\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'`);
+      `mkdir -m 700 -- '/bench/campaign'\ntest -z "$(git status --porcelain --untracked-files=all)"\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}`);
   files["pack.sh"] = `#!/bin/bash
 set -euo pipefail
 umask 077
