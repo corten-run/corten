@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join, posix, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../deployments.mjs";
+import { definition } from "../registry.mjs";
+import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
 
@@ -79,8 +81,8 @@ function fixture(t, change = () => {}, bound = binding) {
   return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
 }
 
-function browserFixture(t) {
-  const bound = { ...binding, request: { ...binding.request, group: "fullstack-browser" }, selection: { apps: ["app"] } };
+function browserFixture(t, selectedApp = "app") {
+  const bound = { ...binding, request: { ...binding.request, group: "fullstack-browser" }, selection: { apps: [selectedApp] } };
   const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
   const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
     Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
@@ -121,6 +123,108 @@ function browserResourceResults(f) {
     catch (error) { assert.equal(error.code, "ERR_ASSERTION"); return "invalid"; }
   });
 }
+
+function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true } = {}) {
+  const f = browserFixture(t, "corten"), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
+  f.observation.samples = Array.from({ length: 41 }, (_, i) => {
+    const at = i * 100, sample = structuredClone(template); sample.at = at;
+    if (i === 0 || i === 40) { sample.groups = [group(path)]; sample.processes = []; }
+    if (i < 2 || i > 38) sample.docker = { inventory: [], participants: [], gaps: [] };
+    else {
+      const r = sample.docker.participants[0]; r.startedAt = at + 1; r.endedAt = at + 3; r.kernel.at = at + 2;
+      if (!rootAbsent) { r.kernel.ancestors.at(-1).files["cpu.max"] = "max 100000\n"; r.kernel.ancestors.at(-1).files["memory.max"] = "max\n"; }
+    }
+    return sample;
+  });
+  const running = structuredClone(p.terminal.state), neverStarted = { ...running, Status: "created", Running: false, Pid: 0,
+    StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
+  const terminal = exited ? { ...running, Status: "exited", Running: false, Pid: 0, ExitCode: 1,
+    FinishedAt: "2026-11-14T00:00:04Z" } : running;
+  const task = "browser-abcdef", caseKey = definition("fullstack-browser").cases[0].key;
+  const image = { Id: p.imageId, Config: { Entrypoint: ["node"], Cmd: ["server.mjs"] } };
+  const info = { Id: p.id, Name: "/native-case", Image: p.imageId,
+    Config: { ...image.Config, Env: ["MARKETPLACE_SOURCE=fixture"], Labels: { "agent.owner": "codex", "agent.task": task } },
+    RestartCount: 0, State: neverStarted, HostConfig: { NanoCpus: 1e9, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: "",
+      Memory: 2 ** 30, MemorySwap: 2 ** 31, ShmSize: 64 * 2 ** 20, PidsLimit: null, NetworkMode: "bridge" }, Mounts: [] };
+  const snapshot = (state) => participantSnapshot({ ...info, State: state }, image);
+  const identity = { event: "participant", role: "application", app: "corten", case: caseKey };
+  const events = [
+    { ...identity, phase: "created", at: 200, snapshot: snapshot(neverStarted) },
+    { event: "command", operation: "start", role: identity.role, app: identity.app, case: caseKey, id: p.id, code: 0, at: 250 },
+    { ...identity, phase: "running", at: 300, snapshot: snapshot(running) },
+    { event: "browser-window", app: identity.app, case: caseKey, startedAt: 300, endedAt: 3600, at: 3600 },
+    { ...identity, phase: "terminal", at: 3800, snapshot: snapshot(terminal) },
+    { event: "remove", at: 3850, kind: "container", id: p.id, code: 0 },
+    { event: "inventory", at: 3860, kind: "container", scope: "all", code: 0, ids: [] },
+    ...["container", "network", "image", "volume"].map((kind) => ({ event: "inventory", at: 3870, kind, scope: "owned", code: 0, ids: [] })),
+  ].map((e, seq) => ({ ...e, seq }));
+  const replay = replayExecution({ json: () => ({ schema: "native-browser-execution/v2", task,
+    commit: f.bound.request.commit, startedAt: 100, endedAt: 3900, events }) }, null);
+  assert.deepEqual(replay.blocked, []); assert.equal(replay.cleanupComplete, true);
+  assert.deepEqual(replay.participants[0].window, { startedAt: 200, endedAt: 3800 });
+  Object.assign(f.native.hostSubject, { participants: replay.participants, processWindows: replay.processWindows,
+    executionWindow: replay.executionWindow, subjectSha256: replay.subjectSha256 });
+  f.native.outcomes = [{ app: "corten", outcome: exited ? "failed" : "passed" }];
+  f.native.qualificationPassed = !exited;
+  if (created) { const r = f.observation.samples[2].docker.participants[0]; r.kernel = null; r.container.state = structuredClone(neverStarted); }
+  if (exited) for (const sample of f.observation.samples.filter((s) => s.at >= 3700 && s.at <= 3800)) {
+    const r = sample.docker.participants[0]; r.kernel = null; r.container.state = structuredClone(terminal);
+  }
+  return f;
+}
+
+for (const [name, options] of [
+  ["ordinary running", {}], ["created prefix inside native window", { created: true }],
+  ["failed exited suffix inside native window", { exited: true }],
+  ["both boundaries inside native window", { created: true, exited: true }],
+  ["created prefix with observed root limit files", { created: true, rootAbsent: false }],
+  ["exited suffix with observed root limit files", { exited: true, rootAbsent: false }],
+]) test(`native lifecycle replay retains ${name}`, (t) => {
+  const f = lifecycleBoundaryFixture(t, options);
+  assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
+});
+
+for (const [name, mutate] of [
+  ["created state reappears after live execution", (f) => { const d = f.observation.samples[10].docker;
+    d.participants[0] = structuredClone(f.observation.samples[2].docker.participants[0]);
+    Object.assign(d.participants[0], { startedAt: 1001, endedAt: 1003 }); }],
+  ["live execution reappears after exit", (f) => { const d = f.observation.samples[38].docker;
+    d.participants[0] = structuredClone(f.observation.samples[36].docker.participants[0]);
+    Object.assign(d.participants[0], { startedAt: 3801, endedAt: 3803 }); d.participants[0].kernel.at = 3802; }],
+  ["exited record disagrees with native terminal exit", (f) => { f.observation.samples[37].docker.participants[0].container.state.ExitCode = 137; }],
+  ["created prefix retains a nonzero exit", (f) => { f.observation.samples[2].docker.participants[0].container.state.ExitCode = 1; }],
+  ["missing record inside the native window", (f) => { f.observation.samples[10].docker = { inventory: [], participants: [], gaps: [] }; }],
+  ["missing kernel in a declared running observation", (f) => { f.observation.samples[10].docker.participants[0].kernel = null; }],
+  ["actual exited suffix contradicts still-running terminal", (f) => { Object.assign(f.native.hostSubject.participants[0].terminal.state,
+    f.observation.samples[36].docker.participants[0].container.state); }],
+]) test(`native boundary proof rejects ${name}`, (t) => {
+  const f = lifecycleBoundaryFixture(t, { created: true, exited: true }); mutate(f);
+  assert.ok(browserResourceResults(f).every((value) => value !== "verified"));
+});
+
+for (const delay of [1000, 1001]) test(`created prefix keeps the exact ${delay}ms continuity boundary`, (t) => {
+  const f = lifecycleBoundaryFixture(t, { created: true });
+  const created = f.observation.samples[2].docker.participants[0];
+  for (const sample of f.observation.samples.filter((s) => s.at >= 300 && s.at < 1200)) {
+    sample.docker.participants[0] = structuredClone(created);
+    Object.assign(sample.docker.participants[0], { startedAt: sample.at + 1, endedAt: sample.at + 3 });
+  }
+  const first = f.observation.samples[12].docker.participants[0];
+  first.startedAt = 200 + delay; first.kernel.at = first.startedAt + 1; first.endedAt = first.startedAt + 2;
+  assert.deepEqual(browserResourceResults(f), delay === 1000 ? ["verified", "verified"] : ["blocked", "blocked"]);
+});
+
+for (const delay of [1000, 1001]) test(`exited suffix keeps the exact ${delay}ms continuity boundary`, (t) => {
+  const f = lifecycleBoundaryFixture(t, { exited: true });
+  const terminal = f.observation.samples[38].docker.participants[0];
+  for (const sample of f.observation.samples.filter((s) => s.at >= 2800 && s.at < 3700)) {
+    sample.docker.participants[0] = structuredClone(terminal);
+    Object.assign(sample.docker.participants[0], { startedAt: sample.at + 1, endedAt: sample.at + 3 });
+  }
+  const last = f.observation.samples[27].docker.participants[0];
+  last.endedAt = 3800 - delay; last.kernel.at = last.endedAt - 1;
+  assert.deepEqual(browserResourceResults(f), delay === 1000 ? ["verified", "verified"] : ["blocked", "blocked"]);
+});
 
 for (const [name, change] of [
   ["omitted declared population", (f, d) => { f.native.hostSubject.participants = []; }],

@@ -418,8 +418,8 @@ export function inspectBrowserParticipants(subject, observation) {
     for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
       && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
     for (const s of samples.filter((s) => s.at >= startedAt && s.at <= endedAt))
-      if (!s.docker.participants.some((r) => r.container.id === p.id && r.kernel)) return false;
-    let identity, previousEnd = -1;
+      if (!s.docker.participants.some((r) => r.container.id === p.id)) return false;
+    let identity, previousEnd = -1, phase = 0;
     const accounting = new Map(), ancestorControls = new Map();
     for (const r of records) {
       assert.ok(Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.endedAt) && r.endedAt >= r.startedAt
@@ -429,7 +429,9 @@ export function inspectBrowserParticipants(subject, observation) {
       assert.equal(c.imageId, p.imageId); assert.equal(c.restartCount, 0);
       for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(c.state[key], false);
       if (!r.kernel && c.state.Status === "created") {
+        if (phase !== 0) return false;
         assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0); assert.equal(c.state.OOMKilled, false);
+        assert.equal(c.state.ExitCode, 0);
         for (const key of ["StartedAt", "FinishedAt"]) assert.match(c.state[key], /^0001-01-01T00:00:00(?:\.0+)?Z$/);
         if (r.startedAt > startedAt + maximumSampleGapMs) return false;
         continue;
@@ -437,11 +439,15 @@ export function inspectBrowserParticipants(subject, observation) {
       assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
       if (!r.kernel) {
         assert.equal(c.state.Status, "exited"); assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
+        if (phase === 0 || p.terminal.state.Running && r.startedAt <= endedAt) return false;
+        phase = 2;
         if (r.endedAt < endedAt - maximumSampleGapMs) return false;
         if (!p.terminal.state.Running) for (const key of ["ExitCode", "OOMKilled", "FinishedAt"])
           assert.equal(c.state[key], p.terminal.state[key]);
         continue;
       }
+      if (phase === 2) return false;
+      phase = 1;
       assert.equal(c.state.Status, "running"); assert.equal(c.state.Running, true);
       const k = r.kernel, rootIdentity = processIdentity(k.stat), path = groupPath(k.cgroup);
       assert.equal(k.bootId, observation.context.bootId); participantGroup(path, p.id);

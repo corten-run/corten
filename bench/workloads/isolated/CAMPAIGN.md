@@ -229,6 +229,13 @@ terminal snapshot must name the actually observed PID/incarnation and zero resta
 a replay-proven exited failure keeps PID zero and does not become a passing app. CPU and
 memory limit files may be absent only on the actual cgroup-v2 root. Actual root observations
 are retained and compared unchanged; required non-root/command controls remain mandatory.
+The native participant window covers creation through its pre-removal terminal receipt,
+not only its running interval. Every in-window poll still needs the original-ID snapshot.
+A zero-history created prefix may precede the first actual live kernel observation by at
+most one second; a matching exited suffix may follow the last live observation by at most
+one second. States only advance created-to-running-to-exited. Missing interior records,
+created-after-running, running-after-exit and contradictory terminal exit facts cannot
+qualify. These bounds do not infer live processes before start or after exit.
 
 For browser processes, the sampler opens the actual `/proc/<observed-pid>/exe` inode,
 records its device/inode/size/nanosecond modification/change identity and rechecks it
