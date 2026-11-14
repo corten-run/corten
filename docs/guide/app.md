@@ -2413,7 +2413,10 @@ fn app(pages: Routes) -> App {
    `#[derive(Route)]` writes (plain text, and parameters that are whole segments or followed by
    text in theirs, `/feeds/{name}.atom`), or the app does not compile. A route that says
    `patches` in its routes module takes only a `get` handler that returns `HtmlResult<Patches>`
-   there too.
+   there too (with no `get`, or another, it does not compile). Both checks are made when the
+   code that mounts the route is compiled: `cargo build`, and `cargo test` when a test or the
+   library reaches it, but not `cargo check`, nor `cargo test` when only a binary's `main`
+   mounts it ([design Limit 11](../design.md#limit-caller-types)).
 6. Areas nest (`/admin` and `/admin/billing`, each with its own routes and stylesheet).
 
 How the common cases look:

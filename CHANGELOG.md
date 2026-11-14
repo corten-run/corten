@@ -422,7 +422,10 @@ Corten is pre-1.0, so any minor version may change the API.
   route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
   by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
   `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
-  any other `get` there stops the build (`E0080`, as a route's path of the wrong shape does).
+  any other `get` there, or none, stops the build (`E0080`, as a route's path of the wrong shape
+  does: when the code that mounts it is compiled, by `cargo build` or by `cargo test` where a
+  test or the library reaches it; not by `cargo check`, nor by `cargo test` when only a binary's
+  `main` mounts it).
   **Breaking:** an
   app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
   its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
@@ -439,11 +442,16 @@ Corten is pre-1.0, so any minor version may change the API.
   `E0283` (type annotations needed) without them, as is a handler that hides its answer,
   `corten::Result<impl Answer<Inputs = AnyInputs>>`, and calls them directly (one that returns
   a helper's `HtmlResult` is fine): `req.patch::<ForOne, AnyAnswer>(..)` or
-  `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` there. `Answer` has an associated type,
-  `Kind`: an answer type of an app's own says `type Kind = AnyAnswer;`. `Methods` has a second
-  type parameter, `AnyAnswer` by default, so `let _: Methods = get(h)` still compiles for every
-  handler but one that returns `HtmlResult<Patches>`, whose `Methods` is
-  `Methods<(), Patches>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
+  `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` there. `Answer` requires `Sized` and has an
+  associated type, `Kind`: an answer type of an app's own says `type Kind = AnyAnswer;`, even
+  one that holds a patch or wraps another answer, since only `HtmlResult<Patches>` and
+  `Public` or `NoStore` of it can be `Patches` (`type Kind = Patches;` or
+  `type Kind = A::Kind;` there is `E0277`). `Methods` has a second type parameter,
+  `AnyAnswer` by default, which `get(h)` sets to `h`'s kind, so `let _: Methods = get(h)`
+  does not compile (`E0308`) for a handler that returns `HtmlResult<Patches>`, whose
+  `Methods` is `Methods<(), Patches>`, or one that hides its kind,
+  `corten::Result<impl Answer<Inputs = AnyInputs>>`, which says it in the `impl`:
+  `impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
   nothing to run (callgrind, a `patch_or` request in process, `what_a_patch_or_request_costs` on
   `0ff569c69` and `811324247`: 17,972 instructions for the patch before and 17,973 after, 18,405
   before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`). The requests guide now says

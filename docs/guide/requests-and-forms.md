@@ -1775,11 +1775,16 @@ build rather than the page. A route given by hand, a `#[derive(Route)]` struct, 
 compiler cannot see the handler that serves it. A route that says `patches` mounted by hand
 (`Area::route`, `Api::route`) takes only a `get` handler that returns `HtmlResult<Patches>`, or
 the app does not build: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and those two
-check it where they check the route's path. What is checked is the handler's
-answer. Two things can still answer the read otherwise: a stage or an extractor that answers
-before the handler runs (a `Caller` that refuses someone signed out answers `Mode::Action` with a
-`204` and `corten-location`, sending the browser to sign in), and a handler that replaces its
-answer's response through `DerefMut` (`*res = ..`), which its type does not see.
+check it where they check the route's path, when the code that mounts it is compiled
+(`cargo build`, or `cargo test` where a test or the library reaches it; not `cargo check`, and
+not `cargo test` when only a binary's `main` mounts it). An answer type of the app's own cannot
+say it answers a patch (`type Kind = AnyAnswer;` is all it can say). What is checked is the
+handler's answer. Three things can still answer the read otherwise: a stage or an extractor that
+answers before the handler runs (a `Caller` that refuses someone signed out answers
+`Mode::Action` with a `204` and `corten-location`, sending the browser to sign in), a handler
+that replaces its answer's response through `DerefMut` (`*res = ..`), which its type does not
+see, and another route at the same path, mounted with a page handler where the `patches`
+route's own module is not.
 
 ```rust,ignore
 #[corten::routes]

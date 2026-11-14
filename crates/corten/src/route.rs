@@ -3722,7 +3722,7 @@ pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind>(_
     const {
         assert!(
             !R::PATCHES || K::PATCHES,
-            "corten: the route says `patches`, and the get handler it is given here may answer the runtime's read with a page or a redirect: give it one that returns HtmlResult<Patches> (req.patch_or), as its routes module does"
+            "corten: the route named in mounted_with::<..> below says `patches`, and the handlers it is mounted with have no get that answers a patch (no get, or one that may answer the runtime's read with a page or a redirect): give it a get that returns HtmlResult<Patches> (req.patch_or), as its routes module does"
         )
     };
 }
@@ -4389,7 +4389,7 @@ pub mod __private {
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-        <H as crate::answer::Signature<T>>::Out: crate::answer::OnlyPatches,
+        <H as crate::answer::Signature<T>>::Out: crate::answer::sealed::PatchAnswer,
     {
     }
 

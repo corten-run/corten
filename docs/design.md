@@ -3339,9 +3339,7 @@ rules something out.
     says `patches` and the macro checks it, as `rows = Level` is said and checked against
     `FeedResponse<Level>`. The trait the macro implements for such a route,
     `route::__private::AnswersPatch`, is public only because that impl is written in the app's
-    crate and must name it; it is hidden and not an API, and an app that implements it by hand has
-    stepped around the check, as with any `__private` item (so has one that calls the hidden
-    `Methods::__patches` or writes the derive's hidden `__patches` word, below). A route given by
+    crate and must name it; it is hidden and not an API. A route given by
     hand, a `#[derive(Route)]` struct, is never a `PatchRoute`: nothing ties its type to its
     handler, so `ReadAgain::from` refuses it rather than trusting it. A `PatchRoute` mounted by
     hand is held to its word as well, since `Area::route` and `Api::route` take a route type and
@@ -3350,13 +3348,42 @@ rules something out.
     every other method's, and handlers with no `get`, are `AnyAnswer`, the default), and the
     routes macro tells `#[derive(Route)]` the route said `patches` (a hidden `Route::PATCHES`,
     true), so those two, and the routes macro's own `Routes::__route`, refuse such a route with
-    any other `get`. The route's side of that can only be a `const`: stable Rust has no bound for
+    any other `get`, or none. The kind is sealed, so an answer cannot claim it: `Answer::Kind` is
+    bounded by `KindOf<Self>`, which `AnyAnswer` is for every answer and `Patches` only for the
+    answers of a sealed trait, `PatchAnswer`, that holds `HtmlResponse<_, Patches>` and
+    `corten::Result`, `Public` and `NoStore` of one; those three forward their answer's kind
+    through `KindOf`'s hidden associated types, so the forwarding is proved for any answer they
+    hold, an `impl Answer` among them, and an app's own type that says `Patches`, or forwards
+    another answer's kind with `A::Kind`, does not compile (`compile_fail` doctests on
+    `Answer::Kind`). The routes module's check of its own `get` is the same trait, `PatchAnswer`,
+    as a bound with its wording at the handler's name, so the two checks cannot disagree on what
+    answers a patch. The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
-    path-shape assertions the same functions already make, which fails under `cargo build` (a
-    test, a doctest) with its message and not under `cargo check`; the routes macro still checks
-    its own `get` first, with a bound and its wording at the handler's name. That costs every
+    path-shape assertions the same functions already make
+    ([Limit 11](#limit-caller-types)), which the compiler evaluates only when it generates the
+    code that mounts the route: `cargo build`, and `cargo test` when a test, a doctest or a
+    library's own code reaches the mount, with its message; not `cargo check`, clippy or
+    rust-analyzer, not `cargo test --lib`, and not `cargo test` when only a binary's `main`
+    mounts the route (its test build never generates `main`'s callees). Its error points into
+    Corten's `mounted_with`, naming the route there (`mounted_with::<url::Status, AnyAnswer>`),
+    not at the app's call: the note for a generic call names the call that instantiated the
+    function holding the `const`, and `Area::route` cannot hold it itself, since its `Methods` is
+    an `impl` argument it cannot name (an explicit type parameter would end `route::<R>(..)`);
+    `#[track_caller]` changes nothing at compile time. That costs every
     answer type one associated type (an app's own says `type Kind = AnyAnswer;`), and `Methods`
-    a defaulted second parameter, which only a `get` of a `Patches` handler changes. The cost to every app is that the
+    a defaulted second parameter, which a `get` of a `Patches` handler, or of one that hides its
+    kind (`corten::Result<impl Answer<Inputs = AnyInputs>>`, which names it,
+    `Kind = AnyAnswer`, where a `Methods` is named), changes.
+
+    What still steps around it, each on purpose and none by mistake: implementing the hidden
+    `route::__private::AnswersPatch` for a route, which makes it a `PatchRoute` whose handler
+    nothing checked; calling the hidden `Methods::__patches`, which says any handlers answer a
+    patch; and a second route at the same path, a `#[derive(Route)]` struct or a `Route` written
+    by hand, mounted with a `get` that answers its page where the `patches` route's own module is
+    not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
+    answers it. The derive's hidden `__patches` word is not one: it only adds the mount check.
+
+    The cost to every app is that the
     patch-making methods have one more type parameter, which a handler's return type fixes; a
     closure handler whose result nothing fixes, or a call that names `For` with a turbofish,
     names it too (`req.patch::<ForOne, AnyAnswer>`). A `data-patch` form takes any route, as
@@ -3383,7 +3410,12 @@ rules something out.
     `Methods` checked when the app starts, a panic at run time where the assertion stops the
     build; and `Methods` naming its `get` handler's whole answer type, which would change the
     type of every `get(..)` an app names as `Methods` (`Answer::Kind` changes only a
-    `Patches` handler's).
+    `Patches` handler's and a hidden one's). And not chosen for the seal: `KindOf<Self>` without
+    the hidden associated types, each wrapper saying `type Kind = A::Kind` where
+    `A::Kind: KindOf<Self>`, which no bound proves for an `impl Answer` it holds, so
+    `corten::Result<impl Answer<Inputs = AnyInputs>>` would stop being an answer at all; and
+    leaving `Kind` open, which an app's own answer type could set to `Patches` and serve the
+    runtime's read a page.
 
     Stands on: platform (a procedural macro gets the tokens of `#[route(..)]`, so `get = alerts`
     and not `alerts`'s signature, and stable Rust has no way to name a function's return type in
@@ -3395,7 +3427,9 @@ rules something out.
     `Methods<_, AnyAnswer>` by a bound, and associated type defaults are unstable, so `Route`
     cannot gain a type every `Route` written by hand would not have to name; the route's side of
     that check is the hidden `const PATCHES`, which has a default); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
-    `Patches` answer but through the methods that answer a patch to the runtime; the marker types
+    `Patches` answer but through the methods that answer a patch to the runtime, and `Patches` is
+    a `KindOf` only of an answer of the sealed `PatchAnswer`, so no answer type of the app's own
+    can say it; the marker types
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
     request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
@@ -3597,8 +3631,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     checked when a routes module that holds the prefix's struct expands, `cargo check` included;
     a route given to `Area::route` or `Api::route` by hand, or by a routes module whose prefix's
     struct is in another module, is checked by a `const` assertion in a generic method, which
-    the compiler evaluates only when it generates code: when it builds the app (`cargo build`,
-    `cargo test`, `corten check`), not under `cargo check` alone. `Refused::sign_in`'s 401 to a
+    the compiler evaluates only when it generates the code that calls that method. So is a route
+    that says `patches`, mounted by hand or by its routes module, against the kind of the `get`
+    handler it is given ([Choice 48](#choice-patch-routes)), and so is the shape of a hand-written
+    `Route`'s path. Those assertions fail `cargo build`, and `cargo test` (so `corten check`)
+    when a test, a doctest or a library's own non-generic code reaches the mount, as the template's
+    `app()` in its library does. They do not fail `cargo check`, clippy or rust-analyzer, nor
+    `cargo test --lib`, nor `cargo test` in a crate whose only mount is in a binary's `main`,
+    since a binary's test build never generates `main`'s callees; `corten check` passes such a
+    crate, and `cargo build` then refuses it. `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
     has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
     wrong one with `unauthorized`, which carries one.

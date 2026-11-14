@@ -170,24 +170,26 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
 }
 
 /// A `patches` route mounted by hand (`Area::route`) with a `get` handler that returns a plain
-/// `HtmlResult` stops the build and says what it takes; with `HtmlResult<Patches>` it builds
-/// (#1342).
+/// `HtmlResult`, or with no `get` at all, stops the build and says what it takes; with
+/// `HtmlResult<Patches>` it builds (#1342).
 #[test]
 fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
-    let app = |answer: &str| {
+    let app = |answer: &str, method: &str| {
         format!(
-            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>(get(mounted))).router();\n}}\n"
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>({method}(mounted))).router();\n}}\n"
         )
     };
-    let (ok, stderr) = build_main("patches-mount-message", &app("HtmlResult"));
-    assert!(!ok, "a patches route mounted with a get handler that returns HtmlResult built");
-    assert!(stderr.contains("error[E0080]"), "an error when the app builds: {stderr}");
-    assert!(
-        stderr.contains("the route says `patches`, and the get handler it is given here may answer"),
-        "Corten's message: {stderr}"
-    );
-    assert!(stderr.contains("mounted_with::<Alerts"), "the route named: {stderr}");
-    let (ok, stderr) = build_main("patches-mount-message", &app("HtmlResult<Patches>"));
+    for (answer, method) in [("HtmlResult", "get"), ("HtmlResult<Patches>", "post")] {
+        let (ok, stderr) = build_main("patches-mount-message", &app(answer, method));
+        assert!(!ok, "a patches route mounted with {method}({answer}) built");
+        assert!(stderr.contains("error[E0080]"), "an error when the app builds: {stderr}");
+        assert!(
+            stderr.contains("says `patches`, and the handlers it is mounted with have no get that answers a patch"),
+            "Corten's message: {stderr}"
+        );
+        assert!(stderr.contains("mounted_with::<Alerts"), "the route named: {stderr}");
+    }
+    let (ok, stderr) = build_main("patches-mount-message", &app("HtmlResult<Patches>", "get"));
     assert!(ok, "the same mount with HtmlResult<Patches>: {stderr}");
 }
 

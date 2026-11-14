@@ -86,7 +86,7 @@ pub enum Format {
     label = "the handler returns this",
     note = "return `HtmlResult` (a page, a patch, a redirect), `JsonResult<T>`, or `Public<..>` of one; `Response` and `impl IntoResponse` hide what the route answers"
 )]
-pub trait Answer: IntoResponse {
+pub trait Answer: IntoResponse + Sized {
     /// How the route's failures are answered.
     const FORMAT: Format;
     /// What the handler may read: [`AnyInputs`], or [`AnonymousInputs`] for an answer that is
@@ -104,10 +104,76 @@ pub trait Answer: IntoResponse {
     const PAGE: bool = false;
     /// What a request from the runtime ([`crate::Mode::Action`]) can get: [`Patches`] for
     /// `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch whenever the
-    /// runtime asked, and [`AnyAnswer`] for any other answer, an app's own too. A [`crate::Methods`]
-    /// carries its `get` handler's, so a route that says `patches` mounted by hand
-    /// ([`crate::Area::route`], [`crate::Api::route`]) takes only a `get` that answers one.
-    type Kind: AnswerKind;
+    /// runtime asked, and [`AnyAnswer`] for any other answer. A [`crate::Methods`] carries its
+    /// `get` handler's, so a route that says `patches` mounted by hand ([`crate::Area::route`],
+    /// [`crate::Api::route`]) takes only a `get` that answers one. Only those answers of Corten's
+    /// can be `Patches` ([`KindOf`]): an answer type of the app's own says
+    /// `type Kind = AnyAnswer;`, even one that holds a patch, since nothing holds it to answering
+    /// one.
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, HtmlResult, Patches};
+    ///
+    /// struct Mine(HtmlResult<Patches>);
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = Patches;
+    /// }
+    /// ```
+    ///
+    /// Nor can one forward the kind of the answer it holds:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::Format, http::{IntoResponse, Response}, Answer};
+    ///
+    /// struct Logged<A>(A);
+    ///
+    /// impl<A: IntoResponse> IntoResponse for Logged<A> {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl<A: Answer> Answer for Logged<A> {
+    ///     const FORMAT: Format = A::FORMAT;
+    ///     const PAGE: bool = A::PAGE;
+    ///     type Inputs = A::Inputs;
+    ///     type Rows = A::Rows;
+    ///     type Kind = A::Kind;
+    /// }
+    /// ```
+    ///
+    /// It says `AnyAnswer`, which a route that says `patches` does not take:
+    ///
+    /// ```
+    /// use corten::{answer::Format, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Logged<A>(A);
+    ///
+    /// impl<A: IntoResponse> IntoResponse for Logged<A> {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl<A: Answer> Answer for Logged<A> {
+    ///     const FORMAT: Format = A::FORMAT;
+    ///     const PAGE: bool = A::PAGE;
+    ///     type Inputs = A::Inputs;
+    ///     type Rows = A::Rows;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    type Kind: KindOf<Self>;
 }
 
 /// The two kinds of answer ([`Answer::Kind`]): [`AnyAnswer`] and [`Patches`].
@@ -123,6 +189,42 @@ impl AnswerKind for AnyAnswer {
 
 impl AnswerKind for Patches {
     const PATCHES: bool = true;
+}
+
+/// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer, and
+/// [`Patches`] only for `HtmlResult<Patches>` and `Public<..>` or `NoStore<..>` of it, the
+/// answers only the `Req` methods that answer a patch make. Sealed, so a route that says
+/// `patches` can trust its `get` handler's kind.
+pub trait KindOf<A>: AnswerKind + sealed::KindOf<A> {
+    /// The kind of `corten::Result<A>`.
+    #[doc(hidden)]
+    type InResult: KindOf<Result<A, Error>>;
+    /// The kind of `Public<A>`.
+    #[doc(hidden)]
+    type InPublic: KindOf<Public<A>>
+    where
+        A: Shareable;
+    /// The kind of `NoStore<A>`.
+    #[doc(hidden)]
+    type InNoStore: KindOf<NoStore<A>>;
+}
+
+impl<A> KindOf<A> for AnyAnswer {
+    type InResult = AnyAnswer;
+    type InPublic
+        = AnyAnswer
+    where
+        A: Shareable;
+    type InNoStore = AnyAnswer;
+}
+
+impl<A: sealed::PatchAnswer> KindOf<A> for Patches {
+    type InResult = Patches;
+    type InPublic
+        = Patches
+    where
+        A: Shareable;
+    type InNoStore = Patches;
 }
 
 /// The rows ([`Answer::Rows`]) of an answer that is not a feed.
@@ -191,6 +293,32 @@ pub struct ForAll;
 /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Part>(get(part)).route::<Either>(get(either)));
 /// # let _ = app.router();
 /// ```
+///
+/// Nor does its `Kind`, so a `get` of it named as [`crate::Methods`] (which is
+/// `Methods<(), AnyAnswer>`) says the kind in the `impl`, `Kind = AnyAnswer`:
+///
+/// ```
+/// use corten::{answer::AnyInputs, prelude::*, Answer, AnyAnswer, Methods};
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[derive(Route)]
+/// #[route("/admin/page")]
+/// struct Page;
+///
+/// async fn page(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>> {
+///     req.page(html! { <html><head><title>"Admin"</title><Corten /></head><body><main>"Admin"</main></body></html> })
+/// }
+///
+/// fn handlers() -> Methods {
+///     get(page)
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Page>(handlers()));
+/// # let _ = app.router();
+/// ```
 pub struct AnyAnswer;
 
 /// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
@@ -252,20 +380,6 @@ pub struct AnyAnswer;
 /// ```
 pub struct Patches;
 
-/// The answer of the `get` handler of a route that says `patches`: a patch whenever the runtime
-/// asked ([`Patches`]).
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "the route says `patches`, and its get handler's `{Self}` may answer the runtime's read with a page or a redirect",
-    label = "this handler",
-    note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
-)]
-pub trait OnlyPatches {}
-impl<For> OnlyPatches for HtmlResponse<For, Patches> {}
-impl<A: OnlyPatches> OnlyPatches for Result<A, Error> {}
-impl<A: OnlyPatches + Shareable> OnlyPatches for Public<A> {}
-impl<A: OnlyPatches> OnlyPatches for NoStore<A> {}
-
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
     message = "a `Public` answer is the same for everyone, so it cannot set a cookie",
@@ -276,13 +390,33 @@ pub trait SetsCookies: sealed::Sealed {}
 
 impl SetsCookies for ForOne {}
 
-mod sealed {
+pub(crate) mod sealed {
+    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Shareable};
+
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
 
     pub trait Kind {}
-    impl Kind for super::AnyAnswer {}
-    impl Kind for super::Patches {}
+    impl Kind for AnyAnswer {}
+    impl Kind for Patches {}
+
+    pub trait KindOf<A> {}
+    impl<A> KindOf<A> for AnyAnswer {}
+    impl<A: PatchAnswer> KindOf<A> for Patches {}
+
+    /// An answer that is a patch whenever the runtime asked ([`Patches`]): what the `get`
+    /// handler of a route that says `patches` returns, checked by its routes module, and the
+    /// answers whose [`super::Answer::Kind`] can be `Patches`. Only Corten's.
+    #[diagnostic::on_unimplemented(
+        message = "the route says `patches`, and its get handler's `{Self}` may answer the runtime's read with a page or a redirect",
+        label = "this handler",
+        note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+    )]
+    pub trait PatchAnswer {}
+    impl<For> PatchAnswer for HtmlResponse<For, Patches> {}
+    impl<A: PatchAnswer> PatchAnswer for Result<A, Error> {}
+    impl<A: PatchAnswer + Shareable> PatchAnswer for Public<A> {}
+    impl<A: PatchAnswer> PatchAnswer for NoStore<A> {}
 
     pub trait Immutable {}
     impl Immutable for super::Media {}
@@ -887,7 +1021,7 @@ impl<A: Answer> Answer for Result<A, Error> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
-    type Kind = A::Kind;
+    type Kind = <A::Kind as KindOf<A>>::InResult;
 }
 
 impl Answer for &'static str {
@@ -1820,7 +1954,7 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     const PAGE: bool = A::PAGE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
-    type Kind = A::Kind;
+    type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
 /// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
@@ -1893,7 +2027,7 @@ where
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
-    type Kind = A::Kind;
+    type Kind = <A::Kind as KindOf<A>>::InNoStore;
 }
 
 /// Bytes a URL can name, which [`Public::immutable`] takes: [`Media`], or `corten::Result<Media>`.
