@@ -1922,7 +1922,7 @@ rules something out.
     parameter is stripped before the router holds the path (`suffixed`); a `Route` written by hand
     and given to the hidden `Routes::__route` can put text before one, and the count follows
     matchit 0.9.2 for that too; such a route can also meet 0.9.2's order-dependent conflict,
-    a known limit Choice 48 records); platform (matchit 0.9.2, exactly pinned by
+    a known limit [Choice 48](#choice-matchit) records); platform (matchit 0.9.2, exactly pinned by
     [Choice 48](#choice-matchit), read in `tree.rs`: a parameter takes at least one byte after
     any text before it and before any suffix, a segment holds one parameter, and a catch-all
     takes the nonempty rest of the path. Corten still strips suffixes before insertion, so
@@ -3420,7 +3420,8 @@ rules something out.
     pin, with all 17 dispatch tests passing after the deliberate empty-value change;
     2026-11-14, the 0.8.6 and 0.9.2 sources diffed file by file, and the order-dependent
     conflict run on both (0.8.6 takes every pair in both orders); 2026-11-14, crates.io's
-    matchit versions read (0.9.2 the newest, published 2026-04-08); 2026-11-14, the matched and
+    list of matchit releases read, matchit 0.9.2 the newest (published 2026-04-08) after 0.9.1,
+    0.9.0 and 0.8.6; 2026-11-14, the matched and
     unknown requests counted at `4c6ac3e3d` against `de46e974b` and at `0653768e1` against
     `d2f885c3e`, with the same harness copied into each base snapshot, rustc 1.99.1 and
     valgrind 3.19.0, and the cost split by source file at the second pair;
