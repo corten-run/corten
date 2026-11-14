@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -160,6 +160,52 @@ function installed(root) {
   }
   walk(root, "", 0); return files.sort((a, b) => a.path.localeCompare(b.path, "en"));
 }
+const executableChunkBytes = 16 * 1024 ** 2, maxExecutableBytes = 512 * 1024 ** 2;
+const sameExecutable = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs", "nlink"].every((key) => a[key] === b[key]);
+/** Live executable input only. Saved receipts never choose a local path to open. */
+export function captureExecutableBytes(store, path) {
+  assert.ok(typeof path === "string" && !path.replaceAll("\\", "/").startsWith("//"));
+  path = resolve(path); physical(path, false);
+  const before = lstatSync(path, { bigint: true });
+  assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1n
+    && before.size > 0n && before.size <= BigInt(maxExecutableBytes), "executable size/type outside fixed bounds");
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    assert.ok(sameExecutable(before, fstatSync(fd, { bigint: true })), "executable replaced before capture");
+    const bytes = Number(before.size), chunks = [], hash = createHash("sha256");
+    for (let offset = 0; offset < bytes; offset += executableChunkBytes) {
+      assert.ok(sameExecutable(before, fstatSync(fd, { bigint: true })), "executable mutated during capture");
+      const body = Buffer.alloc(Math.min(executableChunkBytes, bytes - offset)); let at = 0;
+      while (at < body.length) {
+        const count = readSync(fd, body, at, body.length - at, offset + at); assert.ok(count > 0); at += count;
+      }
+      hash.update(body); chunks.push(store.blob(body));
+    }
+    assert.ok(sameExecutable(before, fstatSync(fd, { bigint: true })) && sameExecutable(before, lstatSync(path, { bigint: true })),
+      "executable mutated during capture");
+    physical(path, false);
+    return { schema: "native-browser-executable-bytes/v1", bytes, sha256: hash.digest("hex"), chunks };
+  } finally { closeSync(fd); }
+}
+export function replayExecutableBytes(reader, receipt) {
+  exact(receipt, ["schema", "bytes", "sha256", "chunks"]);
+  assert.equal(receipt.schema, "native-browser-executable-bytes/v1");
+  assert.ok(Number.isSafeInteger(receipt.bytes) && receipt.bytes > 0 && receipt.bytes <= maxExecutableBytes);
+  assert.match(receipt.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(Array.isArray(receipt.chunks) && receipt.chunks.length === Math.ceil(receipt.bytes / executableChunkBytes));
+  // Validate ALL sizes/refs before the evidence reader can allocate any chunk.
+  receipt.chunks.forEach((ref, i) => {
+    exact(ref, ["path", "bytes", "sha256"]); assert.match(ref.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(ref.path, `native-evidence/blobs/${ref.sha256}`);
+    assert.equal(ref.bytes, Math.min(executableChunkBytes, receipt.bytes - i * executableChunkBytes));
+  });
+  const hash = createHash("sha256"); let bytes = 0;
+  for (const ref of receipt.chunks) {
+    const body = reader.read(ref); assert.equal(body.length, ref.bytes); hash.update(body); bytes += body.length;
+  }
+  assert.equal(bytes, receipt.bytes); const digest = hash.digest("hex"); assert.equal(digest, receipt.sha256);
+  return digest;
+}
 export function captureTools(store, { browserExecutable }) {
   assert.ok(["win32", "linux"].includes(process.platform), "native browser tool closure currently covers Windows/Linux only");
   assert.ok(typeof browserExecutable === "string" && !browserExecutable.replaceAll("\\", "/").startsWith("//"));
@@ -174,11 +220,12 @@ export function captureTools(store, { browserExecutable }) {
     assert.deepEqual(actual.map((f) => [f.path, sha256(f.body)]), expected.map((f) => [f.path, sha256(f.body)]), "installed tool differs from locked package");
     return { name, version: entry.version, archive: store.blob(compressed), files: actual.map((f) => ({ path: f.path, body: store.blob(f.body) })) };
   });
-  return { schema: "native-browser-tools/v2", lock: store.blob(lockBody), node: store.blob(readRegular(realpathSync(process.execPath))),
-    browser: store.blob(readRegular(realpathSync(resolve(browserExecutable)))), packages };
+  return { schema: "native-browser-tools/v3", lock: store.blob(lockBody), node: captureExecutableBytes(store, realpathSync(process.execPath)),
+    browser: captureExecutableBytes(store, realpathSync(resolve(browserExecutable))), packages };
 }
 export function replayTools(reader, receipt) {
-  exact(receipt, ["schema", "lock", "node", "browser", "packages"]); assert.equal(receipt.schema, "native-browser-tools/v2");
+  exact(receipt, ["schema", "lock", "node", "browser", "packages"]);
+  assert.equal(receipt.schema, "native-browser-tools/v3", "unsupported tool receipt; regenerate unpublished v2 development evidence");
   const lock = JSON.parse(reader.read(receipt.lock));
   assert.deepEqual(receipt.packages.map((p) => p.name), tools);
   for (const pkg of receipt.packages) {
@@ -191,6 +238,5 @@ export function replayTools(reader, receipt) {
     assert.deepEqual(pkg.files.map((f) => f.path), expected.map((f) => f.path));
     pkg.files.forEach((f, i) => { exact(f, ["path", "body"]); assert.ok(reader.read(f.body).equals(expected[i].body)); });
   }
-  assert.ok(reader.read(receipt.node).length > 0 && reader.read(receipt.browser).length > 0);
-  return { node: receipt.node.sha256, browser: receipt.browser.sha256, lockSha256: receipt.lock.sha256 };
+  return { node: replayExecutableBytes(reader, receipt.node), browser: replayExecutableBytes(reader, receipt.browser), lockSha256: receipt.lock.sha256 };
 }
