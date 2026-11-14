@@ -337,13 +337,17 @@ fetched as a document, so when it redirects again, `fetch` follows that redirect
 A write that answers with its own page rather than a redirect (a form drawn again with what it
 refused, a bulk add whose failed lines the page lists) needs nothing more either. `req.page(..)` for
 a write is the whole document in every mode, with JavaScript (`Mode::Action`) as without: the layout
-reads start as for the page a write redirects to, a value the handler read after the write is given
-with `.give::<CartCount>(n)`, and the runtime draws it as it draws that page, swapping in `<main>`
-and each element around it that changed, in the same document and at the same address. Only a `GET`
-form's page (a search) is `<main>` alone, as a navigation's is, since a `GET` changes nothing the
-layout shows. Such an answer costs the layout's markup and its reads; a page that differs from the
-one on screen in more than such elements (another frame, another number of elements around
-`<main>`) swaps in `<main>` alone, and the next navigation reads the whole page.
+reads it draws start once the handler has answered with it, so they see what the write did (nothing
+runs beside the handler of such a write, and one that answers a patch or a redirect starts none), a
+value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
+it as it draws that page, swapping in `<main>` and each element around it that changed, in the same
+document and at the same address; until it is in, a navigation reads the whole page, so one that
+leaves it on its way still shows what the write changed. Only a `GET` form's page (a search) is
+`<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer
+costs the layout's markup and its reads; a page that differs from the one on screen in more than
+such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
+the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
+navigation reads the whole page.
 
 A patch is not a page: it carries elements by id and fills no layout read's place, and a read's
 `view` drawn at two places has no id to carry. So a write whose answer must change a layout read

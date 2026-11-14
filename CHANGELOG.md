@@ -418,11 +418,14 @@ Corten is pre-1.0, so any minor version may change the API.
   without; before, only `<main>` was swapped and the count kept its value from before the write. A
   `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
   answer must change one answers its page
-  ([design Choice 48](docs/design.md#choice-write-own-page-whole)). Measured against `main` with
-  callgrind: such a write takes 59,222 instructions where its `<main>` swap took 23,034 (two layout
-  reads), 25,089 where it took 22,786 without reads; a patch in an app with layout reads takes
-  29,867 where it took 21,549, and one in an app without them is unchanged. The runtime is 101
-  bytes larger raw and 45 with gzip. **Breaking:** an app that skips a layout value of its own when
+  ([design Choice 48](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  has answered with the page, so they see what the write did, and a write that answers anything
+  else starts none. Measured against `main` with callgrind: such a write takes 57,134 instructions
+  where its `<main>` swap took 23,034 (two layout reads), 25,215 where it took 22,786 without
+  reads; a patch in an app with layout reads takes 26,625 where it took 21,550 (its route keeps a
+  copy of the request's head for a page it may answer with), and one in an app without them
+  21,629 where it took 21,376. The runtime is 93 bytes larger with gzip. A read an `Ahead` starts
+  before the handler may not see the write. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; skip it only for a `GET`
   (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does

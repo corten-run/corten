@@ -3327,13 +3327,16 @@ rules something out.
     closed for a write that redirects
     ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
     Now a write's `req.page` (any method but `GET` and `HEAD`) is the whole document with
-    JavaScript as without: the layout reads start as for a document write, `give` is honored, and
+    JavaScript as without: the layout reads it draws start once the handler has answered with it
+    (nothing runs beside the handler, whose reads must see what it wrote), `give` is honored, and
     the runtime applies it with the comparison it runs on the page a write redirects to
     ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
-    changed, in the same document. A `GET` form's page stays `<main>` alone, as a navigation's,
-    since a `GET` changes nothing the layout shows. A page whose frame differs swaps `<main>` alone
-    and the next navigation reads the whole page; it cannot load in full, as the redirect's page
-    does, since loading the address would not draw the write's answer.
+    changed, in the same document. Until it is in, every navigation reads the whole page, as after a
+    write that redirects, so one that leaves it on its way still shows what the write changed. A
+    `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
+    layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
+    page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
+    full, as the redirect's page does, since loading the address would not draw the write's answer.
 
     Not chosen: a patch that gives a value (`req.patch(..)?.give::<CartCount>(n)`) filling each
     place on screen. Every page with a layout read would carry a marker per place for the runtime to
@@ -3346,16 +3349,19 @@ rules something out.
 
     What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
     reads, as the same write without JavaScript always did; in the test app (two reads, a small
-    layout) it takes 59,222 instructions where its `<main>` swap took 23,034, and 25,089 where it
-    took 22,786 in an app without layout reads. In an app with layout reads every action write now
-    keeps its request's head for a page it may draw, as a document write already did, so a patch
-    there takes 29,867 instructions where it took 21,549 (about 8,300 more, a few microseconds);
-    in an app without them a patch is unchanged. The runtime is 101 bytes larger raw, 45 with gzip
-    (15,016 to 15,061) and 35 with brotli. A `GET` form and a navigation pay nothing.
+    layout) it takes 57,134 instructions where its `<main>` swap took 23,034, and 25,215 where it
+    took 22,786 in an app without layout reads (the document's head and layout). A write that
+    answers something else pays for no read: in an app with layout reads its route keeps a copy of
+    the request's head for a page it may answer with, since a handler's answer type (`HtmlResult`)
+    does not say whether it answers a page or a patch, so a patch there takes 26,625 instructions
+    where it took 21,550 (callgrind puts about 3,450 in the copy and its drop, the rest in the boxed
+    fill around the route); in an app without them a patch takes 21,629 where it took 21,376. The
+    runtime is 341 bytes larger raw, 93 with gzip (15,069 to 15,162) and 80 with brotli. A `GET`
+    form and a navigation pay nothing.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`, the
     difference of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every
-    range within 30 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
+    range within 150 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
     patch carries elements by id, and a layout read's view at two places has none, so filling it
     needs a marker on every page; a write's own answer is not at an address a full load would
     draw); value (the page shows the same values with JavaScript as without, Values 3; one answer
@@ -3363,12 +3369,14 @@ rules something out.
     microseconds a write in an app with layout reads now pays, the order of the values).
 
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
-    whose page is too costly to draw again), which would reopen markers on the places; or the
+    whose page is too costly to draw again), which would reopen markers on the places; or a route's
+    answer type says it answers patches alone, when its route need not keep the head; or the
     patch's cost in an app with layout reads grows past 10% of a write's handler time measured in a
-    real app, when the head could be kept only for a route that may answer a page.
+    real app.
 
-    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `e760a5385` against the change, and the
-    runtime's size on `9c867b5e7` against the change.
+    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `de46e974b` with the harness test added
+    against `6cef1efce` (round 1: `e760a5385` against the first change), and the runtime's size on
+    `de46e974b` against the change.
 
 ## Rules
 
