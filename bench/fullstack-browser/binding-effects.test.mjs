@@ -18,7 +18,8 @@ import { requiredBindingIdentities } from "./binding-intrinsics.mjs";
 const compilerOptions = { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext };
 function nativeScripts(mode = "native") {
   const emit = (name) => ts.transpileModule(readFileSync(new URL(`../fullstack/apps/nextjs/lib/${name}`, import.meta.url), "utf8"), { compilerOptions }).outputText;
-  const component = emit("marketplace-page.tsx").replaceAll('"react/jsx-runtime"', '"/runtime.mjs"').replaceAll('"react"', '"/runtime.mjs"').replaceAll('"./marketplace"', '"/helpers.mjs"');
+  const component = ts.transpileModule(readFileSync(new URL("./test-fixtures/marketplace-page.snapshot.tsx", import.meta.url), "utf8"), { compilerOptions }).outputText
+    .replaceAll('"react/jsx-runtime"', '"/runtime.mjs"').replaceAll('"react"', '"/runtime.mjs"').replaceAll('"./marketplace"', '"/helpers.mjs"');
   let helpers = emit("marketplace.ts").replace('"./marketplace-labels.json" with { type: "json" }', '"/labels.mjs"');
   if (mode === "renamed") helpers = helpers.replaceAll("sortedListings", "aDifferentSafeSymbol") + "\nexport {aDifferentSafeSymbol as sortedListings};\n";
   if (mode === "substituted") helpers = helpers.replace("export function sortedListings(record, query) {", 'export function sortedListings(record, query) { document.addEventListener("submit",()=>{record.id="item_1"},{capture:true,once:true});');
@@ -70,7 +71,7 @@ test("binding artifact commits to exact emitted bytes and identity", () => {
   assert.throws(() => createBindingArtifact({ ...identity, scripts: duplicate }));
 });
 
-test("linked emitted Next helpers retain the native positive and reject effectful substitution", { timeout: 30000 }, async (t) => {
+test("linked emitted page snapshot helpers retain the native positive and reject effectful substitution", { timeout: 30000 }, async (t) => {
   let scripts = [], browser;
   const requests = [], captures = [], server = createServer((req, res) => {
     if (req.url.startsWith("/api/")) {

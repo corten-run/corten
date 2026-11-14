@@ -182,6 +182,11 @@ that are assigned, writes to outer bindings, and assignments inside copied condi
 or standalone-block scopes reject rather than reusing a stale snapshot. Immutable scalar closures
 remain supported. Native controls retain and mutate the actual record before calling the captured
 handler, independently of whether static discovery succeeds.
+The portable JSX-adapter helper control uses the committed pre-hook page snapshot in
+`test-fixtures/marketplace-page.snapshot.tsx`, not a transformed current production page.
+It still imports the repository's actual helper source and checks renamed/effectful substitutions.
+The adapter does not gain React hook authority; the explicit unchanged-image production control
+separately exercises the real React mount, hook identities and guarded native submit handler.
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
