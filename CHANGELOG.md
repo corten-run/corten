@@ -19,6 +19,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Bind native browser DOM evidence to bounded public reads, the actual document and
+  network origin, with exact replay and separate semantic and apparatus lifetimes.
+  Unsupported structure, private data, missing proof and uncertain cleanup remain
+  ineligible; timed-out body reads retain capacity until their actual sends settle.
+
 - Stream grouped cloud evidence through bounded physical-file hashing, durable copying
   and complete archive preflight before extraction. Explicit byte, node and path budgets
   cover the campaign phases without loading the complete archive into memory; oversized
