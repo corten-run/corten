@@ -147,8 +147,10 @@ test("row7: React endpoint discovery rejects unsupported lexical and control flo
     "/api/marketplace/item_2", "An unrelated nested callback cannot shadow the mounted handler's props");
   assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const rows=[{id:"other"}];const view=rows.map(r=>{const alias=r;return alias.id;});')])?.path,
     "/api/marketplace/item_2", "An alias of an unrelated callback parameter is not an escape of the component prop");
-  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const id=r.id;const title=r.title;')])?.path,
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const id=r.id;const other=r.id;')])?.path,
     "/api/marketplace/item_2", "Pure property reads are not receiver invocations");
+  assert.equal(discoverReactEndpoint([candidate(`async e=>fetch(${endpoint},{method:"POST"})`, 'const title=r.title;')]),
+    null, "A missing-own field is not a proved pure property read");
   assert.equal(discoverReactEndpoint([candidate(`async e=>{const unused="safe";return fetch(${endpoint},{method:"POST"})}`, 'const rows=[{id:"other"}];const view=rows.map(submit=>submit.id);')])?.path,
     "/api/marketplace/item_2", "Pure prefix declarations and unrelated handler-name shadows are supported");
   assert.equal(discoverReactEndpoint([candidate(`async e=>{let unused="safe";e.preventDefault();return fetch(${endpoint},{method:"POST"})}`)])?.path,

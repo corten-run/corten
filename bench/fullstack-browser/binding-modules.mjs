@@ -108,5 +108,3 @@ export function validateFrameworkClosure(entry, modules) {
   };
   visit(modules.owner(entry));
 }
-
-

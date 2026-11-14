@@ -171,6 +171,10 @@ indexes are never inferred from a hole-skipping iterator or silently lost during
 Numeric reads additionally require an own, known-position element. Out-of-range reads reject,
 including after exact slices or filters. Indexed reads from uncertain filtered/sorted alternatives
 reject rather than substituting the first possible element or consulting an inherited getter.
+Plain-object reads likewise require an own field on every modeled path; a prototype's unchanged
+property-name inventory is not an accessor-purity proof. Map/filter callbacks receive the actual
+abstract traversed array as argument three, so caching that receiver cannot hide borrowed records
+behind a missing-argument/null approximation. Unknown reads and borrowed retention stay unsupported.
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
@@ -191,6 +195,11 @@ Missing, duplicate, stale or transplanted
 receipts reject in both strict projection and saved replay. Earlier intact proofs cannot attest a
 later guarded action. These are bounded observations, not independent source authentication or
 a guarantee about unobserved future state; existing qualification blockers are unchanged.
+Saved chronology admits binding-clock phases only through their unique case/action window,
+journal receipt and native initial/terminal clock envelope, including incomplete diagnostics that
+never proved an enhancement. Unknown, orphaned, duplicate or contradictory phases remain invalid.
+The native-journal saved regression remains blocked for its explicitly uncollected semantic/source/
+response/cleanup proof; admitting its clock receipts does not qualify that diagnostic.
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property
 and destructuring writes), intervening function scopes, conditional/unreachable or uncalled
 nested fetches, duplicate method properties and option spreads are unsupported, not inferred POSTs.

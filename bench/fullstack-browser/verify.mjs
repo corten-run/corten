@@ -16,7 +16,7 @@ import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
-import { replayActionBinding, validateBindingWindow } from "./binding-window.mjs";
+import { replayActionBinding, validateBindingWindow, validateBindingClockPhase } from "./binding-window.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
 const hash = /^[a-f0-9]{64}$/, commitId = /^[a-f0-9]{40}$/;
@@ -211,7 +211,7 @@ function storeReads(e, profile, summary, app, endpoints, block) {
   block("Independent readback endpoint/context/source binding is not independently bundled; custom target paths are never opened");
 }
 
-function observationTiming(e, block) {
+function observationTiming(e, block, caseKey) {
   let latest = e.clock.startedAt, previous = e.clock.startedAt;
   const windows = [];
   const durationKeys = ["dispatchMs", "visibleChangeObservedMs", "settledObservedMs"];
@@ -265,10 +265,10 @@ function observationTiming(e, block) {
       latest = Math.max(latest, at);
     }
   }
-  return Math.max(latest, receiptChronology(e, windows, block));
+  return Math.max(latest, receiptChronology(e, windows, block, caseKey));
 }
 
-function receiptChronology(e, windows, block) {
+function receiptChronology(e, windows, block, caseKey) {
   const origin = e.clock.startedAt, missing = (v) => v === null || v === undefined;
   for (const row of e.steps.filter((r) => r.formBefore?.enhancement?.bindingProof)) {
     if (!validateBindingWindow(row.formBefore.enhancement, e, row, row.bindingWindow?.case))
@@ -329,6 +329,8 @@ function receiptChronology(e, windows, block) {
           if (missing(started)) block("Lifecycle request start receipt unavailable");
           if (r.phase?.startsWith("initial")) order(received, b.startedAt, "Initial lifecycle inventory/clock");
           else if (r.phase?.startsWith("terminal")) order(b.terminalStartedAt, started, "Terminal lifecycle inventory/clock");
+          else if (r.event === "native-clock-sample" && r.phase?.startsWith("binding-"))
+            need(validateBindingClockPhase(r, e, caseKey, saved), "Unbound or inconsistent native binding-clock phase");
           else need(false, "Unknown lifecycle inventory/clock phase");
         }
         if (r.event === "unique-context-read-probe" && missing(finished)) block("Lifecycle probe completion unavailable");
@@ -413,7 +415,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
   if (e.functionalChecksPassed === undefined) block("Functional checks interrupted before aggregate observation");
   same(e.environment, { ...settings.profiles[profile.device], js: profile.js }, "Native environment differs from profile");
   need(e.clock?.origin === "node.performance.now" && finite(e.clock.startedAt), "Native observation clock missing/malformed");
-  const latestObservation = observationTiming(e, block);
+  const latestObservation = observationTiming(e, block, profile.key);
   storeReads(e, profile, summary, app, endpoints, block);
   if (e.resourceBaseline) { resource(e.resourceBaseline); same(e.resourceBaseline.scriptExecutionEnabled, profile.js, "Baseline JS configuration differs from profile"); }
   else block("Native resource baseline missing");

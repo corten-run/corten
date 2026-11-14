@@ -87,3 +87,44 @@ export function validateBindingWindow(enhancement, evidence, row, caseKey) {
 export function replayActionBinding(enhancement, artifact, evidence, row, caseKey) {
   return validateBindingWindow(enhancement, evidence, row, caseKey) && replayBindingProof(enhancement, artifact);
 }
+
+// Failed/unsupported captures also retain their clock samples. Validate their
+// action window without turning the absence of an enhancement into a proof.
+export function validateBindingClockPhase(sample, evidence, caseKey, journal = evidence.platformLifecycle) {
+  try {
+    assert.equal(sample.event, "native-clock-sample");
+    const match = /^binding-(.+)-(before|after)-native-clock$/.exec(sample.phase);
+    assert.ok(match);
+    const rows = evidence.steps.filter((r) => r.bindingWindow?.id === match[1]); assert.equal(rows.length, 1);
+    const row = rows[0], w = row.bindingWindow;
+    assert.equal(w.instance, evidence.bindingInstance); assert.equal(w.case, caseKey); assert.equal(w.action, row.action.id);
+    assert.ok(typeof w.instance === "string" && w.instance && typeof w.id === "string" && w.id);
+    const records = journal.events.filter((r) => r.event === "binding-observation" && r.window?.id === w.id);
+    assert.equal(records.length, 1); assert.deepEqual(records[0].window, w);
+    assert.equal(records[0].capture, row.formBefore?.enhancement?.bindingProof?.links?.observation?.id ?? null);
+    const pair = ["before", "after"].map((phase) => {
+      const found = journal.events.filter((r) => r.event === "native-clock-sample" && r.phase === `binding-${w.id}-${phase}-native-clock`);
+      assert.equal(found.length, 1); return found[0];
+    });
+    assert.equal(journal.events.filter((r) => r === sample).length, 1);
+    const sequence = [evidence.clock.startedAt + row.at, w.startedAt, pair[0].startedAt, pair[0].receivedAt,
+      pair[1].startedAt, pair[1].receivedAt, w.finishedAt, records[0].receivedAt, row.dispatchStartedAt];
+    assert.ok(sequence.every((v) => Number.isFinite(v) && v >= 0) && sequence.every((v, i) => i === 0 || sequence[i - 1] <= v));
+    assert.ok(pair.every((r) => Number.isFinite(r.at) && r.at >= 0) && pair[0].at <= pair[1].at);
+    const initial = journal.events.find((r) => r.event === "native-clock-sample" && r.phase === "initial-native-clock");
+    const terminal = journal.events.find((r) => r.event === "native-clock-sample" && r.phase === "terminal-native-clock" && r.startedAt >= w.finishedAt);
+    assert.ok(Number.isFinite(initial?.at) && Number.isFinite(terminal?.at) && initial.at <= pair[0].at && pair[1].at <= terminal.at);
+    assert.ok(journal.boundaries.applicationStartedAt <= w.startedAt && row.dispatchStartedAt <= journal.boundaries.endedAt);
+    assert.deepEqual(w.target, journal.target);
+    assert.equal(journal.realms.filter((r) => isDeepStrictEqual(r, w.native)).length, 1);
+    assert.equal(w.native.realm, w.resources.realm);
+    const created = journal.events.filter((r) => r.event === "Runtime.executionContextCreated" && r.uniqueId === w.native.uniqueId);
+    assert.equal(created.length, 1); assert.equal(created[0].context, w.native.context); assert.equal(created[0].frame, w.native.frame); assert.equal(created[0].default, true);
+    assert.ok(created[0].receivedAt <= w.startedAt);
+    assert.ok(!journal.events.some((r) => r.receivedAt >= created[0].receivedAt && r.receivedAt <= pair[1].receivedAt
+      && (r.event === "Runtime.executionContextsCleared" || r.event === "Runtime.executionContextDestroyed" && (r.context === w.native.context || r.uniqueId === w.native.uniqueId))));
+    assert.ok(w.startedAt <= w.resources.at && w.resources.at <= w.form.observedAt && w.form.observedAt <= pair[1].startedAt);
+    assert.equal(w.form.selector, bindingFormSelector); assert.ok(Number.isInteger(w.form.backendNodeId) && w.form.backendNodeId > 0);
+    return true;
+  } catch { return false; }
+}

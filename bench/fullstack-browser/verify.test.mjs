@@ -3,6 +3,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
+import { randomUUID } from "node:crypto";
+import { chromium } from "@playwright/test";
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -15,6 +19,9 @@ import { exportBrowserCaptures } from "./capture.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { classifyNoJSRequests, validatePlatformRetirement } from "./lifecycle.mjs";
+import { PlatformLifecycle } from "./lifecycle.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { beginBindingWindow, finishBindingWindow } from "./binding-window.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../.."), script = join(repo, "bench/fullstack-browser/verify.mjs");
 const commit = "a".repeat(40), records = fixtureRecords(), plan = createBrowserPlan({ records });
@@ -58,14 +65,63 @@ function treeHashes(folder) {
   }
   return values;
 }
-function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api")) {
-  const cell = summary.cells.nuxt.find((c) => c.case === profile.key);
+function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api"), app = "nuxt") {
+  const cell = summary.cells[app].find((c) => c.case === profile.key);
   Object.assign(cell, { outcome: "failed", reason: "Native apparatus deliberately unavailable", qualificationPassed: false, evidence: {
     environment: { ...structuredClone(settings.profiles[profile.device]), js: profile.js }, architecture: null, clock: { origin: "node.performance.now", startedAt: 0 }, steps: [],
     failures: ["Native apparatus deliberately unavailable"], gaps: ["No native observations"], functionalChecksPassed: false, domChecksPassed: false, nativeCleanup: null,
   } });
   return { cell, e: cell.evidence, profile };
 }
+
+test("native binding-clock journal survives saved validation as an honest incomplete diagnostic", { timeout: 60000 }, async (t) => {
+  const summary = unavailable(), { e, profile } = failedRaw(summary, plan.cases.find((p) => p.js && p.source === "fixture"), "nextjs");
+  summary.options.apps = ["nextjs"];
+  e.clock.startedAt = performance.now(); e.bindingInstance = randomUUID();
+  const server = createServer((req, res) => { res.setHeader("content-type", "text/html"); res.end('<article class="marketplace"><section class="marketplace__alert"><form></form></section></article>'); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const browser = await chromium.launch({ headless: true }); let lifecycle;
+  try {
+    const context = await browser.newContext(); await context.addInitScript(installResourceObserver);
+    const page = await context.newPage(), cdp = await context.newCDPSession(page);
+    lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: true });
+    await lifecycle.enable(); await lifecycle.enableDomains(); await lifecycle.startObservation();
+    await page.goto("about:blank");
+    await page.setContent('<article class="marketplace"><section class="marketplace__alert"><form></form></section></article>');
+    const resources = new ResourceAudit(page, cdp, true, lifecycle);
+    e.resourceBaseline = await resources.checkpoint(); lifecycle.markApplicationStart();
+    const row = { action: structuredClone(profile.steps[0]), at: performance.now() - e.clock.startedAt,
+      timing: { dispatchMs: 0, visibleChangeObservedMs: 0, settledObservedMs: 0 }, requests: [], document: null,
+      domPassed: false, failures: ["Only native clock observations collected; no marketplace semantic proof"], lifecycleFailures: [], errors: [] };
+    e.steps.push(row);
+    row.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources, { instance: e.bindingInstance, case: profile.key, action: row.action.id });
+    await finishBindingWindow(lifecycle, row.bindingWindow, null);
+    row.dispatchStartedAt = performance.now();
+    await page.goto(`http://127.0.0.1:${server.address().port}${row.action.path}`);
+    row.resourcesAtDOM = await resources.checkpoint();
+    row.dom = { observer: randomUUID(), scope: row.resourcesAtDOM.scope, url: { path: row.action.path }, page: null, native: {} };
+    await lifecycle.finishObservation({ observationMs: 0 }); e.platformLifecycle = lifecycle.snapshot();
+    e.requestLedgerEndedAt = performance.now();
+    await context.close(); e.cleanup = { contextClosed: !browser.contexts().includes(context), nativePageScope: null };
+    e.harnessClosedLifecycle = lifecycle.snapshot();
+    const f = fixture(t, summary), baseline = f.check();
+    assert.deepEqual(baseline.invalid, [], baseline.invalid.join("; ")); assert.equal(baseline.outcome, "blocked");
+    assert.equal(baseline.qualificationPassed, false); assert.equal(baseline.readyForLoad, false);
+    assert.ok(baseline.blocked.length, "Native/source/response/peer limitations remain blocked, not erased");
+    const original = structuredClone(e);
+    for (const [name, mutate] of [
+      ["unbound clock", (e) => { e.platformLifecycle.events.find((r) => r.phase?.startsWith("binding-")).phase = "binding-other-before-native-clock"; }],
+      ["misbound action", (e) => { e.steps[0].bindingWindow.action = "other"; }],
+      ["future sample", (e) => { e.platformLifecycle.events.find((r) => r.phase?.startsWith("binding-")).at += 3600; }],
+    ]) await t.test(name, () => {
+      Object.keys(e).forEach((k) => delete e[k]); Object.assign(e, structuredClone(original)); mutate(e); f.save();
+      assert.equal(f.check().outcome, "invalid", name);
+    });
+  } finally {
+    try { if (lifecycle) await lifecycle.close(); }
+    finally { await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+  }
+});
 
 test("standalone saved validator retains all 240 unavailable cells, remains blocked and writes nothing", (t) => {
   const f = fixture(t), before = treeHashes(f.folder), result = f.check();

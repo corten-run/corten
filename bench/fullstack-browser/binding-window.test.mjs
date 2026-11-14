@@ -1,7 +1,7 @@
 // Receipt-shape controls only, never a fabricated qualification capture.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bindingFormSelector, validateBindingWindow, replayActionBinding } from "./binding-window.mjs";
+import { bindingFormSelector, validateBindingWindow, replayActionBinding, validateBindingClockPhase } from "./binding-window.mjs";
 
 function fixture() {
   const native = { realm: "realm", context: 2, uniqueId: "native-context", frame: "native-frame", loader: "native-loader", observedAt: 122 };
@@ -75,4 +75,33 @@ test("binding windows reject stale, transplanted and incomplete native receipts"
     mutate(e, r, enhancement.bindingProof.links.observation);
     assert.equal(validateBindingWindow(enhancement, e, r, "case"), false);
   });
+});
+
+test("binding clock phases require a unique action window and native envelope", async (t) => {
+  const setup = () => {
+    const e = fixture(), j = e.platformLifecycle;
+    j.events.unshift({ event: "native-clock-sample", phase: "initial-native-clock", startedAt: 100, receivedAt: 100.5, at: 195 });
+    j.events.push({ event: "native-clock-sample", phase: "terminal-native-clock", startedAt: 145, receivedAt: 146, at: 205 });
+    return e;
+  };
+  const check = (e) => {
+    const j = e.platformLifecycle, samples = j.events.filter((r) => r.phase?.startsWith("binding-"));
+    return samples.length === 2 && samples.every((r) => validateBindingClockPhase(r, e, "case", j));
+  };
+  assert.equal(check(setup()), true);
+  for (const [name, mutate] of [
+    ["unknown window", (e) => { e.steps[0].bindingWindow.id = "other"; }],
+    ["wrong instance", (e) => { e.bindingInstance = "other"; }],
+    ["wrong case", (e) => { e.steps[0].bindingWindow.case = "other"; }],
+    ["wrong action", (e) => { e.steps[0].action.id = "other"; }],
+    ["duplicate window", (e) => { e.steps.push(structuredClone(e.steps[0])); }],
+    ["unknown phase", (e) => { e.platformLifecycle.events.find((r) => r.phase?.startsWith("binding-")).phase = "binding-window-middle-native-clock"; }],
+    ["duplicate phase", (e) => { e.platformLifecycle.events.find((r) => r.phase === "binding-window-after-native-clock").phase = "binding-window-before-native-clock"; }],
+    ["wrong journal capture", (e) => { e.platformLifecycle.events.find((r) => r.event === "binding-observation").capture = "other"; }],
+    ["wrong context", (e) => { e.platformLifecycle.events.find((r) => r.event === "Runtime.executionContextCreated").uniqueId = "other"; }],
+    ["destroyed context", (e) => { e.platformLifecycle.events.push({ event: "Runtime.executionContextDestroyed", context: 2, receivedAt: 129 }); }],
+    ["future native samples", (e) => { e.platformLifecycle.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at += 3600; }); }],
+    ["missing outer native envelope", (e) => { e.platformLifecycle.events.pop(); }],
+    ["sample after dispatch", (e) => { e.platformLifecycle.events.find((r) => r.phase === "binding-window-after-native-clock").receivedAt = 136; }],
+  ]) await t.test(name, () => { const e = setup(); mutate(e); assert.equal(check(e), false); });
 });

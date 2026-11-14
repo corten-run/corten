@@ -97,3 +97,17 @@ test("array effects never substitute another element for a missing or unresolved
     else assert.equal(result, null);
   });
 });
+
+test("object reads require an own field on every modeled path", async (t) => {
+  for (const [name, declarations, supported] of [
+    ["own borrowed field", 'const value=r.id;', true],
+    ["own literal field", 'const value={valueOf:"safe"}.valueOf;', true],
+    ["inherited existing property", 'const value=r.valueOf;', false],
+    ["missing borrowed field", 'const value=r.absent;', false],
+    ["missing literal field", 'const value={id:"safe"}.absent;', false],
+    ["branch missing own field", 'const row=l.startsWith("fr")?{valueOf:"safe"}:{};const value=row.valueOf;', false],
+  ]) await t.test(name, () => {
+    const found = discoverReactEndpoint([candidate(`fetch(${endpoint},{method:"POST"})`, "", declarations)]);
+    if (supported) assert.equal(found?.path, "/api/marketplace/item_2"); else assert.equal(found, null);
+  });
+});

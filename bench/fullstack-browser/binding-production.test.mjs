@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { PlatformLifecycle } from "./lifecycle.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
-import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
+import { beginBindingWindow, finishBindingWindow, replayActionBinding, validateBindingClockPhase } from "./binding-window.mjs";
 
 // Only the ordinary case uses unchanged image bytes. Intercepted emitted-bundle
 // controls have separate, explicitly synthetic identities and never qualify an
@@ -160,6 +160,8 @@ test("production Next: immutable native page links and independently POSTs reque
         if (mode === "ordinary") {
           await lifecycle.finishObservation({ observationMs: 0 }); evidence.platformLifecycle = lifecycle.snapshot();
           assert.equal(replayActionBinding(discovered, activeArtifact, evidence, row, "production-native-control"), true, "Actual production dispatch has its own native capture window");
+          for (const sample of evidence.platformLifecycle.events.filter((r) => r.phase?.startsWith("binding-")))
+            assert.equal(validateBindingClockPhase(sample, evidence, "production-native-control"), true, "Ordinary native proof clocks enter the same saved chronology check");
           const reject = (change) => {
             const copy = structuredClone(evidence); change(copy, copy.steps[0]);
             assert.equal(replayActionBinding(copy.steps[0].formBefore.enhancement, activeArtifact, copy, copy.steps[0], "production-native-control"), false);
@@ -223,5 +225,3 @@ test("production Next: immutable native page links and independently POSTs reque
     assert.equal(dirname(realpathSync(scratch)), realpathSync(tmpdir())); rmSync(scratch, { recursive: true, force: true });
   }
 });
-
-

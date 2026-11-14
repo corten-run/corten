@@ -23,7 +23,11 @@ function join(a, b) {
   if (!a || !b) return { kind: "unknown" };
   if (a.kind !== b.kind) return { kind: "union", alternatives: [a, b] };
   if (a.kind === "array") return { kind: "array", fresh: a.fresh && b.fresh, indexExact: false, items: [...a.items, ...b.items] };
-  if (a.kind === "object" || a.kind === "borrowed") return { kind: a.kind, fields: Object.fromEntries([...new Set([...Object.keys(a.fields), ...Object.keys(b.fields)])].map((k) => [k, join(a.fields[k] ?? nil, b.fields[k] ?? nil)])) };
+  if (a.kind === "object" || a.kind === "borrowed") {
+    const keys = Object.keys(a.fields);
+    if (keys.length !== Object.keys(b.fields).length || keys.some((k) => !Object.hasOwn(b.fields, k))) return { kind: "union", alternatives: [a, b] };
+    return { kind: a.kind, fields: Object.fromEntries(keys.map((k) => [k, join(a.fields[k], b.fields[k])])) };
+  }
   if (a.kind === "scalar") return scalar(a.type === b.type ? a.type : "unknown", a.value === b.value ? a.value : undefined);
   return JSON.stringify(a) === JSON.stringify(b) ? a : { kind: "unknown" };
 }
@@ -161,7 +165,10 @@ export function checkBindingEffects(candidate, artifact, receipt) {
     };
     const property = (object, key) => {
       if (["__proto__", "prototype", "constructor"].includes(key)) fail("Unsupported prototype property");
-      if (["object", "borrowed"].includes(object.kind)) return object.fields[key] ?? nil;
+      if (["object", "borrowed"].includes(object.kind)) {
+        if (!Object.hasOwn(object.fields, key)) fail(`Unproved own object field/inherited lookup: ${key}`);
+        return object.fields[key];
+      }
       if (object.kind === "array" && key === "length") return scalar("number");
       if (object.kind === "array" && /^(?:0|[1-9]\d*)$/.test(key)) {
         if (object.indexExact === false || !Object.hasOwn(object.items, key)) fail("Unproved own array index/inherited lookup");
@@ -427,7 +434,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
               return { ...receiver, fresh: true, items: receiver.indexExact === false ? receiver.items : receiver.items.slice(...args.map((v) => v.value)) };
             }
             if (args.length !== 1 || args[0].kind !== "function" || method === "sort" && !receiver.fresh) fail("Unproved array callback/freshness");
-            const output = receiver.items.map((item) => invoke(args[0], method === "sort" ? [item, item] : [item, scalar("number")]));
+            const output = receiver.items.map((item) => invoke(args[0], method === "sort" ? [item, item] : [item, scalar("number"), receiver]));
             if (method === "filter") {
               const known = output.every((v) => truth(v) !== null);
               return { kind: "array", fresh: true, indexExact: receiver.indexExact !== false && known,

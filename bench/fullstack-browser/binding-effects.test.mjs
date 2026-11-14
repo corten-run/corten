@@ -92,7 +92,7 @@ test("linked emitted Next helpers retain the native positive and reject effectfu
         await page.goto(base);
         await page.evaluate(async (record) => {
           const { Marketplace } = await import("/component.mjs");
-          const props = { record, locale: "fr-FR", query: { seller: "", sort: "asc", allOffers: false } }, tree = Marketplace(props);
+          const props = { record, locale: "fr-FR", query: { seller: "", sort: "asc", allOffers: false }, message: "" }, tree = Marketplace(props);
           const find = (node) => !node || typeof node !== "object" ? null : node.tag === "form" && node.props.onSubmit ? node.props.onSubmit
             : Array.isArray(node) ? node.map(find).find(Boolean) : find(node.props?.children);
           const form = document.querySelector("form"), handler = find(tree);
@@ -320,6 +320,57 @@ test("native dispatch evaluation rejects unmodeled option work and sparse props 
         }
         if (!["dense", "native form", "native body"].includes(mode)) assert.equal(discovered, null);
         else { assert.equal(discovered?.path, "/api/marketplace/item_2"); assert.equal(replayBindingProof(discovered, artifact), true); }
+      } finally { await observer.close(); await context.close(); }
+    });
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+});
+
+test("native own-property and callback-receiver effects cannot attest borrowed retention", { timeout: 30000 }, async (t) => {
+  const cases = [
+    ["own property", 'const value=r.id;', true, false],
+    ["inherited getter", 'const value=r.valueOf;', false, false],
+    ["map receiver retention", 'const rows=[r].map((value,index,array)=>{cache.set("retained",array);return value.id;});', false, true],
+    ["filter receiver retention", 'const rows=[r].filter((value,index,array)=>{cache.set("retained",array);return true;});', false, true],
+    ["default receiver retention", 'const rows=[r].filter((value,index,array=[])=>{cache.set("retained",array);return true;});', false, true],
+    ["nested receiver retention", 'const rows=[r].map((value,index,array)=>{cache.set("retained",{array});return value.id;});', false, true],
+    ["map receiver read", 'const rows=["safe"].map((value,index,array)=>array.length);', true, false],
+    ["filter receiver read", 'const rows=["safe"].filter((value,index,array)=>array.length);', true, false],
+  ];
+  let scripts, browser;
+  const server = createServer((req, res) => {
+    const script = scripts.find((s) => s.path === req.url);
+    if (script) { res.setHeader("content-type", "text/javascript"); res.end(script.source); }
+    else { res.setHeader("content-type", "text/html"); res.end('<form action="/marketplace/fr-FR/item_2"></form>'); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const [name, prefix, supported, retained] of cases) await t.test(name, async () => {
+      scripts = [
+        { path: "/component.mjs", source: `import {jsx} from "/runtime.mjs";const cache=new Map();export function M({record:r,locale:l}){${prefix}return jsx("form",{onSubmit:async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}});}export function saved(){return cache.get("retained");}` },
+        { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
+      ];
+      const artifact = createBindingArtifact({ ...identity, scripts }), context = await browser.newContext(), page = await context.newPage();
+      const observer = new BindingLinkObserver(await context.newCDPSession(page), artifact); await observer.enable();
+      try {
+        await page.goto(base);
+        const actual = await page.evaluate(async (mode) => {
+          const { M, saved } = await import("/component.mjs"), props = { record: { id: "item_2" }, locale: "fr-FR" };
+          globalThis.getterReads = 0;
+          if (mode === "inherited getter") Object.defineProperty(Object.prototype, "valueOf", { configurable: true, get() { globalThis.getterReads++; return 0; } });
+          const tree = M(props), value = saved(), form = document.querySelector("form");
+          form.__reactProps$control = { onSubmit: tree.props.onSubmit }; form.__reactFiber$control = { type: M, memoizedProps: props };
+          return { getterReads: globalThis.getterReads, retained: value?.[0] === props.record || value?.array?.[0] === props.record };
+        }, name);
+        assert.equal(actual.getterReads, name === "inherited getter" ? 1 : 0);
+        assert.equal(actual.retained, retained, "Native callback receives the actual traversed array, not null");
+        const observed = await observer.capture("form", page.url());
+        assert.equal(observed.outcome, "observed", observed.reason);
+        assert.equal(await page.evaluate(() => globalThis.getterReads), actual.getterReads, "Descriptor capture never executes the inherited getter");
+        const effects = checkBindingEffects(observed.candidate, artifact, observed.receipt);
+        assert.equal(effects.outcome, supported ? "proved" : "unknown", effects.reason);
+        const found = discoverReactEndpoint([observed.candidate], observed.linked);
+        if (supported) assert.equal(found?.path, "/api/marketplace/item_2"); else assert.equal(found, null);
       } finally { await observer.close(); await context.close(); }
     });
   } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
