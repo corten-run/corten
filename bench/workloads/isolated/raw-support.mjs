@@ -2,6 +2,7 @@
 // This is NOT complete native qualification: HTTP/browser observations, exact-runtime
 // provenance and positive cleanup cannot be reconstructed from these formats.
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { phases, readLoad } from "../../catalog/contract.mjs";
 import { readOutcome, timedProfiles } from "../../marketplace/run-contract.mjs";
@@ -22,7 +23,7 @@ export function inspectRawSupport(group, summary, root, manifest) {
     }
     return bytes;
   };
-  const equalJson = (path, expected) => requireFile(path, (b) => assert.deepEqual(JSON.parse(b), expected));
+  const equalJson = (path, expected) => requireFile(path, (b) => assert.ok(isDeepStrictEqual(JSON.parse(b), expected), "native raw evidence differs"));
   requireFile("run.log");
   for (const app of summary.options.apps) {
     const entry = summary.apps[app];

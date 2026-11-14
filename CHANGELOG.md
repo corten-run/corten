@@ -8,15 +8,32 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
-  spurious missing-heartbeat errors. [Choice 50](docs/design.md#choice-msrv) records when the
+  spurious missing-heartbeat errors. [Choice 51](docs/design.md#choice-msrv) records when the
   floor moves and why SQLx stays on 0.8.
+
 - **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
   `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
   `From<String>` for `HeaderValue`; use `HeaderValue::try_from`, `from_lossy` or the
   `insert`/`append` methods that take a string.
+
 - Record RUSTSEC-2026-0459 in auction-room's bundled SQLite as an explained exception
-  ([Choice 50](docs/design.md#choice-msrv)): it needs a database file a less trusted party
+  ([Choice 51](docs/design.md#choice-msrv)): it needs a database file a less trusted party
   wrote, and the example opens only its own data directory.
+
+- Bind dedicated workload-group hosts to a complete current-registry fleet roster,
+  exact source and provider identity. Preserve native group defaults and complete
+  contenders; permit only exact reserved sibling hosts, require room for the whole
+  fleet, and keep single-group evidence distinct from a completed official round.
+  Run controllers on isolated parallel worker event loops from verified source
+  snapshots, collect each host independently, and replay the full roster read-only.
+  Match failed inspections to the exact reserved selection before cleanup.
+  Keep parallel Git proofs on exact observed commits without shared-ref writes,
+  and bind nested native validation to captured committed code and a pinned parser.
+  Existing all-group reservations and uncertain-host recovery remain separate;
+  local workload verification files run serially without changing measurements.
+  Reject altered benchmark source bindings and evidence manifests with strict
+  boolean comparisons and bounded diagnostics, without formatting enormous diffs.
+
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
 - Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
@@ -491,6 +508,55 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
+  handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
+  `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
+  runtime's read of the route is a patch (what answers before the handler, a stage or an
+  extractor such as a `Caller` refusal, a response replaced through `DerefMut`, and a handler
+  that writes `req.mode` before `req.patch_or`, `req.invalid` or `req.invalid_with`, which
+  then answer the mode it wrote, are not checked). Before, any route compiled, and one whose handler answered its page left
+  the part as it was with an error in the console, found only when the page ran; now that route,
+  or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
+  the call or at the handler's name ([design Choice 50](docs/design.md#choice-patch-routes)). A
+  route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
+  by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
+  `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
+  any other `get` there, or none, stops the build (`E0080`, as a route's path of the wrong shape
+  does: when the code that mounts it is compiled, by `cargo build` or by `cargo test` where a
+  test or the library reaches it; not by `cargo check`, nor by `cargo test` when only a binary's
+  `main` mounts it).
+  **Breaking:** an
+  app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
+  its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
+  has a second type parameter (`Kind`, `AnyAnswer` by default), which `req.patch`,
+  `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` take after
+  `For`. A handler's return type fixes it, around `Public::new(age, req.patch(..))` and
+  `NoStore::new(..)` too; a call that names `For` with a turbofish names `Kind` after it:
+  `req.patch::<ForOne, AnyAnswer>(..)` and `req.patch_with_status::<ForOne, AnyAnswer>(..)`
+  (were `::<ForOne>`), `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` and
+  `req.invalid::<ForOne, AnyAnswer, _, _>(..)` (were `::<ForOne, _, _>`), and
+  `req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(..)`, six type arguments with its lifetime
+  left out (was `::<ForOne, _, _, _, _>`). A closure handler whose result nothing else fixes
+  names them too, `get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(..) })`, and is
+  `E0283` (type annotations needed) without them, as is a handler that hides its answer,
+  `corten::Result<impl Answer<Inputs = AnyInputs>>`, and calls them directly (one that returns
+  a helper's `HtmlResult` is fine): `req.patch::<ForOne, AnyAnswer>(..)` or
+  `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` there. `Answer` requires `Sized` and has an
+  associated type, `Kind`: an answer type of an app's own says `type Kind = AnyAnswer;`, even
+  one that holds a patch or wraps another answer, since only `HtmlResult<Patches>` and
+  `Public` or `NoStore` of it can be `Patches` (`type Kind = Patches;` or
+  `type Kind = A::Kind;` there is `E0277`). `Methods` has a second type parameter,
+  `AnyAnswer` by default, which `get(h)` sets to `h`'s kind, so `let _: Methods = get(h)`
+  does not compile (`E0308`) for a handler that returns `HtmlResult<Patches>`, whose
+  `Methods` is `Methods<(), Patches>`, or one that hides its kind,
+  `corten::Result<impl Answer<Inputs = AnyInputs>>`, which says it in the `impl`:
+  `impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
+  nothing to run (callgrind, a `patch_or` request in process, `what_a_patch_or_request_costs` on
+  `0ff569c69` and `811324247`: 17,972 instructions for the patch before and 17,973 after, 18,405
+  before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`). The requests guide now says
+  what a `data-patch` form gets from a handler that answers its page: the page swapped in, as a
+  navigation's
+  ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
 - A `#[component]`'s own string (`to_html`, which a patch, a refused form's patch and a live
   fragment are rendered with when the view is a component) now starts at the size that component
   last rendered to, an eighth more and never below 256 bytes, as an `html!` call site's does,
@@ -516,7 +582,6 @@ Corten is pre-1.0, so any minor version may change the API.
   string now starts with room for it (256 bytes against the watchlist's 88-byte link), so it no
   longer grows to hold the link, the about 510 instructions that Choice counts in its harness
   (reasoned from the sizes, not measured on the merged code).
-
 - The app `corten new` writes posts its form to the page's own route
   (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
   with no `GET`, where a browser without JavaScript was left at an address that answers 405 when

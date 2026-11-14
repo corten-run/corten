@@ -71,6 +71,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
                     match part {
                         [] => {}
+                        // What `#[corten::routes]` passes for a route that says `patches`.
+                        [TokenTree::Ident(i)] if i.to_string() == "__patches" => {}
                         [key, ..] if is_ident(Some(key), "prefetch") => {
                             if prefetched {
                                 return err(key.span(), "prefetch is named twice");
@@ -83,22 +85,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                         [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if prefetched && eq.as_char() == '=' => {
                             return err(
                                 key.span(),
-                                "a handler (get = show), no_store, gives(..) or unstaged is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store, gives(..), unstaged or patches is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                         [TokenTree::Ident(i)] | [TokenTree::Ident(i), TokenTree::Group(_)]
-                            if prefetched && ["no_store", "gives", "unstaged"].contains(&i.to_string().as_str()) =>
+                            if prefetched && ["no_store", "gives", "unstaged", "patches"].contains(&i.to_string().as_str()) =>
                         {
                             return err(
                                 i.span(),
-                                "a handler (get = show), no_store, gives(..) or unstaged is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store, gives(..), unstaged or patches is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                         _ if prefetched => {}
                         [other, ..] => {
                             return err(
                                 other.span(),
-                                "a handler (get = show), no_store, gives(..) or unstaged is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store, gives(..), unstaged or patches is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                     }
@@ -115,7 +117,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ),
         );
     }
-    let (attrs, prefetch) = route_prefetch(&item.attrs, item.name.span())?;
+    let (attrs, prefetch, patches) = route_prefetch(&item.attrs, item.name.span())?;
     let item = Item { attrs, ..item };
     let Some((path, span)) = item.attr_string("route")? else {
         return err(
@@ -214,8 +216,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let keys_check = check_keys(&item, &query);
     let (matched, suffixes) = suffixed(&path);
     // The path as written, when axum matches less of it (`{page}.xml` as `{page}`).
-    let written =
+    let mut written =
         if suffixes.is_empty() { TokenStream::new() } else { q("const WRITTEN: &'static str = __A0;", &[string(&path).into()]) };
+    if patches {
+        written.extend(q("const PATCHES: bool = true;", &[]));
+    }
     let mut out = item.impl_block(
         "::corten::route::Route",
         q(
@@ -825,10 +830,12 @@ fn is_route_query(attr: &proc_macro::Group) -> bool {
 }
 
 /// `#[route("/..", prefetch = false)]` or `prefetch = costly` (a function of the route): the
-/// attributes with the route's cut to its path, and the body of `Route::may_prefetch` (`true`
-/// unless it says otherwise).
-fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream), Error> {
+/// attributes with the route's cut to its path, the body of `Route::may_prefetch` (`true`
+/// unless it says otherwise), and whether `#[corten::routes]` said the route says `patches`
+/// (`"/..", __patches`, right after the path), for `Route::PATCHES`.
+fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool), Error> {
     let mut prefetch: TokenStream = TokenTree::Ident(Ident::new("true", span)).into();
+    let mut patches = false;
     let mut out = Vec::with_capacity(attrs.len());
     for attr in attrs {
         let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
@@ -836,12 +843,18 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
             out.push(attr.clone());
             continue;
         };
-        let inner: Vec<TokenTree> = args.stream().into_iter().collect();
+        let mut inner: Vec<TokenTree> = args.stream().into_iter().collect();
         if name.to_string() != "route" || !matches!(inner.first(), Some(TokenTree::Literal(_))) || inner.len() == 1 {
             out.push(attr.clone());
             continue;
         }
+        if matches!(&inner[1..], [TokenTree::Punct(comma), TokenTree::Ident(marker), ..] if comma.as_char() == ',' && marker.to_string() == "__patches")
+        {
+            patches = true;
+            inner.drain(1..3);
+        }
         match &inner[1..] {
+            [] => {}
             [TokenTree::Punct(comma), key, TokenTree::Punct(eq), value @ ..]
                 if comma.as_char() == ',' && is_ident(Some(key), "prefetch") && eq.as_char() == '=' =>
             {
@@ -900,7 +913,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
         cut.set_span(attr.span());
         out.push(cut);
     }
-    Ok((out, prefetch))
+    Ok((out, prefetch, patches))
 }
 
 /// Where a `prefetch` value that is whole (`false`, `true` or a function's path) is followed by

@@ -35,7 +35,7 @@ SQLx's `sqlite` feature builds its own SQLite into the server, a release affecte
 [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html): a database file and
 its `-wal` file crafted by someone else can make queries return stale memory. This example opens
 only its own data directory, so it is not exposed. Do not copy it to open a database a user
-uploads or another party could write; [Choice 50](../../docs/design.md#choice-msrv) records the
+uploads or another party could write; [Choice 51](../../docs/design.md#choice-msrv) records the
 exception and when it is revisited.
 
 Open it in two browsers (or a private window), sign in under two names, and bid against yourself.
