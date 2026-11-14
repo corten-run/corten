@@ -9,7 +9,12 @@ checkout=$(realpath "$2")
 test -x "$node"
 test -f "$checkout/bench/workloads/isolated/host-participant-linux.test.mjs"
 cd "$checkout"
-systemctl is-system-running --wait | grep -Eq '^(running|degraded)$'
+system_status=0
+system_state=$(systemctl is-system-running --wait) || system_status=$?
+case "$system_state:$system_status" in
+  running:0|degraded:1) printf 'Native CI systemd host: %s\n' "$system_state" ;;
+  *) printf 'Native CI requires running/degraded systemd (state=%s, exit=%s)\n' "$system_state" "$system_status" >&2; exit 1 ;;
+esac
 docker info >/dev/null
 image=$("$node" --input-type=module -e 'import {nodeImage} from "./bench/json-api/contract.mjs"; console.log(nodeImage)')
 docker pull "$image"

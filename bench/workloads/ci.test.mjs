@@ -75,6 +75,24 @@ test("real Linux controls have a required host job and cannot pass through fixtu
   assert.ok(!driver.includes("continue-on-error") && !driver.includes("--privileged"));
 });
 
+test("kernel preflight accepts systemd's degraded exit without accepting other host states", {
+  skip: process.platform !== "linux" && "requires the Linux driver shell, not a native resource fixture",
+}, () => {
+  const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  const marker = 'cd "$checkout"\n', start = driver.indexOf(marker);
+  assert.ok(start >= 0);
+  const end = driver.indexOf('\ndocker info', start); assert.ok(end > start);
+  const preflight = driver.slice(start + marker.length, end);
+  for (const [state, code, accepted] of [["running", 0, true], ["degraded", 1, true],
+    ["starting", 1, false], ["offline", 1, false], ["maintenance", 1, false],
+    ["running", 1, false], ["degraded", 0, false], ["degraded", 124, false], ["", 1, false]]) {
+    const result = spawnSync('/bin/bash', ['-c', `set -euo pipefail\nsystemctl() { printf '%s\\n' '${state}'; return ${code}; }\n${preflight}`],
+      { encoding: 'utf8', timeout: 10000, maxBuffer: 1024 ** 2 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status === 0, accepted, `${state}/${code}: ${result.stdout}${result.stderr}`);
+  }
+});
+
 test("actual Node CLI executes portable verifier sentinels and excludes historical capture", () => {
   const folder = mkdtempSync(join(tmpdir(), "benchmark-ci-selection-"));
   try {
