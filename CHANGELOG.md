@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Retain bounded first/last host-lifetime observer failures with fixed operation and
+  allowlisted error codes, without saving raw errors or weakening identity, retry,
+  continuity or cleanup proof. This adds diagnostics; it does not establish or repair
+  the historical r21 failure's cause.
+
 - Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
   grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
   raw responses or credentials, or changing provider validation and recovery rules.
