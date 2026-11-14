@@ -8,11 +8,8 @@
 //!
 //! #[corten::routes]
 //! mod url {
-//!     #[route("/", get = home)]
+//!     #[route("/", get = home, post = greet)]
 //!     pub struct Home;
-//!
-//!     #[route("/greet", post = greet)]
-//!     pub struct Greet;
 //! }
 //!
 //! #[derive(Fields)]
@@ -31,7 +28,7 @@
 //! let app: Client = App::new(url::router()).test();
 //! let home = app.get(&url::Home).await;
 //! assert_eq!((home.status(), home.text()), (StatusCode::OK, "Hello"));
-//! let greeting = app.post(&url::Greet).field(GreetForm::FIELDS.name, "Ada").await;
+//! let greeting = app.post(&url::Home).field(GreetForm::FIELDS.name, "Ada").await;
 //! assert_eq!(greeting.text(), "Hello, Ada!");
 //! # });
 //! ```
@@ -50,7 +47,7 @@
 //!
 //! ```compile_fail,E0277
 //! # async fn f(app: corten::testing::Client) {
-//! app.get(&"/greet").await;
+//! app.get(&"/").await;
 //! # }
 //! ```
 //!
