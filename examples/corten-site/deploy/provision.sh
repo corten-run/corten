@@ -16,7 +16,7 @@ domain=$1
 email=$2
 key=$3
 # Read through a pipe further down, where a file that is not there would stop nothing.
-[ -f "$key" ] && [ -s "$key" ] || { echo "the deploy key's public half is not a file that can be read: $key" >&2; exit 1; }
+[ -f "$key" ] && grep -q . "$key" || { echo "the deploy key's public half is not a file with a key in it: $key" >&2; exit 1; }
 machine=${4:-}
 redirects=${5:-}
 here=$(cd "$(dirname "$0")" && pwd)

@@ -131,15 +131,16 @@ fresh() {
     lets_in new "$t/key.pub"
     key=$(cat "$t/key")
 }
-# The relay as the apply runs it, with a clock that `sleep` moves on. Two minutes for a run
-# that takes a second: one that waits for ever is a case that fails, not a job that hangs.
+# The relay as the apply runs it, with a clock that `sleep` moves on. Five minutes for a run
+# that takes a second, or half a minute where it signs in sixty times: one that waits for
+# ever is a case that fails, not a job that hangs.
 relay() {
     : > "$t/said"
     (
         sleep() { SECONDS=$((SECONDS + $1)); }
         export -f sleep
         PATH="$t/bin:$PATH" TMPDIR="$t/tmp" RELAY_SAID="$t/said" DOMAIN=site.test NEW=$new \
-            HOST_KEY_PUBLIC="$(cat "$t/host.pub")" HANDOVER_KEY="$key" timeout 120 bash "$here/relay.sh"
+            HOST_KEY_PUBLIC="$(cat "$t/host.pub")" HANDOVER_KEY="$key" timeout 300 bash "$here/relay.sh"
     ) > "$t/out" 2>&1 && ended=0 || ended=$?
 }
 
@@ -228,7 +229,7 @@ fresh
 echo another-word > "$t/old/ask-says"
 relay
 is "a serving machine that answers the key with another word keeps the address: the relay fails" ended_with 1
-is "  said as an error" said error "could not be asked over SSH"
+is "  said as an error, ssh having said nothing" said error "could not be asked over SSH.*: ssh said nothing\."
 is "  nothing handed" nothing_handed
 
 fresh

@@ -121,9 +121,10 @@ address where it was, the new droplet is left as it is, and the next run
 (`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
 is there. For a droplet that did not take the key the run says what ssh said: one that
 refuses the key or shows another host key, run after run, was made with a public half that
-is not its secret's (the table below). A droplet such a run left, which says it is set up already and does not serve, is
-replaced by another that is handed the same (`gh workflow run site-machine.yml -f replace=true`):
-the address still moves only once that one serves. Where no droplet sets itself up from what
+is not its secret's (the table below). A droplet that a run which failed left, and that
+says it is set up already and does not serve, is replaced by another that is handed the
+same (`gh workflow run site-machine.yml -f replace=true`): the address still moves only
+once that one serves. Where no droplet sets itself up from what
 it is handed, the next is handed nothing
 (`gh workflow run site-machine.yml -f without_handover=true`, which makes a new one): the address
 moves first, as below. What the address's own move costs is in each run's log: the site is

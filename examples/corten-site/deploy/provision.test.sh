@@ -36,7 +36,7 @@ untouched() {
 # stops_for <what was given as the key's file>
 stops_for() {
     sh "$here/provision.sh" site.test someone@site.test "$1" 2> /tmp/said && return 1
-    grep -q "not a file that can be read" /tmp/said
+    grep -q "not a file with a key in it" /tmp/said
 }
 # The rest of the script, without its comments: a line there that named one of that user's
 # directories would be root's, and is not run here.
@@ -74,6 +74,8 @@ is "a run with all of it put back ends well" provision
 : > /tmp/empty
 is "provision.sh stops before it installs anything for a key's file that is not there" stops_for /tmp/not-there
 is "  for one that is empty" stops_for /tmp/empty
+echo > /tmp/empty
+is "  for one that holds an empty line" stops_for /tmp/empty
 is "  and for a directory" stops_for /tmp
 
 [ "$failed" = 0 ] || exit 1

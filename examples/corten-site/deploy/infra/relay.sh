@@ -119,7 +119,7 @@ fi
 ends=$((SECONDS + 600))
 until hands_over "$NEW"; do
     if [ "$SECONDS" -ge "$ends" ]; then
-        say error "The new machine at $NEW did not take the handover key within ten minutes: $(ssh_said). The address has not moved, and the old machine serves. Run the workflow again; where it says the same, the keys the machine was made with are not the ones this run holds (deploy/README.md)."
+        say error "The new machine at $NEW did not take the handover key within ten minutes: $(ssh_said). The address has not moved, and the old machine serves. Run the workflow again; where it refuses the key or shows another host key again, the keys the machine was made with are not the ones this run holds (deploy/README.md)."
         exit 1
     fi
     sleep 10
