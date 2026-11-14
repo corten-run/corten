@@ -3454,7 +3454,7 @@ rules something out.
     0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
     `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
 
-51. <a id="choice-asked-open-state"></a>**A patch keeps what the user opened or closed, except that the element a `data-patch`
+49. <a id="choice-asked-open-state"></a>**A patch keeps what the user opened or closed, except that the element a `data-patch`
     answer replaces takes the answer's open state when the user asked for it from outside it.** A
     patch carries a `<dialog>`, `<details>` or popover the user opened or closed into the fresh
     markup unless the server changed it from what it sent before
@@ -3617,7 +3617,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    element with an id, the same name; focus also follows an element without either to the same
    place). A field without an id or a unique name takes the server's value. A `<dialog>`,
    `<details>` or popover the user opened or closed stays so, unless the server changed it or the
-   user asked for the element from outside it ([Choice 51](#choice-asked-open-state)). Other
+   user asked for the element from outside it ([Choice 49](#choice-asked-open-state)). Other
    browser state inside a replaced element (scroll position) resets, so keep targets small.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that

@@ -4384,6 +4384,40 @@ async function run(browser) {
       first.replaced && first.open && first.modal && shut && again.replaced && again.open && again.modal,
       JSON.stringify({ first, shut, again }),
     );
+    // Markup that draws the open modal closed closes it as close() does: one close event, and
+    // focus back on the button that opened it. Opened from the keyboard, as WebKit does not focus a
+    // button it clicks.
+    await sheet.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).close());
+    const opener = sheet.getByRole("button", { name: "Preview", exact: true });
+    await answered(async () => {
+      await opener.focus();
+      await sheet.keyboard.press("Enter");
+    });
+    await sheet.route(
+      (url) => url.pathname === "/smoke/live/sheet-closed",
+      (route) => route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: patch\ndata: <dialog id="smoke-sheet"><p>Closed</p></dialog>\n\nevent: end\ndata: end\n\n' }),
+    );
+    const shutByMarkup = await answered(() =>
+      sheet.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__closes = 0;
+        document.getElementById("smoke-sheet")?.addEventListener("close", () => w.__closes++);
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="sheet-closed-live" src="/smoke/live/sheet-closed"></corten-live>'));
+      }),
+    );
+    await sheet.waitForFunction(() => /** @type {any} */ (window).__closes > 0, undefined, { timeout: 2000 }).catch(() => {});
+    await sheet.waitForTimeout(200);
+    const markupClose = await sheet.evaluate(() => ({
+      closes: /** @type {any} */ (window).__closes,
+      focus: document.activeElement?.textContent ?? document.activeElement?.localName,
+    }));
+    check(
+      "markup that draws an open modal dialog closed closes it as close() does: one close event, focus back on its opener",
+      shutByMarkup.replaced && shutByMarkup.text === "Closed" && !shutByMarkup.open && markupClose.closes === 1 && markupClose.focus === "Preview",
+      JSON.stringify({ ...shutByMarkup, ...markupClose }),
+    );
+    // The app's sheet again, with its form, open.
+    await answered(preview);
     // Pressed inside the dialog, closed (Escape) while the answer is on its way: it stays closed.
     // Opened as a button would (`command="show-modal"`) when the press above left it closed.
     await sheet.evaluate(() => {
@@ -4407,6 +4441,59 @@ async function run(browser) {
     });
     await sheet.unroute(sheetAnswer);
     check("a data-patch answer to a form inside a dialog the user closed while it was on its way keeps it closed", inside.replaced && !inside.open && !inside.modal, JSON.stringify(inside));
+    // Where the press was is where it was when pressed: removing the button, redrawing the dialog
+    // or replacing the form earlier in the same answer, while it is on its way, does not make it a
+    // press outside the dialog, which would open it again.
+    /**
+     * Opens the dialog, presses Again inside it, closes it with Escape while the answer is held,
+     * does `meanwhile`, then lets the answer (`body`, or the app's) through and waits for it to
+     * replace the dialog.
+     * @param {() => Promise<unknown>} meanwhile @param {string} [body]
+     */
+    const pressedInside = async (meanwhile, body) => {
+      await sheet.evaluate(() => {
+        const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet"));
+        if (!dialog.open) dialog.showModal();
+        const form = dialog.querySelector("form");
+        if (form) form.id = "smoke-again";
+      });
+      /** @type {() => void} */
+      let let_go = () => {};
+      await sheet.route(sheetAnswer, async (route) => {
+        await new Promise((resolve) => (let_go = () => resolve(undefined)));
+        if (body) await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body });
+        else await route.continue();
+      });
+      const sent = sheet.waitForRequest((r) => sheetAnswer(new URL(r.url())), { timeout: 5000 }).catch(() => null);
+      await sheet.getByRole("button", { name: "Again", exact: true }).click();
+      await sent;
+      await sheet.keyboard.press("Escape");
+      await closed();
+      await meanwhile();
+      await sheet.evaluate(() => (/** @type {any} */ (window).__sheet = document.getElementById("smoke-sheet")));
+      let_go();
+      await sheet.waitForFunction(() => document.getElementById("smoke-sheet") !== /** @type {any} */ (window).__sheet, undefined, { timeout: 5000 }).catch(() => {});
+      await sheet.unroute(sheetAnswer);
+      return state();
+    };
+    const removed = await pressedInside(() => sheet.evaluate(() => document.querySelector("#smoke-again button")?.remove()));
+    check("a data-patch answer to a form inside a dialog keeps it closed when its button was removed while it was on its way", removed.replaced && removed.text === "Preview" && !removed.open, JSON.stringify(removed));
+    await sheet.route(
+      (url) => url.pathname === "/smoke/live/sheet-again",
+      (route) => route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: patch\ndata: <dialog id="smoke-sheet" open><p>Redrawn</p></dialog>\n\nevent: end\ndata: end\n\n' }),
+    );
+    const redrawn = await pressedInside(async () => {
+      await sheet.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="sheet-again-live" src="/smoke/live/sheet-again"></corten-live>')));
+      await sheet.waitForFunction(() => document.querySelector("#smoke-sheet p")?.textContent === "Redrawn", undefined, { timeout: 5000 }).catch(() => {});
+    });
+    check("a data-patch answer to a form inside a dialog keeps it closed when the dialog was redrawn while it was on its way", redrawn.replaced && redrawn.text === "Preview" && !redrawn.open, JSON.stringify(redrawn));
+    // Redrawn above without the form; the app's answer draws it again.
+    await answered(() => sheet.getByRole("button", { name: "Preview", exact: true }).click());
+    const formFirst = await pressedInside(
+      async () => {},
+      '<form id="smoke-again"><p>Form</p></form><dialog id="smoke-sheet" open><p>Answered</p></dialog>',
+    );
+    check("a data-patch answer that replaces the form inside a dialog before the dialog keeps it closed", formFirst.replaced && formFirst.text === "Answered" && !formFirst.open, JSON.stringify(formFirst));
     // A live fragment that draws it open, after the user closed it: it stays closed.
     await sheet.route(
       (url) => url.pathname === "/smoke/live/sheet",

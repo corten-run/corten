@@ -995,10 +995,11 @@ export function patch(html, signal) {
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
- * @param {Element} [by] the control the user pressed to ask for it (a form's submitter, else the
- *   form), which decides whose open state an element it replaces takes ({@link opened})
+ * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
+ *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
+ *   it replaces takes ({@link opened})
  */
-async function apply(html, signal, sent, took, own = true, asked, by) {
+async function apply(html, signal, sent, took, own = true, asked, within) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
@@ -1030,7 +1031,7 @@ async function apply(html, signal, sent, took, own = true, asked, by) {
       elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
-      replaceKeeping(target, el, sent, took, true, by);
+      replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
   }
@@ -1295,15 +1296,19 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it. So does `root` itself when the user asked for it by pressing `by`
- * outside it (a form's trigger beside a dialog): the press is newer than what they did to it
- * before, so a dialog they closed and ask for again opens. A popover has no markup that shows it,
- * so it stays as the user left it.
+ * sending it open closes it. So does `root` itself when the user asked for it from outside it (a
+ * form's trigger beside a dialog): the press is newer than what they did to it before, so a dialog
+ * they closed and ask for again opens. Outside is where the control was when it was pressed
+ * (`within`), so one removed, or a dialog redrawn, while the answer was on its way does not turn a
+ * press inside into one outside. An open dialog the markup closes is closed as the browser closes
+ * one, before it is replaced: its `close` event fires and focus goes back to what opened it. A
+ * popover has no markup that shows it, so it stays as the user left it.
  * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
- * @param {Element} [by] the control the user pressed to ask for the patch
+ * @param {Set<string>} [within] the ids of the dialogs and details the control that asked for the
+ *   patch was in when it was pressed ({@link asking})
  * @returns {() => void}
  */
-function opened(root, fresh, ids, by) {
+function opened(root, fresh, ids, within) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
@@ -1312,19 +1317,28 @@ function opened(root, fresh, ids, by) {
     const popover = hasAttr(el, "popover");
     const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
-    // Left as the server sent it, and not a shown popover: the fresh markup says, so its
-    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
-    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
+    // Left as the server sent it, and not a shown popover or an open dialog the fresh markup may
+    // close: the fresh markup says, so its counterpart is not looked up (a lookup is a query of
+    // `fresh`; most patches open nothing).
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now && !(dialog && now)))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
     if (shown && hasAttr(to, "popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
     if (!toggles) continue;
+    const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
-    if (now === (served.has(el) ? served.get(el) : /** @type {HTMLDialogElement} */ (to).open)) continue;
     // Asked for from outside it, and drawn otherwise than the user left it: the answer's.
-    if (el === root && by && now !== /** @type {HTMLDialogElement} */ (to).open && !holds(root, by)) continue;
+    if (now === (served.has(el) ? served.get(el) : drawnOpen) || (el === root && within && now !== drawnOpen && !within.has(attrOf(root, "id") ?? ""))) {
+      // An open dialog the markup closes: closed by the browser, so it says so and gives focus back.
+      if (dialog && now && !drawnOpen) {
+        try {
+          /** @type {HTMLDialogElement} */ (el).close();
+        } catch {}
+      }
+      continue;
+    }
     if (!dialog) /** @type {HTMLDetailsElement} */ (to).open = now;
     else if (!now) to.removeAttribute("open");
     else {
@@ -1355,15 +1369,15 @@ function opened(root, fresh, ids, by) {
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
  *   page's part a link replaces leaves it to the navigation, which moves it as a link does
- * @param {Element} [by] the control the user pressed to ask for `fresh` ({@link opened})
+ * @param {Set<string>} [within] where the control that asked for `fresh` was ({@link opened})
  */
-function replaceKeeping(root, fresh, sent, took, focus = true, by) {
+function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
   // Every lookup until `fresh` is in the page, where a script may change it.
   const ids = idsIn(fresh);
-  const reopen = opened(root, fresh, ids, by);
+  const reopen = opened(root, fresh, ids, within);
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
@@ -2901,11 +2915,26 @@ function patchSubmit(event) {
 }
 
 /**
+ * The ids of the dialogs and details `el` is in (a form's submitter, else the form), read when it
+ * is pressed, so its answer knows what it was asked from inside ({@link opened}).
+ * @param {Element} el @returns {Set<string>}
+ */
+function asking(el) {
+  const ids = new Set();
+  for (let at = closestOf(el, "dialog, details"); at; at = at.parentElement && closestOf(at.parentElement, "dialog, details")) {
+    const id = attrOf(at, "id");
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/**
  * Sends a `data-patch` form's submit, by `submitter`, as `sends` says (its method, action and
  * encoding).
  * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @param {ReturnType<typeof sendsAs>} sends
  */
 async function send(form, submitter, sends) {
+  const within = asking(submitter ?? form);
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -3005,7 +3034,7 @@ async function send(form, submitter, sends) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, submitter ?? form);
+      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, within);
       else {
         const notice = noticeOf(res);
         await swapPage(body, signal, false, notice);
