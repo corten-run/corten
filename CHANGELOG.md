@@ -5,6 +5,25 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
+  tests run
+  ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).
+  An empty segment no longer matches a path parameter anywhere: `/items//edit` used to reach
+  `/items/{id}/edit` with an empty `id`, and is now a 404 unless another route, such as a
+  catch-all, matches it. To keep such a request working, give the empty case a route of its
+  own (`/items/edit`) or move the value to the query (`/items/edit?id=`). A `#[derive(Route)]`
+  link with an empty path parameter between two segments, which used to write `//`, now does
+  what one at the start or end of the path already did: a debug build panics naming the route
+  and field, and a release build writes `%FF` after it, which the route answers with a 400, and
+  logs an error once for each route and field. Cargo takes one matchit 0.9.x per build, so an
+  app with another dependency that needs matchit 0.9.3 or later cannot resolve until Corten
+  moves the pin, and a matchit fix reaches apps in a Corten release. A matched request costs
+  about 50 instructions more (0.29%) and a 404 about 11 more (0.06%). Derived, area and API
+  routes match and insert as before apart from empty values; a `Route` implemented by hand
+  with text before a parameter (`/a{x}/{y}`) and given to the hidden `Routes::__route` now
+  meets 0.9's prefix and suffix conflict checks, and some such pairs stop the app in one order
+  only (`/{z}/b` after `/a{x}/{y}`; design Choice 48's known limit).
+
 - Keep grouped cloud create actions with a numeric zero resource ID pending until
   the matching action completes with the exact owned droplet ID. Preserve strict
   identity/link checks, bounded polling and the single-create rule; this fixes a
