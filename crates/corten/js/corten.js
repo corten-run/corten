@@ -995,8 +995,10 @@ export function patch(html, signal) {
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
+ * @param {Element} [by] the control the user pressed to ask for it (a form's submitter, else the
+ *   form), which decides whose open state an element it replaces takes ({@link opened})
  */
-async function apply(html, signal, sent, took, own = true, asked) {
+async function apply(html, signal, sent, took, own = true, asked, by) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
@@ -1028,7 +1030,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
       elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
-      replaceKeeping(target, el, sent, took);
+      replaceKeeping(target, el, sent, took, true, by);
       put.push(el);
     }
   }
@@ -1293,10 +1295,15 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it.
- * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids @returns {() => void}
+ * sending it open closes it. So does `root` itself when the user asked for it by pressing `by`
+ * outside it (a form's trigger beside a dialog): the press is newer than what they did to it
+ * before, so a dialog they closed and ask for again opens. A popover has no markup that shows it,
+ * so it stays as the user left it.
+ * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
+ * @param {Element} [by] the control the user pressed to ask for the patch
+ * @returns {() => void}
  */
-function opened(root, fresh, ids) {
+function opened(root, fresh, ids, by) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
@@ -1316,6 +1323,8 @@ function opened(root, fresh, ids) {
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
     if (now === (served.has(el) ? served.get(el) : /** @type {HTMLDialogElement} */ (to).open)) continue;
+    // Asked for from outside it, and drawn otherwise than the user left it: the answer's.
+    if (el === root && by && now !== /** @type {HTMLDialogElement} */ (to).open && !holds(root, by)) continue;
     if (!dialog) /** @type {HTMLDetailsElement} */ (to).open = now;
     else if (!now) to.removeAttribute("open");
     else {
@@ -1346,14 +1355,15 @@ function opened(root, fresh, ids) {
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
  *   page's part a link replaces leaves it to the navigation, which moves it as a link does
+ * @param {Element} [by] the control the user pressed to ask for `fresh` ({@link opened})
  */
-function replaceKeeping(root, fresh, sent, took, focus = true) {
+function replaceKeeping(root, fresh, sent, took, focus = true, by) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
   // Every lookup until `fresh` is in the page, where a script may change it.
   const ids = idsIn(fresh);
-  const reopen = opened(root, fresh, ids);
+  const reopen = opened(root, fresh, ids, by);
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
@@ -2995,7 +3005,7 @@ async function send(form, submitter, sends) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok);
+      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, submitter ?? form);
       else {
         const notice = noticeOf(res);
         await swapPage(body, signal, false, notice);
