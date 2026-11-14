@@ -5,6 +5,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Bind dedicated workload-group hosts to a complete current-registry fleet roster,
+  exact source and provider identity. Preserve native group defaults and complete
+  contenders; permit only exact reserved sibling hosts, require room for the whole
+  fleet, and keep single-group evidence distinct from a completed official round.
+  Run controllers on isolated parallel worker event loops from verified source
+  snapshots, collect each host independently, and replay the full roster read-only.
+  Match failed inspections to the exact reserved selection before cleanup.
+  Keep parallel Git proofs on exact observed commits without shared-ref writes,
+  and bind nested native validation to captured committed code and a pinned parser.
+  Existing all-group reservations and uncertain-host recovery remain separate;
+  local workload verification files run serially without changing measurements.
+  Reject altered benchmark source bindings and evidence manifests with strict
+  boolean comparisons and bounded diagnostics, without formatting enormous diffs.
+
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
 - Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with

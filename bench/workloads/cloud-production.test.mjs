@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, symlinkSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
+import { fleetPlan } from "./cloud-contract.mjs";
+import { groupNames } from "./registry.mjs";
+import { sourceUrl } from "./cloud-remote.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -19,6 +22,7 @@ function productionHarness(t, flags = {}) {
       }
       if (argv[0] === "cat-file" && flags.missingNative) return { status: 1, stderr: "private" };
       if (argv[0] === "merge-base" && flags.unmerged) return { status: 1, stderr: "private" };
+      if (argv[0] === "merge-base" && flags.staleTracking && argv.at(-1) === "origin/main") return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.afterFetch) flags.afterFetch();
       if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M private-file" };
@@ -247,7 +251,10 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 13);
+  assert.equal(controllerPaths.length, 17);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
+  for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"])
+    assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];
   for (const suffix of [["--adapter", "evil"], ["--duration", "1"], ["--print-approval", "--print-approval"], ["--approve-reviewed-merged-ready", "not-a-hash"]])
     assert.throws(() => parseProductionArgs([...args, ...suffix]));
@@ -257,4 +264,81 @@ test("current saved-verifier checkout requirement fails before any provider acce
   const p = productionHarness(t); p.h.seed(); p.h.change((s) => { s.commit = "b".repeat(40); });
   await assert.rejects(productionMain([...p.args(), "--print-approval"], p.deps), /measured integrated checkout/);
   assert.ok(p.calls.every(([binary]) => binary === "git")); assert.equal(p.h.deletes, 0);
+});
+
+function groupProduction(t, flags = {}) {
+  const p = productionHarness(t, flags), path = join(p.h.temp, "fleet.json");
+  const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
+    tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) });
+  writeFileSync(path, JSON.stringify(fleet));
+  const values = [...p.args("--detach"), "--group", groupNames[0], "--fleet", path];
+  return { p, path, fleet, values, async approval() {
+    assert.equal(await productionMain([...values, "--print-approval"], p.deps), 3);
+    return [...values, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256];
+  } };
+}
+
+test("group production approval binds complete fleet bytes before any provider access", async (t) => {
+  for (const mutate of [(g) => g.fleet.jobs.pop(), (g) => g.fleet.provider.context = "other",
+    (g) => g.fleet.selection.groups[0].apps.pop(), (g) => g.fleet.sshKey = "99",
+    (g) => g.fleet.jobs.reverse(), () => {}]) {
+    const g = groupProduction(t), args = await g.approval(); mutate(g);
+    // Even semantically identical bytes have a new explicit approval identity.
+    writeFileSync(g.path, `${JSON.stringify(g.fleet, null, 2)}\n`);
+    await assert.rejects(productionMain(args, g.p.deps));
+    assert.equal(g.p.h.creates, 0); assert.equal(g.p.h.deletes, 0);
+    assert.ok(g.p.calls.every(([binary]) => binary === "git"));
+  }
+});
+
+test("approved group composition runs only its native group and collection cannot relabel it", async (t) => {
+  const g = groupProduction(t, { active: true });
+  assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
+  assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
+  assert.equal(g.p.h.saved().group, groupNames[0]);
+  assert.deepEqual(g.p.h.saved().selection.groups.map((row) => row.group), [groupNames[0]]);
+  assert.ok(readFileSync(join(g.p.h.local, "job.sh"), "utf8").includes(`--group '${groupNames[0]}'`));
+  const values = g.p.args();
+  assert.equal(await productionMain([...values, "--print-approval"], g.p.deps), 3);
+  assert.equal(await productionMain([...values, "--approve-reviewed-merged-ready", g.p.stdout.at(-1).approvalSha256], g.p.deps), 3);
+  assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
+  await assert.rejects(productionMain([...values, "--group", groupNames[1], "--fleet", g.path, "--print-approval"], g.p.deps));
+});
+
+test("changing the fleet between preview and merged-source gate refuses allocation", async (t) => {
+  const flags = {}, g = groupProduction(t, flags), args = await g.approval();
+  flags.afterFetch = () => writeFileSync(g.path, `${JSON.stringify(g.fleet)}\n`);
+  await assert.rejects(productionMain(args, g.p.deps));
+  assert.equal(g.p.h.creates, 0); assert.ok(g.p.calls.every(([binary]) => binary === "git"));
+});
+
+test("fresh remote proof fetches only advertised objects without a shared reference or FETCH_HEAD write", async (t) => {
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead });
+  assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
+  const git = p.calls.filter(([binary]) => binary === "git").map(([, argv]) => argv);
+  assert.deepEqual(git.filter((argv) => argv[0] === "ls-remote"),
+    [["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"]]);
+  assert.deepEqual(git.filter((argv) => argv[0] === "fetch"),
+    [["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead]]);
+  assert.ok(git.some((argv) => JSON.stringify(argv) === JSON.stringify(["merge-base", "--is-ancestor", commit, remoteHead])));
+  assert.ok(!git.some((argv) => argv.some((arg) => arg.includes(":refs/") || arg === "FETCH_HEAD")));
+});
+
+test("missing, malformed or ambiguous remote main advertisements refuse before cloud access", async (t) => {
+  for (const remoteLine of ["", `${commit}\trefs/heads/other\n`, `${commit}\trefs/heads/main\n${commit}\trefs/heads/main\n`,
+    `${commit.slice(1)}\trefs/heads/main\n`, `${commit}\trefs/heads/main\nPRIVATE`]) {
+    const p = productionHarness(t, { remoteLine });
+    await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /remote main advertisement/);
+    assert.equal(p.h.creates, 0); assert.ok(p.calls.every(([binary]) => binary === "git"));
+    assert.ok(!p.calls.some(([binary, argv]) => binary === "git" && argv[0] === "fetch"));
+  }
+});
+
+test("locked launch rechecks the observed remote SHA rather than stale shared tracking refs", async (t) => {
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead, staleTracking: true });
+  assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
+  const ancestry = p.calls.filter(([binary, argv]) => binary === "git" && argv[0] === "merge-base");
+  assert.equal(ancestry.length, 2);
+  for (const [, argv] of ancestry) assert.deepEqual(argv, ["merge-base", "--is-ancestor", commit, remoteHead]);
+  assert.equal(p.h.creates, 1); assert.equal(p.h.saved().status, "running");
 });

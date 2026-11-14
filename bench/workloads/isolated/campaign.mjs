@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -47,12 +48,12 @@ export function createCampaign({ authorize }) {
   function verifyPhases(c) {
     own(c.handle);
     for (const p of c.phases) {
-      assert.deepEqual(tree(p.native), p.manifest, "sealed native evidence mutated");
-      if (p.present) assert.deepEqual(tree(p.original), p.manifest, "original native evidence mutated");
+      assert.ok(isDeepStrictEqual(tree(p.native), p.manifest), "sealed native evidence mutated");
+      if (p.present) assert.ok(isDeepStrictEqual(tree(p.original), p.manifest), "original native evidence mutated");
       else assert.equal(lstatSync(p.original, { throwIfNoEntry: false }), undefined, "native output appeared after failure");
     }
-    if (c.audit) assert.deepEqual(tree(c.audit.sourceRoot), c.audit.subject.sourcesManifest.snapshot, "sealed source snapshot mutated");
-    if (c.mixedAudit) assert.deepEqual(tree(c.mixedAudit.sourceRoot), c.mixedAudit.subject.sourcesManifest.snapshot, "sealed mixed source/context snapshot mutated");
+    if (c.audit) assert.ok(isDeepStrictEqual(tree(c.audit.sourceRoot), c.audit.subject.sourcesManifest.snapshot), "sealed source snapshot mutated");
+    if (c.mixedAudit) assert.ok(isDeepStrictEqual(tree(c.mixedAudit.sourceRoot), c.mixedAudit.subject.sourcesManifest.snapshot), "sealed mixed source/context snapshot mutated");
   }
   function status(c) {
     own(c.handle);
@@ -175,7 +176,7 @@ export function createCampaign({ authorize }) {
       assert.equal(await authorize(subject), true, "parent did not authorize this exact campaign");
       assert.ok(!signal?.aborted); verifyWorkingSources(plan.bindings[0]);
       for (const b of plan.bindings) fresh(join(repo, ...b.validation.artifactRoot.split("/")));
-      fresh(join(repo, ...jsonPhase(plan, "prepare").validation.artifactRoot.split("/")));
+      if (plan.order.includes("json-api")) fresh(join(repo, ...jsonPhase(plan, "prepare").validation.artifactRoot.split("/")));
       const id = `${plan.round}-${randomBytes(8).toString("hex")}`;
       const lock = json({ schema: "benchmark-isolated-campaign-reservation/v1", id, campaignSha256: plan.campaignSha256,
         commit: plan.commit, pid: process.pid, createdAt: new Date().toISOString() });
@@ -273,7 +274,7 @@ export function createCampaign({ authorize }) {
         if (lstatSync(inbox, { throwIfNoEntry: false })) {
           const stat = lstatSync(inbox);
           if (process.platform === "linux") { assert.equal(stat.uid, process.getuid()); assert.equal(stat.mode & 0o077, 0); }
-          const bytes = readRegular(inbox); assert.deepEqual(JSON.parse(bytes), delivery, "audit transport changed");
+          const bytes = readRegular(inbox); assert.ok(isDeepStrictEqual(JSON.parse(bytes), delivery), "audit transport changed");
           c.files.push({ path: "json-audit-delivery.json", sha256: digest(bytes) });
         }
         const subject = freeze({ action: "stage-json-audit", campaignSha256: c.plan.campaignSha256,
@@ -298,7 +299,7 @@ export function createCampaign({ authorize }) {
         if (lstatSync(inbox, { throwIfNoEntry: false })) {
           const stat = lstatSync(inbox);
           if (process.platform === "linux") { assert.equal(stat.uid, process.getuid()); assert.equal(stat.mode & 0o077, 0); }
-          const bytes = readRegular(inbox); assert.deepEqual(JSON.parse(bytes), delivery);
+          const bytes = readRegular(inbox); assert.ok(isDeepStrictEqual(JSON.parse(bytes), delivery), "mixed audit transport changed");
           c.files.push({ path: "mixed-audit-delivery.json", sha256: digest(bytes) });
         }
         const subject = freeze({ action: "stage-mixed-audit", campaignSha256: c.plan.campaignSha256,
