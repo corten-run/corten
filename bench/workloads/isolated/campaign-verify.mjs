@@ -14,6 +14,7 @@ import { registrySchema } from "../registry.mjs";
 import { verifyHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 export async function validateCampaign(input) {
   try {
@@ -58,13 +59,13 @@ export async function validateCampaign(input) {
     }
     const replay = replayJournal(plan, id, journal, status);
     const lastEvent = read(`${id}/${events.at(-1).path}`);
-    assert.deepEqual(lastEvent.status, status, "terminal journal and result disagree");
+    assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
     if (collectionEntry) {
       const collection = read(`${id}/collection-manifest.json`);
       const entries = subtree.entries.filter((e) => e.path !== "collection-manifest.json");
-      assert.deepEqual(collection.manifest, { entries, sha256: deploymentSha256(entries) }, "saved campaign manifest differs");
-      assert.deepEqual(collection.status, status);
+      assert.ok(isDeepStrictEqual(collection.manifest, { entries, sha256: deploymentSha256(entries) }), "saved campaign manifest differs");
+      assert.ok(isDeepStrictEqual(collection.status, status), "collection status differs");
     } else assert.equal(status.state, "preserved-uncertain", "finished campaign needs a sealed collection manifest");
     const diagnostics = [], blockers = currentExecution ? [] : ["legacy three-group campaign is not all-nine execution"];
     const verifiedGroups = [];
@@ -85,7 +86,7 @@ export async function validateCampaign(input) {
         hostBefore = read(`${id}/${entry.path}/host-before.json`);
         try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.deepEqual(status.outcomes[index].cleanup, boundary); }
+        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       if (currentExecution) for (const [commandIndex, result] of recorded.results.entries()) {
         // An intent is already forbidden advancement, even if its exit is absent.
@@ -116,7 +117,7 @@ export async function validateCampaign(input) {
       const native = join(folder, id, entry.path, "native");
       const manifest = tree(native);
       if (currentExecution) assert.equal(recorded.sealed, true, "collected phase lacks full host/native seal");
-      assert.deepEqual(manifest, read(`${id}/${entry.path}/native-manifest.json`), "native snapshot differs from sealed manifest");
+      assert.ok(isDeepStrictEqual(manifest, read(`${id}/${entry.path}/native-manifest.json`)), "native snapshot differs from sealed manifest");
       manifests.set(entry.path, manifest);
       const recordedSeal = replay.phases.get(entry.path).manifestSha256;
       // Historical completed phases have group-finished commitments; preparation
@@ -138,8 +139,8 @@ export async function validateCampaign(input) {
           const derived = composePhase(binding, nativeResult, host, recorded.results, timingAudit);
           const savedOutcome = status.outcomes[index];
           if (replay.completed.has(group)) {
-            for (const field of ["outcome", "nativeStatus", "appOutcomes", "report"]) assert.deepEqual(savedOutcome[field], derived[field]);
-            assert.deepEqual(savedOutcome.host, host);
+            for (const field of ["outcome", "nativeStatus", "appOutcomes", "report"]) assert.ok(isDeepStrictEqual(savedOutcome[field], derived[field]), "saved outcome differs");
+            assert.ok(isDeepStrictEqual(savedOutcome.host, host), "saved host proof differs");
           }
           if (nativeResult.status === "invalid") assert.fail("native evidence contradictory");
           report = derived.report;
@@ -172,9 +173,9 @@ export async function validateCampaign(input) {
     if (replay.reviewNeeded) {
       const subject = read(`${id}/json-audit-subject.json`), sourceRoot = join(folder, id, "audit-sources");
       const sources = subject.sourcesManifest;
-      assert.deepEqual(sources.snapshot, tree(sourceRoot), "audit source snapshot differs");
+      assert.ok(isDeepStrictEqual(sources.snapshot, tree(sourceRoot)), "audit source snapshot differs");
       assert.equal(sources.sha256, deploymentSha256({ files: sources.files, snapshot: sources.snapshot }));
-      assert.deepEqual(sources.files.map(({ bytes, storedAs, ...file }) => file), plan.bindings[0].sources.files);
+      assert.ok(isDeepStrictEqual(sources.files.map(({ bytes, storedAs, ...file }) => file), plan.bindings[0].sources.files), "audit source files differ");
       for (const file of sources.files) {
         assert.equal(file.storedAs, `blobs/${file.sha256}`); assert.match(file.sha256, /^[a-f0-9]{64}$/);
         const bytes = readRegular(join(sourceRoot, file.storedAs));
@@ -183,7 +184,7 @@ export async function validateCampaign(input) {
       const jsonIndex = plan.order.indexOf("json-api"); assert.ok(jsonIndex >= 0);
       const prefix = `${String(jsonIndex).padStart(2, "0")}-json-api`, prep = `${prefix}-prepare`, native = join(folder, id, prep, "native");
       const prepared = inspectPreparation(jsonPhase(plan, "prepare"), native);
-      assert.deepEqual(subject, auditSubject(plan, prepared, manifests.get(prep), sources, read(`${id}/${prep}/images.json`)));
+      assert.ok(isDeepStrictEqual(subject, auditSubject(plan, prepared, manifests.get(prep), sources, read(`${id}/${prep}/images.json`))), "audit subject differs");
       assert.equal(subject.subjectSha256, replay.reviewNeeded.subjectSha256);
       assert.equal(status.auditSubjectSha256, subject.subjectSha256);
       for (const event of journal) if (event.sequence >= replay.reviewNeeded.sequence || event.status?.auditSubjectSha256 != null)
@@ -192,16 +193,16 @@ export async function validateCampaign(input) {
         const delivery = read(`${id}/json-audit-delivery-retained.json`);
         const expected = { action: "stage-json-audit", campaignSha256: plan.campaignSha256, auditSubjectSha256: subject.subjectSha256,
           deliverySha256: digest(`${JSON.stringify(delivery, null, 2)}\n`), review: delivery.review };
-        assert.deepEqual(replay.auditStaged.subject, expected, "audit delivery differs from journal commitment");
+        assert.ok(isDeepStrictEqual(replay.auditStaged.subject, expected), "audit delivery differs from journal commitment");
         const checked = validateAuditDelivery(delivery, subject, sourceRoot);
-        assert.deepEqual(read(`${id}/json-native-audits.json`), checked.bundle);
+        assert.ok(isDeepStrictEqual(read(`${id}/json-native-audits.json`), checked.bundle), "JSON audit bundle differs");
         if (manifests.has(`${prefix}-timing`)) {
           const timing = validateTimingAudit(jsonPhase(plan, "timing", `/bench/campaign/${id}/json-native-audits.json`),
             join(folder, id, `${prefix}-timing`, "native"), subject, checked.bundle, sourceRoot);
           if (status.outcomes[jsonIndex].outcome === "native-validated") assert.equal(timing.complete, true);
         }
         if (subtree.entries.some((e) => e.path === "json-audit-delivery.json"))
-          assert.deepEqual(read(`${id}/json-audit-delivery.json`), delivery);
+          assert.ok(isDeepStrictEqual(read(`${id}/json-audit-delivery.json`), delivery), "JSON audit delivery differs");
       }
     } else {
       assert.ok(status.auditSubjectSha256 == null);
@@ -216,11 +217,11 @@ export async function validateCampaign(input) {
         assert.equal(event.status.mixedAuditSubjectSha256, subject.subjectSha256);
       if (replay.mixedAuditStaged) {
         const delivery = read(`${id}/mixed-audit-delivery-retained.json`);
-        assert.deepEqual(replay.mixedAuditStaged.subject, { action: "stage-mixed-audit", campaignSha256: plan.campaignSha256,
-          auditSubjectSha256: subject.subjectSha256, deliverySha256: digest(`${JSON.stringify(delivery, null, 2)}\n`), review: delivery.review });
+        assert.ok(isDeepStrictEqual(replay.mixedAuditStaged.subject, { action: "stage-mixed-audit", campaignSha256: plan.campaignSha256,
+          auditSubjectSha256: subject.subjectSha256, deliverySha256: digest(`${JSON.stringify(delivery, null, 2)}\n`), review: delivery.review }), "mixed audit commitment differs");
         const checked = validateMixedDelivery(delivery, subject, sourceRoot);
-        assert.deepEqual(read(`${id}/mixed-native-audits.json`), checked.bundle);
-        if (subtree.entries.some((e) => e.path === "mixed-audit-delivery.json")) assert.deepEqual(read(`${id}/mixed-audit-delivery.json`), delivery);
+        assert.ok(isDeepStrictEqual(read(`${id}/mixed-native-audits.json`), checked.bundle), "mixed audit bundle differs");
+        if (subtree.entries.some((e) => e.path === "mixed-audit-delivery.json")) assert.ok(isDeepStrictEqual(read(`${id}/mixed-audit-delivery.json`), delivery), "mixed audit delivery differs");
       }
     } else {
       assert.ok(status.mixedAuditSubjectSha256 == null);
@@ -228,14 +229,14 @@ export async function validateCampaign(input) {
     }
     if (currentExecution) for (const event of journal.filter((e) => e.kind === "group-finished")) {
       const savedOutcome = status.outcomes[plan.order.indexOf(event.group)];
-      for (const field of ["nativeStatus", "appOutcomes", "report", "host"]) assert.deepEqual(event[field], savedOutcome[field]);
+      for (const field of ["nativeStatus", "appOutcomes", "report", "host"]) assert.ok(isDeepStrictEqual(event[field], savedOutcome[field]), "journal outcome differs");
     }
     if (currentExecution) for (const event of journal) for (const row of event.status?.outcomes ?? []) {
       const final = status.outcomes[plan.order.indexOf(row.group)]; assert.ok(final);
       for (const field of ["nativeStatus", "appOutcomes", "report", "host", "cleanup"])
-        if (Object.hasOwn(row, field)) assert.deepEqual(row[field], final[field]);
+        if (Object.hasOwn(row, field)) assert.ok(isDeepStrictEqual(row[field], final[field]), "journal status differs");
     }
-    assert.deepEqual(tree(folder), snapshot, "saved campaign mutated during validation");
+    assert.ok(isDeepStrictEqual(tree(folder), snapshot), "saved campaign mutated during validation");
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",

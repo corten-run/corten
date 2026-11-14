@@ -94,6 +94,12 @@ of reserved siblings. An unrelated benchmark host still blocks allocation. The
 account must have room for the entire remaining roster, not just the next host.
 Sibling membership is not permission to collect, stop or delete that sibling.
 
+Large source bindings and evidence manifests are compared with exact strict
+equality without constructing assertion diffs. Invalid evidence still refuses;
+the error contains a bounded message rather than either complete manifest.
+Memory-regression reproductions need an operating-system memory limit, not only
+a JavaScript heap limit: formatting a diff can allocate outside that heap.
+
 Single-group inspection uses a distinct report schema and cannot establish a
 complete official round. Full-round publication requires every current registry
 group, exact source and selection, native replay, immutable saved evidence and

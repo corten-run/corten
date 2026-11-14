@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
 import { runnerFor } from "../run.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -314,7 +315,7 @@ export function validateBinding(binding) {
   assert.equal(binding?.schema, schema, "wrong isolated contract schema");
   const r = request(binding.request), sources = captureSources(r.commit);
   const expected = build(r, sources, binding.review?.declaration);
-  assert.deepEqual(binding, expected, "binding differs from native source, selection, recipe or strict validation state");
+  assert.ok(isDeepStrictEqual(binding, expected), "binding differs from native source, selection, recipe or strict validation state");
   return freeze({ bindingSha256: expected.bindingSha256, binding: "verified-offline", ready: false, executionAuthorized: false });
 }
 

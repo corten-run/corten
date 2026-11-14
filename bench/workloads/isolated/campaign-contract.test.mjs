@@ -8,6 +8,7 @@ import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import * as campaigns from "./campaign-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
+import { isDeepStrictEqual } from "node:util";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
@@ -54,7 +55,12 @@ test("full campaign binds real committed procedures, all groups, exact native de
   assert.equal(timing.execution.effectiveOptions.receipts, "/bench/campaign/owned/json-native-audits.json");
   for (const key of ["passes", "duration", "warmup", "rate", "startupTimeout"]) assert.equal(prep.execution.effectiveOptions[key], timing.execution.effectiveOptions[key]);
   const bad = structuredClone(plan); bad.bindings[0].execution.invocation.argv.push("--apps", "corten");
-  assert.throws(() => validateCampaign(bad), /differs from fixed native/);
+  assert.throws(() => validateCampaign(bad), (error) => {
+    assert.match(error.message, /differs from fixed native/);
+    assert.ok(error.message.length < 256, "rejection must not format the complete campaign");
+    assert.equal(error.actual, false); assert.equal(error.expected, true);
+    return true;
+  });
   assert.throws(() => bindCampaign({ round: "r17", commit, groups: ["catalog-page"] }));
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
@@ -65,7 +71,8 @@ test("group campaigns bind the entire exact native group with stable all-group p
   for (const group of groupNames) {
     const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group });
     assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
-    assert.deepEqual(plan.order, [group]); assert.deepEqual(plan.bindings, all.bindings.filter((b) => b.request.group === group));
+    assert.deepEqual(plan.order, [group]);
+    assert.ok(isDeepStrictEqual(plan.bindings, all.bindings.filter((b) => b.request.group === group)), "group bindings differ");
     for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));

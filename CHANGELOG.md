@@ -16,6 +16,8 @@ Corten is pre-1.0, so any minor version may change the API.
   and bind nested native validation to captured committed code and a pinned parser.
   Existing all-group reservations and uncertain-host recovery remain separate;
   local workload verification files run serially without changing measurements.
+  Reject altered benchmark source bindings and evidence manifests with strict
+  boolean comparisons and bounded diagnostics, without formatting enormous diffs.
 
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
