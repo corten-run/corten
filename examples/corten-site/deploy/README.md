@@ -846,6 +846,24 @@ serves made to fail, the relay was refused by `take`, found that the machine ser
 ended well; with the old machine serving a release named `etc`, it ended in failure with an
 error for the workflow, and the address stayed.
 
+A third review found nothing in those changes by which the deploy key gains from a
+handover, and found that `provision.sh`, as it was before the handover too, wrote as root
+into directories the deploy user owns whenever it ran a second time: with links that user
+had put there, a file under `/etc` became that user's (the review's run). At `0d1725e6d` it
+writes there as that user. Run again on a machine that had taken over, with
+`authorized_keys`, then `.ssh`, then `releases` replaced by a link into `/etc`, it failed
+for the first two and passed for the third, and what the links pointed at was root's and
+unchanged each time; with the links gone it passed, and a deploy to that machine was served.
+The relay, for an old machine that refuses the key, moved the address first with its warning
+as before; for one whose sshd was stopped while the site answered, it ended in failure with
+the address where it was and none of 35 requests unanswered; and with the old machine's tar
+made to end badly after sending everything, it went on, since the new machine had kept it,
+and the replacement ended with none of 276 requests unanswered, 286 seconds after the
+machine was made on a workstation busy with other work. `handover.test.sh` passes as it is
+and fails with any of five lines of `handover.sh` changed: the names refused, gzip, the
+package's `cli.ini` left out, a release required, and the bit that runs a file as its owner
+dropped.
+
 What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
 the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
 signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
