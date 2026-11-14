@@ -3571,8 +3571,9 @@ rules something out.
     so; the platform gets markup for a shown popover, when an answer could ask for one; or a
     press inside an element is found to ask for it open (a Show more in a `<details>` the user
     folded), when the rule would need the submitter's intent rather than its place; or the issue
-    on closing an open dialog as the browser does is fixed, when an answer's close may be done as the browser's and the case of an answer that
-    closes what the user opened can be decided with it.
+    on closing an open dialog as the browser does is fixed, when an answer's close may be done as
+    the browser's and the case of an answer that closes what the user opened can be decided with
+    it.
 
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
@@ -3580,8 +3581,9 @@ rules something out.
     27.2 (Playwright 1.64.1); 2026-11-14, the runtime's size on `bf1b2eaa2` against `e59c32c28`;
     2026-11-14, the press recorded where it was on `c1b7bce23`, the smoke's removed-button,
     redrawn-dialog and form-first checks passing in Chromium 156.0.8078.4; 2026-11-14, the rule
-    narrowed to opening only (round 3), the runtime's size against `8f11b7b35` and the smoke as
-    the PR's round 3 records.
+    narrowed to opening only on `6011ef751`: the runtime's size against `8f11b7b35`, and the
+    smoke's open-state checks, the one that keeps a dialog the user opened open among them,
+    passing in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
 ## Rules
 
