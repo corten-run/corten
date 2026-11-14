@@ -3215,10 +3215,10 @@ rules something out.
     `/`, 0.8.6 and 0.9.2 refuse them; both newer versions match suffixes, and 0.9.2 rejects
     overlapping parameter prefixes and suffixes); measured (callgrind 3.19.0, release with thin
     LTO and glibc's allocator, three alternating runs each of `tests/router_cost.rs`, 1,200
-    requests less 200 divided by 1,000, `2594bf710` against `0ff569c69`: a matched
-    `/items/7/edit` request 17,413.084 instructions (17,413.013 to 17,413.116) against
-    17,363.140 (17,363.122 to 17,363.172), and a 404 at `/items/7/unknown` 19,095.046
-    (19,095.013 to 19,095.046) against 19,083.740 (19,083.708 to 19,083.837));
+    requests less 200 divided by 1,000, `cebf0b4f7` against `0ff569c69`: a matched
+    `/items/7/edit` request 17,412.990 instructions (17,412.919 to 17,413.013) against
+    17,363.107 (17,363.046 to 17,363.178), and a 404 at `/items/7/unknown` 19,094.952
+    (19,093.573 to 19,095.107) against 19,083.834 (19,083.796 to 19,083.928));
     reasoned (an exact pin makes a new app and
     the workspace resolve the same matcher, independently of axum; `tests/matchit.rs` asks
     matchit itself about values, longest prefixes and suffixes, conflicts in either order,
@@ -3236,7 +3236,7 @@ rules something out.
     `tree.rs`, 0.9.2's `error.rs`, `lib.rs` and `tests/insert.rs`, against Corten at `0ff569c69`;
     2026-11-13, the four direct matching tests failed on 0.8.4 and passed on the exact 0.9.2
     pin, with all 17 dispatch tests passing after the deliberate empty-value change;
-    2026-11-13, the matched and unknown requests counted at `2594bf710` against `0ff569c69`
+    2026-11-13, the matched and unknown requests counted at `cebf0b4f7` against `0ff569c69`
     with the same harness copied into the base snapshot, rustc 1.99.1 and valgrind 3.19.0.
 
 ## Rules
