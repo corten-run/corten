@@ -314,6 +314,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A handler parameter typed `Map<string, El>` takes only a ref whose every element has a
+  `key={..}`: a ref without keys, on all its elements or on some, no longer compiles there, and
+  the error says to add `key={..}`, where it compiled and the handler got a one-entry `Map`. A ref
+  now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
+  fixed by the markup as its value's kind is. Debug builds stop a render in which two elements of a
+  ref in one render of its component have the same key, or a `key={..}` writes none (`None`),
+  since the `Map` would hold one entry for them; release builds do not check, and the runtime is
+  unchanged ([#1329](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)). **Breaking:** a component that puts a
+  parent's ref on elements with a key names the ref's type
+  `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
+  `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
+  gets `key={..}` on each of its elements.
+
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a

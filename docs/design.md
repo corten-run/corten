@@ -3093,6 +3093,19 @@ rules something out.
     script share is the ref's, which the compiler already holds them to; `data-ref-value` is the
     runtime's own, written only by `ref=`.
 
+    A key is carried the same way: the ref's fourth type parameter says whether its elements have
+    one (`Keyed` when the markup puts `key={..}` beside it, `NoKey` when not), fixed by each
+    element it is on, so a parameter typed `Map<string, El>` takes only a ref whose every element
+    has a key, and the error says to add `key={..}`. Without it a forgotten key compiled and the
+    handler got a one-entry `Map`, every element filed under the absent key
+    ([#1329](https://github.com/corten-run/corten/issues/1329)). Equal keys cannot be seen when the
+    crate compiles, so debug builds stop a render in which two elements of a ref in one render of
+    its component write the same key, or a `key={..}` writes none (`None`), as they stop on an
+    integer past 2^53; release builds keep no record. The runtime is unchanged: a check of the
+    live page's keys there would cost every user bytes to report a mistake the debug check finds
+    in the render that makes it, and rows a patch or a script adds later carry the keys the server
+    or the script gives them.
+
     Not chosen: the row's key (`ref={rows} key={..}` and a `Map<string, El>`). A key is a row's
     identity, which two rows with the same price cannot share, and it is text, so taking it for the
     value would change what a keyed ref means and still convert in the script. A typed `dataset`
@@ -3153,7 +3166,9 @@ rules something out.
     order for `*` and `#`, so a value is one attribute read per element when the handler runs and
     nothing on a load; the ref's third type parameter is one type wherever the component uses the
     ref, so a ref given text on one element and a number on another, or a value on one and none on
-    another, is a type error); bet (values are given today in five places: card-market's listing
+    another, is a type error, as its fourth is for a key on one element and none on another; a debug
+    build's record of keys is per render of a component, as the runtime finds a ref's elements under
+    the component's root nearest them); bet (values are given today in five places: card-market's listing
     sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
     `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
     `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
@@ -3178,7 +3193,11 @@ rules something out.
     `data-sort` and the attributes beside it onto ref values. If that issue is still open on
     2027-11-13, the first condition alone decides on that date.
 
-    Last checked: 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
+    Last checked: 2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
+    render with two equal keys stopped in a debug build, on the change for
+    [#1329](https://github.com/corten-run/corten/issues/1329) against `0ff569c69`, where the first
+    compiled (`compile_fail` doctests on `ts::Map` and `Keyed`, and the tests beside
+    `KeyedCells`); 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
     2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
     `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
     and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by

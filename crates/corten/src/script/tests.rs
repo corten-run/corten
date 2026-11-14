@@ -518,6 +518,55 @@ fn closest_groups_keyed_refs_and_typed_event_handlers_are_written_compactly() {
     );
 }
 
+/// Cells keyed by id, with the key before the ref, and a cell of another ref keyed as text.
+#[component]
+fn KeyedCells<'a>(ids: &'a [Option<&'a str>]) -> impl Render {
+    let (qty, total) = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(qty, "a")}>
+                for id in ids.iter() { <tr><td key={*id} ref={qty}>"1"</td></tr> }
+            </tbody>
+            <tfoot on:click={js::show(total, "a")}><tr><td ref={total} key="a">"2"</td></tr></tfoot>
+        </table>
+    }
+}
+
+#[component]
+fn TwoKeyedGrids() -> impl Render {
+    html! { <div><KeyedCells ids={&[Some("a"), Some("b")]} /><KeyedCells ids={&[Some("a")]} /></div> }
+}
+
+#[test]
+fn a_keyed_ref_writes_each_key_where_its_markup_puts_it() {
+    let html = KeyedCells { ids: &[Some("a"), Some("b")] }.to_html();
+    assert_eq!(
+        html,
+        concat!(
+            r#"<table data-scope="keyed-cells"><tbody data-on='click:stock_grid.show(#qty,"a")'>"#,
+            r#"<tr><td data-key="a" data-ref="qty">1</td></tr><tr><td data-key="b" data-ref="qty">1</td></tr></tbody>"#,
+            r#"<tfoot data-on='click:stock_grid.show(#total,"a")'><tr><td data-ref="total" data-key="a">2</td></tr></tfoot></table>"#,
+        )
+    );
+    // Each component's elements are its own: two grids may hold the same keys, as two refs may.
+    let both = TwoKeyedGrids {}.to_html();
+    assert_eq!(both.matches(r#"<td data-key="a" data-ref="qty">"#).count(), 2, "{both}");
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref qty in one keyed-cells have the key \"a\"")]
+fn debug_builds_stop_on_two_elements_of_a_keyed_ref_with_one_key() {
+    KeyedCells { ids: &[Some("a"), Some("b"), Some("a")] }.to_html();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "an element of ref qty in keyed-cells has a key={..} that wrote no key")]
+fn debug_builds_stop_on_an_element_of_a_keyed_ref_without_a_key() {
+    KeyedCells { ids: &[Some("a"), None] }.to_html();
+}
+
 // The doctests' script for rows that give their script a value (`Ref::with`), shared here.
 script::script!(mod priced = "../price_list.js");
 

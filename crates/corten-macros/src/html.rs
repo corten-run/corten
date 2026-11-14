@@ -1799,6 +1799,11 @@ impl Gen {
         self.text.push('<');
         self.text.push_str(name);
         let mut actions_printed = false;
+        // Whether the element has a key (`key={..}`, written `data-key`), for a handler's
+        // Map<string, El>: every element of a ref has one, or none does.
+        let is_key = |attr: &str| attr.eq_ignore_ascii_case("data-key");
+        let keyed = attrs.iter().any(|a| matches!(a, Attr::Expr(attr, _) | Attr::Static(attr, _) if is_key(attr)));
+        let has_ref = attrs.iter().any(|a| matches!(a, Attr::Ref(..)));
         for attr in attrs {
             match attr {
                 Attr::Bare(attr) => {
@@ -1806,6 +1811,15 @@ impl Gen {
                     self.text.push_str(attr);
                 }
                 Attr::Page(_) => self.text.push_str(" data-corten-page"),
+                // A keyed ref's key, which debug builds check against its other elements'.
+                Attr::Static(attr, value) if has_ref && is_key(attr) => {
+                    let written = format!(" {attr}=\"{}\"", escape(value));
+                    self.text.push_str(&written);
+                    self.code(q(
+                        "#[cfg(debug_assertions)] ::corten::script::__private::key_written(__A0);",
+                        &[literal(&written)],
+                    ));
+                }
                 Attr::Static(attr, value) => {
                     self.text.push_str(&format!(" {attr}=\"{}\"", escape(value)));
                 }
@@ -1819,6 +1833,8 @@ impl Gen {
                     }
                     .parse()
                     .expect("a path parses");
+                    let keys: TokenStream =
+                        if keyed { q("::corten::script::Keyed", &[]) } else { q("::corten::script::NoKey", &[]) };
                     match wide {
                         // `ref={trigger as HTMLElement}`: a ref on several kinds of element, typed as one they all are.
                         Some(wide) => {
@@ -1831,13 +1847,13 @@ impl Gen {
                                 })
                                 .collect();
                             self.code(q(
-                                "::corten::script::__private::ref_attr_as::<__A1, __A2, __A3>(&(__A0), __OUT);",
-                                &[expr.clone(), el, ty, holds],
+                                "::corten::script::__private::ref_attr_as::<__A1, __A2, __A3, __A4>(&(__A0), __OUT);",
+                                &[expr.clone(), el, ty, holds, keys],
                             ))
                         }
                         None => self.code(q(
-                            "::corten::script::__private::ref_attr::<__A1, __A2>(&(__A0), __OUT);",
-                            &[expr.clone(), el, holds],
+                            "::corten::script::__private::ref_attr::<__A1, __A2, __A3>(&(__A0), __OUT);",
+                            &[expr.clone(), el, holds, keys],
                         )),
                     }
                 }
@@ -1915,6 +1931,17 @@ impl Gen {
                 Attr::Expr(attr, expr) if attr == "id" && attrs.iter().any(|a| matches!(a, Attr::Page(_))) => {
                     self.code(q("::corten::view::__private::page_id(&(__A0), __OUT);", std::slice::from_ref(expr)))
                 }
+                // A keyed ref's key, which debug builds check against its other elements' as written.
+                Attr::Expr(attr, expr) if has_ref && is_key(attr) => self.code(q(
+                    "{
+                        #[cfg(debug_assertions)]
+                        let __corten_key = __OUT.len();
+                        (&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);
+                        #[cfg(debug_assertions)]
+                        ::corten::script::__private::key_written(&__OUT[__corten_key..]);
+                    }",
+                    &[expr.clone(), literal(&format!(" {attr}"))],
+                )),
                 Attr::Expr(attr, expr) => self.code(q(
                     "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
                     &[expr.clone(), literal(&format!(" {attr}"))],

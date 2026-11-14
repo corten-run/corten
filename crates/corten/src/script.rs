@@ -73,7 +73,8 @@
 //!   `js::Selection { rows: row, count }`, built once in the component and passed as one
 //!   argument wherever the handlers need the same elements.
 //! - **Keys.** `key={item.id}` on the elements of a ref makes a parameter typed
-//!   `Map<string, HTMLTableCellElement>` get them by key, for rows a feed updates by id.
+//!   `Map<string, HTMLTableCellElement>` get them by key, for rows a feed updates by id. Every
+//!   element of the ref has a key, or the call does not compile ([`Keyed`]).
 //! - **Values.** `ref={row.with(cents)}` gives each element of a ref a value, and a parameter
 //!   typed `Map<HTMLTableRowElement, number>` gets every one with its value ([`Ref::with`]), for
 //!   rows a script sorts or filters by what the server gave them, never a `data-` attribute it
@@ -1568,11 +1569,15 @@ pub trait DomEvent {
 /// with their values (`@param {Map<HTMLTableRowElement, number>} rows`): [`ts::Number`],
 /// [`ts::String`] or [`ts::Boolean`] when the markup puts it on every element with a value,
 /// `ref={row.with(cents)}` ([`Ref::with`]), [`NoValue`] when it gives none.
-pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue> {
+///
+/// `K` is whether its elements have keys, for a handler that takes them by key
+/// (`@param {Map<string, HTMLTableCellElement>} cells`): [`Keyed`] when the markup puts it on
+/// every element with a `key={..}`, [`NoKey`] when on none.
+pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey> {
     scope: &'static str,
     name: &'static str,
     kind: PhantomData<fn() -> (T, V)>,
-    value: PhantomData<fn() -> W>,
+    value: PhantomData<fn() -> (W, K)>,
 }
 
 /// A ref whose element the markup fills with something other than one view's rows.
@@ -1580,6 +1585,61 @@ pub enum NoRows {}
 
 /// A ref whose elements give their script no value: put as `ref={row}`, not `ref={row.with(..)}`.
 pub enum NoValue {}
+
+/// A ref whose elements have no `key={..}`, which a `Map<string, El>` parameter does not take.
+pub enum NoKey {}
+
+/// A ref whose every element has a `key={..}`, which a handler parameter typed
+/// `Map<string, El>` gets by key ([`ts::Map`]). The type a component's prop names for a parent's
+/// ref it puts on keyed elements, `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>`:
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten::script::{Keyed, NoRows, NoValue};
+///
+/// #[component]
+/// fn QtyCells<'a>(ids: &'a [&'a str], qty: Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>) -> impl Render {
+///     html! { <tr>for id in ids.iter() { <td ref={qty} key={*id}>"0"</td> }</tr> }
+/// }
+///
+/// // stock_grid.js: export function show(cells, id), cells a Map<string, HTMLTableCellElement>.
+/// // Its other handlers take a RowToggled from "corten/events", so the #[event] type is in scope.
+/// #[corten::script::event]
+/// pub struct RowToggled {
+///     pub id: String,
+///     pub selected: bool,
+/// }
+///
+/// #[component(js)]
+/// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+///     let qty = refs();
+///     html! {
+///         <table>
+///             <tbody><QtyCells ids={ids} qty={qty} /></tbody>
+///             <tfoot on:connect={js::show(qty, "a")}></tfoot>
+///         </table>
+///     }
+/// }
+///
+/// # fn main() {
+/// let html = StockGrid { ids: &["a", "b"] }.to_html();
+/// assert!(html.contains(r#"<td data-ref="qty" data-key="b">0</td>"#), "{html}");
+/// # }
+/// ```
+///
+/// A prop that leaves it out, `Ref<el::HTMLTableCellElement>`, is a ref without keys, and an
+/// element with a key does not take it:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn QtyCells<'a>(ids: &'a [&'a str], qty: Ref<el::HTMLTableCellElement>) -> impl Render {
+///     html! { <tr>for id in ids.iter() { <td ref={qty} key={*id}>"0"</td> }</tr> }
+/// }
+/// # fn main() {}
+/// ```
+pub enum Keyed {}
 
 /// A ref whose element holds only rows of one `#[component(view)]`, named by [`view_id`] of its
 /// name: the type a component's prop names for such a ref,
@@ -1704,21 +1764,21 @@ pub const fn view_id(name: &str) -> u64 {
     hash
 }
 
-impl<T, V, W> Clone for Ref<T, V, W> {
+impl<T, V, W, K> Clone for Ref<T, V, W, K> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, V, W> Copy for Ref<T, V, W> {}
+impl<T, V, W, K> Copy for Ref<T, V, W, K> {}
 
-impl<T, V, W> std::fmt::Debug for Ref<T, V, W> {
+impl<T, V, W, K> std::fmt::Debug for Ref<T, V, W, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Ref({}/{})", self.scope, self.name)
     }
 }
 
-impl<T, V, W> Ref<T, V, W> {
+impl<T, V, W, K> Ref<T, V, W, K> {
     /// The element with this ref that holds the event's target, like the DOM's
     /// `event.target.closest(..)`: one handler on a list's container gets the row that was
     /// clicked. A handler with a `closest()` argument runs only for events inside such an
@@ -1860,7 +1920,7 @@ impl<T, V, W> Ref<T, V, W> {
     /// }
     /// # fn main() {}
     /// ```
-    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X> {
+    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X, K> {
         Valued { at: self, value }
     }
 }
@@ -1877,8 +1937,8 @@ impl<T> Clone for Closest<T> {
 impl<T> Copy for Closest<T> {}
 
 /// What [`Ref::with`] returns: the ref, put on an element with its value.
-pub struct Valued<T, V, X: RefValue> {
-    at: Ref<T, V, X::Kind>,
+pub struct Valued<T, V, X: RefValue, K = NoKey> {
+    at: Ref<T, V, X::Kind, K>,
     value: X,
 }
 
@@ -2036,7 +2096,7 @@ pub mod el {
                 const TS: &'static str = stringify!($name);
             }
             $(impl SubOf<$parent> for $name {})+
-            impl<T: SubOf<$name>, V, W> super::__private::RefParam<T, V, W> for $name {
+            impl<T: SubOf<$name>, V, W, K> super::__private::RefParam<T, V, W, K> for $name {
                 const SIGIL: &'static str = "@";
             }
         };
@@ -2191,7 +2251,61 @@ pub mod ts {
     /// strings (`string[]`, a slice, an array or a `Vec` of them).
     pub struct Array<T>(std::marker::PhantomData<T>);
     /// Elements by their `key`: `Map<string, HTMLTableCellElement>`, a ref put with
-    /// `key={item.id}` on elements in a loop.
+    /// `key={item.id}` on every element ([`Keyed`](super::Keyed)), for rows a feed updates by
+    /// id. Two elements with equal keys are one entry, the later in the page's order.
+    ///
+    /// A ref whose elements have no key does not fit one, and the error says to add `key=`:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// // stock_grid.js: export function show(cells, id), cells a Map<string, HTMLTableCellElement>.
+    /// // Its other handlers take a RowToggled from "corten/events", so the #[event] type is in scope.
+    /// #[corten::script::event]
+    /// pub struct RowToggled {
+    ///     pub id: String,
+    ///     pub selected: bool,
+    /// }
+    ///
+    /// #[component(js)]
+    /// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+    ///     let qty = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody>for id in ids.iter() { <tr><td ref={qty}>{*id}</td></tr> }</tbody>
+    ///             <tfoot on:connect={js::show(qty, "a")}></tfoot>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// Nor does a ref with a key on some elements and not on others:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::script::event]
+    /// pub struct RowToggled {
+    ///     pub id: String,
+    ///     pub selected: bool,
+    /// }
+    ///
+    /// #[component(js)]
+    /// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+    ///     let qty = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody>
+    ///                 for id in ids.iter() { <tr><td ref={qty} key={*id}>{*id}</td></tr> }
+    ///                 <tr><td ref={qty}>"Total"</td></tr>
+    ///             </tbody>
+    ///             <tfoot on:connect={js::show(qty, "a")}></tfoot>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
     pub struct Map<T>(std::marker::PhantomData<T>);
     /// Elements with their values: `Map<HTMLTableRowElement, number>` (`K` is [`Number`],
     /// [`String`] or [`Boolean`]), a ref put with `ref={row.with(cents)}` on each element.
@@ -2334,6 +2448,93 @@ thread_local! {
     static SCOPE: Cell<Option<&'static str>> = const { Cell::new(None) };
     /// The script modules the page's handlers use, while a page renders.
     static MODULES: RefCell<Option<Vec<&'static str>>> = const { RefCell::new(None) };
+}
+
+/// Debug builds: the keys a component's keyed refs have had while it renders, so two elements of
+/// one ref with equal keys, or one whose `key={..}` wrote none (`None`), stop the render, as an
+/// integer past 2^53 does. A handler's `Map<string, El>` would hold one entry for the two, or one
+/// under `null`. The page's other renders (a patch, rows a script adds) are not seen.
+#[cfg(debug_assertions)]
+mod keys {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+
+    /// A ref of a component: its component's name and its own.
+    type RefName = (&'static str, &'static str);
+    /// A component's refs' keys so far, by ref, each as its attribute is written (` data-key="a"`).
+    type Keys = HashSet<(&'static str, String)>;
+    /// The keyed ref and the key of the element whose tag is being written, whichever came first in
+    /// its markup.
+    type Tag = (Option<RefName>, Option<String>);
+
+    thread_local! {
+        /// Each component rendering (`scoped`), innermost last, with its refs' keys.
+        static RENDERING: RefCell<Vec<(&'static str, Keys)>> = const { RefCell::new(Vec::new()) };
+        static TAG: RefCell<Tag> = const { RefCell::new((None, None)) };
+    }
+
+    pub(super) fn enter(scope: &'static str) {
+        RENDERING.with(|r| {
+            let mut r = r.borrow_mut();
+            // A render that starts afresh drops what one that panicked mid-tag left.
+            if r.is_empty() {
+                TAG.with(|t| *t.borrow_mut() = (None, None));
+            }
+            r.push((scope, HashSet::new()))
+        });
+    }
+
+    pub(super) fn leave() {
+        RENDERING.with(|r| r.borrow_mut().pop());
+    }
+
+    pub(super) fn ref_written(at: RefName) {
+        noted(|tag| tag.0 = Some(at));
+    }
+
+    pub(super) fn key_written(written: &str) {
+        noted(|tag| tag.1 = Some(written.to_owned()));
+    }
+
+    /// Notes the tag's ref or key, and checks the two once both are written.
+    fn noted(note: impl FnOnce(&mut Tag)) {
+        let both = TAG.with(|t| {
+            let mut t = t.borrow_mut();
+            note(&mut t);
+            if t.0.is_some() && t.1.is_some() {
+                std::mem::take(&mut *t)
+            } else {
+                (None, None)
+            }
+        });
+        if let (Some(at), Some(key)) = both {
+            check(at, &key);
+        }
+    }
+
+    fn check((scope, name): RefName, written: &str) {
+        assert!(
+            !written.is_empty(),
+            "an element of ref {name} in {scope} has a key={{..}} that wrote no key (None or false), so a handler's \
+             Map<string, ..> would get it under null: give every element of the ref a key"
+        );
+        // The innermost render of the ref's component holds it, as the page's `data-scope` root
+        // nearest the element does.
+        let repeated = RENDERING.with(|r| {
+            r.borrow_mut()
+                .iter_mut()
+                .rev()
+                .find(|(at, _)| *at == scope)
+                .is_some_and(|(_, seen)| !seen.insert((name, written.to_owned())))
+        });
+        if repeated {
+            let key = written.split_once('=').map_or("", |(_, v)| v.trim_matches('"'));
+            panic!(
+                "two elements of ref {name} in one {scope} have the key \"{key}\", so a handler's Map<string, ..> would hold \
+                 only the later: give each element of the ref a key of its own"
+            );
+        }
+    }
 }
 
 /// The module of numbers, money and dates for a script (`js/format.js`, minified into
@@ -2566,15 +2767,19 @@ pub mod __private {
         impl Drop for Restore {
             fn drop(&mut self) {
                 SCOPE.with(|s| s.set(self.0));
+                #[cfg(debug_assertions)]
+                keys::leave();
             }
         }
+        #[cfg(debug_assertions)]
+        keys::enter(scope);
         let _restore = Restore(SCOPE.with(|s| s.replace(Some(scope))));
         f()
     }
 
     /// `let (rows, rest) = refs();`: each name, made by `#[component]`.
     #[inline]
-    pub const fn new_ref<T, V, W>(scope: &'static str, name: &'static str) -> Ref<T, V, W> {
+    pub const fn new_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
         Ref { scope, name, kind: PhantomData, value: PhantomData }
     }
 
@@ -2586,26 +2791,28 @@ pub mod __private {
         }
     }
 
-    /// What `ref={..}` takes: a ref, which gives its element no value, or a ref with one
-    /// (`row.with(cents)`).
+    /// What `ref={..}` takes on an element with a key (`K` is [`Keyed`]) or without one
+    /// ([`NoKey`]): a ref, which gives its element no value, or a ref with one (`row.with(cents)`).
     #[diagnostic::on_unimplemented(
-        message = "every element of a ref gives its script a value of one kind, or none, and a ref={{..}} here does not: {Self}",
-        label = "a ref={{..}} in this markup gives what the ref's other elements or its handlers do not take",
+        message = "every element of a ref gives its script a value of one kind or none, and has a key={{..}} or none, and a ref={{..}} here does not: {Self}",
+        label = "a ref={{..}} in this markup gives what the ref's other elements or its handlers do not take, or has a key={{..}} they do not",
         note = "a handler parameter typed Map<El, number> takes a ref whose every element gives a number, ref={{row.with(cents)}}; \
-                ref={{row}} gives none"
+                ref={{row}} gives none; Map<string, El> takes a ref whose every element has a key={{..}}, and a component's prop \
+                for such a ref names it Ref<El, NoRows, NoValue, Keyed>"
     )]
-    pub trait RefAttr<E, V> {
+    pub trait RefAttr<E, V, K> {
         fn write_ref(&self, out: &mut String);
     }
     /// ` data-ref="rows"`.
     #[inline]
-    fn data_ref<T, V, W>(r: &Ref<T, V, W>, out: &mut String) {
+    fn data_ref<T, V, W, K: KeyKind>(r: &Ref<T, V, W, K>, out: &mut String) {
         out.push_str(" data-ref=\"");
         qualified(out, r.scope, SCOPE.with(Cell::get));
         out.push_str(r.name);
         out.push('"');
+        K::written(r.scope, r.name);
     }
-    impl<E, V> RefAttr<E, V> for Ref<E, V> {
+    impl<E, V, K: KeyKind> RefAttr<E, V, K> for Ref<E, V, NoValue, K> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(self, out)
@@ -2613,7 +2820,7 @@ pub mod __private {
     }
     /// ` data-ref-value='1250'`: the value as JSON, single-quoted as `data-on` is, so a string
     /// keeps its quotes (`docs/design.md#choice-ref-values`).
-    impl<E, V, X: RefValue> RefAttr<E, V> for Valued<E, V, X> {
+    impl<E, V, K: KeyKind, X: RefValue> RefAttr<E, V, K> for Valued<E, V, X, K> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(&self.at, out);
@@ -2623,19 +2830,43 @@ pub mod __private {
         }
     }
 
-    /// ` data-ref="rows"` on an element of interface `E` that holds `V`, which makes `rows` a
-    /// `Ref<E, V>` (with ` data-ref-value='..'` for `rows.with(..)`, whose value fixes its third
-    /// type).
+    /// ` data-ref="rows"` on an element of interface `E` that holds `V`, with a key or without
+    /// (`K`), which makes `rows` a `Ref<E, V, NoValue, K>` (with ` data-ref-value='..'` for
+    /// `rows.with(..)`, whose value fixes its third type).
     #[inline]
-    pub fn ref_attr<E, V>(r: &impl RefAttr<E, V>, out: &mut String) {
+    pub fn ref_attr<E, V, K>(r: &impl RefAttr<E, V, K>, out: &mut String) {
         r.write_ref(out)
     }
 
     /// `ref={trigger as HTMLElement}` on an element of interface `E`: `trigger` is a `Ref<W>`,
     /// and every `E` it is on must be a `W`.
     #[inline]
-    pub fn ref_attr_as<E: el::SubOf<W>, W, V>(r: &impl RefAttr<W, V>, out: &mut String) {
+    pub fn ref_attr_as<E: el::SubOf<W>, W, V, K>(r: &impl RefAttr<W, V, K>, out: &mut String) {
         ref_attr(r, out)
+    }
+
+    /// Whether the elements of a ref have keys ([`Keyed`]) or not ([`NoKey`]): debug builds note
+    /// a keyed one's element, to check its key ([`key_written`]).
+    pub trait KeyKind {
+        #[inline]
+        fn written(_scope: &'static str, _name: &'static str) {}
+    }
+    impl KeyKind for NoKey {}
+    impl KeyKind for Keyed {
+        #[inline]
+        fn written(_scope: &'static str, _name: &'static str) {
+            #[cfg(debug_assertions)]
+            keys::ref_written((_scope, _name));
+        }
+    }
+
+    /// ` data-key=".."` as written on an element with a keyed ref: debug builds stop when two of
+    /// the ref's elements in one render of its component have the same key, or one has none. The
+    /// code `html!` writes calls it in debug builds only.
+    #[inline]
+    pub fn key_written(_written: &str) {
+        #[cfg(debug_assertions)]
+        keys::key_written(_written);
     }
 
     /// ` data-on='click:m.f(..) input:m.g(..)'`, or nothing when no handler is there. Single-quoted,
@@ -2687,8 +2918,8 @@ pub mod __private {
     pub struct ScopeKw;
 
     /// What a parameter type gets for a ref of an `T` that holds `V`, whose elements give values
-    /// of kind `W`: the first element (`@`), every one (`*`), every one by its key (`#`), or every
-    /// one with its value (`=`).
+    /// of kind `W` and have keys or not (`K`): the first element (`@`), every one (`*`), every one
+    /// by its key (`#`), or every one with its value (`=`).
     #[diagnostic::on_unimplemented(
         message = "the handler's JSDoc type {Self} does not fit this ref, an {T} that holds {V} and gives {W}",
         label = "a ref of an {T} that holds {V} and gives {W}",
@@ -2696,29 +2927,40 @@ pub mod __private {
                 or one <Row .. /> in a <template>); RowsOf and Holds name the view by view_id(\"Row\"); \
                 Map<El, number> takes a ref whose every element gives a number, ref={{row.with(cents)}}"
     )]
-    pub trait RefParam<T, V, W> {
+    pub trait RefParam<T, V, W, K> {
         const SIGIL: &'static str;
     }
-    // An element type takes the first element: `impl RefParam<T, V, W> for HTMLButtonElement` and the
+    // An element type takes the first element: `impl RefParam<T, V, W, K> for HTMLButtonElement` and the
     // others, from `el`'s list (one impl each, so a mismatched Holds gets this trait's message).
-    impl<T: el::SubOf<P>, P: el::Elem, V, W> RefParam<T, V, W> for ts::Array<P> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, W, K> RefParam<T, V, W, K> for ts::Array<P> {
         const SIGIL: &'static str = "*";
     }
-    impl<T: el::SubOf<P>, P: el::Elem, V, W> RefParam<T, V, W> for ts::Map<P> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, W, K: HasKeys> RefParam<T, V, W, K> for ts::Map<P> {
         const SIGIL: &'static str = "#";
     }
-    impl<T: el::SubOf<P>, P: el::Elem, V, K> RefParam<T, V, K> for ts::Valued<P, K> {
+    impl<T: el::SubOf<P>, P: el::Elem, V, W, K> RefParam<T, V, W, K> for ts::Valued<P, W> {
         const SIGIL: &'static str = "=";
     }
-    impl<T: el::SubOf<P>, P: el::Elem, const VIEW: u64, W> RefParam<T, RowsOf<VIEW>, W> for ts::Holds<P, VIEW> {
+    impl<T: el::SubOf<P>, P: el::Elem, const VIEW: u64, W, K> RefParam<T, RowsOf<VIEW>, W, K> for ts::Holds<P, VIEW> {
         const SIGIL: &'static str = "@";
     }
+
+    /// A ref whose elements a `Map<string, El>` parameter gets by key: one put with a key on every
+    /// element ([`Keyed`]). A bound of its own, so a ref without keys is told what to add.
+    #[diagnostic::on_unimplemented(
+        message = "the handler takes this ref's elements by key (Map<string, El>), and its elements have no key={{..}}",
+        label = "a ref whose elements have no key",
+        note = "add key={{..}} beside the ref on each of its elements, <td ref={{cells}} key={{item.id}}>; a component's prop for \
+                a parent's keyed ref names it Ref<El, NoRows, NoValue, Keyed>"
+    )]
+    pub trait HasKeys {}
+    impl HasKeys for Keyed {}
 
     /// A parameter type one element of interface `T` fits.
     pub trait OneParam<T> {}
     impl<T: el::SubOf<P>, P: el::Elem> OneParam<T> for P {}
     impl<T> OneParam<T> for ts::Any {}
-    impl<T, V, W> RefParam<T, V, W> for ts::Any {
+    impl<T, V, W, K> RefParam<T, V, W, K> for ts::Any {
         const SIGIL: &'static str = "@";
     }
 
@@ -2727,7 +2969,7 @@ pub mod __private {
     impl<E: ev::SubOf<P>, P: ev::EventType> EventParam<E> for P {}
     impl<E> EventParam<E> for ts::Any {}
 
-    impl<T, V, W, P: RefParam<T, V, W>> Arg<P> for Ref<T, V, W> {
+    impl<T, V, W, K, P: RefParam<T, V, W, K>> Arg<P> for Ref<T, V, W, K> {
         fn write_arg(&self, ctx: &Ctx, out: &mut String) {
             out.push_str(P::SIGIL);
             qualified(out, self.scope, ctx.current);

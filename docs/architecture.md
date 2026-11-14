@@ -144,8 +144,9 @@ writes on a cell and the `data-ascending`, `data-descending` and `data-first` th
 link's `data-ascending` and `data-descending`, and `ComboBox` its own `data-terms` (moving them is
 [#1387](https://github.com/corten-run/corten/issues/1387); a value a script reads is otherwise its
 element's ref's, `ref={row.with(cents)}` for a `Map<El, number>`, checked at the call like any
-ref), that the elements of a ref a `Map<string, El>` parameter takes each
-have a `key=` (those without one share one entry of the map), that a ref inside an `if` is present when a handler
+ref), that the keys of the elements a `Map<string, El>` parameter takes differ (two equal keys are
+one entry of the map; a key on each element is checked when the crate compiles, and debug builds stop
+on equal keys in one render of a component), that a ref inside an `if` is present when a handler
 runs (the call throws when it is not; the type says it is always there), the value a call passes to a
 handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to
 that), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
