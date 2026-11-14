@@ -3098,7 +3098,8 @@ rules something out.
     element it is on, so a parameter typed `Map<string, El>` takes only a ref whose every element
     has a key, and the error says to add `key={..}`. Without it a forgotten key compiled and the
     handler got a one-entry `Map`, every element filed under the absent key
-    ([#1329](https://github.com/corten-run/corten/issues/1329)). Equal keys cannot be seen when the
+    ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)).
+    Equal keys cannot be seen when the
     crate compiles, so debug builds stop a render in which two elements of a ref in one render of
     its component write the same key, or a `key={..}` writes none (`None`), as they stop on an
     integer past 2^53; release builds keep no record. The runtime is unchanged: a check of the
@@ -3195,9 +3196,12 @@ rules something out.
 
     Last checked: 2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
     render with two equal keys stopped in a debug build, on the change for
-    [#1329](https://github.com/corten-run/corten/issues/1329) against `0ff569c69`, where the first
-    compiled (`compile_fail` doctests on `ts::Map` and `Keyed`, and the tests beside
-    `KeyedCells`); 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
+    [#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)
+    against `0ff569c69`, where the first compiled (`compile_fail` doctests on `ts::Map` and
+    `Keyed`, and the tests beside `KeyedCells`), and the item page's render in card-market's
+    release `render_cost`, which compiles to the same machine code on `0ff569c69` and on the change
+    (callgrind counts in the pull request); 2026-11-13, the runtime's size on `f12d3daa3` against
+    the change, `09a61616c`;
     2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
     `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
     and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
