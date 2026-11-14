@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import ts from "typescript";
+import { transpile } from "../../transpile.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -93,11 +93,10 @@ test("locale-decimal alert validation uses native money, not stored formatted st
 
 test("native React page renders complete escaped data, only visible offers, localized links and empty states", async () => {
   const source = (await readFile(new URL("marketplace-page.tsx", directory), "utf8")).replace('from "./marketplace"', 'from "./marketplace.ts"');
-  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX } });
+  const compiled = transpile(source, import.meta.url);
   const path = new URL(".marketplace-test-render.mjs", directory);
   try {
-    await writeFile(path, compiled.outputText);
+    await writeFile(path, compiled);
     const { Marketplace } = await import(path.href);
     for (const locale of ["en-US", "fr-FR", "de-DE"]) {
       const html = renderToStaticMarkup(createElement(Marketplace, { record, locale, query }));

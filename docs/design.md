@@ -198,7 +198,8 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   platform (TypeScript 5.9.3 and 7.0.2 check JSDoc types as they check annotations, except where
+   platform (TypeScript 7.0.2, pinned for CI to match npm's newest stable release installed by the
+   getting-started guide, checks JSDoc types as it checks annotations, except where
    JavaScript infers a type, in the cases probed so far: a property first given after an empty
    object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
    untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
@@ -265,7 +266,19 @@ rules something out.
    than a function reading `arguments` declares, which 7.0.2 refuses), and the repository's scripts
    searched for each, the first through the TypeScript copy (no TS2683 or TS7009), the second with
    `rg` for `arguments` (only in comments)
-   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
+   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040));
+   2026-11-14, TypeScript 7.0.2 on `4cbc5e627` and the change: `tsc -p jsconfig.json`, including
+   every `@ts-expect-error` in `scripts/typecheck-fixture.js`, passes. Moving the compiler reopens
+   the compiler premise, not the authoring format: the known inference limits above remain
+   reasons for precise JSDoc, not a serving-time syntax pass. Three sequential wall-time
+   runs on the same workstation: 5.9.3 took 4.532, 3.697 and 4.178 s, and 7.0.2 took 1.389, 1.064
+   and 0.962 s (medians 4.178 and 1.064 s, not alternated, not a controlled performance claim).
+   The event-map check now reads 7.0.2's own DOM library through its native AST API. `input`
+   remains `Event` because a select or checkbox fires a plain event, unlike a text edit's
+   `InputEvent`. The old JavaScript parser API is gone, so the event and unsafe-escape checks
+   use the native API too, with their existing negative fixtures retained.
+   The [HTML checkbox activation steps](https://html.spec.whatwg.org/multipage/input.html#checkbox-state-(type=checkbox))
+   were read for the plain `input` event (no interface override).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2670,8 +2683,13 @@ rules something out.
     `corten:module` event each served module dispatches, which the runtime takes only from the
     module its page's own script tag loaded. Explicit `any` was removed from the runtime, the
     kit, the template and the examples (26 uses): where the DOM library has no type for an API
-    (the Navigation API, a service worker's global, `navigator.connection`) they declare the part
-    they use (`crates/corten/js/navigation.d.ts`) and cast once where the value enters; a form's
+    (a service worker's global, `navigator.connection`) they declare the part
+    they use and cast once where the value enters. TypeScript 7.0.2's DOM library now declares
+    the Navigation API, so the former `navigation.d.ts` is removed: only `NavigateEvent.info`
+    is narrowed to the runtime's own symbol-keyed `Info` at the listener boundary. The DOM's
+    `NavigationResult` dictionary has optional fields; `go` asserts both returned promises,
+    which `navigate()` always supplies. These are type-only changes, with the same minified
+    runtime. A form's
     property read past a shadowing control is typed by its name (`HTMLFormElement[K]`); a
     format's function is `(value: never) => string`, its branches typed. Typing the Navigation
     API's `info` found a read the checker had not seen: the place a `data-keep-place`
@@ -2712,15 +2730,15 @@ rules something out.
     one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
     parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
     returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
-    TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
+    TypeScript 7.0.2's DOM library declares `window.navigation`, with `NavigateEvent.info` as
+    `any` and `NavigationResult`'s promises optional); reasoned (a value the checker
     did not see made is only as typed as its producer: the server's rows are, an older runtime's
     reading of a newer protocol and old storage are not); value (Correctness and reliability
     first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
     4; Fast, and proven fast, Values 1, which is why the rows are not checked).
 
-    Revisit when: the repository's TypeScript (5.9.3, `package.json`) moves to one whose DOM
-    library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
-    `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
+    Revisit when: TypeScript's DOM library gives `NavigateEvent.info` a checked type or changes
+    the Navigation API shapes the runtime uses; the browser gets a
     way to check JSON against a schema without a library; or a feed carries rows the server did
     not type (a feed relayed from another service); or open pages reload when a feed's generation
     changes, which ends the limit above.
@@ -2729,7 +2747,10 @@ rules something out.
     `scripts/escapes.mjs` on the change; 2026-11-10, TypeScript 5.9.3 on `560c4cf7` and the change
     (the explicit-`any` count, 26 and 0); 2026-11-08, TypeScript
     6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
-    again on 2026-11-09.
+    again on 2026-11-09; 2026-11-14, reopened for TypeScript 7.0.2 on `4cbc5e627` and the change:
+    its DOM declarations read, the redundant Navigation API declarations removed, the runtime
+    type-checked and its minified build checked unchanged, and the existing unsafe-escape
+    fixtures run through TypeScript 7's native parser API.
 
 41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
     `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept

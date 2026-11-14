@@ -162,6 +162,8 @@ pub fn event(name: &str) -> &'static str {
         }
         "keydown" | "keyup" | "keypress" => "KeyboardEvent",
         "beforeinput" => "InputEvent",
+        // Text edits fire InputEvent; selects and checkboxes fire a plain Event.
+        "input" => "Event",
         "focus" | "blur" | "focusin" | "focusout" => "FocusEvent",
         "submit" => "SubmitEvent",
         "formdata" => "FormDataEvent",

@@ -7,22 +7,25 @@
 // (crates/corten/src/script.rs). Run by npm run check.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import ts from "typescript";
+import { dirname, join } from "node:path";
+import * as ts from "typescript/unstable/ast";
+import { parse } from "./typescript.mjs";
 
 const read = (/** @type {string} */ path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const dom = read("crates/corten-macros/src/dom.rs");
 const markers = read("crates/corten/src/script.rs");
 
 /** lib.dom's event maps, read with TypeScript's parser: event name to interface. */
-const libDom = createRequire(import.meta.url).resolve("typescript/lib/lib.dom.d.ts");
-const file = ts.createSourceFile(libDom, readFileSync(libDom, "utf8"), ts.ScriptTarget.Latest);
+const platformPackage = createRequire(import.meta.url).resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`);
+const libDom = join(dirname(platformPackage), "lib", "lib.dom.d.ts");
+const file = parse(libDom, readFileSync(libDom, "utf8"), (source) => source);
 /** @type {Map<string, string>} */
 const lib = new Map();
 for (const statement of file.statements) {
   if (!ts.isInterfaceDeclaration(statement)) continue;
   if (!["GlobalEventHandlersEventMap", "ElementEventMap", "HTMLElementEventMap"].includes(statement.name.text)) continue;
   for (const member of statement.members) {
-    if (!ts.isPropertySignature(member) || !member.type || !ts.isTypeReferenceNode(member.type)) continue;
+    if (!ts.isPropertySignatureDeclaration(member) || !member.type || !ts.isTypeReferenceNode(member.type)) continue;
     if (!ts.isStringLiteral(/** @type {ts.Node} */ (member.name))) continue;
     lib.set(/** @type {ts.StringLiteral} */ (member.name).text, member.type.typeName.getText(file));
   }
@@ -44,7 +47,8 @@ const marked = new Set([...markers.matchAll(/^\s*events!\((\w+):/gm)].map(([, n]
  * `Event` arm for them says so. Probed for `error` (an image's, a video's), `abort` and
  * `progress`; `resize` is a media element's, an `Event` in the HTML standard's event table.
  */
-const plain = new Set(["error", "abort", "progress", "resize"]);
+// input is an InputEvent for text edits, but a plain Event for selects and checkboxes.
+const plain = new Set(["error", "abort", "progress", "resize", "input"]);
 const failures = [];
 if (lib.size < 50) failures.push(`read only ${lib.size} events from ${libDom}`);
 if (ours.size < 50) failures.push(`read only ${ours.size} event names from dom.rs's event()`);

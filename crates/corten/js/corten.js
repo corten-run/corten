@@ -2407,10 +2407,9 @@ function readLater(seconds, wanted, read) {
 /**
  * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
  * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
- * @typedef {import("./navigation").NavigateEvent<Info>} NavigateEvent
  */
-// The Navigation API, where the browser has it; TypeScript's DOM library does not declare it yet.
-const navigation = /** @type {Window & { navigation?: import("./navigation").Navigation<Info> }} */ (window).navigation;
+// The Navigation API, where the browser has it.
+const navigation = window.navigation;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2490,7 +2489,8 @@ function posts(event) {
  */
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
-navigation?.addEventListener("navigate", (event) => {
+// Only this module has these symbol keys; another script's info has none of them.
+navigation?.addEventListener("navigate", (/** @type {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} */ event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -2567,7 +2567,8 @@ navigation?.addEventListener("navigate", (event) => {
  */
 function go(url, options) {
   // Called only where the browser has the Navigation API.
-  const { committed, finished } = /** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options);
+  // navigate() returns both promises; lib.dom models the Web IDL dictionary's fields as optional.
+  const { committed, finished } = /** @type {Required<NavigationResult>} */ (navigation.navigate(url, options));
   committed.catch(() => {});
   return finished;
 }
@@ -2595,7 +2596,7 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * @param {NavigateEvent} event
  * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after
- * @param {import("./navigation").NavigationInterceptOptions} options
+ * @param {NavigationInterceptOptions} options
  * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
  */
 function interceptVisit(event, run, after, options, early = true) {

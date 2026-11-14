@@ -12,6 +12,9 @@ cd my-app
 corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 ```
 
+The TypeScript install uses npm's newest stable release. Corten's CI checks scripts with
+TypeScript 7.0.2, the `latest` release verified on 2026-11-14 and pinned in `package.json`.
+
 `cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
 build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary), using GitHub
 artifact attestations and `SHA256SUMS`, not a minisign signature
