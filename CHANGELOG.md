@@ -15,6 +15,16 @@ Corten is pre-1.0, so any minor version may change the API.
   upstream SQLite 3.54.1 (the fix first shipped in 3.54.0). Local builds now need patched
   SQLite development files; version-only lockfile scans still flag the unbundled FFI crate.
 
+- Retry entire host-lifetime snapshots for comm-only bookend changes within the
+  existing three-attempt budget. Every accepted identity must still match in full;
+  PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
+  This repairs a demonstrated local native churn race, not an established r21 cause.
+
+- Retain bounded first/last host-lifetime observer failures with fixed operation and
+  allowlisted error codes, without saving raw errors or weakening identity, retry,
+  continuity or cleanup proof. This adds diagnostics; it does not establish or repair
+  the historical r21 failure's cause.
+
 - Make generated catalog fixtures and Gin's public static assets readable by native
   non-root image users under a private job umask. Preserve original catalog checker
   errors when negative-response receipts are missing or invalid, without accepting
