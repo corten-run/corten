@@ -441,7 +441,10 @@ test("actual HTTP upstream receipts are conserved through probes/cleanup/final, 
       if (["mutation-probes", "cleanup"].includes(phase)) await (await fetch(base + "/marketplace/records/item_1")).arrayBuffer();
       await audit.end(row);
     }
-    await new Promise((r) => setTimeout(r, settings.observationMs)); await audit.finish();
+    const terminalAt = audit.ledger.phases.at(-1).after.finishedAt + settings.observationMs;
+    while (performance.now() < terminalAt)
+      await new Promise((r) => setTimeout(r, terminalAt - performance.now()));
+    await audit.finish();
   } finally { source.closeAllConnections(); await new Promise((r) => source.close(r)); }
   const options = { source: profile.source, actions: profile.steps.map((s) => s.id), observationMs: settings.observationMs };
   e.upstreamLedger = structuredClone(audit.ledger); e.upstreamReconciliation = reconcileUpstream(e.upstreamLedger, options);
