@@ -4,21 +4,167 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { candidates, emptyCells, parseOptions, publicURL, publicInput, publishPort, transportOf, validateTargets, nativeFailures, alertsFromReadback } from "./contract.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { createUpstream, upstreamDelta } from "./upstream.mjs";
 import { observeNetwork, architecture, classifyDisabledPreloads } from "./observe.mjs";
 import { readStore, waitForSemanticChange } from "./journey.mjs";
-import { imageEvidence } from "./run.mjs";
+import { imageEvidence, captureLiveInputs } from "./run.mjs";
+import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts } from "./verify.mjs";
+import { sha256 } from "./contract.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
 import { missingAction } from "./probes.mjs";
 import { discoverReactEndpoint } from "./bindings.mjs";
 
+// Explicit local Docker/Chromium integration, separate from portable units.
+// A witnessed failed prerequisite is a complete selected attempt, not a pass
+// for a marketplace app or for the still-incomplete registry matrix.
+test("native caller v2 replays actual failed-start cleanup and rejects missing browser terminal receipts", { skip: !process.env.NATIVE_CALLER_IMAGE, timeout: 180000 }, async (t) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path"), { tmpdir } = await import("node:os"), { randomUUID } = await import("node:crypto");
+  const { chromium } = await import("@playwright/test");
+  const { command, OwnedDocker } = await import("./run.mjs"), { validateSaved } = await import("./verify.mjs");
+  const { EvidenceStore } = await import("./native-evidence.mjs");
+  const { captureSource, captureTools } = await import("./native-source.mjs");
+  const { ExecutionLedger } = await import("./native-execution.mjs");
+  const { captureSources } = await import("../workloads/isolated/contract.mjs");
+  const { schema, settings, retainedFamilies } = await import("./contract.mjs");
+  const { exportBrowserCaptures } = await import("./capture.mjs");
+  const commit = await command("git", ["rev-parse", "HEAD"]), source = captureSources(commit);
+  const folder = mkdtempSync(join(tmpdir(), "browser-native-caller-")), task = `browser-${randomUUID().slice(0, 12)}`;
+  const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() }), owned = new OwnedDocker(task, ledger);
+  let browser, cleaned = false;
+  try {
+    const app = "nextjs", profile = plan.cases[0], fixture = records(), image = JSON.parse(await command("docker", ["image", "inspect", process.env.NATIVE_CALLER_IMAGE]))[0];
+    const targets = { [app]: { image: image.Id, readback: { path: "/api/alerts" } } };
+    const native = { schema: "native-browser-run/v2", source: store.record("source", captureSource(store, commit)), sourceBinding: store.record("source-binding", source),
+      inputsBefore: store.record("inputs-before", captureLiveInputs(store, source)), inputsAfter: null, toolsBefore: null, toolsAfter: null,
+      execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
+    const summary = { schema, group: "fullstack-browser", startedAt: new Date().toISOString(), task, effectivePlan: plan, settings,
+      code: { commit, dirty: false, status: "", runnerFiles: Object.fromEntries((await import("node:fs")).readdirSync(new URL("./", import.meta.url)).filter((p) => p.endsWith(".mjs")).sort()
+        .map((p) => [p, sha256(readFileSync(new URL(p, import.meta.url)))])), runnerDiffSha256: sha256("") },
+      fixtureSha256: sha256(JSON.stringify(fixture)), targetsSha256: sha256(JSON.stringify(targets)),
+      host: { hostname: "native-caller-apparatus", platform: process.platform, release: "native-control", node: process.version },
+      options: { round: "w1", targets: "targets.json", out: folder, apps: [app], cases: [profile.key], build: false },
+      images: { [app]: { ...imageEvidence(image, commit), sourceTreeSha256: sha256(await command("git", ["ls-tree", "-r", "HEAD", "--", "bench/fullstack/apps/nextjs"])) } },
+      builds: {}, bindingArtifacts: {}, browser: null, cells: emptyCells(plan), complete: true, qualificationPassed: false, readyForLoad: false, limits: ["Actual prerequisite/cleanup apparatus, not app qualification"],
+      retainedFamilies: retainedFamilies.map((f) => ({ ...f, outcome: "not-run", reason: "Retained; not replaced by native browser diagnostics" })), failures: [], cleanupFailures: [], native };
+    owned.record({ event: "created", kind: "image", id: image.Id, owned: false });
+    await assert.rejects(owned.start(task, ["--cpus", "1", "--memory", "1g", "--entrypoint", "/native-caller-missing-command"], image.Id, [], { role: "application", app, case: profile.key }));
+    assert.equal(owned.containers.size, 1, "Failed start must retain original ID for cleanup");
+    Object.assign(summary.cells[app].find((c) => c.case === profile.key), { outcome: "failed", reason: "Native start was rejected", qualificationPassed: false });
+    browser = await chromium.launch({ headless: true });
+    const executable = chromium.executablePath();
+    native.toolsBefore = store.record("tools-before", captureTools(store, { browserExecutable: executable }));
+    summary.browser = { engine: "chromium", version: browser.version(), playwright: JSON.parse(readFileSync(new URL("node_modules/@playwright/test/package.json", new URL("../../", import.meta.url)))).version,
+      executable, executableSha256: sha256(readFileSync(executable)), launch: { headless: true } };
+    native.browserTerminal = { closeStartedAt: Date.now(), contextsBefore: [], disconnectedAt: null, closeCompletedAt: null, connectedAfter: null };
+    browser.on("disconnected", () => { native.browserTerminal.disconnectedAt = Date.now(); });
+    await browser.close(); native.browserTerminal.closeCompletedAt = Date.now(); native.browserTerminal.connectedAfter = browser.isConnected(); browser = null;
+    summary.cleanupFailures.push(...await owned.cleanup());
+    assert.deepEqual(summary.cleanupFailures, []);
+    cleaned = true;
+    native.inputsAfter = store.record("inputs-after", captureLiveInputs(store, source));
+    native.toolsAfter = store.record("tools-after", captureTools(store, { browserExecutable: executable }));
+    native.execution = ledger.finish({ endedAt: Date.now() }); native.manifest = store.seal();
+    const save = () => {
+      const exported = exportBrowserCaptures(summary, fixture);
+      mkdirSync(join(folder, "captures"), { recursive: true });
+      for (const [name, capture] of Object.entries(exported.captures)) writeFileSync(join(folder, `captures/${name}.json`), JSON.stringify(capture));
+      writeFileSync(join(folder, "captures/manifest.json"), JSON.stringify(exported.manifest));
+      summary.strictCaptureExport = { manifest: "captures/manifest.json", functionalPassed: false, readyForLoad: false };
+      summary.finishedAt = new Date().toISOString(); writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+      writeFileSync(join(folder, "marketplace.json"), JSON.stringify(fixture));
+    };
+    save(); const result = await validateSaved({ folder, round: "w1", commit });
+    assert.deepEqual(result.invalid, []); assert.equal(result.selectedComplete, true, JSON.stringify(result));
+    assert.equal(result.cleanupComplete, true); assert.equal(result.attemptComplete, false); assert.equal(result.qualificationPassed, false); assert.equal(result.expectedExitCode, 1);
+    assert.deepEqual(result.blocked, ["matrix-incomplete"]); assert.ok(result.hostSubject?.participants.some((p) => p.role === "application" && p.window === null));
+    const terminal = native.browserTerminal; native.browserTerminal = { ...terminal, disconnectedAt: null }; save();
+    const missing = await validateSaved({ folder, round: "w1", commit });
+    assert.equal(missing.selectedComplete, false); assert.equal(missing.cleanupComplete, false); assert.equal(missing.hostSubject, null);
+    native.browserTerminal = terminal; save();
+    t.diagnostic(JSON.stringify({ selectedComplete: result.selectedComplete, qualificationPassed: result.qualificationPassed, blocked: result.blocked, files: native.manifest.files.length,
+      missingTerminalBlocked: missing.blocked }));
+  } finally {
+    if (browser) await browser.close();
+    if (!cleaned) { const errors = await owned.cleanup(); assert.deepEqual(errors, []); }
+    rmSync(folder, { recursive: true });
+  }
+});
+
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
+
+test("native prerequisite dispositions require exact bounded command and terminal witnesses", () => {
+  const app = "nextjs", key = plan.cases[0].key, id = "a".repeat(64);
+  const cell = { case: key, outcome: "failed", qualificationPassed: false, evidence: null, reason: "not authority" };
+  const summary = { options: { build: true }, builds: { [app]: { passed: false } }, images: { [app]: { id: "sha256:" + "b".repeat(64) } } };
+  const build = { seq: 0, operation: "build", role: "artifact", app, case: null, id: null, code: 1 };
+  const execution = { commands: [build], participants: [] };
+  assert.deepEqual(replayPrerequisite(cell, app, summary, execution, new Set([app])), { prerequisite: "native-build-rejected", command: 0 });
+  for (const changed of [{ ...build, code: 0 }, { ...build, app: "nuxt" }, { ...build, role: "application" }, { ...build, case: key }])
+    assert.equal(replayPrerequisite(cell, app, summary, { ...execution, commands: [changed] }, new Set([app])), null);
+  assert.equal(replayPrerequisite(cell, app, summary, execution, new Set()), null);
+  assert.equal(replayPrerequisite({ ...cell, outcome: "unsupported" }, app, summary, execution, new Set([app])), null);
+  const create = { seq: 1, operation: "create", role: "application", app, case: key, id: null, code: 1 };
+  assert.equal(replayPrerequisite(cell, app, summary, { ...execution, commands: [create] }, new Set()).prerequisite, "native-create-rejected");
+  const start = { ...create, seq: 2, operation: "start", id }, participant = { id, role: "application", app, case: key, imageId: summary.images[app].id, window: null, terminal: { state: { Status: "created" } } };
+  const failedStart = { commands: [{ ...create, code: 0, id }, start], participants: [participant] };
+  assert.equal(replayPrerequisite(cell, app, summary, failedStart, new Set()).prerequisite, "native-start-rejected");
+  for (const changed of [{ ...failedStart, commands: failedStart.commands.slice(1) }, { ...failedStart, commands: [...failedStart.commands, start] },
+    { ...failedStart, participants: [] }, { ...failedStart, participants: [{ ...participant, window: { startedAt: 1, endedAt: 2 } }] },
+    { ...failedStart, participants: [{ ...participant, terminal: null }] }])
+    assert.equal(replayPrerequisite(cell, app, summary, changed, new Set()), null);
+});
+
+test("native selected completeness never substitutes for whole matrix or missing proof", () => {
+  const app = "nextjs", key = plan.cases[0].key;
+  const summary = { options: { apps: [app], cases: [key] }, cells: { [app]: [{ case: key, qualificationPassed: false }] } };
+  const row = { app, case: key, outcome: "failed", blocked: [], derived: { prerequisite: "native-start-rejected", command: 2 } };
+  assert.deepEqual(nativeAttemptCells([row], summary)[0], { ...row, selected: true, attemptComplete: true, qualificationPassed: false, disposition: "observed-prerequisite-failure" });
+  for (const changed of [{ ...row, derived: null }, { ...row, blocked: ["missing-proof"] }])
+    assert.equal(nativeAttemptCells([changed], summary)[0].disposition, "proof-missing");
+  assert.equal(nativeAttemptCells([{ ...row, app: "nuxt" }], summary)[0].disposition, "not-selected");
+});
+
+test("native context terminal observations require unique context and actual close chronology", () => {
+  const execution = { executionWindow: { startedAt: 1, endedAt: 20 }, processWindows: [{ app: "nextjs", case: plan.cases[0].key, startedAt: 2, endedAt: 15 }] };
+  const context = { id: "own-context", role: "application", app: "nextjs", case: plan.cases[0].key, source: "fixture", createStartedAt: 3, createdAt: 4,
+    closeStartedAt: 10, closeEventAt: 11, closeCompletedAt: 12, absentAfter: true };
+  const terminal = { closeStartedAt: 16, disconnectedAt: 17, closeCompletedAt: 18, connectedAfter: false, contextsBefore: [] };
+  assert.equal(validateContextReceipts([context], terminal, execution), true);
+  assert.throws(() => validateContextReceipts([context, context], terminal, execution));
+  for (const changed of [{ ...context, absentAfter: false }, { ...context, closeEventAt: null }, { ...context, createdAt: 1 }, { ...context, closeCompletedAt: 16 }])
+    assert.equal(validateContextReceipts([changed], terminal, execution), false);
+  assert.equal(validateContextReceipts([context], { ...terminal, contextsBefore: [context.id] }, execution), false);
+});
+test("native caller retains all bound inputs including imported helpers and non-module files", () => {
+  const paths = ["bench/mixed-production/immutable-git.mjs", "bench/workloads/isolated/evidence.mjs", "scripts/steady.mjs", "README.md"];
+  const files = paths.map((path) => ({ path, sha256: sha256(readFileSync(new URL(`../../${path}`, import.meta.url))) }));
+  const bodies = new Map(), store = { blob(body) {
+    const ref = { path: `native-evidence/blobs/${sha256(body)}`, bytes: body.length, sha256: sha256(body) };
+    bodies.set(ref.path, Buffer.from(body)); return ref;
+  } };
+  const rows = captureLiveInputs(store, { files }), reader = { json: () => rows, read: (ref) => bodies.get(ref.path) };
+  assert.deepEqual(rows.map((r) => r.path), paths, "Imported/non-.mjs sources must not disappear behind runnerFiles");
+  assert.deepEqual(replayLiveInputs(reader, null, { files }), rows);
+  for (const mutate of [
+    (r) => r.pop(), (r) => r.reverse(), (r) => { r[0].canonicalSha256 = "0".repeat(64); },
+    (r) => { r[0].body = store.blob(Buffer.from("substituted helper")); }, (r) => { r[0].extra = true; },
+  ]) {
+    const changed = structuredClone(rows); mutate(changed);
+    assert.throws(() => replayLiveInputs({ ...reader, json: () => changed }, null, { files }));
+  }
+  const normalized = files.map((f) => ({ ...f, sha256: sha256(bodies.get(rows.find((r) => r.path === f.path).body.path).toString("utf8").replaceAll("\r\n", "\n")) }));
+  const crlf = rows.map((r) => ({ ...r, canonicalSha256: normalized.find((f) => f.path === r.path).sha256,
+    body: store.blob(Buffer.from(bodies.get(r.body.path).toString("utf8").replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"))) }));
+  assert.deepEqual(replayLiveInputs({ ...reader, json: () => crlf }, null, { files: normalized }), crlf);
+});
 test("React endpoint syntax controls are independent and fail closed", () => {
   const handlerSource = 'async e=>{e.preventDefault();await fetch("/api/marketplace/"+encodeURIComponent(r.id)+"?locale="+l,{method:"POST",body:"safe"});}';
   const observed = { handlerSource, componentSource: `function M({record:r,locale:l}){const submit=${handlerSource};return null}`,

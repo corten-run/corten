@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
-import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
-import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM } from "./observe.mjs";
+import { settings, alertsFromReadback, nativeFailures, sha256 } from "./contract.mjs";
+import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM, observedContext, closeObservedContext } from "./observe.mjs";
 import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { comparePage } from "../marketplace/check.mjs";
@@ -13,6 +13,7 @@ import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
 import { BindingLinkObserver } from "./binding-links.mjs";
 import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
+import { retainPublicJSON } from "./native-responses.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -46,16 +47,26 @@ function message(step, locale, record) {
     price: new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1.25) };
   return labels[locale].alert_set.replace(/\{(email|title|price)\}/g, (_, key) => values[key]);
 }
-export async function readStore(base, specification, request) {
+export async function readStore(base, specification, request, observation = null, phase = null) {
   if (!specification) return { outcome: "unsupported", reason: "No independent native alert-store readback configured", alerts: null };
   assert.ok(request?.get, "readback requires the browser context's API cookie jar");
   const observed = { observer: randomUUID(), outcome: "failed", via: "independent-read", path: specification.path, status: null, alerts: null };
+  if (observation) Object.assign(observed, { requestId: randomUUID(), context: observation.byRequest.get(request)?.id ?? null,
+    app: observation.app, case: observation.case, round: observation.round, source: observation.source, phase, startedAt: Date.now(), finishedAt: null, responseEvidence: null });
   try {
     const response = await request.get(base + specification.path, { maxRedirects: 0, headers: { accept: "application/json", "cache-control": "no-cache" }, timeout: 5000 });
     observed.status = response.status();
     assert.equal(observed.status, 200, "independent native store readback failed");
     assert.match(response.headers()["content-type"] ?? "", /^application\/json\b/);
-    observed.alerts = alertsFromReadback(await response.json());
+    const body = observation ? await response.body() : null;
+    observed.alerts = alertsFromReadback(observation ? JSON.parse(body.toString("utf8")) : await response.json());
+    if (observation) {
+      observed.responseSha256 = sha256(body);
+      try { observed.responseEvidence = retainPublicJSON(observation.store, body, "state",
+        { requestId: observed.requestId, responseSha256: observed.responseSha256, path: observed.path, status: observed.status }); }
+      catch { observed.captureFailure = "public-readback-unproved"; }
+      observed.finishedAt = Date.now();
+    }
     return { ...observed, outcome: "read" };
   } catch (e) { e.readback = { ...observed, reason: e.message }; throw e; }
 }
@@ -78,7 +89,7 @@ export async function dispatch(page, step) {
   return form.locator('[type="submit"]').click();
 }
 
-export async function runJourney({ browser, app, base, profile, records, readback, counters, bindingArtifact = null }) {
+export async function runJourney({ browser, app, base, profile, records, readback, counters, bindingArtifact = null, observation = null }) {
   const environment = structuredClone(settings.profiles[profile.device]);
   const result = { case: profile.key, outcome: "failed", qualificationPassed: false, evidence: {
     environment: { ...environment, js: profile.js }, architecture: null, steps: [], failures: [], gaps: [], cleanup: null,
@@ -87,13 +98,14 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   } };
   const evidence = result.evidence;
   evidence.bindingInstance = randomUUID();
-  const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
+  const context = await observedContext(browser, { javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" }, observation, "application");
+  if (observation) evidence.context = observation.byContext.get(context).id;
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
   let network, lifecycle, bindings;
   const runtimeErrors = [];
   const started = performance.now();
-  evidence.clock = { origin: "node.performance.now", startedAt: started };
+  evidence.clock = { origin: "node.performance.now", startedAt: started, ...(observation ? { timeOrigin: performance.timeOrigin } : {}) };
   const upstream = new UpstreamAudit(counters);
   evidence.upstreamLedger = upstream.ledger;
   try {
@@ -123,7 +135,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     lifecycle.markApplicationStart();
     const initialStore = await upstream.begin("initial-store");
     try {
-      evidence.storeBefore = await readStore(base, readback, context.request);
+      evidence.storeBefore = await readStore(base, readback, context.request, observation, "initial-store");
       if (evidence.storeBefore.outcome === "read") assert.deepEqual(evidence.storeBefore.alerts, [], "fresh case must start with an empty independent alert store");
       else evidence.gaps.push(evidence.storeBefore.reason);
     } catch (e) {
@@ -170,7 +182,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           const button = page.locator('.marketplace__alert [type="submit"]');
           assert.ok(await button.isVisible() && await button.isEnabled(), "native action not usable");
           evidence.readiness.actionableObservedMs = performance.now() - at;
-          row.document = await responseDocument(browser, response, base + step.path);
+          row.document = await responseDocument(browser, response, base + step.path, observation, network.requestId(response.request()));
           evidence.architecture = architecture(app, row.dom.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.architecture = architecture(app, row.document.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.gaps.push("Native architecture unverified in observed DOM and independent SSR markers");
@@ -196,7 +208,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       }
       if (step.input) {
         try {
-          row.readback = await readStore(base, readback, context.request);
+          row.readback = await readStore(base, readback, context.request, observation, step.id);
           if (row.readback.outcome === "read") assert.deepEqual(row.readback.alerts, [{ item_id: step.itemId, email: profile.steps.find((s) => s.kind === "accepted-write").input.email, target_minor: 125 }], "write/rejected-write state differs, duplicate or false success");
           else row.failures.push(row.readback.reason);
         } catch (e) { row.readback = e.readback ?? { outcome: "failed", reason: e.message, alerts: null }; row.failures.push(e.message); }
@@ -243,7 +255,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
     const probePhase = await upstream.begin("mutation-probes");
-    evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback });
+    evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback, observation });
     evidence.mutationProbes.upstream = await upstream.end(probePhase);
     evidence.failures.push(...evidence.mutationProbes.failures);
     evidence.functionalChecksPassed = evidence.steps.length === profile.steps.length && !evidence.failures.length;
@@ -296,7 +308,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     const beforeClose = performance.now();
     if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
     try {
-      await context.close();
+      await closeObservedContext(browser, context, observation);
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,
         nativePageScope: evidence.nativeCleanup ?? null };
     } catch (e) { evidence.cleanup = { contextClosed: false, error: e.message, nativePageScope: null }; evidence.failures.push("Browser context cleanup failed"); }

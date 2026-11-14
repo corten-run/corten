@@ -9,6 +9,26 @@ import { singleFetchData } from "./navigation.mjs";
 import { NativeNetworkAudit } from "./cancellations.mjs";
 import { performance } from "node:perf_hooks";
 import { installResourceObserver } from "./resources.mjs";
+import { collectDOMReads } from "../mixed-production/response-evidence.mjs";
+import { snapshotMixedPage } from "../mixed-production/snapshot.mjs";
+import { retainDOMProjection } from "./native-responses.mjs";
+
+export async function observedContext(browser, options, observation, role) {
+  if (!observation) return browser.newContext(options);
+  const row = { id: randomUUID(), role, app: observation.app, case: observation.case, source: observation.source,
+    createStartedAt: Date.now(), createdAt: null, closeStartedAt: null, closeEventAt: null, closeCompletedAt: null, absentAfter: null };
+  observation.contexts.push(row);
+  const context = await browser.newContext(options); row.createdAt = Date.now();
+  observation.byContext.set(context, row); observation.byRequest.set(context.request, row);
+  context.on("close", () => { row.closeEventAt = Date.now(); });
+  return context;
+}
+export async function closeObservedContext(browser, context, observation) {
+  const row = observation?.byContext.get(context);
+  if (row) row.closeStartedAt = Date.now();
+  await context.close();
+  if (row) { row.closeCompletedAt = Date.now(); row.absentAfter = !browser.contexts().includes(context); }
+}
 
 export function classifyDisabledPreloads(rows, dom, javaScriptEnabled) {
   const document = rows.find((r) => r.resource === "document");
@@ -80,6 +100,7 @@ export function observeNetwork(page) {
   const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); };
   let native;
   return { rows, failures,
+    requestId(request) { return byRequest.get(request)?.id ?? null; },
     attachCDP(cdp) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; }); },
     annotate() { native?.annotate(rows); },
     bindForm(form) { formBinding = form ? structuredClone(form) : null; }, drain,
@@ -188,11 +209,11 @@ export async function visibleDOM(page) {
     page: present ? await page.evaluate(snapshotPage) : null,
     error: present ? null : (await page.locator("body").innerText()).trim() };
 }
-export async function responseDocument(browser, response, url) {
+export async function responseDocument(browser, response, url, observation = null, requestId = null) {
   // Parse the actual initial response in a DIFFERENT, script-disabled context.
   // Fulfillment replays only these observed bytes to the parser, never oracle HTML.
   const body = await response.body();
-  const context = await browser.newContext({ javaScriptEnabled: false, serviceWorkers: "block" });
+  const context = await observedContext(browser, { javaScriptEnabled: false, serviceWorkers: "block" }, observation, "ssr-parser");
   try {
     const page = await context.newPage();
     await page.route("**/*", async (route) => {
@@ -201,8 +222,18 @@ export async function responseDocument(browser, response, url) {
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(installResourceObserver);
-    return { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope), url: publicURL(url), error: null,
+    const result = { observer: randomUUID(), scope: await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope), url: publicURL(url), error: null,
       responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
       parserScope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
-  } finally { await context.close(); }
+    if (observation) {
+      result.context = observation.byContext.get(context).id;
+      result.requestId = requestId; result.responseEvidence = null;
+      try {
+        const transcript = await page.evaluate(collectDOMReads, { source: snapshotMixedPage.toString(), readPath: result.url.path });
+        result.responseEvidence = retainDOMProjection(observation.store, transcript,
+          { requestId, responseSha256: result.responseSha256, path: result.url.path, status: result.status });
+      } catch { result.captureFailure = "public-dom-projection-unproved"; }
+    }
+    return result;
+  } finally { await closeObservedContext(browser, context, observation); }
 }

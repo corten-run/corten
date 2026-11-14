@@ -377,16 +377,57 @@ failed qualification proof. A historical journal missing new receipts remains un
 its old positive summaries are stale, not grandfathered. Replay never rewrites historical
 captures or updates their hashes. Tests may recompute summaries only in disposable copies.
 
-Both outcomes keep `qualificationPassed` and `readyForLoad` false. Current producers do not
+Both legacy outcomes keep `qualificationPassed` and `readyForLoad` false. Legacy producers do not
 bundle independently authenticated source/commit receipts, raw process/configuration and
 isolation inspections, complete worker-network ownership or native app server-peer closure.
 Boolean coverage flags, a context close and unknown worker counts cannot replace those
 receipts. Runner source hashes are compared with local current sources, not authenticated
 as belonging to a Git commit. Browser binaries, response bytes and custom targets are not
 bundled for independent rehashing; build-log authenticity is not recorded. Absent proof stays blocked.
-The validator currently has no positive qualification path. It does not repair a producer,
+The legacy validator has no positive qualification path. It does not repair a producer,
 qualify a historical run or authorize load. Keep a saved folder immutable while replaying;
 identity/metadata checks detect changes but cannot lock out a hostile concurrent writer.
+
+### Native v2 Integration
+
+New runs retain the reviewed [v2 leaf evidence](NATIVE-V2.md) and use awaitable saved replay.
+Canonical fixed local Git bytes are bound to every actual execution input before and after
+the run, including imported helpers outside the leaf's narrower browser inventory. The broad
+source inventory comes from the existing isolated source-binding API, not an inferred import
+graph. Its clean-current-HEAD requirement is deliberate: historical evidence is not upgraded.
+Exact installed Node/Chromium and locked tool package bytes are retained before/after, with
+the lock matched to canonical source. Builds consume retained immutable context archives;
+their acknowledged original image IDs and context digests must match the observed image.
+Labels alone do not provide this build proof.
+
+Owned Docker create/build IDs are registered before inspect, so a lost readback cannot lose
+cleanup ownership. Artifacts stay stopped. The execution ledger retains command acknowledgements,
+pre-removal participant observations, actual `rm -f -v` acknowledgements and final ALL/OWNED
+inventories. Parser, mutation and application contexts separately retain creation, native close
+event, close completion and enumerated absence; browser disconnection is required too. A blocked
+execution result never produces a verified host subject. Docker configuration is not OS proof.
+
+V2 distinguishes selected-slice completeness, all-registry attempt completeness, unchanged strict
+qualification and apparatus cleanup. Failed build/create/start prerequisites can explain an
+unrun journey only through exact app/case-bound acknowledged native commands and required terminal
+receipts; exceptions and saved reason strings cannot. Unverified image source cannot qualify an
+application, even when its failed prerequisite is completely witnessed. Unknown response extraction,
+workers, long-lived peers and missing observation windows remain proof-missing, not failed targets.
+Only continuous native network observation plus proved worker absence can derive an empty long-lived
+peer population; completed ordinary HTTP keepalive is not such a peer. Peer-present cells stay blocked
+without matched pre-teardown peer receipts. No worker collector or semantic oracle waiver is added.
+
+The current bounded integration still rejects live/error DOM observations not covered by the fixed
+typed public projection API. It never retains original secret-bearing HTML as a fallback or claims
+an initial parser projection reproduced later DOM changes. These explicit blockers can prevent a
+selected journey from completing; a command-prerequisite control is not production qualification.
+The v2 CLI returns the replayed qualification's expected exit, exactly 0 or 1. Load readiness stays false.
+
+Portable replay checks run with `node --test --test-skip-pattern="^retained real w28 "
+bench/fullstack-browser/verify.test.mjs`; only the optional historical w28 capture is excluded.
+The opt-in native caller apparatus control uses an already installed immutable Node image via
+`NATIVE_CALLER_IMAGE` and `node --test --test-name-pattern="^native caller v2 "
+bench/fullstack-browser/runner.test.mjs`. It does not build, substitute or qualify a contender.
 
 The implementation performs native work even when a capability is missing. A DOM success
 message is never independent write evidence. An app with a real native alert store may
