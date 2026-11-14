@@ -73,10 +73,10 @@ test("native caller v2 replays actual failed-start cleanup and rejects missing b
     const save = () => {
       const exported = exportBrowserCaptures(summary, fixture);
       mkdirSync(join(folder, "captures"), { recursive: true });
-      for (const [name, capture] of Object.entries(exported.captures)) writeFileSync(join(folder, `captures/${name}.json`), JSON.stringify(capture));
-      writeFileSync(join(folder, "captures/manifest.json"), JSON.stringify(exported.manifest));
+      for (const [name, capture] of Object.entries(exported.captures)) writeFileSync(join(folder, `captures/${name}.json`), JSON.stringify(capture, null, 2) + "\n");
+      writeFileSync(join(folder, "captures/manifest.json"), JSON.stringify(exported.manifest, null, 2) + "\n");
       summary.strictCaptureExport = { manifest: "captures/manifest.json", functionalPassed: false, readyForLoad: false };
-      summary.finishedAt = new Date().toISOString(); writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+      summary.finishedAt = new Date().toISOString(); writeFileSync(join(folder, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
       writeFileSync(join(folder, "marketplace.json"), JSON.stringify(fixture));
     };
     save(); const result = await validateSaved({ folder, round: "w1", commit });
