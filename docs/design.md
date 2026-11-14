@@ -3515,9 +3515,16 @@ rules something out.
     The press is newer than the close. So when a `data-patch` submit's answer replaces an element
     and the control that sent it (the submitter, else the form) is outside that element, the
     element takes the open state the answer draws; where both say open, a modal dialog stays
-    modal. A press inside the element (a refused form in a dialog the user closed with Escape
-    while it was on its way), the elements inside the one replaced, and every redraw nobody asked
-    for keep the user's. A popover has no markup that shows it, so no answer can ask for one shown
+    modal. Outside is where the control was when it was pressed: the ids of the dialogs and
+    `<details>` around it are read at the press, so removing it, redrawing the dialog, or replacing
+    its form earlier in the same answer while the answer is on its way does not make a press
+    inside one outside (a check at the answer saw a removed button as outside every element and
+    opened a dialog the user had closed). A press inside the element (a refused form in a dialog
+    the user closed with Escape while it was on its way), the elements inside the one replaced,
+    and every redraw nobody asked for keep the user's. An open dialog that the markup draws closed,
+    whoever asked, is closed with `close()` before it is replaced, as the browser closes one: its
+    `close` event fires once and focus goes back to the element that opened it, where replacing
+    it alone fired no event and left focus on the page's `<main>`. A popover has no markup that shows it, so no answer can ask for one shown
     and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
     outside it is on its way opens when the answer comes: the runtime knows the press, not what the
     user meant by the close after it.
@@ -3532,20 +3539,25 @@ rules something out.
     replaces the closed dialog with an empty element before each submit, is the per-page script
     this removes.
 
-    What it costs: the runtime is 61 bytes larger raw, 39 with gzip (15,069 to 15,108) and 26 with
-    brotli (13,601 to 13,627), paid once a release by every user. A patch pays an argument passed
-    down; the new test runs for the patch's own root only, after the checks that already find the
-    user changed it, so a patch whose root is no dialog or `<details>`, or one the user left as
-    the server sent it, does no more work than before, and one the user changed and asked for
-    from outside does one `Node.contains` (reasoned, not measured: a single call where the root's
-    state is already read).
+    What it costs: the runtime is 300 bytes larger raw, 126 with gzip (15,069 to 15,195) and 109
+    with brotli (13,601 to 13,710), paid once a release by every user. A submit reads the
+    `closest` dialog or `<details>` around its control, once per one it is in (usually none),
+    into a set; a patch pays an argument passed down, and the test runs for the patch's own root
+    only, after the checks that already find the user changed it, as one `Set.has`. An open
+    dialog the patch replaces now has its counterpart looked up even when the user left it as
+    the server sent it, to see whether the markup closes it: one query of the fresh markup per
+    open dialog in the replaced element, where most patches have none. All of this is reasoned,
+    not measured: a few calls where the root's state is already read.
 
     Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
     defaults, once each build); platform (a `<dialog>`'s and a `<details>`' open state is their
     `open` attribute, which markup sets and closing removes, while a popover's shown state has no
     attribute; the smoke's dialog, `<details>` and live checks in Chromium, Firefox and WebKit);
     reasoned (a submitter or form outside the element it asks for is the user asking for that
-    element, and nothing else the runtime sees is; the cost is one call in the case it changes);
+    element, and nothing else the runtime sees is; where it was is fixed by the press, not by
+    what the page became while the answer was on its way; the cost is a few calls in the cases it
+    changes); platform (`close()` fires `close` and gives focus back to the element focused before
+    a modal dialog opened, which replacing the element does not);
     value (a control pressed again that does nothing visible is wrong output, the README's conflict
     order 1, correctness, above the bytes it costs, its 2; a server-drawn dialog opens from its
     trigger without a per-page script or an attribute of Corten's own, README Value 5; the user's
@@ -3560,7 +3572,10 @@ rules something out.
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
     in-flight and live checks passing on both, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit
-    27.2 (Playwright 1.64.1); 2026-11-14, the runtime's size on `bf1b2eaa2` against `e59c32c28`.
+    27.2 (Playwright 1.64.1); 2026-11-14, the runtime's size on `bf1b2eaa2` against `e59c32c28`;
+    2026-11-14, the press recorded where it was and the markup's close calling `close()` on
+    `c1b7bce23`, the smoke's removed-button, redrawn-dialog, form-first and markup-close checks
+    passing in Chromium 156.0.8078.4, and the runtime's size on `c1b7bce23` against `8f11b7b35`.
 
 ## Rules
 
