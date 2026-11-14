@@ -391,12 +391,38 @@ that take the group (a field typed `unknown` does not).
 
 **Keys.** `key={item.id}` on the elements of a ref (`data-key` in the page) lets a parameter
 typed `Map<string, HTMLTableCellElement>` get them by key, so rows from a [feed](live-data.md)
-find their cells without reading attributes:
+find their cells without reading attributes. Every element given the ref has a key or none does,
+and only a ref whose elements have one fits a `Map<string, ..>`: one without a key, on all its
+elements or on some, does not compile, and the error says to add `key={..}`. A ref with keys still
+fits `El` and `El[]`. A component that puts a parent's ref on keyed elements names its type
+`Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` (`corten::script::{Keyed, NoRows, NoValue}`).
 
 ```rust,ignore
 <td ref={qty} key={item.id}>{line.qty}</td>
 // on:connect={js::live(qty, url::Levels, signal)}, live(cells, feed, signal) with cells.get(level.id)
 ```
+
+A `Map` holds one element per key, so two elements of the ref with equal keys are one entry, the
+later in the page's order, and the other is out of the handler's reach. Keys are equal as the
+browser reads them (`getAttribute`): `key={true}` and `key=""` are both the empty string, a carriage
+return reads as a line feed, and `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&#39;`, which Corten writes
+for `&`, `<`, `>`, `"` and `'`, are those characters. Debug builds stop a render in which two
+elements of a ref in one component have equal keys, or a `key={..}` writes none (a `None`), as they
+stop on a number past 2^53; release builds do not check. They count the elements the runtime finds,
+so an element in a `<template>`'s or a `<noscript>`'s content is not one of them (inside an `<svg>`,
+where both are elements like any other, it is, except in its `<foreignObject>`, `<desc>` or
+`<title>`, which hold HTML). A component's markup does not see an `<svg>` its parent writes it into,
+and a component's children do not see where the component writes them, so the keys in a
+`<template>` or `<noscript>` a component writes into an outer `<svg>`, or one among a component's
+children (outside an `<svg>` the children write themselves), are not checked: where the check
+cannot be sure, it lets a duplicate pass rather than stop a correct render. They see what one
+render writes: rows a patch or a script adds later are the page's, so give every row a key of its
+own (an id, not a name two rows can share). A key an `AttrValue` of the app's writes with any other
+`&` (`&#128;`, `&nbsp;`) is not checked, since what a browser reads there follows rules of HTML's
+the check does not repeat.
+The check belongs to `corten-run`: it runs when that crate is built with debug assertions (as
+`cargo build` and `cargo test` build it), for every crate's markup, whatever the app's own crate is
+built with. A spread of attributes does not write `data-key`, as it does not write `data-ref`.
 
 **A value for each element.** Rows a script compares (orders by price, filters by stock) carry what
 it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a parameter

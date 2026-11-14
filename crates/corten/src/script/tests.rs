@@ -518,6 +518,442 @@ fn closest_groups_keyed_refs_and_typed_event_handlers_are_written_compactly() {
     );
 }
 
+/// Cells keyed by id, with the key before the ref, and a cell of another ref keyed as text.
+#[component]
+fn KeyedCells<'a>(ids: &'a [Option<&'a str>]) -> impl Render {
+    let (qty, total) = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(qty, "a")}>
+                for id in ids.iter() { <tr><td key={*id} ref={qty}>"1"</td></tr> }
+            </tbody>
+            <tfoot on:click={js::show(total, "a")}><tr><td ref={total} key="a">"2"</td></tr></tfoot>
+        </table>
+    }
+}
+
+#[component]
+fn TwoKeyedGrids() -> impl Render {
+    html! {
+        <div>
+            <KeyedCells ids={&[Some("a"), Some("b")]} />
+            <KeyedCells ids={&[Some("a")]} />
+        </div>
+    }
+}
+
+#[test]
+fn a_keyed_ref_writes_each_key_where_its_markup_puts_it() {
+    let html = KeyedCells { ids: &[Some("a"), Some("b")] }.to_html();
+    assert_eq!(
+        html,
+        concat!(
+            r#"<table data-scope="keyed-cells"><tbody data-on='click:stock_grid.show(#qty,"a")'>"#,
+            r#"<tr><td data-key="a" data-ref="qty">1</td></tr><tr><td data-key="b" data-ref="qty">1</td></tr></tbody>"#,
+            r#"<tfoot data-on='click:stock_grid.show(#total,"a")'><tr><td data-ref="total" data-key="a">2</td></tr></tfoot></table>"#,
+        )
+    );
+    // Each component's elements are its own: two grids may hold the same keys, as two refs may.
+    let both = TwoKeyedGrids {}.to_html();
+    assert_eq!(both.matches(r#"<td data-key="a" data-ref="qty">"#).count(), 2, "{both}");
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref qty in one keyed-cells have the key \"a\"")]
+fn debug_builds_stop_on_two_elements_of_a_keyed_ref_with_one_key() {
+    KeyedCells { ids: &[Some("a"), Some("b"), Some("a")] }.to_html();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "an element of ref qty in keyed-cells has a key={..} that wrote no key")]
+fn debug_builds_stop_on_an_element_of_a_keyed_ref_without_a_key() {
+    KeyedCells { ids: &[Some("a"), None] }.to_html();
+}
+
+/// A keyed cell in the page and one with the same key in a `<template>`'s content, which the
+/// runtime's query for the ref's elements does not reach.
+#[component]
+fn TemplateKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table>
+                <tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="a">"1"</td></tr></tbody>
+            </table>
+            <template>
+                <table><tbody><tr><td ref={cell} key="a">"2"</td></tr></tbody></table>
+            </template>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_template_s_content_is_not_one_of_the_page_s() {
+    let html = TemplateKeys {}.to_html();
+    assert_eq!(html.matches(r#"<td data-ref="cell" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// A keyed cell in the page and one with the same key in a `<noscript>`, whose content a browser
+/// running the script reads as text.
+#[component]
+fn NoscriptKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table>
+                <tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="a">"1"</td></tr></tbody>
+            </table>
+            <noscript>
+                <table><tbody><tr><td ref={cell} key="a">"2"</td></tr></tbody></table>
+            </noscript>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_noscript_s_content_is_not_one_of_the_page_s() {
+    let html = NoscriptKeys {}.to_html();
+    assert_eq!(html.matches(r#"<td data-ref="cell" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// Marks of an `<svg>`, one in its `<template>`, which in SVG is an element like any other: the
+/// runtime's query finds what it holds.
+#[component]
+fn SvgTemplateKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <svg>
+            <g ref={mark} key="a"></g>
+            <template><g ref={mark} key="a"></g></template>
+        </svg>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one svg-template-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_an_svg_s_template() {
+    SvgTemplateKeys {}.to_html();
+}
+/// A keyed label in the page and one with the same key in a `<template>` in an `<svg>`'s `<desc>`
+/// and one in its `<title>`. Their children are HTML's (the HTML standard's integration points),
+/// so each `<template>` is HTML's, and the runtime's query does not reach its content.
+#[component]
+fn DescTemplateKeys() -> impl Render {
+    let label = refs();
+    html! {
+        <div>
+            <span ref={label} key="a">"1"</span>
+            <svg>
+                <desc><template><span ref={label} key="a">"2"</span></template></desc>
+                <title><template><span ref={label} key="a">"3"</span></template></title>
+            </svg>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_template_in_an_svg_s_desc_or_title_is_not_one_of_the_page_s() {
+    let html = DescTemplateKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="label" data-key="a">"#).count(), 3, "{html}");
+}
+
+/// A mark keyed as its parent's is, in a `<template>` of a component's own markup.
+#[component]
+fn MarkTemplate(mark: Ref<el::SVGElement, script::NoRows, script::NoValue, script::Keyed>) -> impl Render {
+    html! { <template><g ref={mark} key="a"></g></template> }
+}
+
+/// A mark and `MarkTemplate`'s copy of it, written into this `<svg>`: there the template is SVG's
+/// and the runtime finds the copy, so the ref has two marks keyed `a`.
+#[component]
+fn OuterSvgKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <svg>
+            <g ref={mark} key="a"></g>
+            <MarkTemplate mark={mark} />
+        </svg>
+    }
+}
+
+/// A limit `docs/design.md#choice-ref-values` states: a component's markup does not see the
+/// `<svg>` its parent writes it into, so it takes its `<template>` for HTML's and its keys are not
+/// checked. The check misses the duplicate rather than stop a render it cannot be sure of.
+#[test]
+fn a_key_in_a_template_a_component_writes_into_an_outer_svg_is_not_checked() {
+    let html = OuterSvgKeys {}.to_html();
+    assert_eq!(html.matches(r#"<g data-ref="mark" data-key="a">"#).count(), 2, "{html}");
+}
+/// Writes its children in an `<svg>`'s `<desc>`, whose children are HTML's.
+#[component]
+fn Description(children: impl Render) -> impl Render {
+    html! { <desc>{children}</desc> }
+}
+
+/// A keyed label in the page, and its copy in a `<template>` among `Description`'s children in an
+/// `<svg>`: the children are written in `<desc>`, so the template is HTML's and the runtime's
+/// query does not reach the copy.
+#[component]
+fn DescribedKeys() -> impl Render {
+    let label = refs();
+    html! {
+        <div>
+            <span ref={label} key="a">"visible"</span>
+            <svg>
+                <Description>
+                    <template><span ref={label} key="a">"hidden"</span></template>
+                </Description>
+            </svg>
+        </div>
+    }
+}
+
+/// The other side of the limit `docs/design.md#choice-ref-values` states: a component's children
+/// do not see where it writes them, so a `<template>` among them is not taken for an `<svg>`'s,
+/// and the check lets its keys pass rather than stop a correct render.
+#[test]
+fn a_key_in_a_template_among_a_component_s_children_is_not_checked() {
+    let html = DescribedKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="label" data-key="a">"#).count(), 2, "{html}");
+}
+
+/// Writes its children in a `<div>`.
+#[component]
+fn Boxed(children: impl Render) -> impl Render {
+    html! { <div>{children}</div> }
+}
+
+/// Marks in an `<svg>` written among `Boxed`'s children, one in its `<template>`: a literal
+/// `<svg>` is SVG's wherever the children land, so the runtime finds both.
+#[component]
+fn BoxedSvgKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <Boxed>
+                <svg>
+                    <g ref={mark} key="a"></g>
+                    <template><g ref={mark} key="a"></g></template>
+                </svg>
+            </Boxed>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one boxed-svg-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_an_svg_s_template_among_a_component_s_children() {
+    BoxedSvgKeys {}.to_html();
+}
+
+/// A key written as it is by an `AttrValue` of the app's, which Corten's escapers would not write.
+struct RawKey(&'static str);
+
+impl crate::view::AttrValue for RawKey {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        out.push_str(self.0);
+        out.push('"');
+    }
+}
+
+/// Two cells a browser reads as keyed `€` and U+0080: `&#128;` is the Windows-1252 euro to a
+/// browser, which decoding it as a code point would take for the other cell's key.
+#[component]
+fn RawKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                <tr>
+                    <td ref={cell} key={RawKey("&#128;")}>"1"</td>
+                    <td ref={cell} key={"\u{80}"}>"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+fn a_key_written_with_a_reference_corten_does_not_write_is_not_checked() {
+    let html = RawKeys {}.to_html();
+    assert!(html.contains(r#"<td data-ref="cell" data-key="&#128;">1</td>"#), "{html}");
+}
+
+/// The check reads a key as `getAttribute` does for the five references Corten's escapers write,
+/// and leaves out a key with any other `&`, which only an app's own `AttrValue` writes.
+#[test]
+#[cfg(debug_assertions)]
+fn a_key_is_read_with_corten_s_five_references_decoded_and_no_others() {
+    use super::keys::{read, Read};
+    let key = |value: &str| read(&format!(" data-key=\"{value}\""));
+    for (written, reads) in
+        [("a&amp;b", "a&b"), ("a&lt;b", "a<b"), ("a&gt;b", "a>b"), ("a&quot;b", "a\"b"), ("a&#39;b", "a'b"), ("&amp;lt;", "&lt;")]
+    {
+        assert_eq!(key(written), Read::Key(reads.into()), "{written}");
+    }
+    let text = "& < > \" ' &amp; &#97;";
+    assert_eq!(key(&crate::html::escape(text)), Read::Key(text.into()), "what Corten writes reads back");
+    assert_eq!(key("a\r\nb\rc\0"), Read::Key("a\nb\nc\u{FFFD}".into()));
+    assert_eq!(read(" data-key"), Read::Key(String::new()));
+    assert_eq!(read(""), Read::Absent);
+    for raw in ["&#128;", "&#+97;", "&#97", "&#97;", "&nbsp;", "&#0;", "&#xD800;", "&#x110000;", "&apos;", "a&b"] {
+        assert_eq!(key(raw), Read::Unknown, "{raw}");
+    }
+    assert_eq!(read(" data-key='a'"), Read::Unknown);
+    assert_eq!(read(" data-key=\"a\"b\""), Read::Unknown);
+}
+
+/// A component with a keyed ref, the key written before the ref, rendered while another's
+/// element is half written.
+#[component]
+fn InnerKeys() -> impl Render {
+    let inner = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(inner, "inner")}><tr><td key="inner" ref={inner}>"i"</td></tr></tbody>
+        </table>
+    }
+}
+
+/// The key, after rendering [`InnerKeys`] when `inner` is set.
+fn rendering_inner_keys(key: &str, inner: bool) -> &str {
+    if inner {
+        InnerKeys {}.to_html();
+    }
+    key
+}
+
+/// Cells keyed by `keys`, each one's key written after its ref, rendering [`InnerKeys`] in its
+/// `key={..}` when told to.
+#[component]
+fn NestedKeys<'a>(keys: &'a [(&'a str, bool)]) -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                for (key, inner) in keys.iter() {
+                    <tr><td ref={cell} key={rendering_inner_keys(key, *inner)}>"1"</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+fn a_render_inside_a_key_leaves_the_element_s_ref_and_key_together() {
+    let html = NestedKeys { keys: &[("a", true), ("inner", false)] }.to_html();
+    assert_eq!(html.matches(r#"data-ref="cell""#).count(), 2, "{html}");
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one nested-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_whatever_renders_inside_a_key() {
+    NestedKeys { keys: &[("a", true), ("a", false)] }.to_html();
+}
+
+/// Two cells whose keys are written differently and read the same: `true` and `""` both read as
+/// the empty string.
+#[component]
+fn BlankKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "")}>
+                <tr>
+                    <td ref={cell} key={true}>"1"</td>
+                    <td ref={cell} key="">"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one blank-keys have the key \"\"")]
+fn debug_builds_stop_on_keys_a_browser_reads_as_the_same_empty_one() {
+    BlankKeys {}.to_html();
+}
+
+/// Two cells whose keys differ in a carriage return, which the browser reads as a line feed.
+#[component]
+fn NewlineKeys() -> impl Render {
+    let cell = refs();
+    html! {
+        <table>
+            <tbody on:click={js::show(cell, "a")}>
+                <tr>
+                    <td ref={cell} key={"a\rb"}>"1"</td>
+                    <td ref={cell} key={"a\nb"}>"2"</td>
+                </tr>
+            </tbody>
+        </table>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref cell in one newline-keys have the key \"a\\nb\"")]
+fn debug_builds_stop_on_keys_a_browser_reads_as_one_after_its_line_breaks() {
+    NewlineKeys {}.to_html();
+}
+
+/// The key, or a panic when `fails` is set.
+#[cfg(debug_assertions)]
+fn failing_key(key: &str, fails: bool) -> &str {
+    assert!(!fails, "a key that fails");
+    key
+}
+
+/// A keyed cell in a `<template>`'s content whose key's expression may panic.
+#[cfg(debug_assertions)]
+#[component]
+fn FailingKeys(fails: bool) -> impl Render {
+    let cell = refs();
+    html! {
+        <div>
+            <table><tbody on:click={js::show(cell, "a")}><tr><td ref={cell} key="b">"1"</td></tr></tbody></table>
+            <template>
+                <table><tbody><tr><td ref={cell} key={failing_key("a", fails)}>"2"</td></tr></tbody></table>
+            </template>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+fn a_render_that_unwinds_inside_a_template_and_a_tag_leaves_the_next_render_checked() {
+    let failed = std::panic::catch_unwind(|| FailingKeys { fails: true }.to_html());
+    assert!(failed.is_err());
+    // Neither the template's content nor the half-written tag is still open: equal keys stop the
+    // next render, and distinct ones do not.
+    FailingKeys { fails: false }.to_html();
+    let repeated = std::panic::catch_unwind(|| KeyedCells { ids: &[Some("a"), Some("a")] }.to_html());
+    let message = repeated.expect_err("equal keys stop the render");
+    let message = message.downcast_ref::<String>().map_or("", String::as_str);
+    assert!(message.contains("two elements of ref qty in one keyed-cells have the key \"a\""), "{message}");
+}
+
+/// Release builds keep no record of keys: equal keys and a missing one render as written.
+#[test]
+#[cfg(not(debug_assertions))]
+fn release_builds_do_not_check_keys() {
+    let html = KeyedCells { ids: &[Some("a"), Some("a"), None] }.to_html();
+    assert_eq!(html.matches(r#"<td data-key="a" data-ref="qty">"#).count(), 2, "{html}");
+    assert_eq!(html.matches(r#"<td data-ref="qty">"#).count(), 1, "{html}");
+    let html = NestedKeys { keys: &[("a", true), ("a", false)] }.to_html();
+    assert_eq!(html.matches(r#"data-key="a""#).count(), 2, "{html}");
+    BlankKeys {}.to_html();
+    NewlineKeys {}.to_html();
+    SvgTemplateKeys {}.to_html();
+}
 // The doctests' script for rows that give their script a value (`Ref::with`), shared here.
 script::script!(mod priced = "../price_list.js");
 

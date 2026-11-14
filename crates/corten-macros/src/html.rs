@@ -909,10 +909,14 @@ fn respan(tokens: TokenStream, at: Span) -> TokenStream {
         .collect()
 }
 
+/// The SVG elements whose children are HTML's: the HTML standard's HTML integration points in
+/// SVG, where a browser parses what they hold as HTML.
+const SVG_HTML_POINTS: &[&str] = &["foreignObject", "desc", "title"];
+
 /// Whether the children of `name`, inside an `<svg>` when `outer`, are SVG's elements.
 fn within_svg(outer: bool, name: &str) -> bool {
     if outer {
-        !name.eq_ignore_ascii_case("foreignObject")
+        !SVG_HTML_POINTS.iter().any(|point| name.eq_ignore_ascii_case(point))
     } else {
         name.eq_ignore_ascii_case("svg")
     }
@@ -922,7 +926,8 @@ struct Cursor {
     tokens: Vec<TokenTree>,
     i: usize,
     end: Span,
-    /// Inside an `<svg>` (and not its `<foreignObject>`), where elements are SVG's.
+    /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where elements
+    /// are SVG's.
     svg: bool,
 }
 
@@ -1503,8 +1508,16 @@ struct Gen {
     level: Level,
     /// Set while a patch's top-level element opens: the local its `id={..}` binds its shape to.
     id_shape: Option<TokenStream>,
-    /// Inside an `<svg>` (and not its `<foreignObject>`), where an `<a>` is SVG's.
+    /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where an `<a>`
+    /// is SVG's.
     svg: bool,
+    /// In a component's children, which the component may write anywhere (in an `<svg>`, its
+    /// `<desc>`, a `<template>`), until a literal `<svg>` inside them: whether a browser makes an
+    /// element there SVG's or HTML's is not known, so the key check takes no `<template>`'s or
+    /// `<noscript>`'s content there for the page's.
+    unknown_context: bool,
+    /// The locals declared so far that hold a debug build's record while markup is written.
+    debug_locals: usize,
 }
 
 /// The locals a view's shape is gathered in: one `Option` per body of a `for`, `if` or `match`
@@ -1590,6 +1603,20 @@ impl Gen {
             Level::Page => self.out.extend(q("if __PART != ::corten::view::Part::Title __A0", &[block])),
             Level::Layout => self.out.extend(q("if __PART == ::corten::view::Part::Full __A0", &[block])),
         }
+    }
+
+    /// Declares a local that holds the key check's record (`open`, an expression) while the
+    /// markup after it is written, and is let go by a statement after that markup. It is declared
+    /// outside the parts' `if`s, so it lives through them, and before the static markup not yet
+    /// written, which has no refs. The record is Corten's to keep or not: a build of `corten-run`
+    /// without debug assertions makes it an empty value and its calls empty, whatever the app's
+    /// own setting, so the check is on or off for every crate's markup together.
+    fn debug_local(&mut self, open: &str) -> TokenStream {
+        self.debug_locals += 1;
+        let name: TokenStream =
+            TokenTree::Ident(Ident::new(&format!("__corten_debug_{}", self.debug_locals), Span::call_site())).into();
+        self.out.extend(q(&format!("let __A0 = {open};"), std::slice::from_ref(&name)));
+        name
     }
 
     /// Switches the parts what follows is written in.
@@ -1688,7 +1715,7 @@ impl Gen {
             fields.extend(q("__A0: __A1,", &[field.clone(), value]));
         }
         if let Some(children) = children {
-            let body = stream([self.body(children, false)]);
+            let body = stream([self.body_in(children, false, true)]);
             let capture = if moving { "move " } else { "" };
             fields.extend(q(
                 &format!("children: ::corten::view::Html::child({capture}|__OUT: &mut ::std::string::String| __A0),"),
@@ -1783,7 +1810,12 @@ impl Gen {
     }
 
     fn body(&self, nodes: &[Node], raw: bool) -> TokenTree {
-        let mut gen = Gen { svg: self.svg, ..Gen::default() };
+        self.body_in(nodes, raw, self.unknown_context)
+    }
+
+    /// `nodes` written in a block of their own, in a context not known when `unknown_context`.
+    fn body_in(&self, nodes: &[Node], raw: bool, unknown_context: bool) -> TokenTree {
+        let mut gen = Gen { svg: self.svg, unknown_context, ..Gen::default() };
         gen.nodes(nodes, raw);
         TokenTree::Group(Group::new(Delimiter::Brace, gen.finish()))
     }
@@ -1799,6 +1831,14 @@ impl Gen {
         self.text.push('<');
         self.text.push_str(name);
         let mut actions_printed = false;
+        // Whether the element has a key (`key={..}`, written `data-key`), for a handler's
+        // Map<string, El>: every element of a ref has one, or none does.
+        let is_key = |attr: &str| attr.eq_ignore_ascii_case("data-key");
+        let keyed = attrs.iter().any(|a| matches!(a, Attr::Expr(attr, _) | Attr::Static(attr, _) if is_key(attr)));
+        let has_ref = attrs.iter().any(|a| matches!(a, Attr::Ref(..)));
+        // A keyed ref's element: debug builds note its ref and key on it until its tag is written,
+        // whatever an attribute's expression renders meanwhile.
+        let tag = (has_ref && keyed).then(|| self.debug_local("::corten::script::__private::KeyTag::open()"));
         for attr in attrs {
             match attr {
                 Attr::Bare(attr) => {
@@ -1806,6 +1846,14 @@ impl Gen {
                     self.text.push_str(attr);
                 }
                 Attr::Page(_) => self.text.push_str(" data-corten-page"),
+                // A keyed ref's key, which debug builds check against its other elements'. The
+                // call is given the key as written, not the output, so it goes beside the markup
+                // not yet written instead of ending it: the tag is still written in one piece.
+                Attr::Static(attr, value) if has_ref && is_key(attr) => {
+                    let written = format!(" {attr}=\"{}\"", escape(value));
+                    self.text.push_str(&written);
+                    self.out.extend(q("::corten::script::__private::key_written(__A0);", &[literal(&written)]));
+                }
                 Attr::Static(attr, value) => {
                     self.text.push_str(&format!(" {attr}=\"{}\"", escape(value)));
                 }
@@ -1819,6 +1867,8 @@ impl Gen {
                     }
                     .parse()
                     .expect("a path parses");
+                    let keys: TokenStream =
+                        if keyed { q("::corten::script::Keyed", &[]) } else { q("::corten::script::NoKey", &[]) };
                     match wide {
                         // `ref={trigger as HTMLElement}`: a ref on several kinds of element, typed as one they all are.
                         Some(wide) => {
@@ -1831,13 +1881,13 @@ impl Gen {
                                 })
                                 .collect();
                             self.code(q(
-                                "::corten::script::__private::ref_attr_as::<__A1, __A2, __A3>(&(__A0), __OUT);",
-                                &[expr.clone(), el, ty, holds],
+                                "::corten::script::__private::ref_attr_as::<__A1, __A2, __A3, __A4>(&(__A0), __OUT);",
+                                &[expr.clone(), el, ty, holds, keys],
                             ))
                         }
                         None => self.code(q(
-                            "::corten::script::__private::ref_attr::<__A1, __A2>(&(__A0), __OUT);",
-                            &[expr.clone(), el, holds],
+                            "::corten::script::__private::ref_attr::<__A1, __A2, __A3>(&(__A0), __OUT);",
+                            &[expr.clone(), el, holds, keys],
                         )),
                     }
                 }
@@ -1915,6 +1965,15 @@ impl Gen {
                 Attr::Expr(attr, expr) if attr == "id" && attrs.iter().any(|a| matches!(a, Attr::Page(_))) => {
                     self.code(q("::corten::view::__private::page_id(&(__A0), __OUT);", std::slice::from_ref(expr)))
                 }
+                // A keyed ref's key, which debug builds check against its other elements' as written.
+                Attr::Expr(attr, expr) if has_ref && is_key(attr) => self.code(q(
+                    "{
+                        let __corten_key = __OUT.len();
+                        (&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);
+                        ::corten::script::__private::key_written_from(__OUT, __corten_key);
+                    }",
+                    &[expr.clone(), literal(&format!(" {attr}"))],
+                )),
                 Attr::Expr(attr, expr) => self.code(q(
                     "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
                     &[expr.clone(), literal(&format!(" {attr}"))],
@@ -1985,6 +2044,9 @@ impl Gen {
                 }
             }
         }
+        if let Some(tag) = tag {
+            self.out.extend(q("__A0.close();", &[tag]));
+        }
         self.text.push('>');
     }
 
@@ -2005,10 +2067,29 @@ impl Gen {
                 }
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
-                    let outer = self.svg;
+                    // A `<template>`'s content and a `<noscript>`'s, which the runtime's query for a
+                    // ref's elements does not reach (with scripts on, a `<noscript>` holds text):
+                    // debug builds record none of their keys. In an `<svg>` both are elements like
+                    // any other, whose children the query finds, except in what an element whose
+                    // children are HTML's holds (`SVG_HTML_POINTS`). A component's markup does
+                    // not see an `<svg>` its parent writes it into, so it takes its `<template>`
+                    // for HTML's, and a component's children do not see where it writes them
+                    // (`unknown_context`), so theirs are taken for HTML's too: the check misses
+                    // those keys rather than stop a render it cannot be sure of.
+                    let svg_element = self.svg && !self.unknown_context;
+                    let unqueried =
+                        !svg_element && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
+                    let content = unqueried.then(|| self.debug_local("::corten::script::__private::UnqueriedContent::open()"));
+                    let (outer, outer_context) = (self.svg, self.unknown_context);
                     self.svg = within_svg(outer, name);
+                    // A literal `<svg>` is SVG's wherever its markup lands.
+                    self.unknown_context = outer_context && !name.eq_ignore_ascii_case("svg");
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
+                    self.unknown_context = outer_context;
+                    if let Some(content) = content {
+                        self.out.extend(q("__A0.end();", &[content]));
+                    }
                     self.text.push_str(&format!("</{name}>"));
                 }
                 if part {
