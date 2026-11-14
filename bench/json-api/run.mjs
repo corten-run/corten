@@ -157,6 +157,11 @@ export async function run(args) {
     summary.host.docker = await docker(["version", "--format", "{{.Server.Version}}"]);
     const { execution, ...node } = await imageTool(c.nodeImage);
     summary.tools.node = node; summary.toolExecutions = { node: execution };
+    summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`],
+      { pullLog: join(folder, "pull-k6.log") });
+    const k6 = JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0];
+    assert.equal(k6.Id, summary.tools.k6.imageId);
+    summary.toolExecutions.k6 = c.imageCommandEvidence(k6); save();
     await docker(["network", "create", "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, network]);
     for (const [payload, p] of Object.entries(c.payloads)) {
       const name = `${runId}-${p.path}-api`;
@@ -224,12 +229,6 @@ export async function run(args) {
         summary.checksPassed = qualified; save();
         if (!qualified) log("Full JSON matrix unqualified: no timing runs will start; all selected rows retained.");
         else if (!options.checkOnly) {
-          summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`],
-            { pullLog: join(folder, "pull-k6.log") });
-          const image = JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0];
-          assert.equal(image.Id, summary.tools.k6.imageId);
-          summary.toolExecutions.k6 = c.imageCommandEvidence(image);
-          save();
           await own(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host",
             "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount, summary.tools.node.imageId, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
         }

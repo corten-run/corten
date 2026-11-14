@@ -88,9 +88,13 @@ load receipts must use their complete fixed native commands and inspected tool e
 All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
 and `Args`. A same-image replacement command or executable is invalid apparatus, not a
 complete observed framework failure. Historical captures without these fields remain incomplete.
-The isolated audit handoff independently inspects all 18 app images and the Node tool image;
+The isolated audit handoff independently inspects all 18 app images and both Node/k6 tool images;
 timing execution metadata must also equal those accepted image observations, not just a
 consistently rewritten runtime snapshot. No default command is invented by the runner.
+Both tools are prepared before checks, including check-only and negative attempts. The
+pinned k6 executable runs only its version command during preparation, never load before
+the full functional/source gate. Missing tool provenance or execution observations block
+preparation rather than leaving a mutable entrypoint expectation for timing.
 
 Each pass starts a fresh native container and probes only `/api/catalog/record_1` or
 `/api/marketplace/item_1`. Cold time is Docker-host container-start to the first complete

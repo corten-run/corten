@@ -35,6 +35,8 @@ test("retained positive timing cannot override a replayed negative or its global
 
 test("negative evidence cannot waive audits, raw completeness, identity, CPU, cleanup or the global timing gate", () => {
   for (const mutate of [
+    (f) => { delete f.summary.tools.k6; },
+    (f) => { delete f.summary.toolExecutions.k6; },
     (f, c) => { delete c.native; },
     (f, c) => { c.functional = {}; },
     (f, c) => { const v = f.load(c.failure); delete v.attempt.requests[0].response; c.failure = f.put(v); },

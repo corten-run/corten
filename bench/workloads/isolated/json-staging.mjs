@@ -55,11 +55,13 @@ export function imageProof(summary) {
       rootFS: info.RootFS, config: { entrypoint: info.Config?.Entrypoint, cmd: info.Config?.Cmd, workingDir: info.Config?.WorkingDir },
       labels: saved.labels });
   }
-  const raw = JSON.parse(dockerRead(["image", "inspect", summary.tools.node.imageId]));
-  assert.equal(raw.length, 1); const info = raw[0]; assert.equal(info.Id, summary.tools.node.imageId);
-  assert.deepEqual(imageCommandEvidence(info), summary.toolExecutions.node, "saved Node execution differs from actual tool image");
-  images.push({ tool: "node", imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-    rootFS: info.RootFS, config: { entrypoint: info.Config.Entrypoint, cmd: info.Config.Cmd, workingDir: info.Config.WorkingDir } });
+  for (const tool of ["node", "k6"]) {
+    const raw = JSON.parse(dockerRead(["image", "inspect", summary.tools[tool].imageId]));
+    assert.equal(raw.length, 1); const info = raw[0]; assert.equal(info.Id, summary.tools[tool].imageId);
+    assert.deepEqual(imageCommandEvidence(info), summary.toolExecutions[tool], "saved execution differs from actual tool image");
+    images.push({ tool, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
+      rootFS: info.RootFS, config: { entrypoint: info.Config.Entrypoint, cmd: info.Config.Cmd, workingDir: info.Config.WorkingDir } });
+  }
   return images;
 }
 
@@ -132,7 +134,7 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
   assert.equal(bundle.schema, "json-api-native-audits/v1");
   assert.equal(subject.identities.length, descriptor().apps.length * descriptor().cases.length);
   assert.equal(bundle.receipts.length, subject.identities.length);
-  assert.equal(subject.images.length, descriptor().apps.length * descriptor().payloads.length + 1);
+  assert.equal(subject.images.length, descriptor().apps.length * descriptor().payloads.length + 2);
   const execution = (saved, accepted) => {
     assert.equal(saved.imageId, accepted.imageId, "timing image differs from independently inspected image");
     assert.deepEqual(saved.execution, { Entrypoint: accepted.config.entrypoint, Cmd: accepted.config.cmd },
@@ -143,8 +145,10 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
     const accepted = subject.images.filter((i) => i.app === app && i.payload === payload);
     assert.equal(accepted.length, 1); execution(saved, accepted[0]); assert.deepEqual(saved.labels, accepted[0].labels);
   }
-  const node = subject.images.filter((i) => i.tool === "node"); assert.equal(node.length, 1);
-  execution({ imageId: summary.tools?.node?.imageId, execution: summary.toolExecutions?.node }, node[0]);
+  for (const tool of ["node", "k6"]) {
+    const accepted = subject.images.filter((i) => i.tool === tool); assert.equal(accepted.length, 1);
+    execution({ imageId: summary.tools?.[tool]?.imageId, execution: summary.toolExecutions?.[tool] }, accepted[0]);
+  }
   let complete = true;
   for (const app of descriptor().apps) for (const profile of descriptor().cases) {
     const expected = subject.identities.filter((i) => i.app === app && i.key === profile.key);

@@ -9,6 +9,8 @@ import { result, failedResult } from "../../json-api/test-fixtures.mjs";
 import { descriptor } from "../../json-api/contract.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { digest, inside, inspectEvidence, tree } from "./evidence.mjs";
+import { inspectNative } from "./native-replay.mjs";
+import { composePhase } from "./composition.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
@@ -19,8 +21,8 @@ const images = descriptor().apps.flatMap((app) => descriptor().payloads.map((pay
   return { app, payload, imageId: saved.imageId, labels: saved.labels,
     config: { entrypoint: saved.execution.Entrypoint, cmd: saved.execution.Cmd } };
 }));
-images.push({ tool: "node", imageId: s.tools.node.imageId,
-  config: { entrypoint: s.toolExecutions.node.Entrypoint, cmd: s.toolExecutions.node.Cmd } });
+for (const tool of ["node", "k6"]) images.push({ tool, imageId: s.tools[tool].imageId,
+  config: { entrypoint: s.toolExecutions[tool].Entrypoint, cmd: s.toolExecutions[tool].Cmd } });
 const receipts = descriptor().apps.flatMap((app) => descriptor().cases.map((p) => fixture.load(s.apps[app].checks[p.key].native).receipt));
 for (const app of descriptor().apps) for (const p of descriptor().cases) {
   const { files } = fixture.load(s.apps[app].checks[p.key].native);
@@ -80,9 +82,9 @@ test("exact current built image identity is required, not generic source presenc
   });
   syncBuiltinESMExports();
   try {
-    const images = imageProof(s); assert.equal(images.length, 19); assert.ok(!JSON.stringify(images).includes("SECRET"));
-    for (const owner of [s.apps.express.images[descriptor().payloads[0]], s.toolExecutions]) {
-      const key = owner === s.toolExecutions ? "node" : "execution", before = owner[key];
+    const images = imageProof(s); assert.equal(images.length, 20); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    for (const [owner, key] of [[s.apps.express.images[descriptor().payloads[0]], "execution"], [s.toolExecutions, "node"], [s.toolExecutions, "k6"]]) {
+      const before = owner[key];
       owner[key] = { ...before, Cmd: ["/unreviewed/node", "--eval", "process.exit(1)"] };
       assert.throws(() => imageProof(s), "same image ID cannot excuse changed saved execution");
       owner[key] = before;
@@ -149,6 +151,37 @@ test("consistent negative runtime/image rewrites still differ from independently
     assert.equal(native.baseline, false);
     assert.throws(() => validateTimingAudit(b, folder, subject, bundle, sealedSources), /timing execution differs/);
   }
+});
+
+test("k6 execution rewrites cannot pass the actual accepted-audit and core bridge", async () => {
+  const f = result(), summary = f.summary, folder = join(temporary, "k6-execution"); mkdirSync(folder);
+  const b = { request: { group: "json-api", round: summary.round, commit: summary.commit }, selection: { apps: descriptor().apps },
+    preparation: { fixtures: [] }, execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } };
+  const bundle = { schema: "json-api-native-audits/v1", receipts };
+  const save = () => { for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+    writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); };
+  const compose = (native, audit) => composePhase(b, native, { cleanupComplete: true, resources: "verified" },
+    [{ terminal: true, code: 0, error: null, cancelled: false, forced: false, success: true }], audit);
+  save();
+  assert.equal(inspectEvidence(b, folder).baseline, true);
+  const original = await inspectNative(b, folder); assert.equal(original.status, "verified");
+  assert.equal(compose(original, validateTimingAudit(b, folder, subject, bundle, sealedSources).complete).outcome, "native-validated");
+  summary.toolExecutions.k6.Entrypoint = ["/unreviewed/k6"];
+  for (const entry of Object.values(summary.apps)) for (const runs of Object.values(entry.runs)) for (const run of runs) {
+    for (const phase of [run.warmup, ...Object.values(run.phases)]) {
+      const raw = f.load(phase.raw), cfg = raw.participants.load.configuration;
+      cfg.entrypoint = summary.toolExecutions.k6.Entrypoint; cfg.path = cfg.entrypoint[0]; cfg.args = [...cfg.command];
+      phase.raw = f.put(raw);
+    }
+  }
+  save();
+  assert.equal(inspectEvidence(b, folder).baseline, true, "self-consistent raw replay alone cannot anchor image configuration");
+  const changed = await inspectNative(b, folder); assert.equal(changed.status, "verified");
+  let audited = false;
+  try { audited = validateTimingAudit(b, folder, subject, bundle, sealedSources).complete; }
+  catch (error) { assert.match(error.message, /timing execution differs from independently inspected image/); }
+  assert.equal(audited, false, "unchanged accepted image proof must reject a consistently rewritten k6 entrypoint");
+  assert.notEqual(compose(changed, audited).outcome, "native-validated");
 });
 
 test("independent review data must match all 36 actual subjects and sealed source bytes", () => {

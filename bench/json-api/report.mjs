@@ -46,12 +46,12 @@ export function inspectJson(summary, { load, commit } = {}) {
       appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, loadMemoryBytes: 2 ** 31,
       nativeProfile: "framework-default", phases: ["warmup", ...phases] }, "measurement settings differ");
     assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
-    for (const tool of ["node", ...(summary.options.checkOnly || gated ? [] : ["k6"])]) {
+    for (const tool of ["node", "k6"]) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
       assert.equal(summary.tools[tool].image, tool === "node" ? nodeImage : k6Image, "wrong tool image reference");
       verifyImageExecution(summary.toolExecutions?.[tool]);
     }
-    if ((!summary.options.checkOnly && !gated) || summary.tools.k6 !== undefined) verifyK6Provenance(summary.tools.k6);
+    verifyK6Provenance(summary.tools.k6);
   });
   const fixtures = {}, functionalVerifiers = {};
   check("fixture set", () => assert.deepEqual(Object.keys(summary.fixtures ?? {}).sort(), Object.keys(payloads).sort()));
