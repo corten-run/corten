@@ -560,7 +560,10 @@ async function run(browser) {
           observer.disconnect();
         }).observe(document.body, { childList: true, subtree: true });
       });
-      await styled.click("#styled-form button");
+      // A click on the button itself, not at a point: the watchlist is still drawing its prices
+      // below the form's place, and a click at the button's point can land beside it once they
+      // move it (Firefox under load: mousedown on the button, the click on <main>, nothing sent).
+      await styled.dispatchEvent("#styled-form button", "click");
       const drawn = await styled
         .waitForFunction(() => (/** @type {any} */ (window)).__styled, undefined, { timeout: 5000 })
         .then((got) => got.jsonValue(), () => "not drawn");
