@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, posix, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../deployments.mjs";
-import { composeHostProof, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
+import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants } from "./host-lifetime.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
 const binding = { request: { group: "client-heavy", round: "w17", commit: "a".repeat(40) }, resources: { app: null } };
@@ -16,12 +16,12 @@ const stat = (pid, name) => `${pid} (${name}) S ${[1, ...Array(17).fill(0), pid 
 const group = (path, ids = []) => ({ path, files: { "cgroup.procs": ids.map((id) => `${id}\n`).join(""),
   "cgroup.events": `populated ${ids.length ? 1 : 0}\n`, "cpu.stat": "usage_usec 10\n", "cpu.max": "max 100000\n",
   "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom 0\noom_kill 0\n" } });
-function fixture(t, change = () => {}) {
+function fixture(t, change = () => {}, bound = binding) {
   const directory = mkdtempSync(join(tmpdir(), "isolated-host-replay-"));
   t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
   const ancestors = []; for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(group(p)); if (p === "/") break; }
   const context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, command, leaderPid: pid, parent, path,
-    ...binding.request, bindingSha256: deploymentSha256(binding), invocation, bootId: "boot", ancestors };
+    ...bound.request, bindingSha256: deploymentSha256(bound), invocation, bootId: "boot", ancestors };
   const processes = [[100, "node", "a", null], [101, "rustc", "c", null], [102, "chrome", "b", "--type=renderer"]]
     .map(([pid, name, hash, type]) => ({ stat: stat(pid, name), cgroup: `0::${path}\n`, executableSha256: hash.repeat(64), type }));
   const samples = [{ at: 0, groups: [group(path)], processes: [] }, { at: 50, groups: [group(path, [100, 101, 102])], processes },
@@ -31,8 +31,83 @@ function fixture(t, change = () => {}) {
   writeFileSync(join(directory, "binding.json"), JSON.stringify(context));
   writeFileSync(join(directory, "samples.jsonl"), samples.map((s) => JSON.stringify(s) + "\n").join(""));
   writeFileSync(join(directory, "terminal.json"), JSON.stringify(terminal));
-  return { directory, observation: () => inspectLifetime(binding, invocation, directory, { campaign, command, pid, result }) };
+  return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
 }
+
+function browserFixture(t) {
+  const bound = { ...binding, request: { ...binding.request, group: "fullstack-browser" }, selection: { apps: ["app"] } };
+  const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
+  const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
+    Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
+  const participant = { id, role: "application", app: "app", case: "case", imageId, window: { startedAt: 20, endedAt: 70 },
+    terminal: { id, imageId, state, limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } };
+  const g = group(dockerPath, [300]); g.files["cpu.max"] = "100000 100000\n"; g.files["memory.max"] = `${2 ** 30}\n`;
+  const record = { startedAt: 49, endedAt: 51, container: { id, imageId, state, restartCount: 0 }, kernel: {
+    bootId: "boot", stat: stat(300, "native"), cgroup: `0::${dockerPath}\n`, at: 50,
+    ancestors: [group("/system.slice"), group("/")], groups: [g], processes: [
+      { stat: stat(300, "native"), cgroup: `0::${dockerPath}\n`, executableSha256: "c".repeat(64), type: null }],
+  } };
+  const f = fixture(t, ({ context, samples }) => {
+    context.dockerBaseline = [];
+    context.leaderIdentity = processIdentity(stat(100, "node"));
+    for (const s of samples) s.docker = { inventory: [], participants: [], gaps: [] };
+    samples[1].docker = { inventory: [id], participants: [record], gaps: [] };
+  }, bound);
+  const native = { cleanupComplete: true, qualificationPassed: false, outcomes: [{ app: "app", outcome: "unsupported" }],
+    hostSubject: { schema: "native-browser-host-subject/v2", executionWindow: { startedAt: 10, endedAt: 90 },
+      processWindows: [{ kind: "browser", app: "app", case: "case", startedAt: 20, endedAt: 70 }],
+      toolIdentities: { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "9".repeat(64) },
+      participants: [participant], subjectSha256: "d".repeat(64), filesSha256: "e".repeat(64) } };
+  return { bound, native, observation: f.observation() };
+}
+
+test("browser OS composition requires actual external Docker scopes as well as the supervised leader/renderer", (t) => {
+  const f = browserFixture(t);
+  assert.equal(inspectBrowserParticipants(f.native.hostSubject, f.observation), true);
+  assert.equal(composeHostProof(f.bound, f.native, f.observation).resources, "verified");
+  assert.equal(f.native.qualificationPassed, false);
+  f.observation.samples[1].processes[0].stat = stat(999, "node");
+  assert.equal(composeHostProof(f.bound, f.native, f.observation).resources, "blocked", "another same-binary Node PID cannot stand in for the leader");
+});
+
+test("a never-started artifact has no running OS claim, but cannot conceal actual execution", (t) => {
+  const f = browserFixture(t), p = f.native.hostSubject.participants[0];
+  p.role = "artifact"; p.window = null; p.terminal.restartCount = 0;
+  p.terminal.state = { ...p.terminal.state, Status: "created", Running: false, Pid: 0,
+    StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
+  assert.throws(() => inspectBrowserParticipants(f.native.hostSubject, f.observation), "actual running snapshot contradicts never-started declaration");
+  f.observation.samples[1].docker.participants = [];
+  assert.equal(inspectBrowserParticipants(f.native.hostSubject, f.observation), true);
+  for (const [key, value] of [["StartedAt", "2026-11-14T00:00:00Z"], ["FinishedAt", "2026-11-14T00:00:01Z"],
+    ["Status", "exited"], ["Pid", 300], ["Running", true], ["Paused", true], ["Restarting", true], ["OOMKilled", true]]) {
+    const before = p.terminal.state[key]; p.terminal.state[key] = value;
+    assert.throws(() => inspectBrowserParticipants(f.native.hostSubject, f.observation), key); p.terminal.state[key] = before;
+  }
+  p.terminal.restartCount = 1; assert.throws(() => inspectBrowserParticipants(f.native.hostSubject, f.observation));
+  p.terminal.restartCount = 0; f.observation.context.dockerBaseline.push(p.id);
+  assert.throws(() => inspectBrowserParticipants(f.native.hostSubject, f.observation), "baseline resources cannot be adopted");
+});
+
+for (const [name, change, invalid] of [
+  ["Docker namespace mismatch", (f, r) => { r.kernel.cgroup = "0::/unrelated\n"; }, true],
+  ["Docker PID reuse", (f, r) => { r.kernel.stat = stat(301, "native"); }, true],
+  ["wrong Docker image", (f, r) => { r.container.imageId = `sha256:${"0".repeat(64)}`; }, true],
+  ["wrong boot", (f, r) => { r.kernel.bootId = "foreign"; }, true],
+  ["missing participant", (f) => { f.observation.samples[1].docker.participants = []; }, false],
+  ["observed collection gap", (f) => { f.observation.samples[1].docker.gaps = [f.native.hostSubject.participants[0].id]; }, false],
+  ["HostConfig without OS proof", (f, r) => { r.kernel = null; r.container.state.Running = false; r.container.state.Pid = 0; }, false],
+  ["missing effective controls", (f, r) => { r.kernel.groups[0].files["cpu.max"] = null; }, false],
+  ["different actual quota", (f, r) => { r.kernel.groups[0].files["cpu.max"] = "200000 100000\n"; }, true],
+  ["different actual memory", (f, r) => { r.kernel.groups[0].files["memory.max"] = "max\n"; }, true],
+  ["omitted member", (f, r) => { r.kernel.processes = []; }, true],
+  ["paused participant", (f, r) => { r.container.state.Paused = true; }, true],
+  ["restarted participant", (f, r) => { r.container.restartCount = 1; }, true],
+  ["missing actual ancestor control", (f, r) => { r.kernel.ancestors[0].files["memory.max"] = null; }, false],
+]) test(`browser ${name} cannot qualify resource proof`, (t) => {
+  const f = browserFixture(t), record = f.observation.samples[1].docker.participants[0]; change(f, record);
+  if (invalid) assert.throws(() => composeHostProof(f.bound, f.native, f.observation));
+  else assert.equal(composeHostProof(f.bound, f.native, f.observation).resources, "blocked");
+});
 test("PID identity uses kernel start ticks, including names containing parentheses", () => {
   assert.deepEqual(processIdentity(stat(100, "a (b) c")), { pid: 100, startTicks: "1000", comm: "a (b) c" });
   assert.throws(() => processIdentity("100 malformed"));

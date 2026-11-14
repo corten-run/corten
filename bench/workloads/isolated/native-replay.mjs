@@ -35,6 +35,14 @@ export function validateNativeResult(binding, result) {
     assert.ok(result.outcomes.every((r) => r.outcome !== "not-run"));
   }
   if (result.status === "verified") assert.ok(result.outcomes.every((r) => ["passed", "unsupported"].includes(r.outcome)));
+  if (binding.request.group === "fullstack-browser" && result.attemptComplete) {
+    assert.equal(typeof result.qualificationPassed, "boolean");
+    assert.ok([0, 1].includes(result.expectedExitCode));
+    assert.equal(result.expectedExitCode, result.qualificationPassed ? 0 : 1);
+    if (result.qualificationPassed) {
+      assert.equal(result.status, "verified"); assert.ok(result.outcomes.every((r) => r.outcome === "passed"));
+    }
+  }
   if (result.comparisonEligibleApps !== undefined) {
     assert.ok(Array.isArray(result.comparisonEligibleApps));
     assert.equal(new Set(result.comparisonEligibleApps).size, result.comparisonEligibleApps.length);

@@ -29,9 +29,10 @@ for (const [path, { group, name }] of seams) mock.module(urls.get(path), { expor
   if (action === "mutate") appendFileSync(join(folder, "raw.log"), "changed");
   if (action === "malformed") return { status: "SYNTHETIC_PRIVATE_SENTINEL" };
   return { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
+    ...(group === "fullstack-browser" ? { qualificationPassed: true, expectedExitCode: 0 } : {}),
     outcomes: input.selection.apps.map((app) => ({ app, outcome: "passed" })), blockers: [] };
 } } });
-const { inspectNative, executionGroups } = await import("./native-replay.mjs");
+const { inspectNative, executionGroups, validateNativeResult } = await import("./native-replay.mjs");
 function fixture(t, group) {
   const folder = mkdtempSync(join(tmpdir(), "isolated-native-composition-"));
   t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); });
@@ -42,6 +43,21 @@ function fixture(t, group) {
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
 }
+
+test("browser qualification exit is exact and separate from intrinsic completion and cleanup", () => {
+  const binding = { request: { group: "fullstack-browser" }, selection: { apps: ["a", "b"] } };
+  const result = { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "blocked",
+    qualificationPassed: false, expectedExitCode: 1, outcomes: [{ app: "a", outcome: "passed" }, { app: "b", outcome: "unsupported" }], blockers: [] };
+  assert.equal(validateNativeResult(binding, result), result);
+  for (const expectedExitCode of [undefined, null, "1", 0, 2, 137])
+    assert.throws(() => validateNativeResult(binding, { ...result, expectedExitCode }));
+  assert.throws(() => validateNativeResult(binding, { ...result, qualificationPassed: true, expectedExitCode: 0 }));
+  const qualified = { ...result, qualificationPassed: true, expectedExitCode: 0,
+    outcomes: binding.selection.apps.map((app) => ({ app, outcome: "passed" })) };
+  assert.equal(validateNativeResult(binding, qualified), qualified);
+  assert.doesNotThrow(() => validateNativeResult(binding, { ...qualified, cleanupComplete: false }));
+  assert.throws(() => validateNativeResult(binding, { ...qualified, status: "failed" }));
+});
 test("all registry groups have fixed awaited native APIs, with the real strict JSON report retained", async (t) => {
   assert.deepEqual(executionGroups, groupNames);
   for (const group of groupNames.filter((g) => g !== "json-api")) {
