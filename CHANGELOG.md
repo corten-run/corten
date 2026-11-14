@@ -462,15 +462,12 @@ Corten is pre-1.0, so any minor version may change the API.
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
   runtime's read of the route is a patch (what answers before the handler, a stage or an
-  extractor such as a `Caller` refusal, and a response replaced through `DerefMut` are not
-  checked; `req.patch_or`, `req.invalid` and `req.invalid_with` answer the mode the client
-  asked in, so a handler that sets `req.mode` cannot make them a page). Before, any route compiled, and one whose handler answered its page left
+  extractor such as a `Caller` refusal, a response replaced through `DerefMut`, and a handler
+  that writes `req.mode` before `req.patch_or`, `req.invalid` or `req.invalid_with`, which
+  then answer the mode it wrote, are not checked). Before, any route compiled, and one whose handler answered its page left
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
   the call or at the handler's name ([design Choice 49](docs/design.md#choice-patch-routes)). A
-  handler may also return `impl Answer<Inputs = AnyInputs, Rows = NotAFeed, Kind = Patches>`
-  around one, which the routes module and a mount both take (rustc warns that such an `impl`
-  does not prove `Kind`'s bound, `opaque_hidden_inferred_bound`). A
   route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
   by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
   `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
@@ -506,9 +503,7 @@ Corten is pre-1.0, so any minor version may change the API.
   `impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
   nothing to run (callgrind, a `patch_or` request in process, `what_a_patch_or_request_costs` on
   `0ff569c69` and `811324247`: 17,972 instructions for the patch before and 17,973 after, 18,405
-  before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`;
-  the mode `patch_or` reads, one more field of `Req`, measured 4 fewer on `89e355062` than on
-  `74b8bef51`: 17,968 and 17,964 for the patch, 18,386 and 18,382 for the page). The requests guide now says
+  before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`). The requests guide now says
   what a `data-patch` form gets from a handler that answers its page: the page swapped in, as a
   navigation's
   ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).

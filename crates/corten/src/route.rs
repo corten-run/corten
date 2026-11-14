@@ -1652,8 +1652,7 @@ impl<R: Route + ?Sized> Route for &R {
 /// serves it. Such a route mounted by hand (`Area::route`, `Api::route`) takes only a `get`
 /// handler that answers a patch too ([`Methods`]).
 ///
-/// Both checks read the `get` handler's [`crate::Answer::Kind`], so they agree (a test in
-/// `tests.rs` holds a handler returning `impl Answer<.., Kind = Patches>` to both). Only
+/// Both checks read the `get` handler's [`crate::Answer::Kind`], so they agree. Only
 /// Corten's patch answers can say `Patches`, so an answer of the app's own that holds one
 /// is not the `get` of such a route:
 ///
@@ -4425,8 +4424,8 @@ pub mod __private {
     /// `patches`: the route's `get` handler answers a patch whenever the runtime asks
     /// ([`crate::Patches`]). A `const` with nothing to run: the bounds are the check, at the
     /// handler's name in `#[route(..)]`. It reads the answer's [`crate::Answer::Kind`], as a
-    /// mount reads its [`crate::Methods`]'s, so the two agree: an `impl Answer<.., Kind = Patches>`
-    /// passes both, and only Corten's patch answers can say `Patches` ([`crate::answer::KindOf`]).
+    /// mount reads its [`crate::Methods`]'s, so the two agree, and only Corten's patch answers
+    /// can say `Patches` ([`crate::answer::KindOf`]).
     #[inline]
     pub const fn patches<H, T, S>(_: &H)
     where

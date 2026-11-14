@@ -2631,22 +2631,22 @@ async fn opaque(
     part
 }
 
-/// `patch_or`, `invalid` and `invalid_with` answer the mode the client asked in, not `req.mode`
-/// as the handler left it: a handler that sets `req.mode` to `Mode::Document` still answers the
-/// runtime's read of a route that says `patches` with a patch.
+/// `patch_or`, `invalid` and `invalid_with` answer `req.mode` as the handler leaves it, so a
+/// handler that sets it to `Mode::Document` answers the runtime's read of a route that says
+/// `patches` with the other side, here a redirect, and no patch: the escape Choice 49 names
+/// (`docs/design.md#choice-patch-routes`). Writing `req.mode` is the app's own override, as it
+/// is for any `HtmlResult` handler.
 #[tokio::test]
-async fn a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set() {
+async fn a_handler_that_sets_req_mode_answers_the_runtimes_read_as_it_set_it() {
     let app = App::new(url_moded::router()).test();
     for read in [
         app.get(&url_moded::Or).mode(crate::Mode::Action).await,
         app.get(&url_moded::Invalid).mode(crate::Mode::Action).await,
         app.get(&url_moded::InvalidWith).mode(crate::Mode::Action).await,
     ] {
-        assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
-        assert_eq!(read.text(), r#"<p id="msg">Moded</p>"#);
+        assert!(!read.headers().contains_key("corten-patch"), "the side req.mode chose, not a patch: {:?}", read.headers());
+        assert_eq!(read.status(), StatusCode::SEE_OTHER, "the redirect a page load gets");
     }
-    let page = app.get(&url_moded::Or).await;
-    assert_eq!(page.status(), StatusCode::SEE_OTHER, "a browser without JavaScript gets the other side");
 }
 
 #[crate::routes]

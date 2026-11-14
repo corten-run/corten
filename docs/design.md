@@ -3495,10 +3495,12 @@ rules something out.
     another answer's kind with `A::Kind`, does not compile (`compile_fail` doctests on
     `Answer::Kind`). The routes module's check of its own `get` reads the same `Answer::Kind`
     the mount reads, as a bound only `Patches` meets (a hidden `PatchKind`) with its wording at
-    the handler's name, so the two checks cannot disagree on what answers a patch: a handler
-    returning `impl Answer<.., Kind = Patches>` passes both, as `HtmlResult<Patches>` does (a
-    test in `tests.rs`; rustc warns there, `opaque_hidden_inferred_bound`, that the `impl` does
-    not prove `Kind`'s bound, which only the hidden type's impl can). The mount's side of that can only be a `const`: stable Rust has no bound for
+    the handler's name, so the two checks cannot disagree on what answers a patch. The shape to
+    write, and the one the message names, is `HtmlResult<Patches>`; as a compatibility detail, a
+    handler returning `impl Answer<.., Kind = Patches>` passes both checks too (a test in
+    `tests.rs`), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
+    prove `Kind`'s bound, which only the hidden type's impl can), which fails an app that denies
+    warnings. The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
     path-shape assertions the same functions already make
     ([Limit 11](#limit-caller-types)), which the compiler evaluates only when it generates the
@@ -3524,7 +3526,13 @@ rules something out.
     patch; and a second route at the same path, a `#[derive(Route)]` struct or a `Route` written
     by hand, mounted with a `get` that answers its page where the `patches` route's own module is
     not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
-    answers it. The derive's hidden `__patches` word is not one: it only adds the mount check.
+    answers it; and a handler that writes `req.mode` (to `Mode::Document`, say) before
+    `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page or
+    a redirect, as they do for any `HtmlResult` handler (a test in `tests.rs`). Writing
+    `req.mode` is the app's explicit override, and it stays one: a mode those three read but
+    the handler cannot write would change what an ordinary `HtmlResult` handler that writes it
+    gets, and splitting them by kind would add a concept for a case few apps write. The derive's
+    hidden `__patches` word is not one: it only adds the mount check.
 
     The cost to every app is that the
     patch-making methods have one more type parameter, which a handler's return type fixes; a
@@ -3570,10 +3578,7 @@ rules something out.
     `Methods<_, AnyAnswer>` by a bound, and associated type defaults are unstable, so `Route`
     cannot gain a type every `Route` written by hand would not have to name; the route's side of
     that check is the hidden `const PATCHES`, which has a default); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
-    `Patches` answer but through the methods that answer a patch to the runtime; those of them
-    that may answer a page instead, `patch_or`, `invalid` and `invalid_with`, decide by the mode
-    the client asked in, a private field of `Req` beside the writable `req.mode`, so a handler
-    that sets `req.mode` cannot make one a page for the runtime's read; and `Patches` is
+    `Patches` answer but through the methods that answer a patch to the runtime, and `Patches` is
     a `KindOf` only of an answer of the sealed `PatchAnswer`, so no answer type of the app's own
     can say it; the marker types
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
@@ -3588,12 +3593,7 @@ rules something out.
     18,404.68 before (18,404.65 to 18,406.15), 18,389.72 after with `HtmlResult` (18,389.65 to
     18,389.74) and 18,389.60 with `HtmlResult<Patches>` (18,388.02 to 18,389.69), 15 fewer; both
     differences are in how the generic methods were inlined, not work added or removed, and the
-    two kinds cost the same; and for the mode `patch_or`, `invalid` and `invalid_with` read, one
-    more field of `Req` set as it is made, the same way, three runs of each, on `74b8bef51`
-    (before; the binary built at `6bcccbca0`, the same Rust) and `89e355062` (after): the patch
-    17,967.70 before (17,967.67 to 17,967.72) and 17,963.83 after (17,963.68 to 17,965.37) with
-    `HtmlResult`, 17,967.68 and 17,963.73 with `HtmlResult<Patches>`, the page 18,385.65 and
-    18,381.58 with either, 4 fewer, again in how the code was laid out, not work removed); bet (the routes a part is read from are few and
+    two kinds cost the same); bet (the routes a part is read from are few and
     declared in a routes module, so the one word and the one return type cost an app little, and
     no app reads a part again from a route given by hand); value (mistakes fail at compile time,
     Values 4).
@@ -3633,11 +3633,7 @@ rules something out.
     (`an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand`),
     an app's own answer that holds a patch refused as such a route's `get` (the
     `compile_fail,E0277` doctest on `PatchRoute`), the routes module's message still at the
-    handler's name (`tests/handler_message.rs`), and a handler that sets
-    `req.mode = Mode::Document` still answering the runtime's read with a patch through
-    `patch_or`, `invalid` and `invalid_with`
-    (`a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set`), on
-    `89e355062`.
+    handler's name (`tests/handler_message.rs`), on `89e355062`.
 
 ## Rules
 
