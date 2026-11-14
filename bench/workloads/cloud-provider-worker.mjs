@@ -41,7 +41,7 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, run, host;
+  let nonce, sequence = 0, active = false, closing = false, failed = false, run, host, providerFailure;
   const stop = () => { closing = true; if (!active) process.exit(0); };
   process.on("disconnect", stop);
   process.on("SIGTERM", stop);
@@ -75,6 +75,7 @@ export function serveProviderWorker(dependencies = {}) {
           return { format: "module", source, shortCircuit: true };
         } });
         const engine = await import(pathToFileURL(join(directory, "cloud-provider-engine.mjs")).href);
+        providerFailure = (await import(pathToFileURL(join(directory, "cloud-options.mjs")).href)).providerFailure;
         host = (await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href)).host;
         const { createProviderEngine } = engine;
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing }); result = "ready";
@@ -82,10 +83,11 @@ export function serveProviderWorker(dependencies = {}) {
         action(message, host); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
         result = await run(message.args, message.timeout, message.allowFail);
         // Never serialize exceptions, provider error bodies or native stderr.
-        result = { status: result.status, stdout: result.stdout, stderr: "" };
+        const diagnostic = result.status === 1 ? providerFailure(result) : undefined;
+        result = { status: result.status, stdout: result.stdout, stderr: "", ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) };
       }
       ok = true;
-    } catch { failed = true; }
+    } catch (error) { failed = true; result = providerFailure?.(error) ?? null; }
     finally {
       active = false;
       if (process.connected) process.send({ schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result }, (error) => {

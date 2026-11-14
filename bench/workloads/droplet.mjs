@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { ownedDroplet, reservation, tags, terminalUnit } from "./cloud-contract.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
-import { campaignOutcome, controllerState, full, providerAccount, validateOptions } from "./cloud-options.mjs";
+import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 
@@ -89,9 +89,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     try { state = read(); check(); return await fn(); }
     finally {
       try { await settle(); }
-      catch {
+      catch (error) {
         preserveOperationLock = true;
-        throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true });
+        const diagnostic = providerFailure(error);
+        throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
+          diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
       finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
     }
@@ -152,9 +154,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
           assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
-          await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
+          const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
-          bind(await own()); // Lost acknowledgement permits only identity reconciliation, never another create.
+          // Lost acknowledgement permits only identity reconciliation, never another create.
+          try { bind(await own()); }
+          catch (error) {
+            const diagnostic = providerFailure(created);
+            if (diagnostic && !providerFailure(error)) error.providerDiagnostic = diagnostic;
+            throw error;
+          }
           let ready = false;
           for (let i = 0; i < 40; i++) {
             if ((await ssh("true", 30000, true)).status === 0) { ready = true; break; }
@@ -237,8 +245,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
 }
 
 // Never print exception messages/stacks or provider output: assertions may echo raw evidence.
-export function publicError() { return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."; }
+export function publicError(error) {
+  const diagnostic = providerFailure(error);
+  return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."
+    + (diagnostic ? ` Provider failure: ${diagnostic.code}${diagnostic.httpStatus === undefined ? "" : ` (HTTP ${diagnostic.httpStatus})`}.` : "");
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   import("./cloud-production.mjs").then((native) => native.productionCli(process.argv.slice(2)))
-    .then((code) => { process.exitCode = code; }, () => { console.error(publicError()); process.exitCode = 2; });
+    .then((code) => { process.exitCode = code; }, (error) => { console.error(publicError(error)); process.exitCode = 2; });
 }

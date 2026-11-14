@@ -280,11 +280,9 @@ async fn a_path_finds_its_route_and_nothing_else() {
     for path in ["/Items/7", "/items/7/", "//items/7", "/items/../items/7", "/nowhere"] {
         assert_eq!(get(path).await.status, 404, "{path}");
     }
-    // An empty segment stands for a parameter, as the empty text, before another segment, and not
-    // at the end of the path.
+    // A parameter must be nonempty, including before another segment.
     assert_eq!(get("/notes/plan/edit").await.body, "edit plan");
-    let empty = get("/notes//edit").await;
-    assert_eq!((empty.status, empty.body.as_str()), (200, "edit "));
+    assert_eq!(get("/notes//edit").await.status, 404);
     assert_eq!(get("/names/").await.status, 404);
 }
 
@@ -322,6 +320,8 @@ async fn a_value_no_link_carries_is_a_400() {
         "/names/.%FF",
         "/names/%FF",
         "/notes/..%FF/edit",
+        "/notes/%FF/edit",
+        "/shelves/%FF/",
         "/files/public/..%FF/private/report.pdf",
         "/files/..%FF/..%FF/x",
         "/files/%FF",
@@ -342,16 +342,11 @@ async fn a_value_no_link_carries_is_a_400() {
     }
 }
 
-/// An empty value between two segments, which a link writes as it is
-/// (docs/design.md#limit-path-values), reads back as empty, before a trailing `/` too.
+/// An empty parameter is not a match, before another segment or a trailing `/` either.
 #[tokio::test]
-async fn a_value_between_two_segments_may_be_empty() {
-    let notes = get(&url::EditNote { title: "" }.href()).await;
-    assert_eq!((notes.status, notes.body.as_str()), (200, "edit "));
-    let href = url::Shelf { id: "" }.href();
-    assert_eq!(href, "/shelves//");
-    let shelf = get(&href).await;
-    assert_eq!((shelf.status, shelf.body.as_str()), (200, "shelf \"\""));
+async fn a_value_between_two_segments_cannot_be_empty() {
+    assert_eq!(get("/notes//edit").await.status, 404);
+    assert_eq!(get("/shelves//").await.status, 404);
     let shelf = get(&url::Shelf { id: "a.b" }.href()).await;
     assert_eq!((shelf.status, shelf.body.as_str()), (200, "shelf \"a.b\""));
 }

@@ -2,7 +2,7 @@
 # A run that fails (a certificate refused, a package mirror out of reach) is tried again after a
 # quarter of an hour: Let's Encrypt allows five failed validations of a name an hour.
 [Unit]
-Description=Sets this machine up to serve the site, once the site's name reaches it
+Description=Sets this machine up to serve the site, as the one before it did or on its own
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=!/var/lib/corten-site-boot.done
