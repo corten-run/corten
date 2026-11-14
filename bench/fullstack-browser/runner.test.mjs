@@ -12,10 +12,10 @@ import { candidates, emptyCells, parseOptions, publicURL, publicInput, publishPo
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { createUpstream, upstreamDelta } from "./upstream.mjs";
-import { observeNetwork, architecture, classifyDisabledPreloads } from "./observe.mjs";
+import { observeNetwork, architecture, classifyDisabledPreloads, observedContext, closeObservedContext, visibleDOM, responseDocument } from "./observe.mjs";
 import { readStore, waitForSemanticChange } from "./journey.mjs";
 import { imageEvidence, captureLiveInputs } from "./run.mjs";
-import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts, validateCaseParticipant, validateExecutionSources } from "./verify.mjs";
+import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts, validateCaseParticipant, validateExecutionSources, replayDOMObservation, nativeToolIdentities } from "./verify.mjs";
 import { sha256 } from "./contract.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
@@ -88,6 +88,7 @@ test("native caller v2 replays actual failed-start cleanup and rejects missing b
     assert.deepEqual(result.invalid, []); assert.equal(result.selectedComplete, true, JSON.stringify(result));
     assert.equal(result.cleanupComplete, true); assert.equal(result.attemptComplete, false); assert.equal(result.qualificationPassed, false); assert.equal(result.expectedExitCode, 1);
     assert.deepEqual(result.blocked, ["matrix-incomplete"]); assert.ok(result.hostSubject?.participants.some((p) => p.role === "application" && p.window === null));
+    assert.equal(result.hostSubject.toolIdentities.lockSha256, source.files.find((f) => f.path === "package-lock.json").sha256);
     const terminal = native.browserTerminal; native.browserTerminal = { ...terminal, disconnectedAt: null }; save();
     const missing = await validateSaved({ folder, round: "w1", commit });
     assert.equal(missing.selectedComplete, false); assert.equal(missing.cleanupComplete, false); assert.equal(missing.hostSubject, null);
@@ -104,6 +105,114 @@ test("native caller v2 replays actual failed-start cleanup and rejects missing b
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
+
+test("native host tool identities require complete canonical lock proof", () => {
+  const tools = { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "c".repeat(64) };
+  assert.deepEqual(nativeToolIdentities(tools, tools.lockSha256), tools);
+  for (const changed of [{ ...tools, lockSha256: undefined }, { ...tools, lockSha256: "d".repeat(64) }, { ...tools, node: null }])
+    assert.throws(() => nativeToolIdentities(changed, tools.lockSha256));
+});
+
+// Actual HTTP/Chromium/CDP plus the real caller and installed leaf. This is
+// apparatus wiring, not a native marketplace contender or qualification.
+test("native DOM consumer binds actual document scope and interval for page Alice and 404", { timeout: 60000 }, async (t) => {
+  const { chromium } = await import("@playwright/test"), { performance } = await import("node:perf_hooks");
+  const { PlatformLifecycle } = await import("./lifecycle.mjs"), { installResourceObserver, ResourceAudit } = await import("./resources.mjs");
+  const { referenceHtml } = await import("../marketplace/reference.mjs"), { snapshotPage } = await import("../marketplace/check.mjs");
+  const profile = plan.cases.find((p) => p.js && p.locale === "en-US" && p.source === "fixture");
+  const bodies = new Map(), store = { blob(body) { const ref = { path: `native-evidence/blobs/${sha256(body)}`, sha256: sha256(body), bytes: body.length }; bodies.set(ref.path, Buffer.from(body)); return ref; } };
+  const reader = { json: (ref) => JSON.parse(bodies.get(ref.path)) };
+  let body = referenceHtml(records().item_1, "en-US");
+  const server = createServer((req, res) => { res.writeHead(req.url.includes("item_missing") ? 404 : 200, { "content-type": "text/html" }); res.end(body.replaceAll("http://localhost", `http://127.0.0.1:${server.address().port}`)); });
+  await listening(server, async (base) => {
+    const browser = await chromium.launch({ headless: true });
+    let lifecycle, context;
+    const observation = { store, app: "nextjs", case: profile.key, source: profile.source, contexts: [], byContext: new WeakMap(), byRequest: new WeakMap() };
+    try {
+      context = await observedContext(browser, { javaScriptEnabled: true, serviceWorkers: "block" }, observation, "application");
+      await context.addInitScript(installResourceObserver);
+      const page = await context.newPage(), cdp = await context.newCDPSession(page), network = observeNetwork(page);
+      lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: true });
+      await lifecycle.enable(); network.attachCDP(cdp); await lifecycle.enableDomains(); await lifecycle.startObservation(); lifecycle.markApplicationStart();
+      const resources = new ResourceAudit(page, cdp, true, lifecycle), rows = [];
+      for (const kind of ["ordinary", "Alice", "missing"]) {
+        const action = profile.steps[kind === "ordinary" ? 0 : kind === "Alice" ? 3 : 9];
+        body = kind === "missing" ? '<!doctype html><html lang="en-US"><body><h1>Not found</h1></body></html>' : referenceHtml(records()[action.itemId], "en-US");
+        if (kind === "Alice") body = body.replace("seller=&amp;sort=asc", "seller=Alice&amp;sort=desc");
+        const url = base + action.path + (kind === "Alice" ? "?seller=Alice&sort=desc" : "");
+        const response = await page.goto(url, { waitUntil: "load" });
+        await network.settle(0, performance.now() + 15000);
+        const row = { action, resourcesAtDOM: await resources.checkpoint(), dom: null, document: null };
+        const origin = network.originatingDocument(lifecycle.realms.get(row.resourcesAtDOM.realm)); assert.ok(origin, "Actual document must be unambiguously linked");
+        row.dom = await visibleDOM(page, observation, { context: observation.byContext.get(context).id, case: profile.key, action: action.id, scope: row.resourcesAtDOM.scope, originatingResponse: origin });
+        assert.equal(row.dom.extractionComplete, true);
+        if (kind === "ordinary") row.document = await responseDocument(browser, response, url, observation, network.requestId(response.request()), action.id);
+        if (kind !== "missing") assert.deepEqual(row.dom.page, await page.evaluate(snapshotPage));
+        else { assert.equal(response.status(), 404); assert.equal(row.dom.page, null); assert.equal(row.dom.error, "Not found"); }
+        row.resources = await resources.checkpoint(); await lifecycle.recordDocument(row.dom, row.resources); rows.push(row);
+        if (kind === "ordinary") {
+          await page.locator("article.marketplace h1").evaluate((el) => { el.textContent = "Observed live title"; });
+          const live = { action, resourcesAtDOM: await resources.checkpoint(), document: null };
+          live.dom = await visibleDOM(page, observation, { context: observation.byContext.get(context).id, case: profile.key, action: action.id, scope: live.resourcesAtDOM.scope,
+            originatingResponse: network.originatingDocument(lifecycle.realms.get(live.resourcesAtDOM.realm)) });
+          assert.deepEqual(live.dom.originatingResponse, row.dom.originatingResponse); assert.notEqual(live.dom.observer, row.dom.observer);
+          assert.equal(live.dom.page.title, "Observed live title"); assert.notEqual(live.dom.page.title, row.dom.page.title);
+          live.resources = await resources.checkpoint(); await lifecycle.recordDocument(live.dom, live.resources); rows.push(live);
+        }
+        if (kind === "missing") {
+          await page.locator("h1").evaluate((el) => { el.textContent = "LIVE-DIAGNOSTIC-CANARY"; });
+          const incomplete = { action, resourcesAtDOM: await resources.checkpoint(), document: null };
+          incomplete.dom = await visibleDOM(page, observation, { context: observation.byContext.get(context).id, case: profile.key, action: action.id, scope: incomplete.resourcesAtDOM.scope,
+            originatingResponse: network.originatingDocument(lifecycle.realms.get(incomplete.resourcesAtDOM.realm)) });
+          assert.equal(incomplete.dom.extractionComplete, false); assert.equal(incomplete.dom.error, null); assert.equal(incomplete.dom.page, null);
+          assert.ok(!bodies.get(incomplete.dom.responseEvidence.body.path).includes(Buffer.from("LIVE-DIAGNOSTIC-CANARY")));
+          incomplete.resources = await resources.checkpoint(); await lifecycle.recordDocument(incomplete.dom, incomplete.resources); rows.push(incomplete);
+        }
+      }
+      await t.test("private URL rejection does not retain its diagnostic value", async () => {
+        await page.evaluate(() => history.replaceState(null, "", "?token=CALLER-URL-CANARY"));
+        const row = rows.at(-1);
+        await assert.rejects(visibleDOM(page, observation, { context: observation.byContext.get(context).id, case: profile.key, action: row.action.id, scope: row.dom.scope,
+          originatingResponse: row.dom.originatingResponse }), (error) => error.message === "Typed native DOM extraction unavailable");
+      });
+      await closeObservedContext(browser, context, observation); context = null;
+      network.annotate();
+      const evidence = { context: observation.contexts[0].id, clock: { timeOrigin: performance.timeOrigin }, platformLifecycle: lifecycle.snapshot(), requestLedger: structuredClone(network.rows) };
+      const observers = new Set();
+      for (const row of rows) {
+        const result = replayDOMObservation(reader, row.dom, row, evidence, observation.contexts[0], profile.key, observers);
+        assert.equal(result.extractionComplete, row.dom.extractionComplete);
+        if (row.document) assert.equal(replayDOMObservation(reader, row.document, row, evidence, observation.contexts.find((c) => c.id === row.document.context), profile.key, observers, true).extractionComplete, true);
+      }
+      const original = { row: rows[0], evidence, context: observation.contexts[0] };
+      const negative = (mutate) => { const value = structuredClone(original); mutate(value); assert.throws(() => {
+        const result = replayDOMObservation(reader, value.row.dom, value.row, value.evidence, value.context, profile.key, new Set()); assert.ok(result);
+      }); };
+      for (const [key, value] of [["context", "other"], ["action", profile.steps[1].id], ["case", plan.cases.find((p) => p.key !== profile.key).key], ["scope", "other"]])
+        await t.test(`rejects transplanted ${key}`, () => negative((v) => { v.row.dom.responseEvidence.identity[key] = value; }));
+      await t.test("rejects wrong loader", () => negative((v) => { v.evidence.requestLedger[0].nativeDocument.loader = "other"; }));
+      await t.test("rejects wrong body", () => negative((v) => { v.row.dom.originatingResponse.sha256 = "f".repeat(64); }));
+      await t.test("rejects absent dispatch", () => negative((v) => { v.evidence.platformLifecycle.events = v.evidence.platformLifecycle.events.filter((e) => e.event !== "Network.requestWillBeSent"); }));
+      await t.test("rejects outside read interval", () => negative((v) => { v.row.dom.readInterval.startedAt = v.context.createdAt - 1; }));
+      await t.test("rejects contradictory model", () => negative((v) => { v.row.dom.page.title = "Changed saved model"; }));
+      await t.test("rejects reused observer", () => assert.throws(() => replayDOMObservation(reader, rows[0].dom, rows[0], evidence, observation.contexts[0], profile.key, observers)));
+      await t.test("rejects earlier document substituted for a different native realm", () => {
+        const row = structuredClone(rows[2]); row.dom.originatingResponse = rows[0].dom.originatingResponse;
+        assert.throws(() => replayDOMObservation(reader, row.dom, row, evidence, observation.contexts[0], profile.key, new Set()));
+      });
+      await t.test("rejects missing native terminal", () => negative((v) => { v.evidence.platformLifecycle.events = v.evidence.platformLifecycle.events.filter((e) => e.event !== "Network.loadingFinished"); }));
+      await t.test("rejects script-enabled independent parser", () => {
+        const c = { ...observation.contexts.find((c) => c.id === rows[0].document.context), javaScriptEnabled: true };
+        assert.throws(() => replayDOMObservation(reader, rows[0].document, rows[0], evidence, c, profile.key, new Set(), true));
+      });
+      const missing = structuredClone(original); missing.row.dom.responseEvidence = null;
+      assert.equal(replayDOMObservation(reader, missing.row.dom, missing.row, missing.evidence, missing.context, profile.key, new Set()), null);
+    } finally {
+      if (context) await closeObservedContext(browser, context, observation);
+      await lifecycle?.close(); await browser.close();
+    }
+  });
+});
 
 // Synthetic subprocess/ledger regressions. No actual Docker/browser or target
 // qualification is inferred from these controls.
@@ -201,6 +310,7 @@ test("native workload source is fixed by case, not agreement between saved claim
       } else if (mode.includes("context")) {
         for (const role of ["application", "ssr-parser", "mutation-other"]) {
           const context = { id: "source-context", role, app, case: profile.key, source: mode === "missing context source" ? null : opposite,
+            javaScriptEnabled: role === "application" ? profile.js : false,
             createStartedAt: 6, createdAt: 7, closeStartedAt: 10, closeEventAt: 11, closeCompletedAt: 12, absentAfter: true };
           const browserTerminal = { closeStartedAt: 16, disconnectedAt: 17, closeCompletedAt: 18, connectedAfter: false, contextsBefore: [] };
           if (mode === "missing context source") assert.equal(validateContextReceipts([context], browserTerminal, execution), false);
@@ -253,6 +363,7 @@ test("native selected completeness never substitutes for whole matrix or missing
 test("native context terminal observations require unique context and actual close chronology", () => {
   const execution = { executionWindow: { startedAt: 1, endedAt: 20 }, processWindows: [{ app: "nextjs", case: plan.cases[0].key, startedAt: 2, endedAt: 15 }] };
   const context = { id: "own-context", role: "application", app: "nextjs", case: plan.cases[0].key, source: "fixture", createStartedAt: 3, createdAt: 4,
+    javaScriptEnabled: plan.cases[0].js,
     closeStartedAt: 10, closeEventAt: 11, closeCompletedAt: 12, absentAfter: true };
   const terminal = { closeStartedAt: 16, disconnectedAt: 17, closeCompletedAt: 18, connectedAfter: false, contextsBefore: [] };
   assert.equal(validateContextReceipts([context], terminal, execution), true);

@@ -37,6 +37,7 @@ const need = (ok, message) => assert.ok(ok, message);
 const exactKeys = (v, names, message) => same(object(v) ? Object.keys(v).sort() : null, [...names].sort(), message);
 const cleanSnapshot = sha256(JSON.stringify({ diff: "", untracked: [] }));
 const nativeCaseSources = new Map(definition("fullstack-browser").cases.map((p) => [p.key, p.source]));
+const nativeCaseJS = new Map(definition("fullstack-browser").cases.map((p) => [p.key, p.js]));
 
 function localPath(value) {
   need(text(value) && !/[\x00-\x1f\x7f]/.test(value) && !/^[\\/]{2}/.test(value), "Local filesystem path required; no network/device paths");
@@ -621,10 +622,11 @@ export function validateContextReceipts(contexts, terminal, execution) {
   need(Array.isArray(contexts) && contexts.length <= 1000, "Malformed native context inventory");
   const ids = new Set(); let complete = true;
   for (const c of contexts) {
-    exactKeys(c, ["id", "role", "app", "case", "source", "createStartedAt", "createdAt", "closeStartedAt", "closeEventAt", "closeCompletedAt", "absentAfter"], "Unknown context receipt");
+    exactKeys(c, ["id", "role", "app", "case", "source", "javaScriptEnabled", "createStartedAt", "createdAt", "closeStartedAt", "closeEventAt", "closeCompletedAt", "absentAfter"], "Unknown context receipt");
     need(text(c.id) && !ids.has(c.id), "Duplicate/missing native context identity"); ids.add(c.id);
     need(["application", "ssr-parser", "mutation-other"].includes(c.role) && candidates.includes(c.app) && [null, "api", "fixture"].includes(c.source), "Unknown native context role/source");
     need(nativeCaseSources.has(c.case), "Unknown native context case");
+    same(c.javaScriptEnabled, c.role === "application" ? nativeCaseJS.get(c.case) : false, "Native context JS configuration differs from fixed role/case");
     if (c.source === null) complete = false;
     else same(c.source, nativeCaseSources.get(c.case), "Native context source differs from fixed case");
     const windows = execution.processWindows.filter((w) => w.app === c.app && w.case === c.case);
@@ -680,6 +682,89 @@ function readbackEntries(e) {
   return [[e.storeBefore, "initial-store", "application"], ...e.steps.filter((r) => r.action.input).map((r) => [r.readback, r.action.id, "application"]),
     [m?.before, "mutation-baseline", "application"], [m?.otherContext?.before, "other-initial", "mutation-other"],
     [m?.otherContext?.after, "other-final", "mutation-other"], ...(m?.attempts ?? []).map((r) => [r.readback, `rejection-${r.kind}`, "application"])];
+}
+
+export function nativeToolIdentities(tools, canonicalLock) {
+  need([tools?.node, tools?.browser, tools?.lockSha256, canonicalLock].every((v) => typeof v === "string" && hash.test(v)), "Missing native tool/lock identity");
+  same(tools.lockSha256, canonicalLock, "Native tool lock differs from immutable source");
+  return { node: tools.node, browser: tools.browser, lockSha256: tools.lockSha256 };
+}
+
+// This checks observational identities only; the installed leaf decodes reads.
+// Missing linkage stays unknown, while contradictory retained linkage rejects.
+export function validateDOMIdentity(dom, row, evidence, context, caseKey, observers, parser = false) {
+  if (!dom?.responseEvidence || !context || !dom.readInterval || !dom.readWindow || !finite(evidence.clock?.timeOrigin)) return null;
+  need(context.role === (parser ? "ssr-parser" : "application") && context.case === caseKey, "Wrong native DOM context role/case");
+  same(dom.context, context.id, "Native DOM context differs");
+  if (parser) need(context.id !== evidence.context && context.javaScriptEnabled === false && dom.scope !== row.dom?.scope, "Independent parser reused application scope/context");
+  else same(context.id, evidence.context, "DOM differs from application context");
+  need(text(dom.observer) && !observers.has(dom.observer), "Reused native DOM observer"); observers.add(dom.observer);
+  const epoch = (at) => evidence.clock.timeOrigin + at;
+  const start = row.resourcesAtDOM?.at, end = row.resources?.at;
+  if (![start, end, context.createdAt, context.closeStartedAt, dom.readWindow.startedAt, dom.readWindow.finishedAt,
+    dom.readInterval.startedAt, dom.readInterval.finishedAt].every(finite)) return null;
+  const times = [Math.floor(epoch(start)), dom.readWindow.startedAt, dom.readInterval.startedAt,
+    dom.readInterval.finishedAt, dom.readWindow.finishedAt, Math.ceil(epoch(end))];
+  need(times.every((v, i) => !i || times[i - 1] <= v), "Native DOM read outside bounded action window");
+  need(context.createdAt <= times[1] && times[4] <= context.closeStartedAt, "Native DOM read outside context lifetime");
+  same(dom.url?.path, row.action.path, "Native DOM route differs from action");
+  const j = evidence.platformLifecycle, origin = dom.originatingResponse;
+  if (!origin || !j?.events || !j.realms) return null;
+  const requests = evidence.requestLedger?.filter((r) => r.id === origin.requestId) ?? [];
+  need(requests.length === 1, "Missing/ambiguous originating document request");
+  const r = requests[0], n = r.nativeDocument, p = r.documentIdentity;
+  if (!n || !p) return null;
+  need([n.request, n.frame, n.loader].every(text) && finite(n.at) && finite(n.wall) && hash.test(n.urlSha256 ?? "") && hash.test(p.urlSha256 ?? ""), "Incomplete native document identity");
+  need(r.resource === "document" && r.completed && !r.failure && !r.captureError && hash.test(r.bodySha256 ?? "")
+    && Number.isInteger(r.status) && r.status >= 100 && r.status <= 599 && !(r.status >= 300 && r.status < 400), "Originating document did not complete");
+  same(origin.sha256, r.bodySha256, "Native DOM originating body differs");
+  const dispatches = j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document" && e.request === n.request && e.at === n.at);
+  need(dispatches.length === 1, "Missing/ambiguous native document dispatch");
+  const d = dispatches[0];
+  same([n.frame, n.loader, n.wall, n.urlSha256, r.method, r.path, p.urlSha256], [d.frame, d.loader, d.wall, d.urlSha256, d.method, d.path, d.urlSha256], "Document/native dispatch identity differs");
+  const sameNativeURL = j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document" && e.urlSha256 === p.urlSha256 && e.method === r.method);
+  const sameBrowserURL = evidence.requestLedger.filter((q) => q.resource === "document" && q.documentIdentity?.urlSha256 === p.urlSha256 && q.method === r.method);
+  need(finite(p.startedAt) && finite(d.wall) && (sameNativeURL.length === 1 && sameBrowserURL.length === 1
+    || Math.abs(p.startedAt - d.wall) <= 1 && sameNativeURL.filter((e) => Math.abs(e.wall - p.startedAt) <= 1).length === 1
+      && sameBrowserURL.filter((q) => Math.abs(q.documentIdentity.startedAt - d.wall) <= 1).length === 1), "Ambiguous repeated native document URL");
+  const next = j.events.find((e) => e.event === "Network.requestWillBeSent" && e.request === d.request && e.at > d.at);
+  const replies = j.events.filter((e) => e.event === "Network.responseReceived" && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
+  const terminals = j.events.filter((e) => ["Network.loadingFinished", "Network.loadingFailed"].includes(e.event) && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
+  need(replies.length === 1 && replies[0].status === r.status && replies[0].frame === d.frame && replies[0].loader === d.loader
+    && replies[0].type === "Document" && finite(replies[0].at) && replies[0].at >= d.at && d.receivedAt <= replies[0].receivedAt
+    && terminals.length === 1 && terminals[0].event === "Network.loadingFinished"
+    && finite(terminals[0].at) && terminals[0].at >= d.at
+    && replies[0].receivedAt <= terminals[0].receivedAt && epoch(terminals[0].receivedAt) <= times[2] + 1, "Native document response/terminal differs or follows DOM read");
+  const commits = j.events.filter((e) => e.event === "Page.frameNavigated" && e.frame === d.frame && e.loader === d.loader && e.path === d.path);
+  need(commits.length === 1 && d.receivedAt <= commits[0].receivedAt && commits[0].receivedAt <= terminals[0].receivedAt, "Document lacks unique native commit");
+  const realms = j.realms.filter((v) => v.realm === row.resourcesAtDOM.realm);
+  need(realms.length === 1 && realms[0].frame === d.frame && realms[0].loader === d.loader, "Originating document differs from DOM native realm");
+  const realm = realms[0], created = j.events.filter((e) => e.event === "Runtime.executionContextCreated" && e.uniqueId === realm.uniqueId);
+  need(text(realm.uniqueId) && Number.isInteger(realm.context) && created.length === 1 && created[0].context === realm.context && created[0].frame === realm.frame && created[0].default === true
+    && epoch(created[0].receivedAt) <= times[2] + 1, "Native DOM unique context creation unavailable");
+  need(!j.events.some((e) => epoch(e.receivedAt) <= times[3] && e.receivedAt >= created[0].receivedAt
+    && (e.event === "Runtime.executionContextDestroyed" && (e.uniqueId === realm.uniqueId || e.context === realm.context)
+      || e.event === "Runtime.executionContextsCleared" || e.event === "Page.frameDetached" && e.frame === realm.frame)), "Native DOM context destroyed before read completed");
+  if (parser) {
+    same([dom.requestId, dom.responseSha256, dom.status], [r.id, r.bodySha256, r.status], "Parser differs from original document response");
+  } else {
+    same(dom.scope, row.resourcesAtDOM.scope, "Native DOM/resource scope differs");
+    need(j.documents?.filter((v) => v.observer === dom.observer && v.scope === dom.scope && v.realm === realm.realm && v.frame === d.frame && v.loader === d.loader).length === 1,
+      "Native DOM observer lacks matching lifecycle document");
+  }
+  return { observer: dom.observer, context: context.id, case: caseKey, action: row.action.id, scope: dom.scope,
+    originatingResponse: { requestId: r.id, sha256: r.bodySha256 }, readInterval: dom.readInterval, url: dom.url };
+}
+
+export function replayDOMObservation(reader, dom, row, evidence, context, caseKey, observers, parser = false) {
+  const identity = validateDOMIdentity(dom, row, evidence, context, caseKey, observers, parser);
+  if (!identity) return null;
+  const response = replayResponse(reader, dom.responseEvidence, identity);
+  same(response.type, "public-browser-dom-observation", "Native DOM requires installed browser projection");
+  same([response.page, response.error?.text ?? null, response.articleCount, response.extractionComplete],
+    [dom.page, dom.error, dom.articleCount, dom.extractionComplete], "Native DOM model differs from typed public transcript");
+  if (response.extractionComplete) same(response.kind, row.action.kind === "missing" ? "missing-item" : "page", "Typed DOM kind differs from fixed action");
+  return response;
 }
 
 export function replayLiveInputs(reader, ref, sourceReceipt) {
@@ -758,7 +843,7 @@ async function validateNativeV2(input) {
     const toolsBefore = root("toolsBefore", "tools-before"), toolsAfter = root("toolsAfter", "tools-after");
     const tools = replayTools(reader, toolsBefore); same(replayTools(reader, toolsAfter), tools, "Native tools changed during execution");
     same(toolsBefore, toolsAfter, "Native installed tool/package bytes changed");
-    same(tools.lockSha256, sourceMap.get("package-lock.json")?.sha256, "Native tool lock differs from immutable source");
+    const toolIdentities = nativeToolIdentities(tools, sourceMap.get("package-lock.json")?.sha256);
     same(tools.browser, summary.browser?.executableSha256, "Native browser executable identity differs");
     const targets = root("targets", "targets"); validateTargets({ schema: "native-fullstack-browser-targets/v1", targets });
     same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");
@@ -785,7 +870,7 @@ async function validateNativeV2(input) {
     const contextsComplete = validateContextReceipts(n.contexts, n.browserTerminal, execution);
     if (!contextsComplete) block("native-context-terminal-incomplete");
     const proof = { files, manifest: reader.manifest, sources, tools, targets, execution, readbacks: true, responses: true, lifetimes: new Map(), prerequisites: new Map() };
-    const contextIds = new Set(), readIds = new Set();
+    const contextIds = new Set(), readIds = new Set(), domObservers = new Set();
     for (const app of candidates) for (const cell of summary.cells[app]) {
       const e = cell.evidence;
       if (!e) {
@@ -805,6 +890,7 @@ async function validateNativeV2(input) {
       for (const [r, phase, role] of readbackEntries(e)) {
         if (!r?.responseEvidence) { proof.readbacks = false; block("independent-readback-response-missing"); continue; }
         need(!readIds.has(r.requestId), "Reused independent native read identity"); readIds.add(r.requestId);
+        need(text(r.observer) && !domObservers.has(r.observer), "Reused native read/DOM observer"); domObservers.add(r.observer);
         const c = n.contexts.find((c) => c.id === r.context);
         need(context && c && c.role === role && c.app === app && c.case === cell.case && c.source === context.source, "Independent readback/context identity differs");
         same([r.app, r.case, r.source, r.round, r.phase, r.path], [app, cell.case, nativeCaseSources.get(cell.case), summary.options.round, phase, targets[app]?.readback?.path], "Independent readback source/phase/endpoint differs");
@@ -814,19 +900,16 @@ async function validateNativeV2(input) {
         contextIds.add(c.id);
       }
       for (const row of e.steps) {
-        const doc = row.document;
-        if (doc?.responseEvidence) {
-          const response = replayResponse(reader, doc.responseEvidence, { requestId: doc.requestId, responseSha256: doc.responseSha256, path: doc.url.path, status: doc.status });
-          const c = n.contexts.find((c) => c.id === doc.context);
-          need(c?.role === "ssr-parser" && c.app === app && c.case === cell.case && c.id !== context?.id, "Independent parser context differs");
-          need(!contextIds.has(c.id), "Reused independent parser context");
-          contextIds.add(c.id);
-          same(response.page, doc.page, "Independent parser model differs from public transcript");
-          if (!response.extractionComplete) { proof.responses = false; block("public-response-extraction-incomplete"); }
-        } else if (doc) { proof.responses = false; block("public-response-projection-missing"); }
-        // Live same-page updates and native error pages need their own typed
-        // observation, not a claim that an earlier HTML body reproduced them.
-        proof.responses = false; block("public-live-dom-projection-missing");
+        for (const [dom, parser] of [[row.dom, false], ...(row.document ? [[row.document, true]] : [])]) {
+          const c = parser ? n.contexts.find((c) => c.id === dom.context) : context;
+          if (parser) {
+            need(c?.role === "ssr-parser" && c.app === app && c.case === cell.case && c.id !== context?.id, "Independent parser context differs");
+            need(!contextIds.has(c.id), "Reused independent parser context"); contextIds.add(c.id);
+          }
+          const response = replayDOMObservation(reader, dom, row, e, c, cell.case, domObservers, parser);
+          if (!response) { proof.responses = false; block("public-dom-native-binding-missing"); continue; }
+          if (!response.extractionComplete) { proof.responses = false; block("public-dom-extraction-incomplete"); }
+        }
       }
     }
     const replayed = replaySaved(input, proof); result.inventory = replayed.inventory;
@@ -843,7 +926,7 @@ async function validateNativeV2(input) {
     const outer = [...files.entries].filter(([, f]) => !f.directory).map(([path, f]) => ({ path, sha256: sha256(readFileSync(f.path)) }));
     if (!execution.blocked.length && sourcesComplete && result.cleanupComplete && execution.participants.every((p) => p.imageId && p.terminal)) result.hostSubject = {
       schema: "native-browser-host-subject/v2", executionWindow: execution.executionWindow, processWindows: execution.processWindows,
-      toolIdentities: { node: tools.node, browser: tools.browser }, participants: execution.participants,
+      toolIdentities, participants: execution.participants,
       subjectSha256: execution.subjectSha256, filesSha256: sha256(encoded(outer)) };
     if (!summary.complete || summary.failures.length) block("producer-incomplete");
     if (!result.cleanupComplete) block("apparatus-cleanup-incomplete");

@@ -58,7 +58,7 @@ export class PlatformLifecycle {
     cdp.on("Network.webSocketHandshakeResponseReceived", (e) => record("Network.webSocketHandshakeResponseReceived", { request: e.requestId, at: e.timestamp, status: e.response.status }));
     cdp.on("Network.webSocketClosed", (e) => record("Network.webSocketClosed", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.requestWillBeSent", (e) => {
-      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, ...address(e.request.url), urlSha256: urlHash(e.request.url),
+      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, wall: e.wallTime * 1000, ...address(e.request.url), urlSha256: urlHash(e.request.url),
         document: { ...address(e.documentURL), urlSha256: urlHash(e.documentURL) }, sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), urlSha256: urlHash(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
           request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null,
         redirectHasExtraInfo: e.redirectHasExtraInfo,

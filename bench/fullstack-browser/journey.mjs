@@ -160,6 +160,12 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       const at = performance.now();
       row.dispatchStartedAt = at;
       const deadline = at + settings.actionTimeoutMs;
+      const observeDOM = async () => {
+        if (!observation) return visibleDOM(page);
+        const sample = row.resourcesAtDOM ?? await resources.checkpoint();
+        return visibleDOM(page, observation, { context: evidence.context, case: profile.key, action: step.id, scope: sample.scope,
+          originatingResponse: network.originatingDocument(lifecycle.realms.get(sample.realm)) });
+      };
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
         if (response?.status) row.navigationResponse = { status: response.status(), path: new URL(response.url()).pathname };
@@ -174,7 +180,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         await network.settle(offset, deadline, Boolean(step.input));
         row.timing.settledObservedMs = performance.now() - at;
         row.resourcesAtDOM = await resources.checkpoint();
-        row.dom = await visibleDOM(page);
+        row.dom = await observeDOM();
         await nativeForm(page, row.dom.native, app, profile.js, cdp);
         assert.equal(row.dom.url.path, step.path, "visible logical route differs from action");
         if (step.kind === "initial") {
@@ -182,7 +188,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           const button = page.locator('.marketplace__alert [type="submit"]');
           assert.ok(await button.isVisible() && await button.isEnabled(), "native action not usable");
           evidence.readiness.actionableObservedMs = performance.now() - at;
-          row.document = await responseDocument(browser, response, base + step.path, observation, network.requestId(response.request()));
+          row.document = await responseDocument(browser, response, base + step.path, observation, network.requestId(response.request()), step.id);
           evidence.architecture = architecture(app, row.dom.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.architecture = architecture(app, row.document.native);
           if (evidence.architecture.startsWith("unverified-")) evidence.gaps.push("Native architecture unverified in observed DOM and independent SSR markers");
@@ -201,11 +207,14 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         row.failures.push(e.message);
         // A timeout must retain the page that actually failed, not only the
         // planned action. Extraction may itself fail; retain that reason too.
-        if (!row.dom) try { row.dom = await visibleDOM(page); } catch (error) { row.failures.push(`failure DOM extraction: ${error.message}`); }
+        if (!row.dom) try { row.dom = await observeDOM(); } catch { row.failures.push("failure DOM extraction unavailable"); }
         if (!row.dom) try {
-          row.failurePage = { native: sanitizeNative(await page.evaluate(nativeDOM)), text: (await page.locator("body").innerText()).slice(0, 4096) };
+          row.failurePage = observation ? { captureFailure: "native-dom-extraction-unavailable" }
+            : { native: sanitizeNative(await page.evaluate(nativeDOM)), text: (await page.locator("body").innerText()).slice(0, 4096) };
         } catch (error) { row.failurePage = { error: error.message }; }
       }
+      if (observation && (row.dom?.extractionComplete !== true || row.document && row.document.extractionComplete !== true))
+        evidence.gaps.push(`${step.id}: typed native DOM extraction incomplete`);
       if (step.input) {
         try {
           row.readback = await readStore(base, readback, context.request, observation, step.id);

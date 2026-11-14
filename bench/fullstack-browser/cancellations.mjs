@@ -1,4 +1,4 @@
-import { publicURL } from './contract.mjs';
+import { publicURL, sha256 } from './contract.mjs';
 
 export function classifyCancellation(request, documents, frames) {
   const failure = request.failed;
@@ -35,6 +35,18 @@ export class NativeNetworkAudit {
   annotate(rows) {
     const documents = this.requests.filter((r) => r.kind === 'Document');
     for (const row of rows) {
+      if (row.resource === 'document') {
+        const identity = this.identity(row.id);
+        if (identity) {
+          row.documentIdentity = { urlSha256: sha256(identity.url), startedAt: identity.startTime };
+          const sameURL = documents.filter((r) => r.url === identity.url && r.method === row.method);
+          const browserMatches = rows.filter((other) => other.resource === 'document' && other.method === row.method && this.identity(other.id)?.url === identity.url);
+          const matches = sameURL.length === 1 && browserMatches.length === 1 ? sameURL
+            : sameURL.filter((r) => Math.abs(r.wall - identity.startTime) <= 1);
+          row.nativeDocument = matches.length === 1 ? { request: matches[0].id, frame: matches[0].frame, loader: matches[0].loader,
+            at: matches[0].at, wall: matches[0].wall, urlSha256: sha256(matches[0].url) } : null;
+        }
+      }
       if (!row.failure) continue;
       const identity = this.identity(row.id); if (!identity) continue;
       const sameURL = this.requests.filter((r) => r.url === identity.url && r.method === row.method);
