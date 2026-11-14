@@ -7,6 +7,7 @@ import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
+import { verifyK6Provenance } from "../load-tool.mjs";
 
 export function inspectJson(summary, { load, commit } = {}) {
   assert.equal(summary.schema, schema, "not a json-api result schema");
@@ -42,6 +43,7 @@ export function inspectJson(summary, { load, commit } = {}) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
       assert.equal(summary.tools[tool].image, tool === "node" ? nodeImage : k6Image, "wrong tool image reference");
     }
+    if (!summary.options.checkOnly) verifyK6Provenance(summary.tools.k6);
   });
   const fixtures = {}, functionalVerifiers = {};
   check("fixture set", () => assert.deepEqual(Object.keys(summary.fixtures ?? {}).sort(), Object.keys(payloads).sort()));

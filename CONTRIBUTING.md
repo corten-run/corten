@@ -22,6 +22,7 @@ examples/card-market/ A trading-card store (home, categories, item pages) with e
 examples/seller-desk/ A seller's inventory desk: a client-heavy screen built with handlers
 examples/listings-feed/ A seller's listings kept live by a feed on corten-cluster, served by several instances, and the failover benchmark; smoke.mjs tests the page
 examples/ui-gallery/ corten-ui and every UI kit component; smoke.mjs tests them in a browser
+examples/corten-site/ Corten's own site, a page that demonstrates itself, with the files that deploy it; smoke.mjs tests it
 docs/              Guides (docs/guide), design decisions and limits, surfaces (architecture.md)
 skills/corten/     The agent skill for building apps on Corten
 bench/fullstack/     Historical marketplace implementations and diagnostic scripts; localization work differs
@@ -58,8 +59,10 @@ the framework itself.
 ## Checks
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
-PowerShell from the repository root; in another shell use `$PWD` for `${PWD}` and
-`checkout=$(basename "$PWD")` for the first line).
+PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
+`checkout=$(basename "$PWD")` for the first line, and, for the three lines from `$env:SITE_HELD` to
+`Remove-Item`, the one line
+`SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium`).
 
 Each checkout builds into its own volumes, named after its folder (`corten-target-<folder>`,
 `corten-msrv-target-<folder>`), so two checkouts or worktrees never share one: every checkout is
@@ -97,6 +100,15 @@ docker build -f examples/ui-gallery/Dockerfile -t corten-ui-gallery .
 docker run -d --name corten-ui-gallery -p 18482:8080 corten-ui-gallery
 node examples/ui-gallery/smoke.mjs http://localhost:18482
 docker rm -f corten-ui-gallery
+docker build -f examples/corten-site/Dockerfile -t corten-site .
+docker run -d --name corten-site -p 18488:8080 corten-site
+node examples/corten-site/smoke.mjs http://localhost:18488
+docker rm -f corten-site
+docker run -d --name corten-site --cpus 1 --memory 512m -p 18488:8080 corten-site
+$env:SITE_HELD = "1"
+node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+Remove-Item Env:SITE_HELD
+docker rm -f corten-site
 docker build -f examples/seller-desk/Dockerfile -t corten-seller-desk .
 docker run -d --name corten-seller-desk -p 18484:8080 corten-seller-desk
 node examples/seller-desk/smoke.mjs http://localhost:18484
@@ -116,7 +128,7 @@ docker run -d --name feeds-nats --network feeds nats:2-alpine -js
 docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
 docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
 node examples/listings-feed/smoke.mjs http://localhost:18485
-docker rm -f corten-listings-feed feeds-pg feeds-nats
+docker rm -f -v corten-listings-feed feeds-pg feeds-nats
 docker network rm feeds
 ```
 
@@ -170,7 +182,7 @@ docker network create corten-test
 docker run -d --name corten-test-pg --network corten-test -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:16-alpine
 docker run -d --name corten-test-nats --network corten-test nats:2-alpine -js
 docker run --rm --network corten-test -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -e CORTEN_TEST_DATABASE_URL=postgres://postgres:postgres@corten-test-pg/feeds -e CORTEN_TEST_NATS_URL=nats://corten-test-nats:4222 -w /src rust:1-bookworm cargo test -p corten-cluster -- --test-threads=1
-docker rm -f corten-test-pg corten-test-nats
+docker rm -f -v corten-test-pg corten-test-nats
 docker network rm corten-test
 ```
 
@@ -282,9 +294,25 @@ Every published crate (all of `crates/`) shares the version in `[workspace.packa
 released together; the examples have `publish = false`. Pushing a tag `vX.Y.Z` runs the
 `Release` workflow (`.github/workflows/release.yml`): the checks, a `corten` binary for each
 platform, `cargo publish --workspace` (each crate after the ones it depends on), then a GitHub
-release with the binaries and the version's `CHANGELOG.md` section as its notes (attached as
-`CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub release allows).
+release with the binaries, `SHA256SUMS` and the version's `CHANGELOG.md` section as its notes
+(attached as `CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub
+release allows).
 It stops before publishing when the tag, the workspace version and the changelog disagree.
+A separate `attest` job, which builds nothing, signs each archive's GitHub build provenance, so
+the build jobs never hold an OIDC token. `verify-archives` then requires exactly the five
+expected archives, verifies each one's provenance against this workflow, commit and tag, and
+writes `SHA256SUMS` and its sha256 as a job output; `publish` needs it, so a missing or invalid
+attestation stops the release before the `release` environment's approval and before anything
+reaches crates.io. `github-release` checks that the `SHA256SUMS` it downloaded has that sha256,
+then that the archives it uploads are exactly the ones it lists, with their sha256s. That shows
+the release carries the bytes `verify-archives` verified; the checksums themselves are not
+signed and say nothing about who built the archives, which only the attestations show. Users
+verify downloaded archives as in
+[Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary). `cargo binstall`
+checks only HTTPS today: it would verify a minisign signature
+(`[package.metadata.binstall.signing]`), which needs a signing key the release holds as a
+secret, and whether to keep one is not decided
+([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.

@@ -1,0 +1,75 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 924B 0.0s done
+#1 DONE 0.2s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.27.3-alpine
+#3 DONE 0.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 51B 0.1s done
+#4 DONE 0.2s
+
+#5 [stage-1 1/3] FROM docker.io/library/debian:bookworm-slim
+#5 CACHED
+
+#6 [tools 1/3] FROM docker.io/library/golang:1.27.3-alpine
+#6 DONE 0.0s
+
+#7 [stage-2 5/5] ADD --chmod=644 --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 282.96kB 0.2s done
+#8 DONE 0.4s
+
+#9 [tools 2/3] WORKDIR /src
+#9 CACHED
+
+#10 [tools 3/3] RUN go install github.com/a-h/templ/cmd/templ@v0.3.1100
+#10 CACHED
+
+#11 [build 1/4] COPY go.mod go.sum ./
+#11 CACHED
+
+#12 [build 2/4] RUN go mod download
+#12 CACHED
+
+#13 [build 3/4] COPY . .
+#13 DONE 0.8s
+
+#14 [build 4/4] RUN templ generate && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/itempage .
+#14 2.323 (✓) Post-generation event received, processing... [ updates=0 needsRestart=true needsBrowserReload=true ]
+#14 2.701 (✓) Post-generation event received, processing... [ updates=1 needsRestart=false needsBrowserReload=false ]
+#14 3.156 (✓) Post-generation event received, processing... [ updates=2 needsRestart=false needsBrowserReload=false ]
+#14 3.156 (✓) Complete [ updates=3 duration=1.043133164s ]
+#14 ...
+
+#15 [stage-1 2/3] WORKDIR /app
+#15 CACHED
+
+#14 [build 4/4] RUN templ generate && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/itempage .
+#14 DONE 404.3s
+
+#7 [stage-2 5/5] ADD --chmod=644 --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+#7 CACHED
+
+#16 [stage-2 3/5] COPY --from=build /out/itempage ./
+#16 DONE 0.2s
+
+#17 [stage-2 4/5] COPY static ./static
+#17 DONE 0.1s
+
+#18 [stage-2 5/5] ADD --chmod=644 --checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js static/htmx.min.js
+#18 DONE 0.2s
+
+#19 exporting to image
+#19 exporting layers
+#19 exporting layers 0.5s done
+#19 writing image sha256:d6acb5d6484045961c2c99d96df9a08495c46bb5cf12a5e3cfda92503fa2b6d9 done
+#19 naming to docker.io/library/parity-gin-trace:local 0.0s done
+#19 DONE 0.6s

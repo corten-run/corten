@@ -43,6 +43,8 @@ AI agents.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
+  Apps with live streams also need an HTTP/2 proxy or CDN in front
+  ([Deploying](docs/guide/deploy.md)), even when the app ends TLS itself.
 - **One binary.** No JavaScript build step or bundler in the app; `static/` is compiled into the
   program.
 
@@ -55,6 +57,10 @@ corten new my-app
 cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save
 ```
+
+`cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
+build first, download it as in
+[Verify a prebuilt binary](docs/guide/getting-started.md#verify-a-prebuilt-binary).
 
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a test and a Dockerfile. [Getting started](docs/guide/getting-started.md) walks
@@ -202,12 +208,52 @@ says an `HTMLOutputElement` and the ref is on an `<output>`. Either mismatch is 
 
 ## Performance
 
-The table preserves historical measurements, not a current framework ranking. The first five
-rows are Corten's old marketplace implementation (round r16), with requests sent uncompressed
-and untagged, as `curl` sends them; a browser's request costs Corten more. Localization work
-was not equivalent across the eighteen apps, so r16 cannot establish general speed rankings.
-The last row is from the client-heavy table in the browser (round browser-4, 2026-11-11, at
-`3fb4b1ac`, on a Xeon Platinum 8358; [client-heavy screens](docs/performance.md#client-heavy-screens)).
+Historical round r20 is the **first validated v2 production baseline**, measured on 2026-11-12 (UTC)
+at `43550265076e378d2159a9ebc254cf9412a2355a` on one dedicated c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz).
+It is a saved measurement of that commit, not today's code or a baseline for the newer
+workload-group campaign. There is no speed delta from r16, catalog c1/c2 or another workload.
+
+Group `production`, feature profile `marketplace-production/v1`, native
+`PROFILE=matched`, connection cap 1000. Corten and ASP.NET Core qualified in both sources
+and passed every browser/content gate. Next.js, FastAPI, Express, Topcoat, Leptos were
+probed and excluded, not timed. The report preserves each missing requirement and lists all
+omitted adapters, which were not tested. These are measured adapter configurations, not claims
+about what their frameworks could implement. Conditional GET/ETag and downstream readiness
+are disclosed exceptions; logging remains native, not normalized.
+
+The table is Corten's median [min-max] of 3 passes. Pages format values per request;
+the other page locales and both admitted adapters are in the
+[full results](docs/performance.md#on-the-server) and [raw report](bench/marketplace/results/r20/report.md).
+
+| Profile, 64 users | Corten req/s | p95 ms | Counted CPU us/request |
+|---|---:|---:|---:|
+| Localized page from memory, en-US | 20,544.98 [19,501.83-21,843.88] | 8.12 [7.36-8.34] | 41.58 [39.27-43.30] |
+| Locale-neutral JSON from memory | 22,218.09 [21,286.85-23,037.44] | 7.76 [7.62-8.30] | 30.92 [28.56-35.06] |
+| Localized page from HTTP, en-US | 6,696.24 [6,220.59-7,233.94] | 13.29 [13.21-13.72] | 149.18 [138.00-160.59] |
+| Locale-neutral JSON from HTTP | 8,465.41 [7,546.34-8,486.89] | 11.43 [11.07-12.47] | 117.74 [117.42-131.97] |
+
+At fixed 150 en-US memory pages/s, Corten used 3.38 [2.41-3.48]% of one core
+and 11.39 [11.25-11.41] MiB steady memory (11.64 [11.60-11.65] MiB sampled peak).
+Container start to first complete en-US memory page was 182.00 [176.00-183.00] ms,
+before readiness/warmup, not process-exec or browser-interactive time.
+
+Warmup is 10s and each phase 15s, with identity encoding. Closed-loop throughput is
+observed, not proven maximum capacity: Corten's memory-source app CPU is below 95% in some
+closed-loop passes. No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core.
+Full pass-specific limits stay
+beside the detailed tables. No request failures, dropped fixed-rate iterations or app stops
+were recorded. Short-window ranges are not confidence intervals or an overall speed ranking.
+
+### Historical Measurements
+
+The following table preserves earlier measurements, including the site's measurement
+certificate references. Its first five rows are the old marketplace implementation from
+r16, not v2: requests were uncompressed and untagged, and localization work differed
+between frameworks. They establish neither a fair framework ranking nor a comparison
+with r20. Browser, bytes and build measurements remain
+[historical](docs/performance.md#historical-measurements). The final row is the separate
+client-heavy round browser-4 (2026-11-11, at
+`3fb4b1ac`, on a Xeon Platinum 8358), not the marketplace workload:
 
 | What | Corten, measured |
 |---|---|
@@ -218,11 +264,9 @@ The last row is from the client-heavy table in the browser (round browser-4, 202
 | Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
 | Taking over 1,000 server-rendered rows | 10.2 ms, 101 bytes of memory per row |
 
-Nightly measurements move to [marketplace v2](bench/marketplace/README.md) starting with
-official round r17: equivalent request-time localization in all twenty apps (eighteen in r17), with a new
-baseline and no r16 or catalog c1 delta. No v2 performance numbers are published here yet.
-See the [nightly procedure](bench/marketplace/nightly.md) and
-[Performance](docs/performance.md) for scope, historical tables and measurement limits.
+See [Performance](docs/performance.md) and the [nightly procedure](bench/marketplace/nightly.md)
+for scope, methodology and limits. Framework capabilities remain separate in
+[Highlights](#highlights), not inferred from benchmark speed.
 
 ## When to use it
 
@@ -279,6 +323,9 @@ In the order to read them; each README says how to run it and where each piece i
 7. [listings-feed](examples/listings-feed): one live feed served by several instances through
    Postgres and NATS, for when one instance is not enough, with a failover benchmark that kills
    instances while browsers follow.
+8. [corten-site](examples/corten-site): Corten's own site, one page that demonstrates itself,
+   with the files that deploy it to one small machine. Read it for a page of content rather than
+   an app, and for a deploy without a container.
 
 ## Crates
 

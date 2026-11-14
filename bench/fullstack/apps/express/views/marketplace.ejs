@@ -1,5 +1,5 @@
 <%- include("head", { title: record.title, lang: locale, sheet: "marketplace.css" }) %>
-<article class="marketplace" hx-boost="false">
+<article class="marketplace" hx-boost:inherited="false">
 <nav class="marketplace__categories"><% for (const category of record.categories) { %><a href="<%= itemPath("item_1") %>"><%= category.name %></a><% } %></nav>
 <h1><%= record.title %></h1>
 <% if (record.subtitle !== null) { %><p class="marketplace__subtitle"><%= record.subtitle %></p><% } %>

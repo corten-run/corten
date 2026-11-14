@@ -220,7 +220,7 @@ The previous w26 journal retains six unknown final-landing-page requests; w27 ad
 observation of that destination's asset declarations rather than rewriting the older evidence.
 Both strict qualification and readiness remain false under the unchanged shared oracle.
 
-An actual w27 final-retirement binding is realm `141126c267d610f425689bf03b2f4178`, numeric
+An actual w27 final-retirement binding is realm 141126c267d610f425689bf03b2f4178, numeric
 context 25, unique context `2126592634671779275.-3616000808792517322`, frame
 `0AF45C70B00A677D06713438510E6BD2`, loader `E1CCAD96F844BB05EF0BEA3956006FFE`.
 `Runtime.executionContextsCleared` contains that exact numeric/unique pair. The same frame

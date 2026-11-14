@@ -1,0 +1,255 @@
+# Native App-Owner Handoff
+
+These are observations from clean, immutable native images, not inferred framework
+limitations or default-tier results. App changes belong to their native authors;
+the hardening driver does not install defenses or replace their server/renderer.
+The representative is the existing `PROFILE=matched` production adapter. An
+alternative needs its own native identity and the same qualification gates.
+
+## Express
+
+`bench/fullstack/apps/express/server.mjs` already selects matched Helmet,
+compression, private caches, body limits and a native Node HTTP server with a
+30-second header timeout and configured connection cap. Do not replace those.
+It does not consume `HOSTS` or register a liveness endpoint.
+
+The retained `w6/express/fixture/direct/oversized-requests/qualification.json`
+reports exactly `host` and `live` missing. The unknown Host is answered 200; all
+seven standard liveness paths are answered 404. Independent `native-controls.json`
+confirms the missing allowlist and endpoint. This is missing production feature
+work, not an apparatus error, unknown-as-pass or a short attack's timeout finding.
+
+Native author requirements in `server.mjs`:
+
+1. Enforce configured `HOSTS` for matched native requests, accepting legitimate
+   configured names/ports while refusing unknown Host with 4xx. Preserve allowed
+   JSON, pages, forms, assets and health behavior.
+2. Add an actual liveness endpoint (prefer `/health/live`) which returns 200
+   independently of API source availability, and preserve a negative health path's
+   non-success response. Do not use a catch-all 200 or upstream-dependent readiness
+   as liveness.
+3. Verify real same-origin form handling through TLS deployment. The current
+   `crossSite` comparison uses `req.protocol` and `Host`; the existing nginx
+   benchmark profile rewrites Host to `fsw-target:8080` and terminates TLS. This is
+   a deployment compatibility risk, not a measured Express edge failure yet. Do
+   not remove Origin/Fetch-Metadata checks or forge a safe origin in the driver.
+
+## Gin
+
+`bench/fullstack/apps/gin/main.go` uses `gin.Default()` and `r.Run` with no matched
+profile middleware/server branch. `Dockerfile` builds that same native binary;
+there is no missed production-profile installer. Relevant native implementation
+sites are `main.go`, `marketplace.go` (forms/routes), and `record_http.go` (JSON).
+Keep native Gin/templ rendering and existing source bindings.
+
+The retained `w8/gin/fixture/direct/connection-pressure/qualification.json` has
+these twelve failed cells and exact required existing-contract predicates:
+
+| Cell | Observed | Required |
+| --- | --- | --- |
+| pageHeaders | none | CSP, nosniff, referrer, frame protection, opener policy |
+| pageScripts | no CSP | strict script/default CSP, no broad scheme/wildcard, unsafe eval or unqualified inline |
+| permissions | no | nonempty Permissions-Policy |
+| pageCompression | none | br or gzip when requested |
+| bigBody | 200 | refuse a 3 MiB form field with 4xx/5xx or recognized refusal/reset; healthy recovery |
+| jsonHeaders | none | same five security protections as pages |
+| jsonCompression | none; none | br/gzip for br+gzip request, gzip for gzip-only request |
+| host | 200 | unknown Host refused with 4xx |
+| bigHead | 200 | refuse 64 KiB request header with 4xx or recognized refusal/reset |
+| live | none | real liveness 200, independent of upstream; negative-path control |
+| unfinishedHead | held 40 s | native 30-second header deadline closes within existing 35-second qualification allowance |
+| connectionCap | served with 1050 held (200) | configured 1000-connection cap; healthy below 950 and after release, no service past cap |
+
+These are genuine absent matched-profile defenses/configuration. The last two
+are observed default Go server outcomes, not evidence that Gin cannot implement
+them. Native `http.Server` limits, a counted native listener, Gin middleware and
+bounded body parsing are app-owner work. Compression must remain native (Go gzip
+is sufficient); a common proxy supplying absent app features cannot qualify the
+direct representative. Existing private caching, CSRF refusal, JSON 404/405/HEAD
+and native browser/content checks passed and should remain intact. Fixture
+qualification does not cover API read-error/deadline features.
+
+## Deployment And Acceptance
+
+The unchanged existing nginx profile overwrites the client's Host and has its own
+default header/body/deadline/connection behavior. Direct production qualification
+cannot qualify this effective deployment. `deploymentQualificationVersion: 1`
+runs the same `qualify()` predicates through actual certificate-verified TLS
+clients and retains separate `edge-qualification.json`, edge native controls and
+direct/edge browser receipts. Missing edge defenses are deployment outcomes, not
+assumed native mechanism failures. A healthy native form is still mandatory.
+
+The retained `w10/aspnet/api/deployed-edge/slow-bodies` observation has original
+producer identity 398b3482f, preserved unchanged in its saved provenance. The
+reviewed producer changes are imported here as `226bf8c53`; that import is not
+the capture's measured commit. It has no missing direct ASP.NET production features. Effective TLS
+qualification observes unknown Host 200 and an unfinished head still held at
+40,070 ms. The cap probe establishes only 536/473 completed TLS handshakes within
+its unchanged connection deadline, below the required 950. Its connection-cap
+result is therefore inconclusive, not proof of an absent cap; do not enlarge the
+deadline/quota or relabel it a pass. Exact per-probe TLS receipts are retained in
+`edge-qualification.json.probes.jsonl`, including on qualification failure.
+
+The additional bad-Host control in that capture remains inconclusive because
+Node derived TLS SNI from the overridden HTTP Host and rejected the certificate.
+The follow-up client fix explicitly retains the URL's certificate identity while
+changing only HTTP Host, tested with actual ClientHello bytes and trusted/untrusted
+TLS receiving controls. The original native receipt is not rewritten. Effective
+qualification's separate TLS client already kept SNI independent, so its observed
+unknown-Host 200 remains valid. No qualified edge performance is claimed.
+
+For a bounded app-author regression, use a fresh local round, for example:
+
+```sh
+node bench/hardening/run.mjs w11 --review approved-native-app-change --build --verify-app express --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
+node bench/hardening/verify.mjs bench/hardening/results/w11
+```
+
+The unchanged full 216-cell execution, after author changes are committed, is:
+
+```sh
+node bench/hardening/run.mjs w12 --review approved-complete-group --build
+node bench/hardening/verify.mjs bench/hardening/results/w12
+```
+
+An existing pinned dependency install can be supplied with `--node-modules PATH`.
+Every cell starts fresh native processes and repeats production and complete
+browser/content gates. The full matrix is a multi-hour operation, not a 216-times
+13.5-second smoke test. Verification filters retain all other cells as `not-run`
+and can never set `groupReady`. Missing production defenses do not exclude an app
+from hardening observation or turn unqualified observations into numeric parity.
+
+## Five-finding repair verification
+
+Fresh `w11` was produced from commit `7b39c7438c07b05ca12729b96872e2a229e292a1`
+with `semanticReceiptsVersion: 2` and `lifecycleVersion: 2`. Its command was:
+
+```sh
+node bench/hardening/run.mjs w11 --review user-authorized-five-review-repairs --build --verify-app aspnet --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
+```
+
+Both direct and TLS marketplace browser gates passed 500 JSON, 264 page and 12
+profile checks. Direct native production qualification passed. The effective
+TLS deployment still reports `host`, `unfinishedHead`, `connectionCap`: unknown
+Host now reaches HTTP and returns 200 (missing validation, not the old SNI error),
+the unfinished head remains open at 40,023 ms, and only 641/472 TLS connections
+complete within the unchanged cap-probe deadlines. The last is inconclusive,
+not proof of a missing cap and not permission to enlarge its budget. Edge liveness,
+liveness under upstream fault and API-source controls were observed/passed.
+
+The actual timed cell recorded 12 established connections retained to client
+release at 8,500.034-8,506.071 ms, with 19-23 actual trickles per connection.
+Legitimate work completed 4/4 before, 13/13 during, 10/10 after, with exactly
+27 observed upstream requests and 27 successful upstream answers. Terminal
+application, proxy and API-upstream Docker states were running, without OOM;
+native process inventories were 1 application, 2 proxy, 1 upstream processes.
+The declared 1.5 CPU/1536 MiB native limits were verified against Docker, with
+the injector separately limited to 2 CPU/1024 MiB. Event-loop maximum was
+38.011 ms. These are bounded observations, not workstation throughput claims.
+
+Raw verification passed, as did 34 adversarial mutations and all six focused
+retained-evidence review regressions. The result remains one observed cell,
+215 not run, `groupReady: false`, `numericComparisonQualified: false`. Native
+cleanup recorded no remaining containers, volumes or command clients and no
+failures. A separate final label audit also found zero owned containers, volumes,
+networks and generated images.
+No old `w9`/`w10` evidence was rewritten or qualified under the new producer gates.
+`review-regressions.mjs` can replay the old bytes without upgrading a capture;
+`adversarial.mjs` retains strict full equality against a current saved capture.
+
+The five review repairs now check release/window drift, full trickle cadence,
+600 ms completed-response deadlines, all service-critical terminal roles,
+pre-reserved network ownership/reconciliation, and completed native HTTP failures
+as target-functional rather than apparatus failures. An unacknowledged network
+create failure/timeout remains explicitly uncertifiable cleanup, never an empty passing
+cleanup receipt. Real-daemon cancellation controls use labeled empty networks
+and an explicitly injected process SIGINT event; they are not native qualification.
+Fresh independent review and the full selected matrix remain outstanding.
+
+Terminal focused checks passed 30/30; combined hardening/workloads/production-
+qualification/edge checks passed 284/284 with file concurrency enabled. The two
+bounded real-daemon controls each removed their two labeled test networks while
+preserving the differently owned same-prefix network until its own cleanup.
+No native timing parameters or shared application files were changed.
+
+## Terminal health and pressure-bound repair
+
+At `d823a409cfbb52d9cf859de3267f8367fa56d0f3`, in-memory mutations of the
+retained `w11` API/edge slow-body capture reproduced three further gaps:
+running-but-unhealthy terminal services still recovered, target-close receipts
+at 9,500 ms escaped mandatory release at 8,500 ms, and establishment 10 ms before
+release erased all required trickles despite the 2,000 ms connection timeout.
+The initial reproduction passed the six existing checks and failed all five new
+checks (the two timing cases and each of the three service-critical roles).
+
+The repair bounds both terminal paths by release plus the unchanged 100 ms
+window drift and bounds establishment before cadence validation by connection
+timeout/release plus the unchanged 200 ms start-lag allowance. Early native
+refusals remain valid target outcomes. Receiving controls use their existing
+1,000 ms connection timeout; no attack profile or defense gate was enlarged.
+
+`lifecycleVersion: 3` adds actual terminal liveness observations, collected after
+the timed probe and receiving controls in each service's own network namespace,
+followed by Docker state inspection. Application and edge paths come from their
+respective production qualifications; the owned upstream uses `/health`.
+Completed, error-free HTTP 200 within 600 ms and healthy terminal Docker state
+are both required. No native healthcheck, middleware or endpoint is installed.
+Missing observations are unavailable, absent endpoints remain gaps, and running
+alone cannot establish recovery. API upstream HTTP 503 and Docker unhealthy
+states are target-capacity failures, not successful qualification or invalid
+injection; the unused fixture upstream remains apparatus.
+
+Retained `w10` and `w11` each pass 17/17 replay regressions. Terminal mutations
+use explicitly hypothetical in-memory health metadata to isolate each role's
+Docker failure, HTTP failure and combined failure; they are not new native
+observations. Neither capture, manifest, saved outcome nor summary was rewritten.
+Strict `verify.mjs` rejects `w10` at its old semantic-receipt version and `w11`
+at its old lifecycle version. Their old successful HTTP rows cannot supply
+missing terminal receipts or establish current numeric qualification.
+
+The focused suite passed 31/31, and the combined hardening/workloads/production-
+qualification/edge suite passed 285/285 with file concurrency enabled.
+`verify-health.mjs` separately observed a real
+labeled Docker service remain running with Docker `unhealthy` and a completed
+terminal HTTP 503. Each observation independently revoked recovery and numeric
+qualification for application, proxy and API-upstream role checks. Its exact
+owned container and volumes were removed, with zero remaining control resources.
+This control is not a fresh native framework run. No full matrix, framework
+change or performance/ranking measurement was performed. Fresh independent
+review and integrating repository-wide checks remain outstanding.
+
+## Endpoint binding and observer-exit follow-up
+
+Fresh review of `43780246ecdaaf73af0f8b38c2beaf6baa9d1031` found two remaining
+P2 gaps. Both were reproduced before repair: the real Docker namespace-join
+error after a target's natural exit escaped as apparatus-invalid, and a retained
+`w11` preflight marketplace page 200 supplied terminal recovery for each of the
+application, proxy and API-upstream roles when only the wrapper path changed.
+
+The shared collector now re-inspects after observer failure and preserves an
+unchanged critical target's verified exit state. It records unavailable health
+and the actual observer error, never a successful substitute response. Running,
+changed/restarted or daemon-failed targets and the unused fixture upstream do
+not take that path. Existing external lifecycle intervention gates remain intact.
+
+`lifecycleVersion: 4` binds actual response URL, method and Host to the qualified
+native endpoint. The HTTP observer records its own acquisition start/end times;
+a separately observed Linux monotonic interval must contain them, share the
+injector's boot identity, follow the raw post-controls `probe-complete` boundary
+and precede cleanup. No timestamp or observation is backfilled into old evidence.
+
+Focused tests passed 33/33 and the combined hardening/workloads/production-
+qualification/edge suite passed 287/287. The retained `w10` and `w11` replays each
+passed 42/42 checks, including preflight, stale time, wrong URL/Host/method for
+all three critical roles, interval bounds, natural exit and external-kill refusal.
+The metadata in terminal replay mutations is explicitly hypothetical, not a new
+native observation or numeric qualification. Original artifact manifests remain
+unchanged, and strict historical qualification remains refused.
+
+`verify-exit.mjs` observed the actual Docker namespace-join failure after natural
+exit and retained target-capacity-failure with numeric qualification false.
+`verify-health.mjs` also passed under the endpoint/time-bound receipt contract.
+Both controls removed their labeled containers and volumes. No full matrix,
+native framework run, new application implementation, cloud work or publishing
+was performed. The integrating parent needs both the earlier repair commit and
+this follow-up; fresh independent review remains outstanding.

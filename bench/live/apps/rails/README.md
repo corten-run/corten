@@ -1,0 +1,107 @@
+# Native Rails live application
+
+This is an independent Rails application. Action Cable owns its WebSocket,
+channel actions and lifecycle; Rails ERB/Turbo helpers render native Turbo Stream
+operations and the installed Turbo runtime applies every keyed DOM change. The
+browser bridge only invokes native actions, observes actual DOM/effects, and
+records the runner contract. There is no EventSource or shared renderer/store.
+
+Runtime inputs were refreshed on 2026-11-13 against the official Ruby release,
+RubyGems metadata and Docker image manifests: Ruby 4.0.9, Rails 8.1.4.1,
+Puma 8.0.3 and Bundler 4.0.24. The Ruby image is digest-pinned and the independent
+native lock was regenerated with Bundler's full index on that Ruby image. Rails'
+Active Storage dependency constrains Marcel to `~> 1.0`, retaining 1.2.1 rather
+than the incompatible latest major. No new library or
+broker is required. One Puma process uses
+Action Cable's native asynchronous adapter, in one container. Multiple application
+processes or instances are not supported by this synthetic in-memory store.
+
+`/parity/configure`, `/parity/snapshot`, `/parity/resources`, `/parity/publish` and
+`/parity/control` implement the synthetic control contract. Configuration refuses
+connected readers. Publication validates its sequence before changing state.
+Snapshot reads replace client rows without replaying effects. Native channel
+actions keep one event in flight until the browser acknowledges its real Turbo
+render. Each consumer has a bounded pending queue and a bounded replay copy;
+overflow reports the actual saturation before clearing the queue and requesting
+an authoritative resnapshot. Disconnect removes its reader; the native connection
+close is separately counted. Up to 16 readers/retained client states are supported;
+final detach explicitly clears its native client state, while forced disconnect
+retains it for replay. Configuration clears inactive retained sessions.
+Duplicate/gap detection uses acknowledged client state, not a sent message or the
+workload oracle. One separately inventoried candidate is staged until the browser
+acknowledges its actual DOM cursor, effect counter and row count. Reconnect checks
+those observed values against the acknowledged or staged state: a dropped frame
+must replay its effect, while a dropped acknowledgement must not apply it twice.
+Each rendered page receives a fresh signed consumer token bound to its native
+cookie session, so tabs sharing the cookie jar retain independent cursors.
+Native ready messages identify that consumer; resource inventory attributes its
+actual connection, reader, task and queued entries separately from peers. A
+disconnect/detach waits only for its own native resources, not global zero.
+Final all-reader cleanup still requires aggregate zero. Overlapping publisher
+calls are serialized so a later HTTP response cannot release an earlier call's
+delivery barrier.
+
+Supported explicit bounds: queue 2/history 4, or queue 1024/history 1025. Peaks are
+updated at mutation time. Inventory includes retained client rows, replay copies,
+in-flight work, native worker-pool size and actual Ruby CPU/GC counters. Native
+socket bytes are not observable through Action Cable's public API and are marked
+unknown (`null`), not zero. Per-consumer cleanup requires explicit numeric zeroes
+or absence from the complete native consumer inventory; unknown counters cannot
+prove release. This does not establish load readiness, a TCP slow-reader bound,
+multi-node behavior, authentication, or process-restart durability. Controls are
+unauthenticated synthetic-data endpoints, not a deployment security policy.
+
+Build from this directory using the Dockerfile. Run native unit checks with
+`bundle exec ruby test/store_test.rb`. The runner owner registers this directory
+with transport `Rails Action Cable / native Turbo Stream keyed updates`, image
+`cb-parity-live-rails`, wire `rails-turbo`, and `wireModule: './apps/rails/wire.mjs'`.
+`wire.mjs` only extracts original event/snapshot objects from captured native
+Action Cable frames, including every native resource object in arrival order;
+it never produces application state or effects or reads publisher HTTP responses.
+
+With the native container running, the independent app-local correctness check is
+`node bench/live/apps/rails/test/browser.mjs http://localhost:8080` from the root.
+It exercises all six bounded-profile fault scenarios and strictly checks actual
+DOM/effects against captured raw Action Cable events/snapshots. It is not the
+source-bound shared runner, does not qualify the larger native-feed profile or
+fan-out measurements, and does not claim group readiness. The unit suite includes
+four independent readers, real Turbo template rendering, native HTTP control
+dispatch, expiry, duplicate/gap effects and real bounded queue saturation.
+`node bench/live/apps/rails/test/adversarial.mjs http://localhost:8080` intercepts
+the actual WebSocket to drop the first native event or its browser acknowledgement,
+requires recovery within two seconds, and checks two tabs sharing one cookie jar.
+It also disconnects, reconnects and detaches one tab while its peer keeps receiving,
+and withholds the first HTTP response/native event during overlapping publishes.
+
+The publisher also accepts `{events:[...]}` as an ordinary bulk input, mutually
+exclusive with `event`. It prevalidates every event (at most 1,044) and sequence
+before mutation, serializes against other publishers, and calls the identical
+native write/queue/history/consumer path for every event. `acks` contains each
+actual write's sequence and resource counters. `liveApp.publishBatch` retains one
+native arrival barrier until those individual acknowledgements are recorded.
+This is for bounded fault setup, not measurement timing: default correctness and
+all offered-load measurements retain individual HTTP requests. No renderer,
+consumer work, history update or mutation-time instrumentation is bypassed.
+
+Snapshot requests reconcile the current DOM cursor, counter and row count against
+only the acknowledged state or its one staged candidate before replacing rows.
+Thus overflow after an applied event's lost acknowledgement retains that effect,
+while an unobserved delivery contributes none. Unmatched observations fail before
+snapshot reads or staged-state mutation. Automatic Action Cable reconnects resume
+after the first rendered snapshot, rather than reusing the initial-attach flag.
+`node bench/live/apps/rails/test/recovery.mjs <base>` drops native event/ACK frames,
+overflows the real bounded queue, checks rows and effects, and captures the second
+automatic native start with a new publication before it reaches the server.
+The routed-socket reconnect check requires explicit detach through the unchanged
+five-second native cleanup gate, followed by zero connection/reader/queue and
+retained-client inventory before closing its browser context. Its injected close
+uses application code 3001: the upstream is a browser WebSocket, whose `close()`
+rejects reserved code 1001. The test retains both close-forwarding callbacks and
+requires an actual upstream close notification, not just a page-side close.
+Raw before/after receipts are in `test/receipts/`. Those receipts are historical
+and do not qualify refreshed runtime images. New runtime checks retain separate
+local, hashed raw attempts bound to exact sources and images, including failures.
+All six bounded journeys retain their 45-second whole-journey deadline; the
+adversarial/recovery controls retain their two-second recovery and five-second
+cleanup gates. These are bounded correctness observations, not throughput
+measurements, native-feed qualification or load admission.

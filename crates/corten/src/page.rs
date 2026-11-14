@@ -414,8 +414,21 @@ pub enum Failure {
     /// Nothing is at this URL (404): no route has it, or its handler returned
     /// `Error::not_found()` (the error is logged).
     NotFound,
-    /// A route has this URL but not this method (405; the `Allow` header is kept).
+    /// A route has this URL but not this method, which the app implements: another route has a
+    /// handler for it, a route takes every method (`any`, a relay), or it is `GET`, `HEAD` or
+    /// `OPTIONS` (405; the `Allow` header is kept). One no route has is
+    /// [`Failure::UnknownMethod`].
     WrongMethod,
+    /// A route has this URL, and no route in the app has a handler for this method (`PROPFIND`,
+    /// `QUERY`, or `PUT` in an app that routes none), nor takes every method (`any`): the router's
+    /// 501, with no `Allow` (RFC 9110 9.1). Only the router's is this, and only while its body is
+    /// still empty with a size known to be zero and a middleware has not turned it into another
+    /// status. A middleware's body that is not plain text is kept as written; a plain-text one is
+    /// [`Failure::Rejected`] with status 501, as a handler's plain-text `501` is; an empty body
+    /// of unknown size (a wrapping or streaming middleware) is sent as a bare 501 with no error
+    /// page. A `501` a handler or a middleware answers (`Error::status(NOT_IMPLEMENTED)`, or the
+    /// bare status) is [`Failure::Failed`].
+    UnknownMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
     /// The handler needs a [`crate::Caller`] the request does not have, or one who may not do
@@ -453,6 +466,7 @@ impl Failure {
         match self {
             Failure::NotFound => StatusCode::NOT_FOUND,
             Failure::WrongMethod => StatusCode::METHOD_NOT_ALLOWED,
+            Failure::UnknownMethod => StatusCode::NOT_IMPLEMENTED,
             Failure::CrossSite => StatusCode::FORBIDDEN,
             Failure::Refused { status } | Failure::Rejected { status, .. } | Failure::Failed { status, .. } => *status,
             Failure::Panicked { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -478,16 +492,17 @@ impl Failure {
     }
 
     /// A failure Corten found the request at fault for, not the service: an unknown address (a
-    /// handler's `Error::not_found()` among them), a wrong method, a refusal and a request that did
-    /// not parse, but not a 429, which slows a client down, so it starts no work for it. The error
-    /// page for one starts the layout's reads and waits for them as a page does. A handler's other
+    /// handler's `Error::not_found()` among them), a wrong method, one no route has (501), a
+    /// refusal and a request that did not parse, but not a 429, which slows a client down, so it
+    /// starts no work for it. The error page for one starts the layout's reads and waits for them
+    /// as a page does. A handler's other
     /// errors wait for none, whatever their status (a handler may answer a downstream outage with
     /// a 4xx), nor does plain text at a 5xx (a maintenance middleware's 503), nor a cross-site
     /// write, refused before anything else runs.
     fn request_at_fault(&self) -> bool {
         let fault = |status: &StatusCode| status.is_client_error() && *status != StatusCode::TOO_MANY_REQUESTS;
         match self {
-            Failure::NotFound | Failure::WrongMethod => true,
+            Failure::NotFound | Failure::WrongMethod | Failure::UnknownMethod => true,
             Failure::Refused { status } | Failure::Rejected { status, .. } => fault(status),
             Failure::CrossSite
             | Failure::Unidentified { .. }
@@ -556,6 +571,8 @@ pub(crate) enum Cause {
     TimedOut,
     Refused,
     Unidentified,
+    /// The router's `501`: no route in the app has the method.
+    UnknownMethod,
 }
 
 /// The error page of an app that gives none ([`crate::App::error_page`]): a plain document. An app
@@ -580,9 +597,11 @@ fn default_error_document(req: &Req, failure: Failure) -> impl crate::view::Docu
         Failure::Failed { status, .. } if status == StatusCode::REQUEST_TIMEOUT => {
             ("Not received", "Check your connection and try again.")
         }
-        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
-            ("Something went wrong", "Please try again.")
-        }
+        Failure::WrongMethod
+        | Failure::UnknownMethod
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
     };
     html! {
         <!DOCTYPE html>
@@ -867,8 +886,9 @@ pub(crate) struct Shared {
     /// The other sites [`crate::security::Policy::allow_origin`] lets write, for a switch to a
     /// WebSocket, which [`crate::upgrade::Upgrade`] checks as a write.
     pub allowed_origins: Vec<String>,
-    /// Each `Api::allow_origin` mount's prefix and origins, which may also switch under it.
-    pub api_origins: Vec<(String, Vec<String>)>,
+    /// What each area and API sets, by path: an API's `Api::allow_origin` sites may also switch
+    /// to a WebSocket under it ([`crate::upgrade::Upgrade`]). None outside an app.
+    pub scopes: Option<Arc<crate::app::Scopes>>,
     /// The app's route patterns, its own and its areas', each with whether it has a `GET`
     /// handler ([`Req::serves`]).
     pub pages: Box<[(&'static str, bool)]>,
@@ -914,7 +934,7 @@ impl Shared {
             section_of: Default::default(),
             proxies: Vec::new(),
             allowed_origins: Vec::new(),
-            api_origins: Vec::new(),
+            scopes: None,
             pages: Box::default(),
             not_pages: Default::default(),
             layout_reads: Box::default(),
@@ -2676,8 +2696,16 @@ async fn page_or_error<S: crate::app::Steps>(
     // more value every request's future holds across the await below.
     #[cfg(debug_assertions)]
     let keeps_detail = res.extensions().get::<KeepsDetail>().is_some();
-    let cause = res.extensions().get::<Cause>().copied();
     let empty_error = res.body().size_hint().exact() == Some(0);
+    // The router's mark counts only while its empty `501` is still the answer: a middleware that
+    // turned it into another status, or wrote a body of its own, answered it itself, and that
+    // answer is kept as on the JSON path (a plain-text body as a rejection, below; an empty one of
+    // unknown size as it is).
+    let cause = res
+        .extensions()
+        .get::<Cause>()
+        .copied()
+        .filter(|cause| !matches!(cause, Cause::UnknownMethod) || (status == StatusCode::NOT_IMPLEMENTED && empty_error));
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
     // plain text written for a developer. A browser gets the error page instead, with the text
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
@@ -2704,12 +2732,14 @@ async fn page_or_error<S: crate::app::Steps>(
         Some(Cause::TimedOut) => Failure::TimedOut,
         Some(Cause::Refused) => Failure::Refused { status },
         Some(Cause::Unidentified) => Failure::Unidentified { detail },
+        Some(Cause::UnknownMethod) => Failure::UnknownMethod,
         None if rejection => Failure::Rejected { status, detail },
         // Nothing is here, whether no route has the URL or the handler found nothing.
         None if status == StatusCode::NOT_FOUND => Failure::NotFound,
         None if detail.is_some() => Failure::Failed { status, detail },
         None => match status {
             StatusCode::METHOD_NOT_ALLOWED => Failure::WrongMethod,
+            // A handler's or a middleware's empty `501` among them: only the router's is marked.
             status => Failure::Failed { status, detail: None },
         },
     };

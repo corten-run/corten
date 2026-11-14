@@ -1,0 +1,6 @@
+Phoenix native bounded/normal: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (1 snapshots)
+Phoenix native bounded/disconnect: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (1 snapshots)
+Phoenix native bounded/missed-updates: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (1 snapshots)
+Phoenix native bounded/expired-cursor: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (2 snapshots)
+Phoenix native bounded/gap: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (2 snapshots)
+Phoenix native bounded/slow-reader: DOM/raw LiveView/HTTP writes+acks/effects/recovery/cleanup passed (2 snapshots)

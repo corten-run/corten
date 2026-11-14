@@ -1,10 +1,20 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
+  import type { SubmitFunction } from "@sveltejs/kit";
   import type { PageData, ActionData } from "./$types";
   import { marketplaceView, marketplacePath } from "#lib/marketplace";
   let { data, form }: { data: PageData; form: ActionData } = $props();
   const view = $derived(marketplaceView(data.record, data.locale, new URLSearchParams(data.query)));
   const message = $derived(form?.message ?? "");
+  let pending = $state(false);
+  const submitAlert: SubmitFunction = ({ cancel }) => {
+    if (pending) { cancel(); return; }
+    pending = true;
+    return async ({ update }) => {
+      try { await update(); }
+      finally { pending = false; }
+    };
+  };
   $effect(() => {
     document.documentElement.lang = data.locale;
     return () => { document.documentElement.lang = "en"; };
@@ -45,10 +55,10 @@
   </section>
   <section class="marketplace__alert">
     <h2>{view.words.alert}</h2>
-    <form method="post" action={view.path} use:enhance>
+    <form method="post" action={view.path} use:enhance={submitAlert}>
       <label>{view.words.email} <input type="email" name="email" /></label>
       <label>{view.words.target} <input type="text" inputmode="decimal" name="target_price" /></label>
-      <button type="submit">{view.words.submit}</button>
+      <button type="submit" disabled={pending}>{view.words.submit}</button>
     </form>
     <p class="marketplace__message">{message}</p>
   </section>

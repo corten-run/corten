@@ -1,0 +1,6 @@
+rails native adversarial lost native event before browser acknowledgement: passed
+rails native adversarial lost browser acknowledgement retains exactly one real effect: passed
+rails native adversarial two pages sharing the native session remain independent consumers: passed
+rails native adversarial one consumer disconnects and detaches while its peer keeps receiving: passed
+rails native adversarial unknown per-consumer counters cannot prove cleanup: passed
+rails native adversarial overlapping publications cannot bypass the earlier native acknowledgement: passed

@@ -5,8 +5,20 @@
 Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come from a proxy or a CDN
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
-for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
-the release profile an app builds with.
+for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
+release profile an app builds with, how its image builds beside other apps', and what to know when
+monitoring it.
+
+For live streams this is a requirement, not just a choice of where to end TLS: another server
+to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
+row 5 is conditional on a shared cache, while health checks (9) and HTTPS policy (12) also apply
+without a proxy. Not every row is a new cost caused by the HTTP/2 requirement.
+An opt-in prototype passed an eight-tab h2 check but missed a flow-controlled send timeout;
+its idle watch also remained permanently busy by inspection. The partial-header probe kept
+a response open, which leaves the HTTP/1.1 watch busy too, so it did not establish a lost
+header-timeout guarantee. The idle h2 case and a connection-level body-stall detector remain
+untried. [Choice 25](../design.md#choice-axum-router) and the
+[partial weighing](../../bench/http2/README.md) record the evidence and reopening tests.
 
 ## What the proxy must do
 
@@ -114,6 +126,17 @@ nginx's page. A prefix that also serves downloads keeps
 the map gives a request that is not a WebSocket. Leave `proxy_ignore_headers` without `Vary`
 and `Cache-Control`.
 
+A WebSocket needs `proxy_http_version 1.1` too: a proxy that passes `Upgrade` on over HTTP/1.0
+gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since
+a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
+
+[`examples/corten-site/deploy`](../../examples/corten-site/deploy/README.md) is a whole deploy
+written out: this configuration with a certificate, limits on what one address may ask for
+and hold, with what each was measured to do, a limit on the live streams one reader and all
+readers may hold and, for a machine with 512 MB, the streams asked for as zstd or not
+compressed at all, the app as a systemd service on one small machine, and a workflow that
+ships each change and puts the release before back when the new one does not answer.
+
 ## Caching
 
 A page route answers several clients at one URL: the whole document, a client navigation
@@ -183,3 +206,84 @@ time: in the second round, the quieter one for the default, its rebuild took 135
 its clean build 361 s against 206 s. One codegen unit against sixteen costs about 1% more per page in
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
+
+## Building the image
+
+The Dockerfile `corten new` writes compiles the app with two BuildKit
+[cache mounts](https://docs.docker.com/reference/dockerfile/#run---mounttypecache), which stay on
+the builder between builds and are not part of the image.
+
+The target directory is a cache of the app's own, `id=<app>-target` with `sharing=locked`: a
+rebuild compiles only what changed, and two builds of the same app take turns, since each touches
+its sources first and cargo decides what is current by file times. BuildKit names a cache by its
+`id`, and by its path when it has none, so without the `id` every image on the builder that mounts
+`/src/target` would share one cache, and each build would wait for every other one, whatever app it
+was. With it, apps on one Docker host build alongside each other. Two apps of the same name on one
+host would still share a cache; give one of them another `id`. Each app keeps a full target cache
+of its own on the builder's disk, every dependency it compiled included, so two apps with the same
+dependencies compile them once each, at the same time if they build at once, and store them twice.
+The caches a Dockerfile without an `id` used, `/src/target` and `/usr/local/cargo/registry`, stay
+on the builder until `docker builder prune` removes them.
+
+Downloaded crates are one cache for every app on the host: cargo's whole home, `/var/cache/cargo`
+(`CARGO_HOME`), shared. The home is mounted rather than its `registry` alone because cargo keeps its
+lock on the downloaded crates there (`.package-cache`), so builds that download at once wait for
+each other's lock instead of writing the same files unseen. Setting `CARGO_HOME` also moves where
+cargo reads its global configuration and credentials; the `rust` image has none, and a project's
+`.cargo/config.toml` is read as before.
+
+Every app's build on the host mounts that home, so a file one build leaves in it applies to every
+other's: a `config.toml`, a `credentials.toml`, or a program in its `bin/`, which cargo runs for a
+subcommand ahead of one on `PATH`
+([External tools](https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands)).
+A private registry's token goes to the build through a
+[secret mount](https://docs.docker.com/reference/dockerfile/#run---mounttypesecret) or the
+`CARGO_REGISTRIES_<NAME>_TOKEN` environment variable of that `RUN`
+([registries](https://doc.rust-lang.org/cargo/reference/config.html#registriesnametoken)), never into
+the shared home.
+
+Cache mounts are not exported with `--cache-to` or restored with `--cache-from`, so on a new
+builder, such as a hosted CI runner's, the build starts from clean.
+
+## Monitoring
+
+The router answers a request whose method no route in the app has (`PROPFIND`, `TRACE`, a
+scanner's made-up method) with `501 Not Implemented`, as RFC 9110 9.1 says, at any URL a route has
+([Error pages](app.md#error-pages)). It is a refusal, not a failure: the app does not log it as an
+error. A scan therefore raises a proxy's or a CDN's 5xx rate.
+
+CloudFront's stock 5xx metric cannot leave these out: `5xxErrorRate` has no dimension but
+`DistributionId` and `Region`, so a CloudWatch alarm on it counts every `501`
+([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
+and Cloudflare's Origin Error Rate alert filters only by domain and sensitivity, its Advanced
+Error Rate alert by status code and IP address
+([Platform Notifications](https://developers.cloudflare.com/notifications/notification-available/));
+none of these filters by method. Cloudflare's Monitors run a SQL query with filters by field
+([Monitors](https://developers.cloudflare.com/notifications/monitors/)) and may be a built-in way
+to filter by method, but whether their `events.httpRequests` dataset carries the method is not
+said on the pages read here; check its columns
+([Datasets](https://developers.cloudflare.com/analytics/sql-api/datasets/)) before relying on it.
+Otherwise an alert that leaves these out is built from the access logs,
+which carry the method and the status (CloudFront's `cs-method` and `sc-status`,
+[Standard logging reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logs-reference.html);
+Cloudflare Logpush's `ClientRequestMethod` and `EdgeResponseStatus` or `OriginResponseStatus`,
+[HTTP requests](https://developers.cloudflare.com/logs/logpush/logpush-job/datasets/zone/http_requests/)),
+or from a proxy's own logs or the app's own metrics.
+
+The filter to leave out is `status = 501 AND method not in the app's served methods`, where the
+served methods are the ones its routes name, with `GET`, `HEAD` and `OPTIONS` always among them.
+Both halves matter. Nothing on the wire marks the router's `501` apart from another, and a
+handler's or a middleware's `501` has no `Allow` either, so leaving out every `501` would also
+hide the app's own: a handler's `Error` at 501 is a failure, logged as an error as any 5xx
+`Error` is. And leaving out every 5xx to a method outside the list would hide more than the
+router's answer, such as a maintenance middleware's `503`, which can answer any method. With
+both, the filter hides only a `501` to a method no route serves, which only the router or a
+middleware answers; a list that falls behind a new route hides that route's `501`s, never its
+`500`s. An app with a route that takes every method (`any`, a relay) answers no such `501`, so
+it leaves nothing out.
+
+A client that retries every 5xx by default retries these `501`s too, where it did not retry the
+`405` an older Corten answered: Polly's `HandleTransientHttpError` and the retry of .NET's
+standard resilience handler (Microsoft.Extensions.Http.Resilience) both handle any status of 500
+or more. Each takes a setting for which answers to retry; a client of the app that sends a method
+no route serves can leave 501 out of it.

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +45,48 @@ async function serving(env, body) {
   }
 }
 
+test("matched HOSTS and liveness are native, bounded and independent of the record source", async () => {
+  // Node's fetch replaces Host. Use an actual HTTP request for authority/forwarding probes.
+  const native = (url, options = {}, body) => new Promise((resolve, reject) => {
+    const req = request(url, { ...options, signal: AbortSignal.timeout(2000) }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => text += chunk);
+      res.on("error", reject);
+      res.on("end", () => resolve(new Response(text, { status: res.statusCode, headers: res.headers })));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+  await serving({ PROFILE: "matched", HOSTS: "app.example.test,.shop.example.test,fsw-target", API_BASE: "http://127.0.0.1:1" }, async (base) => {
+    const get = (path, host, extra = {}) => native(base + path, { headers: { host, ...extra } });
+    assert.equal((await get("/", "unknown.invalid")).status, 400);
+    assert.equal((await get("/health/live", "unknown.invalid")).status, 400);
+    for (const host of ["APP.example.test", "app.example.test:8443", "shop.example.test", "a.shop.example.test:8080", "localhost", "127.0.0.1:8080", "[::1]:8080", "fsw-target:8080"]) {
+      const response = await get("/health/live", host);
+      assert.equal(response.status, 200, host);
+      assert.equal(await response.text(), "OK");
+      assert.ok(response.headers.get("content-security-policy"));
+    }
+    for (const host of ["evilshop.example.test", "shop.example.test.evil.invalid", "unknown.invalid:8080", "app.example.test@evil.invalid", "app.example.test/path"]) {
+      assert.equal((await get("/health/live", host)).status, 400, host);
+    }
+    assert.equal((await get("/health/not-a-real-check", "app.example.test")).status, 404);
+    assert.equal((await get("/", "unknown.invalid", { "x-forwarded-host": "app.example.test" })).status, 400);
+    assert.equal((await get("/", "app.example.test", { "x-forwarded-host": "unknown.invalid" })).status, 200);
+    // The edge's rewritten Host is allowed, but it conveys no authenticated public origin.
+    const response = await native(base + "/marketplace/en-US/item_1", { method: "POST",
+      headers: { host: "fsw-target:8080", origin: "https://app.example.test", "x-forwarded-host": "app.example.test", "x-forwarded-proto": "https",
+        "content-type": "application/x-www-form-urlencoded" } }, new URLSearchParams({ email: "a@example.test", target_price: "1" }).toString());
+    assert.equal(response.status, 403, "untrusted forwarding headers must not bypass origin protection");
+    assert.equal((await fetch(base + "/health/live", { method: "POST" })).status, 404);
+  });
+  await serving({ PROFILE: "", HOSTS: "app.example.test" }, async (base) => {
+    assert.equal((await native(base, { headers: { host: "unknown.invalid" } })).status, 200);
+    assert.equal((await fetch(base + "/health/live")).status, 404);
+  });
+});
+
 test("Intl formats signed money, half-up ratings, grouped counts and the listing plural", async () => {
   const model = await import("./lib/marketplace.mjs");
   const prices = [0, 1, 10, 125, 123450, 123456789, -123450];
@@ -71,6 +113,25 @@ test("Intl formats signed money, half-up ratings, grouped counts and the listing
     assert.ok(message.includes("{email} $&") && message.includes(f.money.format(1234.5)), message);
   }
   for (const locale of ["en", "en-us", "__proto__", "toString"]) assert.equal(model.isLocale(locale), false);
+});
+
+test("accepted decimal targets retain exact minor units at the safe-integer boundary in every locale", async () => {
+  const { alertResult, formatters } = await import("./lib/marketplace.mjs");
+  for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+    const decimal = locale === "en-US" ? "." : ",";
+    for (const [digits, expected] of [["0.01", 1], ["1.1", 110], ["0001.01", 101],
+      ["90071992547409.89", 9007199254740989], ["90071992547409.90", 9007199254740990],
+      ["90071992547409.91", Number.MAX_SAFE_INTEGER]]) {
+      const result = alertResult(locale, "Title", "a@example.test", digits.replace(".", decimal));
+      assert.equal(result.targetMinor, expected, `${locale}: ${digits}`);
+      assert.ok(result.message.includes(formatters(locale).money.format(digits)), result.message);
+    }
+    for (const digits of ["0", "0.00", "0.001", "90071992547409.92", "90071992547410", "9999999999999999999999999999999"]) {
+      const result = alertResult(locale, "Title", "a@example.test", digits.replace(".", decimal));
+      assert.equal(result.targetMinor, null, `${locale}: ${digits}`);
+      assert.equal(result.message, formatters(locale).labels.invalid_price);
+    }
+  }
 });
 
 test("listings sort by price, stable, missing last, and filter by a case-sensitive prefix", async () => {
@@ -127,6 +188,21 @@ test("accepted forms persist in a server-issued session, with independent readba
           assert.equal((await post(locale, fields, cookie)).status, 200);
           assert.deepEqual(await read(cookie), expected);
         }
+      }
+      for (const locale of ["en-US", "fr-FR", "de-DE"]) {
+        for (const cents of ["89", "90", "91"]) {
+          const email = `${locale}-${cents}@example.test`;
+          const target = `90071992547409${locale === "en-US" ? "." : ","}${cents}`;
+          const response = await post(locale, { email, target_price: target }, cookie);
+          assert.equal(response.status, 200);
+          expected.push({ item_id: "item_1", email, target_minor: 9007199254740900 + Number(cents) });
+          assert.deepEqual(await read(cookie), expected);
+        }
+        const response = await post(locale, { email: "overflow@example.test", target_price: `90071992547409${locale === "en-US" ? "." : ","}92` }, cookie);
+        assert.equal(response.status, 200);
+        const { formatters } = await import("./lib/marketplace.mjs");
+        assert.ok((await response.text()).includes(formatters(locale).labels.invalid_price));
+        assert.deepEqual(await read(cookie), expected);
       }
       for (const headers of [{ origin: "https://attacker.test" }, { "sec-fetch-site": "cross-site" }]) {
         assert.equal((await post("en-US", { email: "evil@example.test", target_price: "1" }, cookie, headers)).status, 403);

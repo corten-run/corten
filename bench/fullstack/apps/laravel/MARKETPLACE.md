@@ -6,6 +6,14 @@ locale state, `wire:model` inputs and a real `save` action. That action reads th
 authoritative item and applies the same localized validation as the ordinary
 HTML POST. The form's action, method and CSRF input also work without JavaScript.
 
+ICU validates the complete localized target. The original decimal digits then
+use Brick Math (already installed by Laravel, now an explicit dependency) for
+half-up minor-unit conversion, rather than multiplying a binary double. Accepted
+targets retain exact signed-64-bit minor units; overflow is rejected. Confirmation
+uses ICU int64 whole-unit currency formatting with the exact rounded cents, so
+`1.005`/`1,005` confirms and stores 1.01/101 consistently, including values beyond
+binary-double integer precision.
+
 An accepted submission appends exactly one `{item_id,email,target_minor}` record.
 `GET /api/alerts` returns the current session's array in insertion order with
 `private, no-store`. It does not derive records from query parameters, clear them,
@@ -27,10 +35,16 @@ Focused native checks and browser smoke (Playwright from the repository root):
 ```sh
 php tests/marketplace.php
 php tests/alerts.php
+php tests/alert-decimals.php
 node bench/fullstack/apps/rails/test/native-alerts.mjs laravel http://localhost:8080
+node bench/fullstack/apps/laravel/tests/native-decimal-alerts.mjs http://localhost:8080
 ```
 
 The smoke uses real HTTP readbacks with each browser's cookie jar, all three
 locales and both JS modes, and observes the real Livewire component `save` request.
 It also checks rejection, order, concurrent same-session POSTs and two-client
 isolation. These are bounded functional checks, not throughput measurements.
+The decimal browser regression uses this app's `tests/marketplace_fixture.json`.
+It submits real ordinary and Livewire forms in every locale, checking exact
+confirmation and independent integer readback at ties, adjacent decimals, large
+integers, the signed-64-bit boundary and overflow rejection.

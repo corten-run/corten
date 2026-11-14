@@ -24,6 +24,9 @@ const pct = (xs, p) => {
 // The tier the round ran (BENCH_TIER), so a matched round's numbers are never read as the defaults'.
 // Whether a matched round reached its apps through the edge, so one run with BENCH_EDGE=off is never read as the tier's.
 const summary = { tier, ...(tier === "matched" ? { edge: edgeOf(raw) ? "on" : "off" } : {}), ssr: {}, build: read(join(dir, "build.json")), dockerRebuild: read(join(dir, "docker-rebuild.json")), rustAnalyzer: read(join(dir, "rust-analyzer.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
+// Packed rounds keep tools.json in raw.tar.xz. Never fill historical gaps with today's pin.
+const tools = read(join(raw, "tools.json"));
+if (tools) summary.tools = tools;
 // Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
 // results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");

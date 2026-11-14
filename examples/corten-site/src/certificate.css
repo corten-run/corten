@@ -1,0 +1,398 @@
+/* Certificate: bone paper lying on the steel. Ink text, rust rules, the one light surface on
+   the page. */
+@property --share {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+.certificate {
+  max-width: 76rem;
+  margin: 0 auto clamp(4rem, 10svh, 8rem);
+  padding: clamp(1.5rem, 4.5vw, 4rem);
+  background: var(--bone);
+  color: var(--ink);
+  box-shadow:
+    0 2.5rem 5rem rgb(0 0 0 / 55%),
+    0 0 0 1px rgb(0 0 0 / 20%);
+  color-scheme: light;
+  scroll-margin-top: 5rem;
+}
+
+/* The page's focus ring is ember, which paper does not show. */
+.certificate :focus-visible {
+  outline-color: var(--ink);
+}
+
+.certificate ::selection {
+  background: var(--rust);
+  color: var(--bone);
+}
+
+.certificate a {
+  color: var(--rust-deep);
+}
+
+.head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1.5rem clamp(1.5rem, 4vw, 3.5rem);
+  padding-bottom: clamp(1.5rem, 3vw, 2.5rem);
+  border-bottom: 3px solid var(--ink);
+}
+
+.mark {
+  width: 10.5rem;
+  height: auto;
+}
+
+.title {
+  margin-bottom: 0.8rem;
+  font-size: clamp(2.6rem, 6vw, 5rem);
+}
+
+.standard {
+  max-width: 38rem;
+  font-size: 1rem;
+}
+
+/* The sheet's own facts, boxed as a certificate's header fields are. */
+.heat {
+  display: grid;
+  min-width: 15rem;
+  border: 1px solid var(--ink);
+  font-size: 0.875rem;
+}
+
+.heat div {
+  padding: 0.45rem 0.7rem 0.5rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 35%, transparent);
+}
+
+.heat div:last-child {
+  border-bottom: 0;
+}
+
+.heat dt {
+  color: #6c665d;
+  font-size: 0.75rem;
+}
+
+.heat dd {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.tested {
+  display: block;
+}
+
+@media (max-width: 62rem) {
+  .head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .heat {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .heat div:nth-child(odd) {
+    border-right: 1px solid color-mix(in srgb, var(--ink) 35%, transparent);
+  }
+
+  .heat div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+}
+
+/* On a phone the facts stack, each name beside its value. */
+@media (max-width: 36rem) {
+  .heat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .heat div {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    align-items: baseline;
+  }
+
+  .heat div:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .heat div:nth-last-child(2) {
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 35%, transparent);
+  }
+}
+
+.part {
+  padding: clamp(1.5rem, 3vw, 2.5rem) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 30%, transparent);
+}
+
+.heading {
+  margin-bottom: 1.1rem;
+  font-size: clamp(1.7rem, 2.8vw, 2.3rem);
+}
+
+.results {
+  width: 100%;
+  font-size: 0.9375rem;
+}
+
+.results th,
+.results td {
+  padding: 0.55rem 0.9rem 0.55rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.results thead th {
+  border-bottom: 2px solid var(--ink);
+  color: #6c665d;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.results tbody th {
+  font-weight: 400;
+}
+
+.results .result {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* On a narrow page a long result wraps under itself. */
+@media (max-width: 62rem) {
+  .results .result {
+    white-space: normal;
+  }
+}
+
+/* A shadow at the right edge while there is more table that way. */
+.scroll {
+  overflow-x: auto;
+  background:
+    linear-gradient(to left, var(--bone) 40%, transparent) right / 3rem 100% no-repeat local,
+    linear-gradient(to left, rgb(0 0 0 / 24%), transparent) right / 1rem 100% no-repeat scroll;
+}
+
+.conditions {
+  max-width: 64rem;
+  margin-top: 1rem;
+  color: #57524a;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/* The chart: one bar an app, its length the app's share of the slowest. */
+.bars {
+  display: grid;
+  gap: 3px;
+}
+
+.bar {
+  display: grid;
+  grid-template-columns: 11.5rem minmax(0, 1fr) 5rem;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.app {
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.track {
+  display: block;
+  height: 0.8rem;
+}
+
+.fill {
+  display: block;
+  width: var(--share);
+  height: 100%;
+  background: var(--charcoal);
+}
+
+.ms {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.bar.ours {
+  color: var(--rust);
+  font-weight: 700;
+}
+
+.bar.ours .fill {
+  background: var(--rust);
+}
+
+/* A bar's length is its number, so it is still drawn where the system picks the colors. */
+@media (forced-colors: active) {
+  .fill {
+    background: CanvasText;
+  }
+
+  .bar.ours .fill {
+    background: Highlight;
+  }
+}
+
+@media (max-width: 36rem) {
+  .bar {
+    grid-template-columns: 7.5rem minmax(0, 1fr) 4.2rem;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+  }
+}
+
+/* What a part says, before its numbers. */
+.lede {
+  max-width: 60rem;
+  margin-bottom: 1.25rem;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.lede b,
+.phone b {
+  color: var(--rust-deep);
+  font-weight: 700;
+}
+
+/* The server's round: an app a row, its pages a second a bar. */
+.served {
+  min-width: 50rem;
+}
+
+.served th:first-child {
+  width: 12.5rem;
+}
+
+.served tbody th,
+.served tbody td {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
+
+.served thead th:nth-child(n + 3),
+.served td.result {
+  width: 9.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.rate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.row.ours th,
+.row.ours td {
+  background: color-mix(in srgb, var(--rust) 12%, transparent);
+  color: var(--rust-deep);
+  font-weight: 700;
+}
+
+.row.ours .fill {
+  background: var(--rust);
+}
+
+/* The browser's round: a measure a panel, the same five apps in each. */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.measure {
+  min-height: 2.1em;
+  margin-bottom: 0.7rem;
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.35rem;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.panel .bar {
+  grid-template-columns: 5.2rem minmax(0, 1fr) 4.4rem;
+}
+
+.phone {
+  max-width: 60rem;
+  margin-top: 1.5rem;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.behind {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.behind .lede {
+  margin-bottom: 0;
+  font-size: 0.9375rem;
+}
+
+@media (max-width: 62rem) {
+  .panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 36rem) {
+  .served {
+    min-width: 44rem;
+  }
+
+  .served thead th:nth-child(n + 3),
+  .served td.result {
+    width: 6.5rem;
+  }
+
+  /* The number first, so it is read beside the app without scrolling to it. */
+  .rate {
+    grid-template-columns: 4.6rem minmax(0, 1fr);
+  }
+
+  .count {
+    order: -1;
+    text-align: left;
+  }
+
+  .served th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    width: 8.5rem;
+    background: var(--bone);
+    box-shadow: 1px 0 0 color-mix(in srgb, var(--ink) 16%, transparent);
+    font-size: 0.8125rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .row.ours .fill {
+    background: Highlight;
+  }
+}

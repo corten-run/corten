@@ -29,6 +29,24 @@ Labels and CSS are byte-identical copies of `bench/marketplace/labels.json` and
 dotnet test tests/Marketplace.Tests.csproj -c Release
 ```
 
+## Request lifetime
+
+Both marketplace Razor handlers and the marketplace JSON endpoint use ASP.NET's
+native request-timeout middleware with a ten-second endpoint deadline, in both
+profiles. They pass `HttpContext.RequestAborted` through the marketplace source's
+header read and JSON body consumption. The marketplace HttpClient has no second
+competing timer and does not drain cancelled bodies for connection reuse; abort
+or deadline ends the actual upstream read rather than just producing a response.
+Native timeout responses are 504: the Razor policy writes a text/plain body,
+while JSON endpoints retain native Problem Details/status-code handling. An empty
+untyped 504 is not sufficient mixed-contract evidence. Accepted form writes still
+check the request token before committing. Antiforgery, native Problem Details negotiation,
+money parsing and legacy item/catalog profile settings are unchanged.
+
+The cross-app [socket checks](../../../marketplace/corten/README.md#request-lifetime)
+cover both profiles, every locale, JSON, stalled headers/bodies, real client aborts,
+native POST cancellation/deadline non-mutation and recovery using this app's image.
+
 ## Native alert persistence
 
 In both profiles and with either record source, an accepted Razor form
@@ -38,6 +56,9 @@ independently reads the process-local store as an insertion-ordered JSON array
 `Cache-Control: no-store`. No/unknown cookie and fresh browser contexts read `[]`.
 GET never creates, resets or clears a store. Validation, missing records,
 unsupported locales, antiforgery rejection and cross-site rejection do not append.
+Accepted POSTs stage the native Razor page and layout before appending, then send
+the rendered response. Upstream errors, render failures and cancellation before
+commit never append. GETs and invalid forms retain the normal unbuffered path.
 The Razor antiforgery token remains required even for direct HTTP test clients.
 CultureInfo still parses the price and supplies localized validation. Stored minor
 units use the displayed currency's half-away-from-zero rounding and native `Int128`

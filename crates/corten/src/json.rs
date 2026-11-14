@@ -120,6 +120,22 @@
 //! enum Event { Sold { price: f64 } }
 //! ```
 //!
+//! `borrow` is one, since a `FromJson` reads owned values, and so are `skip` and `default` on a
+//! field of a tuple struct that is not `transparent`:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! struct Note<'a> {
+//!     #[serde(borrow)]
+//!     text: std::borrow::Cow<'a, str>,
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! struct Pair(u32, #[serde(skip)] String);
+//! ```
+//!
 //! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
 //! and `rename_all_fields` on a struct:
 //!
@@ -141,12 +157,27 @@
 //! struct Price { amount: f64 }
 //! ```
 //!
-//! Nor does a `transparent` struct whose one field has a default, which leaves nothing to read:
+//! A `transparent` struct is read as its one field that is neither skipped, defaulted nor a
+//! `PhantomData`, as serde's derive picks it (by the type's path: `PhantomData<T>` by any path,
+//! but not a `&PhantomData<T>` or another type holding one), and each other field is its
+//! default. One with no such field, or more than one, does not compile:
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
 //! #[serde(transparent)]
 //! struct Cents { #[serde(default)] amount: u64 }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Pair { id: u64, kind: String }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Tagged { id: u64, kind: &'static std::marker::PhantomData<String> }
 //! ```
 //!
 //! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and

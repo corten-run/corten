@@ -5,9 +5,11 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/bojanz/currency"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -136,16 +139,26 @@ func newMarketplaceSource() (*marketplaceSource, error) {
 			return nil, err
 		}
 		defer file.Close()
-		if err := json.NewDecoder(file).Decode(&s.fixture); err != nil {
+		var records map[string]json.RawMessage
+		if err := json.NewDecoder(file).Decode(&records); err != nil {
 			return nil, err
 		}
-		if s.fixture == nil {
+		if records == nil {
 			return nil, fmt.Errorf("missing marketplace fixture")
 		}
-		for _, record := range s.fixture {
+		s.fixture = make(map[string]*marketplaceRecord, len(records))
+		for id, data := range records {
+			if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err != nil {
+				return nil, err
+			}
+			var record marketplaceRecord
+			if err := json.Unmarshal(data, &record); err != nil {
+				return nil, err
+			}
 			if err := record.validate(); err != nil {
 				return nil, err
 			}
+			s.fixture[id] = &record
 		}
 	} else {
 		s.client = newRecordHTTPClient()
@@ -153,6 +166,10 @@ func newMarketplaceSource() (*marketplaceSource, error) {
 	return s, nil
 }
 func (s *marketplaceSource) get(ctx context.Context, id string) (*marketplaceRecord, error) {
+	return s.load(ctx, id, false)
+}
+
+func (s *marketplaceSource) load(ctx context.Context, id string, completeDocument bool) (*marketplaceRecord, error) {
 	if s.fixture != nil {
 		return s.fixture[id], nil
 	}
@@ -160,6 +177,8 @@ func (s *marketplaceSource) get(ctx context.Context, id string) (*marketplaceRec
 	if err != nil {
 		return nil, err
 	}
+	trace, _ := ctx.Value(marketplaceTraceKey{}).(marketplaceTrace)
+	trace.apply(req)
 	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -172,7 +191,23 @@ func (s *marketplaceSource) get(ctx context.Context, id string) (*marketplaceRec
 		return nil, fmt.Errorf("marketplace API: %s", res.Status)
 	}
 	var record marketplaceRecord
-	if err := json.NewDecoder(res.Body).Decode(&record); err != nil {
+	decoder := json.NewDecoder(res.Body)
+	if completeDocument {
+		var data json.RawMessage
+		if err := decoder.Decode(&data); err != nil {
+			return nil, err
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, fmt.Errorf("marketplace API: expected one JSON document")
+		}
+		if err := alertRecordFields(data, reflect.TypeFor[marketplaceRecord]()); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &record); err != nil {
+			return nil, err
+		}
+	} else if err := decoder.Decode(&record); err != nil {
 		return nil, err
 	}
 	if err := record.validate(); err != nil {
@@ -219,20 +254,50 @@ func (f *marketplaceFormat) Listings(n int64) string {
 var marketplaceDecimal = regexp.MustCompile(`^[0-9]+(?:[.,][0-9]+)?$`)
 
 func (f *marketplaceFormat) Alert(title, email, target string) string {
+	message, _ := f.alert(title, email, target)
+	return message
+}
+
+func (f *marketplaceFormat) alert(title, email, target string) (string, *int64) {
 	words := marketplaceLabels[f.locale]
 	if !strings.Contains(email, "@") {
-		return words["invalid_email"]
+		return words["invalid_email"], nil
 	}
 	target = strings.TrimSpace(target)
 	if !marketplaceDecimal.MatchString(target) || (f.locale == "en-US" && strings.Contains(target, ",")) ||
 		(f.locale != "en-US" && strings.Contains(target, ".")) {
-		return words["invalid_price"]
+		return words["invalid_price"], nil
 	}
 	amount, err := f.money.Parse(target, "USD")
 	if err != nil || !amount.IsPositive() {
-		return words["invalid_price"]
+		return words["invalid_price"], nil
 	}
-	return strings.NewReplacer("{email}", email, "{title}", title, "{price}", f.money.Format(amount)).Replace(words["alert_set"])
+	minor, ok := alertMinor(strings.ReplaceAll(target, ",", "."))
+	if !ok {
+		return words["invalid_price"], nil
+	}
+	return strings.NewReplacer("{email}", email, "{title}", title, "{price}", f.money.Format(amount)).Replace(words["alert_set"]), &minor
+}
+
+// Convert an already validated positive decimal to cents without binary floats.
+func alertMinor(input string) (int64, bool) {
+	whole, fraction, _ := strings.Cut(input, ".")
+	whole = strings.TrimLeft(whole, "0")
+	if whole == "" {
+		whole = "0"
+	}
+	fraction += "00"
+	minor, err := strconv.ParseInt(whole+fraction[:2], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if len(fraction) > 2 && fraction[2] >= '5' {
+		if minor == 1<<63-1 {
+			return 0, false
+		}
+		minor++
+	}
+	return minor, true
 }
 
 type marketplaceView struct {
@@ -279,35 +344,64 @@ func newMarketplaceView(record *marketplaceRecord, locale string, query url.Valu
 	return v
 }
 func (s *marketplaceSource) routes(r *gin.Engine) {
+	alerts := &alertStore{}
+	r.GET("/api/alerts", alerts.read)
 	page := func(c *gin.Context) {
+		ctx := marketplaceReadContext(c.Request)
+		var form struct {
+			Email  string `form:"email"`
+			Target string `form:"target_price"`
+		}
 		locale := c.Param("locale")
 		if marketplaceLabels[locale] == nil {
 			c.Status(http.StatusBadRequest)
 			return
 		}
 		if c.Request.Method == http.MethodPost {
+			c.Header("Cache-Control", "no-store")
 			origin := c.GetHeader("Origin")
 			scheme := "http"
 			if c.Request.TLS != nil {
 				scheme = "https"
 			}
-			if c.GetHeader("Sec-Fetch-Site") == "cross-site" || (origin != "" && origin != scheme+"://"+c.Request.Host) {
+			site := c.GetHeader("Sec-Fetch-Site")
+			if (site != "" && site != "same-origin" && site != "none") || len(c.Request.Header.Values("Origin")) > 1 || len(c.Request.Header.Values("Sec-Fetch-Site")) > 1 || (origin != "" && origin != scheme+"://"+c.Request.Host) {
 				c.Status(http.StatusForbidden)
 				return
 			}
+			if c.ContentType() != "application/x-www-form-urlencoded" {
+				c.Status(http.StatusUnsupportedMediaType)
+				return
+			}
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+			if err := c.ShouldBindWith(&form, binding.FormPost); err != nil {
+				c.Status(http.StatusBadRequest)
+				return
+			}
 		}
-		record, err := s.get(c.Request.Context(), c.Param("id"))
+		record, err := s.load(ctx, c.Param("id"), c.Request.Method == http.MethodPost)
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadGateway, err)
+			abortRecordPage(c, err)
 			return
 		}
 		if record == nil {
 			render(c, http.StatusNotFound, notFoundPage())
 			return
 		}
+		if c.Request.Method == http.MethodPost && record.ID != c.Param("id") {
+			c.Status(http.StatusBadGateway)
+			return
+		}
 		view := newMarketplaceView(record, locale, c.Request.URL.Query())
 		if c.Request.Method == http.MethodPost {
-			view.Message = view.Format.Alert(record.Title, c.PostForm("email"), c.PostForm("target_price"))
+			message, minor := view.Format.alert(record.Title, form.Email, form.Target)
+			view.Message = message
+			var row *storedAlert
+			if minor != nil {
+				row = &storedAlert{record.ID, form.Email, *minor}
+			}
+			alerts.renderPost(c, marketplacePage(view), row)
+			return
 		}
 		c.Header("Cache-Control", "no-store")
 		render(c, http.StatusOK, marketplacePage(view))
@@ -316,10 +410,11 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 	r.POST("/marketplace/:locale/:id", page)
 	recordJSONMethods(r)
 	r.Match([]string{http.MethodGet, http.MethodHead}, "/api/marketplace/:id", func(c *gin.Context) {
+		ctx := marketplaceReadContext(c.Request)
 		c.Header("Cache-Control", "no-store")
-		record, err := s.get(c.Request.Context(), c.Param("id"))
+		record, err := s.get(ctx, c.Param("id"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": "marketplace source unavailable"})
+			c.AbortWithStatusJSON(recordSourceStatus(err), gin.H{"error": "marketplace source unavailable"})
 			return
 		}
 		if record == nil {

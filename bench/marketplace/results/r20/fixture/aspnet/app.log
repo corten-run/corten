@@ -1,0 +1,114 @@
+warn: Microsoft.AspNetCore.DataProtection.Repositories.FileSystemXmlRepository[60]
+      Storing keys in a directory '/root/.aspnet/DataProtection-Keys' that may not be persisted outside of the container. Protected data will be unavailable when container is destroyed. For more information go to https://aka.ms/aspnet/dataprotectionwarning
+warn: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[35]
+      No XML encryptor configured. Key {c72c0916-b9c5-4740-92c9-90a7a7af0e14} may be persisted to storage in unencrypted form.
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://[::]:8080
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /app
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGL" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGM" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGN" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGO" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGP" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGQ" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGR" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGS" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGT" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGU" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQGV" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH0" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH1" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH2" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH3" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH4" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH5" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH6" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH7" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH8" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQH9" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHA" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHB" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHC" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHD" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHE" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHF" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHG" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHH" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHJ" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHK" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHL" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHM" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHN" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHO" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHP" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHQ" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHR" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHS" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHT" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHU" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHV" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI0" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI1" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI2" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI3" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI4" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI5" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI6" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQHI" rejected because the maximum number of concurrent connections has been reached.
+warn: Microsoft.AspNetCore.Server.Kestrel.Connections[24]
+      Connection id "0HNQ0QJVFFQI7" rejected because the maximum number of concurrent connections has been reached.

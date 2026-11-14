@@ -7,7 +7,7 @@ error bodies. GET and Express's implicit HEAD remain available; other methods re
 The error boundary follows Express's native case-insensitive route matching, including
 malformed IDs on upper- and mixed-case aliases.
 
-These JSON reads alone own a ten-second whole-read deadline and cancel their fetch, including
+These JSON reads own a ten-second whole-read deadline and cancel their fetch, including
 body consumption, when the caller disconnects. The matched profile's existing request timeout
 still applies and returns JSON on these two routes. Page localization, native form APIs, legacy item routes
 and the choice of default/matched production middleware are unchanged.
@@ -44,7 +44,10 @@ store. `GET /api/alerts` independently reads it as an insertion-ordered JSON arr
 `Cache-Control: no-store`. Missing/unknown cookies and fresh browser contexts read
 `[]`; GET never initializes, clears or resets a store. Invalid forms, missing
 records, unsupported locales and cross-site rejections do not append. Native Intl
-price parsing, localized messages and form APIs remain in place. Legacy item
+price parsing, localized messages and form APIs remain in place. Decimal target
+digits convert directly to an integer number of cents, bounded by
+`Number.MAX_SAFE_INTEGER`, without a floating-point multiplication. Intl formats
+the exact decimal string in the accepted message, including at that boundary. Legacy item
 forms are not part of this store. No parity flag or new dependency is needed.
 
 The first accepted POST issues `marketplace-alerts`, a server-generated 256-bit
@@ -60,3 +63,69 @@ retained for the process lifetime, not a durable or multi-instance session servi
 
 `node --test marketplace.test.mjs` includes real HTTP POST/readback, all locales,
 both profiles, rejection/non-mutation, independent clients and concurrent operations.
+
+## Request lifetime
+
+Marketplace page GETs and native form POSTs now pass a native AbortSignal to the
+existing fetch and JSON body reader. The signal aborts on response disconnect,
+the matched profile's `connect-timeout` event, or a ten-second page deadline in
+the default profile. A deadline returns 504 in defaults or the existing 503 from
+matched middleware, and actually cancels upstream work. Timers/listeners are
+removed when the response finishes or closes. A disconnected or timed-out form
+cannot append an alert after the fetch or the EJS render callback. Normal native
+form, money, JSON and upstream-error contracts are unchanged.
+
+For an unfinished native URL-encoded POST, the same deadline writes the timeout
+response without waiting for the rest of the body. It ends the socket's write
+side before destroying the incoming reader, preserving the complete response
+instead of resetting a Windows socket at response `finish`. The native form
+wrapper observes body-parser's synchronous pipe destination and restores the
+request method immediately. Cancellation also unpipes and destroys that native
+decompressor, which otherwise outlives a destroyed incoming request. Both the
+plain and compressed raw-body readers must settle within the unchanged 500 ms
+check. Cancelled callbacks cannot resume routing. Accepted encodings, parser
+limits and matched middleware remain intact.
+
+The [native socket checks](../../../marketplace/corten/README.md#request-lifetime)
+exercise both profiles and all locales against the actual image, including
+stalled bodies, real aborts, deadline status/cancellation and POST non-mutation.
+
+## Matched Production
+
+Only `PROFILE=matched` enforces the comma-separated `HOSTS` allowlist. Hostnames
+are case-insensitive, permit request ports and a final DNS dot; `.example.test`
+permits the apex and its subdomains, not sibling suffixes. Localhost, its
+subdomains and IPv4/IPv6 loopback remain allowed. Configured entries may include
+a port, but the policy matches hostnames, not ports. Invalid authorities and
+unknown hosts receive 400, before routing or a source read. Forwarding headers
+do not influence this policy. `GET /health/live` (and implicit HEAD) returns 200
+without reading any source; nonexistent health paths still return 404. Existing
+Helmet, compression, body/connection/header limits and default profile behavior
+remain in place. The native HTTP test includes unavailable-source liveness,
+negative health paths, unknown/suffix/malformed hosts and forwarding spoofing.
+
+The current benchmark TLS edge rewrites Host to `fsw-target:8080` and does not
+provide an authenticated public-origin contract. That configured internal Host
+can serve reads, but a POST with an external HTTPS Origin is correctly rejected
+with 403. `trust proxy` stays off; neither arbitrary forwarding headers nor an
+allowlisted public hostname proves a safe same-origin write. The edge owner must
+preserve the public authority and configure a narrowly trusted scheme/forwarding
+contract before deployed-edge forms can qualify. This change does not edit that
+proxy or claim TLS deployment compatibility.
+
+## Production Install
+
+The production image installs the committed npm dependency lock with `npm ci`; the build
+recipe uses the same command. Framework defaults and direct package pins are unchanged.
+
+## Marketplace Trace Context
+
+Marketplace page/form middleware captures its own incoming traceparent before
+body parsing; the record-JSON handler captures it on entry. The existing native
+fetch receives the immutable string as an optional argument, alongside its
+unchanged AbortSignal. Valid W3C contexts become headers of that request only;
+invalid/duplicate/zero-ID input adds no header. Known future-version fields are
+down-versioned to 00. There is no shared default header, ambient current operation,
+exporter, new fetch, parser or runtime setting. Catalog and legacy item source
+clients are unchanged. The scoped native trace driver linked above exercises
+overlap, delayed bodies/source starts, accepted forms and independent readback.

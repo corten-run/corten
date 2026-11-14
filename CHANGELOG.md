@@ -5,12 +5,180 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
+  is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
+  Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left
+  its idle watch permanently busy. Its partial-header probe with an open stream did not show
+  a regression from HTTP/1.1. Publish the partial evidence and follow-up criteria, and put
+  the proxy caveat beside the README's production-defaults claim.
+
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
   other native group integrations remain pending, not measured results.
 
 ### Added
+
+- Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
+  including dependency-policy and whole-group timing gates. Failed and unsupported
+  outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
+
+- Quote Spring's colon-bearing htmx attribute name in the native Thymeleaf layout,
+  restoring catalog and marketplace HTML without changing boosting behavior or checks.
+
+- Refresh the native Rails, Phoenix, Gin and Drogon live build inputs to reviewed
+  stable versions and immutable base images. Bind deployment runtime descriptions
+  to those sources; changed inputs still require new qualification evidence.
+
+- Keep the native Razor and AOT benchmark CI test SDKs aligned with their production
+  Dockerfiles, so a runtime upgrade cannot leave the test jobs on an older SDK.
+
+- Preserve literal route, scoped-package and vendor-version filenames when collecting
+  native benchmark evidence. Collection, archive and artifact namespaces share the
+  portable-name check without decoding names or relaxing traversal, link or collision checks.
+
+- Prepare current Git in the browser CI image so native immutable-source checks run
+  with replacement objects and lazy fetching disabled, instead of failing on an older CLI.
+  Run source-replay checks as the checkout owner, retaining Git's ownership protection.
+
+- Register the native Rails, Phoenix and Laravel live ports without promoting
+  historical captures. Retain Livewire/Reverb wire and DOM evidence, including
+  negative HTTP controls and request timings on failed journeys; Laravel's
+  observed native-feed deadline misses remain unqualified outcomes.
+
+- Align server build recipes with the refreshed Python 3.15 and Java 27 images,
+  the native Spring JSON check with its production toolchain, deployment runtime
+  descriptions with their current sources, and the Express Node/Bun comparison
+  with the reviewed htmx 4 artifact. Changed inputs require new native qualification;
+  older captures remain historical.
+
+- Bind grouped comparison eligibility to the committed offline latest-stable dependency
+  policy while preserving every contender's native outcomes and failed evidence.
+
+- Reconcile grouped deployment manifests with the checked-in Node 26 and .NET 11
+  launch paths and native Corten/Topcoat/Leptos live ports. Source registration remains
+  separate from qualification; no older captures qualify changed images.
+
+- Align the native Corten parity and Leptos live Dockerfiles with the reviewed
+  digest-pinned Rust/trixie production toolchain and cargo-leptos version. Prior
+  captures remain historical, not qualification of the new image inputs.
+
+- Pin grouped benchmark helper images, native live Express and the Express/Bun
+  Node comparator to Node 26.13.1 by immutable digest. Retain their separate
+  native qualification requirements instead of borrowing older runtime results.
+
+- Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
+  preserving native rendering and source clients. Keep Drogon's native parser
+  normalization and repeated-header failures explicit; this does not qualify
+  that contender for traced production work. Add an opt-in native instruction-cost
+  diagnostic with complete dump validation and all-resource cleanup.
+
+- Register the native Topcoat keyed live application in its selected recoverable-live
+  group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
+  Historical missing-port evidence stays unchanged; functional integration is not a
+  completed group timing baseline.
+
+- Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
+  images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
+  and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
+  historical results; the new toolchain and dependency graph are new-round inputs.
+
+- The marketplace browser gate observes native LiveView WebSocket and long-poll
+  saves with exact form and reply correlation, waits for readiness before editing,
+  and retains bounded case diagnostics on transport failure. Livewire saves must
+  match the native component, item, locale and submitted values.
+
+- Native marketplace runs retain raw load clocks, checks, counted CPU, memory,
+  lifecycle, gate and cleanup observations. A read-only validator replays their
+  complete matrix and exact aggregates; older results remain historical when
+  required proof is absent. Replay does not establish independent source approval
+  or host ownership, and does not change the recorded capacity outcomes.
+
+- Release archives carry GitHub build provenance and a `SHA256SUMS` file. The release verifies
+  every archive's provenance before publishing to crates.io or creating the GitHub release, and
+  the install guide documents verification on Linux, macOS and PowerShell. `cargo binstall`
+  still checks its download only by HTTPS.
+
+- A read-only saved client-heavy evidence validator checks source identities,
+  native bundles, observations, outcomes and resource/timing consistency without
+  executing archived code or contacting a network. Historical v1 captures remain
+  blocked from qualification and verified timings when required proof is absent.
+
+- Grouped catalog runs preserve versioned raw load, counted CPU, memory samples,
+  cold-start, image/check and cleanup observations. An offline validator replays
+  the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
+  acquire missing evidence retroactively. Host isolation and independent source
+  audit remain separate gates, not inferred from replay success.
+
+- A native Drogon keyed live application uses its own acknowledged WebSocket
+  delivery, bounded reader queues, snapshot recovery and reader-scoped cleanup.
+  Group registration preserves original wire observations and historical missing
+  outcomes; bounded correctness diagnostics are not a completed timing baseline.
+
+- Native workload-group driver entry points retain all selected contenders and explicit
+  failure/unsupported coverage. Deployment manifests separate representative production
+  choices from performance candidates and bind qualification to exact native evidence.
+  These local apparatus integrations and read-only plans are not completed group baselines
+  or automatic qualification of alternative runtimes.
+
+- Native Rails, Laravel and Phoenix marketplace alert stores expose independent,
+  session-isolated readback for accepted writes. Their adapters retain native
+  LiveView, Turbo and Livewire behavior; group qualification remains separate.
+
+- Native Corten, ASP.NET and Express marketplace reads retain request-owned
+  cancellation and explicit trace context. ASP.NET and Express also bound
+  unfinished form parsing and prevent a timed-out parser from resuming routing.
+  Express flushes the timeout response before closing an unfinished upload and
+  cancels body-parser's native decompressor as well as its incoming request.
+  Real-socket probes retain caller-abort, upload, JSON-error and alert-readback
+  outcomes. The original Corten stalled-body abort failure remains unresolved;
+  later passing probes are not a complete group qualification or timing baseline.
+
+- Native Drogon, Gin, Topcoat and Leptos marketplace forms persist accepted alerts
+  in isolated cookie sessions, with independent readback and no append after
+  invalid input, incomplete records or failed native rendering. Confirmations use
+  the exact stored minor amount. Leptos retains its enhanced server action and
+  plain form fallback; the other adapters retain their native renderers and forms.
+  Gin's opt-in production profile adds native security headers, host checks,
+  compression, body/connection bounds and upstream-independent liveness. Native
+  browser and HTTP checks remain separate from comparative load qualification.
+
+- Native FastAPI, Django and Spring marketplace page, JSON and alert source reads
+  forward trace headers per request, without changing shared client headers or
+  successful payloads. Concurrent, delayed and untraced native HTTP regressions
+  check isolation, including non-ASCII header bytes in FastAPI and Django. These observations
+  support source auditing; they do not qualify mixed-workload performance.
+
+- Native Next.js, Nuxt, React Router, SvelteKit, Astro and TanStack Start
+  marketplace forms persist accepted alerts with session-isolated readback,
+  preserve their framework's enhanced and plain-form paths, and reject writes
+  whose source or rendering input failed. Next.js, Nuxt, SvelteKit and TanStack
+  Start guard pending same-form JS submissions to retain one session; these
+  correctness changes are not a completed group baseline. The shared correctness
+  checker recognizes TanStack's native generated server action only with matching
+  same-origin submitted fields, while retaining plain-form checks.
+
+- Native FastAPI, Django and Spring marketplace alerts persist accepted writes
+  in isolated sessions with independent readback and no append after rejected,
+  incomplete-source or render-failed submissions. FastAPI owns its page-source
+  cancellation and deadline; Django WSGI and Spring MVC lifetime limitations
+  remain explicitly failed capabilities, not completed group qualification.
+
+- A native client-heavy runner exercises Corten, React, Vue, Solid, Svelte and
+  Remix against the same keyed data and dashboard input. Independent visible-DOM,
+  network and lifecycle gates precede a separate measured journey. Builds are
+  fresh and source-bound; failed cleanup or qualification suppresses timings.
+  Bounded local diagnostics are not an isolated performance ranking.
+
+- Native Corten, ASP.NET Razor Pages and Express marketplace forms persist each
+  accepted alert, with independent session-scoped JSON readback. Rejected forms,
+  failed source reads and render failures do not append. This is process-local
+  benchmark state, not durable storage or load qualification.
+
+- Catalog runners preserve full native application stdout and stderr in raw evidence,
+  rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
+  longer repeatedly copy growing log strings. Log-collection errors still fail the run;
+  application settings, load thresholds and measurement windows are unchanged.
 
 - FastAPI's native record JSON routes bound complete upstream reads, cancel them
   on caller disconnect and return generic JSON source/serialization errors.
@@ -144,7 +312,109 @@ Corten is pre-1.0, so any minor version may change the API.
   whose only key field is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
   ([#1254 A script cannot mint a submit key for a form it makes from a template, so copied rows share one key](https://github.com/corten-run/corten/issues/1254)).
 
+- `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
+  itself: a link reloads it with every script blocked, one of its components is shown as the
+  lines where its three files meet, its own source is broken five ways with what the compiler
+  said, and the server streams its own readings, with the memory it holds, the machine it is on
+  and how much of its CPU and memory is in use (the machine's, or of the limits a container
+  or a systemd unit holds the server to), where the system counts them. Tests hold what it says to
+  `docs/performance.md`, the README,
+  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small
+  machine behind nginx as a systemd service: each change on `main` is tested, built, copied over
+  SSH and switched to, and the release before is put back when the new one does not answer as its
+  commit. The workflow does nothing until the repository names a machine. Its smoke test runs in
+  Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
+  behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
+  reads that the plate is no brighter under the steel's type than the type can stand.
+
+- `examples/corten-site/deploy/infra`: the machine that serves Corten's site as OpenTofu
+  configuration for DigitalOcean (a droplet, an address that stays when the droplet is replaced,
+  a firewall, and the DNS zone), applied on each change on `main` by the `Site machine`
+  workflow with its state in a Spaces bucket. A droplet made from it is handed `provision.sh`,
+  `nginx.conf` and the service file as it starts, waits until the site's name reaches it and
+  sets itself up, so nobody signs in; a change to anything it is handed makes a new droplet,
+  and the workflow then starts the `Site` workflow to ship it a release. The `Site` workflow
+  no longer runs for a change to those files and the deploy guide alone, and `provision.sh`
+  asks for the package lists again when another update holds their lock. `bootstrap.sh` gives
+  the repository the two environments, the keys and the variables this needs, once. The
+  workflow applies nothing until the repository names a bucket for the state. The site's
+  service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
+  from the metadata address.
+- `examples/corten-site`'s machine slows one address that asks as fast as it can, where
+  before one address asking for the page left another reader with none. One reader (an IPv4
+  address or an IPv6 network of 64 bits) may ask nginx for 100 things at once and 20 a second
+  after, have 100 answers on their way, and ask 100 times on a connection, and the machine's
+  firewall lets it hold 256 connections and open 19 in a second; over the first two the
+  answer is 429, and a connection over the last is let in when its sender tries again, a
+  second later at the soonest. A request refused for asking too fast is written to neither
+  of nginx's logs, nor are the redirects of port 80 and of other names. After an apply the
+  `Site machine` workflow asks the machine for 300 requests and for 40 connections at once
+  and for 250 requests one after another, and fails where it refuses, delays or ends too
+  few. No limit keeps a request under it waiting, and one request in a hundred opens a
+  connection; readers who share an address share its limits, and someone with many addresses
+  is not slowed by them. The deploy guide has what was measured (What one address can do).
+- `examples/corten-site`'s machine sends other names on to the site's: the repository variable
+  `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
+  by hand) gives each name a record at the machine's address and a place on the site's
+  certificate, and nginx answers it on both ports with a redirect (308) to the same path at
+  the site's name. A new machine serves the site under its own name first, then takes the
+  other names on once each reaches it, so a name that is late or refused a certificate holds
+  back only itself. A run of `provision.sh` asks for a certificate only when the names the
+  one in place holds are not the ones given, and after an apply the `Site machine` workflow
+  fails where a name does not send its visitors to the site. Port 80 now redirects to the
+  site's name whatever host was asked for, not to the host the request named. A test of the
+  site looks in the checkout for every file or directory the page links to in the repository
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
+
 ### Changed
+
+- A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
+  or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
+  where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
+  server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
+  it implements and this resource lacks. **Breaking for clients and monitors:** they get a 501
+  where they saw a 405, and a scanner's `PROPFIND` or `TRACE` now counts toward a proxy's or a
+  CDN's 5xx rate, and a client that retries every 5xx by default (Polly's
+  `HandleTransientHttpError`, .NET's standard resilience handler) retries it. The app does not
+  log it as an error. CloudFront's `5xxErrorRate` and Cloudflare's error-rate notifications
+  cannot leave it out, since neither filters by method (Cloudflare's Monitors may, not verified
+  here); the deploy guide says how to build one from access logs that leaves out
+  `status = 501 AND method not in the app's served methods`, which hides neither the app's own
+  501s to a method it serves nor any other 5xx, and that an app with an `any` route has nothing
+  to leave out ([Deploying](docs/guide/deploy.md#monitoring)). A method
+  some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
+  route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
+  501; an unknown URL is still a 404 whatever the method, and so is a `CONNECT` to a host and port
+  (the authority form a client sends), which names no path. A browser gets the error page as the
+  new `Failure::UnknownMethod`, which the request is at fault for as it is for a 405, so the
+  page waits for the layout's reads (only the router's 501 is, while it is still its empty 501: a
+  middleware that turns it into another status, or gives it a body that is not plain text, keeps
+  what it wrote, a plain-text body is `Failure::Rejected` with status 501 for a browser and JSON
+  for an API's client, and an empty body of unknown size is sent as a bare 501; a 501 a handler
+  or a middleware answers, `Error::status(NOT_IMPLEMENTED)` or the bare status, is still
+  `Failure::Failed`), and
+  an API its JSON, in its `Api::errors` shape when it has one. **Breaking:** an app's error page that matches
+  `Failure` without `_` gains an `UnknownMethod` arm. Only a request that reaches a route's
+  405 checks the method again: measured with callgrind (release, glibc, three runs each, every run
+  within 2), an unstaged route and a 404 move by 1 to 3 instructions and a page route by 182
+  fewer, all in the allocator; a 405 costs 28 to 29 more, and a `PROPFIND` that was a 405 costs
+  355 to 481 more as a 501, which allocates the router's marker
+  ([design Choice 25](docs/design.md#choice-axum-router), migration step 1)
+  ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+- Pin the benchmark suites to one verified k6 release and record its actual
+  executable, immutable image and platform. Native saved replay requires this
+  identity, and legacy continuation/trends refuse incompatible or unidentified
+  tool boundaries instead of assigning new metadata to old measurements.
+
+- Refresh the JavaScript benchmark framework/compiler dependencies and retain
+  committed package locks in their production builds and build recipes. React
+  Router uses its current native Express dispatcher. Previous rounds are not
+  relabeled; version choices, checks and remaining transitive audit findings are
+  recorded in `bench/fullstack/refresh-js.md`.
+
+- Lock Express's existing production dependency tree and use the same `npm ci`
+  command in its image and build recipe. Historical full-stack results retain
+  their original dependency-reproducibility caveat.
 
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
@@ -176,6 +446,18 @@ Corten is pre-1.0, so any minor version may change the API.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+- A request reads what its area or API sets (deadline, body limit, CSP and shell key,
+  middleware, its API) from the route it matched: `App::router` resolves each area's and API's
+  once, with those of the areas and APIs around it, and gives it to each of their routes, where
+  each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
+  is its prefix's, and a route that can match a path under another prefix, counted segment by
+  segment (a page's `/{*rest}`, or `/{slug}` beside an area at `/shop`), look it up by path, so
+  what a request meets is unchanged. Measured at `f7d33ce2` against main `31de4268` (callgrind,
+  release, jemalloc, five runs each), a page in an inner area costs 328 instructions fewer and an
+  API's JSON 223 fewer, and in an app with no areas or APIs each costs 138 fewer; and later,
+  counting segments, a page at `/{slug}` in an app with no areas costs 114 fewer than
+  when it was looked up by path (at `084db982` against `416882fa`, three runs each)
+  ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 - `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
   only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
@@ -194,8 +476,90 @@ Corten is pre-1.0, so any minor version may change the API.
   would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
   would fail to build. The data block the issue asks for is left open
   ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+- The seven crates name `https://corten.run` as their `homepage` again, now that the site is
+  served there
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- Give the Rust benchmark images distinct locked target caches and a shared whole Cargo home,
+  including the package-cache lock. Keep pinned CLI binaries outside that mount and align the
+  fullstack recipes' dependency, build and development paths with the images. Historical results
+  remain historical; no build timings or native qualification are inferred from this change.
+
+- The marketplace browser gate recognizes Livewire's native enhanced alert response
+  only for the same origin, matching component, item, locale, save call and submitted
+  values. Native transport and plain-form behavior remain unchanged.
+
+- The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
+  (`<app>-target`), so a build waits only for another build of the same app, where every app on a
+  Docker host built from the template shared one locked `/src/target` cache and waited for every
+  other app's build. Downloaded crates are cached as cargo's whole home
+  (`CARGO_HOME=/var/cache/cargo`) instead of its `registry` directory, since cargo's lock on them
+  is in the home: two builds that run at once wait for each other's download, where with
+  `registry` alone one of them could fail to unpack a crate the other was unpacking. Apps no longer
+  share compiled dependencies, so two apps with the same ones compile them once each. The examples'
+  Dockerfiles take one `id` for the workspace they share (`corten-examples.target`), so each example
+  still builds on the crates the last one compiled, and one for their `registry` cache
+  (`corten-examples.registry`): without it that cache was every image's
+  `/usr/local/cargo/registry`, which an app from the earlier template or another Rust image could
+  be unpacking into at the same time, with no lock the two builds both see. The examples write
+  theirs one build at a time, in the step that holds their locked target. An app made before keeps
+  its Dockerfile; one that takes the change starts its next build with empty caches, and the old
+  ones stay on the builder until `docker builder prune`
+  ([#1345 The Dockerfile template's target cache has no id, so every app's build on a host waits for every other's](https://github.com/corten-run/corten/issues/1345)).
+- A WebSocket handshake of a version other than 13, or of none, is answered 426 with
+  `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
+  RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,
+  where it was a 400 that named no version; a handler that gives it a 400 keeps
+  `Sec-WebSocket-Version: 13`, and any other status (a 404 that hides the socket) none of them.
+  An HTTP/1.0 request's `Upgrade` is ignored (RFC 9110, 7.8), so an `Option<Upgrade>` route gives
+  its other answer, and a proxy that passes `Upgrade` on over HTTP/1.0 gets that answer too.
+  Corten needs hyper 1.12, the first that keeps a 426's `Connection: upgrade` when it adds
+  `close`. **Breaking:** a handshake of a wrong or missing version gets a 426 where it got a 400,
+  a request to an `Upgrade` route that does not ask to switch, and a handshake on a
+  connection that cannot switch (HTTP/2, `app.test()`), get a 400 where they got a 426 without
+  the `Upgrade` header a 426 must have, and an HTTP/1.0 request with `Upgrade` to an
+  `Option<Upgrade>` route gets that route's page where it got a 426 (RFC 9110, 7.8), so a client,
+  health check or app test that expects the old status sees the new one
+  ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
+- A typed link no longer writes a path value that would open another page: `.` or `..`, which a
+  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
+  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
+  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
+  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  slug `/posts`). A debug build panics when such a link is written, naming the route by its
+  module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
+  (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
+  route and field, counting only a refusal written while the subscriber takes an error event of
+  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
+  filters on an event's message text or its line can disagree with that check either way: a
+  refusal it drops still uses up the one line, and one it would log may never be logged).
+  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
+  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
+  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
+  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
+  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
+  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
+  dot a second read (docs/design.md#limit-path-values)
+  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
+
+- `#[derive(FromJson)]` reads its `#[serde(..)]` once, and writes its reader and the
+  `Deserialize` it falls back to from that one reading, as Choice 26 says. A `transparent` struct
+  is read as its one field that is neither skipped, defaulted nor a `PhantomData`, the field serde
+  reads, so one beside a `PhantomData` or a defaulted field compiles and reads as serde's derive
+  reads it, where before the reader's stricter rule refused it. A `PhantomData` is told by the
+  field type's path, as serde_derive tells it: `<X as Tr>::PhantomData` is one, and a
+  `&PhantomData<T>` or `*const PhantomData<T>` is not, so beside another read field it is refused
+  as serde refuses it. A transparent struct whose one read field is a path ending in
+  `PhantomData` (`<X as Tr>::PhantomData`), which compiled before, is now refused as serde
+  refuses it. Each other attribute it refused is still a compile error, some with reworded
+  messages: a `rename` or `rename_all` that is not one string now asks for one name (or rule)
+  for reading and writing, as `Fields` does, and a transparent struct with no field to read or more
+  than one gives serde_derive's message. `corten-macros` is 87 lines shorter (measured: line
+  count)
+  ([#1224 #[derive(FromJson)] reads its serde attributes twice, so a transparent struct serde accepts (beside a PhantomData or a defaulted field) does not compile, though Choice 26 says one reading](https://github.com/corten-run/corten/issues/1224)).
 
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
@@ -294,6 +658,28 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- Benchmark deployment refreshes target the newest stable framework, runtime and build
+  tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
+  silently downgrading them or removing selected contenders; qualify new inputs afresh.
+
+- The corten-site deploy guide has the times of the first replacement of the site's machine
+  (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six
+  until the run the workflow starts was answered) in place of "a replacement has not been
+  timed", says that with names that redirect a machine asks Let's Encrypt for two certificates,
+  each from its own set of names' five a week, and its list of what has not run on a real
+  machine no longer names the address moving or a name that redirects and names more of what
+  has not
+  ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
+- The commands CONTRIBUTING gives for the listings-feed smoke and the `corten-cluster` tests, the
+  listings-feed README and its failover benchmark remove their Postgres containers with
+  `docker rm -f -v`, so the data volume each one's image declares goes with it rather than staying
+  behind
+  ([#1233 The Postgres containers CONTRIBUTING and the listings-feed example start are removed with docker rm -f, which keeps each one's anonymous data volume](https://github.com/corten-run/corten/issues/1233)).
+- The app guide's table of defaults has rows for the handler deadline (30 seconds, then a 503, or
+  the client's 408 while it waited for the body) and the request body limit (2 MiB for `Json`,
+  `Form`, `String`, `Bytes` and what an `Upload` keeps, then a 413), each with its overrides, so
+  they are found where every other default is
+  ([#1220 The app guide's table of defaults leaves out the 30-second handler deadline and the 2 MiB body limit, so an app learns of its 503 and 413 only from prose](https://github.com/corten-run/corten/issues/1220)).
 - [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
   publishes no npm initializer that creates an app (`npm create corten`): the app would still
   build with Cargo and its other commands are installed by Cargo, so it would replace only
@@ -6986,16 +7372,21 @@ their names, and has no tag or release.
 4. New `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
-6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
-   from round r16 (2026-11-06 to 2026-11-07 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `eea6adb`),
-   with all eighteen page apps and JSON-only aspnet-aot; load rows are medians of three passes.
-   Corten serves 20,705 item pages and 26,385 JSON responses a second from memory at 64
-   users, and 3,669 item-API pages. A page from memory costs 47 µs of CPU
-   (21,195 per CPU-second), serves 1,234 pages a second per MiB, and the item page loads 14.1 KB
-   of JavaScript (gzip), up 9.1% from r15. It is the first round with five offers in Corten's initial HTML,
-   not all offers in hidden templates, so its page gain is not a like-for-like speedup.
-   The Build table is r16's: Corten's clean production build took 77.3 s and its rebuild 34.7 s; axum + Maud took 31.7 s and 11.3 s,
-   the apps not written in Rust or C++ took 6.6-45.4 s clean and 0.9-6.3 s after the edit, and Corten's development rebuild took 2.6 s.
+6. The README and [Performance](docs/performance.md#on-the-server) server tables now use
+   [historical marketplace v2 r20](bench/marketplace/results/r20/report.md), 2026-11-12 UTC,
+   `43550265076e378d2159a9ebc254cf9412a2355a`, one c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz).
+   This is the first validated `production` baseline under `marketplace-production/v1`,
+   not a speed delta from r16, catalog c1/c2 or the newer workload-group campaign. Corten and
+   ASP.NET Core qualified; Next.js, FastAPI, Express, Topcoat, Leptos were excluded
+   with raw reasons, and omitted adapters were not tested. Each admitted app completed
+   8 profiles and 3 passes, with 10s warmup, 15s phases and 150 req/s fixed load.
+   Tables retain all page locales, JSON once per source, medians/ranges, latency, fixed CPU
+   and memory, counted efficiency, cold starts and pass-specific app/upstream limits. No
+   request failures, drops or app stops were recorded; below-95% app CPU prevents
+   maximum-capacity claims for those stages. No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core.
+   Historical r16 server, build, browser, byte and
+   instruction measurements keep their workload labels; no new measurements of those
+   latter four are claimed, nor readiness for newer group contracts.
 
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a

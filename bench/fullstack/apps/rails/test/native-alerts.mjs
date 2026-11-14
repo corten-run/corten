@@ -6,6 +6,9 @@ import { chromium, expect } from '@playwright/test';
 
 const [stack, base] = process.argv.slice(2);
 assert.ok(['rails', 'laravel', 'phoenix'].includes(stack) && base, 'stack and base URL required');
+// Bandit closes native exception responses; do not reuse those sockets in the
+// independent HTTP probe client. Browser forms/LiveView keep their normal transport.
+const probeHeaders = stack === 'phoenix' ? { Connection: 'close' } : {};
 const labels = JSON.parse(await readFile(new URL('../config/marketplace_labels.json', import.meta.url)));
 const browser = await chromium.launch({ headless: true });
 try {
@@ -15,7 +18,7 @@ try {
       const other = await browser.newContext({ javaScriptEnabled });
       try {
         const read = async (client = context, query = '') => {
-          const response = await client.request.get(`${base}/api/alerts${query}`);
+          const response = await client.request.get(`${base}/api/alerts${query}`, { headers: probeHeaders });
           assert.equal(response.status(), 200);
           assert.match(response.headers()['content-type'], /application\/json/);
           assert.match(response.headers()['cache-control'], /no-store/);
@@ -35,7 +38,7 @@ try {
         if (javaScriptEnabled) {
           if (stack === 'rails') await page.waitForFunction(() => window.Turbo && customElements.get('turbo-frame'));
           if (stack === 'laravel') await page.waitForFunction(() => window.Livewire?.all().some(component => component.name === 'marketplace-alert'));
-          if (stack === 'phoenix') await expect(page.locator('#marketplace-alert')).toHaveClass(/phx-connected/);
+          if (stack === 'phoenix') await expect(page.locator('[data-phx-session]').filter({ has: page.locator('.marketplace__alert') })).toHaveClass(/phx-connected/);
         }
         const timeOrigin = javaScriptEnabled ? await page.evaluate(() => performance.timeOrigin) : null;
         const target = locale === 'en-US' ? '12.50' : '12,50';
@@ -57,17 +60,19 @@ try {
         await form.locator('button[type=submit]').click();
         await expect(page.locator('.marketplace__message')).toHaveText(labels[locale].invalid_price);
         assert.deepEqual(await read(), expected, 'Rejected native UI action does not append');
-        const post = (params, options = {}) => context.request.post(base + path, { form: { [tokenName]: token, ...params }, ...options });
+        const post = (params, options = {}) => context.request.post(base + path, { form: { [tokenName]: token, ...params }, ...options, headers: { ...probeHeaders, ...options.headers } });
         for (const params of [{ email: 'bad', target_price: target }, { email, target_price: '0' }, { email, target_price: 'NaN' }, {}, { email }]) {
           assert.equal((await post(params)).status(), 200);
           assert.deepEqual(await read(), expected, 'Rejected/missing fields do not mutate');
         }
-        assert.ok((await context.request.post(base + path, { form: { email, target_price: target } })).status() >= 400, 'Missing CSRF rejected');
+        // Native exception handlers may close the socket after sending a CSRF error.
+        // Do not pool that socket for the next POST; retain the same browser cookie jar.
+        assert.ok((await context.request.post(base + path, { headers: { Connection: 'close' }, form: { email, target_price: target } })).status() >= 400, 'Missing CSRF rejected');
         for (const headers of [{ Origin: 'https://other.test' }, { 'Sec-Fetch-Site': 'cross-site' }]) {
           assert.ok((await post({ email, target_price: target }, { headers })).status() >= 400, 'Cross-site write rejected');
         }
         // Rails' per-form CSRF token is path-bound and refuses the other action first.
-        assert.equal((await context.request.post(`${base}/marketplace/${locale}/missing`, { form: { [tokenName]: token, email, target_price: target } })).status(), stack === 'rails' ? 422 : 404);
+        assert.equal((await context.request.post(`${base}/marketplace/${locale}/missing`, { headers: probeHeaders, form: { [tokenName]: token, email, target_price: target } })).status(), stack === 'rails' ? 422 : 404);
         assert.deepEqual(await read(context, '?email=oracle&target_minor=999'), expected);
         assert.deepEqual(await read(), expected, 'GET never resets the store');
         const second = { item_id: 'item_1', email: 'second@example.test', target_minor: 1050 };
@@ -85,7 +90,7 @@ try {
         await independent.goto(base + path);
         const otherForm = independent.locator('.marketplace__alert form');
         const otherToken = await otherForm.locator(`input[name="${tokenName}"]`).inputValue();
-        assert.equal((await other.request.post(base + path, { form: { [tokenName]: otherToken, email: 'isolated@example.test', target_price: target } })).status(), 200);
+        assert.equal((await other.request.post(base + path, { headers: probeHeaders, form: { [tokenName]: otherToken, email: 'isolated@example.test', target_price: target } })).status(), 200);
         assert.deepEqual(await read(other), [{ item_id: 'item_1', email: 'isolated@example.test', target_minor: 1250 }]);
         assert.deepEqual(await read(), stored);
         // Exercise the existing native GET controls and typed/native links too.

@@ -1,9 +1,11 @@
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { formatters, marketplacePath, sortedListings, type Locale, type MarketplaceQuery, type MarketplaceRecord } from "./marketplace";
 
 export type MarketplaceProps = { record: MarketplaceRecord; locale: Locale; query: MarketplaceQuery; message?: string };
 export function Marketplace({ record, locale, query, message = "" }: MarketplaceProps) {
   const [submitted, setSubmitted] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const [pending, setPending] = useState(false);
   const f = formatters(locale);
   const t = f.labels;
   const money = (minor: number | null) => minor === null ? "\u2014" : f.money.format(minor / 100);
@@ -58,6 +60,9 @@ export function Marketplace({ record, locale, query, message = "" }: Marketplace
       <h2>{t.alert}</h2>
       <form method="post" onSubmit={async (event) => {
         event.preventDefault();
+        if (submitting.current) return;
+        submitting.current = true;
+        setPending(true);
         const form = new FormData(event.currentTarget);
         try {
           const response = await fetch("/api/marketplace/" + encodeURIComponent(record.id) + "?locale=" + locale, {
@@ -70,12 +75,15 @@ export function Marketplace({ record, locale, query, message = "" }: Marketplace
           setSubmitted(result.message);
         } catch (error) {
           setSubmitted(error instanceof Error ? error.message : "Request failed");
+        } finally {
+          submitting.current = false;
+          setPending(false);
         }
       }} action={path + (query.seller || query.sort !== "asc" || query.allOffers
         ? "?" + new URLSearchParams({ seller: query.seller, sort: query.sort, ...(query.allOffers ? { offers: "all" } : {}) }) : "")}>
         <label>{t.email}<input name="email" type="email" /></label>
         <label>{t.target}<input name="target_price" type="text" inputMode="decimal" /></label>
-        <button type="submit">{t.submit}</button>
+        <button type="submit" disabled={pending}>{t.submit}</button>
       </form>
       <p className="marketplace__message" aria-live="polite">{submitted ?? message}</p>
     </section>

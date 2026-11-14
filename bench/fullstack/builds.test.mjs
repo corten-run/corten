@@ -7,11 +7,88 @@ import { dirname } from "node:path";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parse as parseYaml } from "yaml";
 import { allApps } from "./apps.mjs";
 import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
+
+const rustDockerfiles = [
+  "bench/fullstack/apps/axum-maud/Dockerfile",
+  "bench/fullstack/apps/leptos/Dockerfile",
+  "bench/fullstack/apps/topcoat/Dockerfile",
+  "bench/catalog/corten/Dockerfile",
+  "bench/live/apps/corten/Dockerfile",
+  "bench/marketplace/corten/Dockerfile",
+  "bench/nodelay/app/Dockerfile",
+  "bench/live/apps/corten/Dockerfile.parity",
+  "bench/live/apps/leptos/Dockerfile",
+  "bench/live/apps/topcoat/Dockerfile",
+];
+
+/** Docker's logical instruction lines, without comments or continuation whitespace. */
+const instructionsOf = (/** @type {string} */ text) => text.replace(/\r/g, "").split("\n")
+  .filter((line) => !/^\s*#/.test(line)).join("\n").replace(/\\\n/g, " ").replace(/[ \t]+/g, " ")
+  .split("\n").map((line) => line.trim()).filter(Boolean);
+
+/** The mount options, before the command of a RUN instruction. */
+const mountsOf = (/** @type {string} */ line) => [...line.matchAll(/--mount=(\S+)/g)]
+  .map((match) => Object.fromEntries(match[1].split(",").map((option) => option.split("="))));
+
+for (const file of rustDockerfiles) {
+  test(`${file}: the target cache has an explicit locked id`, () => {
+    const targets = instructionsOf(readFileSync(join(repo, file), "utf8")).flatMap(mountsOf)
+      .filter((mount) => mount.type === "cache" && mount.target?.endsWith("/target"));
+    assert.equal(targets.length, 1, "one target cache per app image");
+    assert.ok(targets[0].id, "the target cache has no id");
+    assert.doesNotMatch(targets[0].id, /^[a-z][a-z0-9_-]*-target$/, "the id cannot collide with a generated app's <name>-target");
+    assert.equal(targets[0].sharing, "locked", "builds of the same app take turns");
+  });
+
+  test(`${file}: cargo shares its whole home, including the package-cache lock`, () => {
+    let home;
+    let runs = 0;
+    for (const line of instructionsOf(readFileSync(join(repo, file), "utf8"))) {
+      if (line.startsWith("FROM ")) home = undefined;
+      if (line.startsWith("ENV ")) home = /(?:^| )CARGO_HOME=(\S+)/.exec(line)?.[1] ?? home;
+      if (!line.startsWith("RUN ") || !/\bcargo (?:install|build|leptos)\b/.test(line)) continue;
+      runs += 1;
+      const mounts = mountsOf(line);
+      assert.ok(!mounts.some((mount) => /\/usr\/local\/(?:cargo|rustup)(?:\/|$)/.test(mount.target)), "do not cache only the registry or hide the installed tools/toolchain");
+      const cargo = mounts.filter((mount) => mount.type === "cache" && mount.target === "/var/cache/cargo");
+      assert.equal(cargo.length, 1, "mount the whole cargo home");
+      assert.equal(cargo[0].id ?? cargo[0].target, "/var/cache/cargo", "one downloaded-crate cache across apps");
+      assert.equal(cargo[0].sharing ?? "shared", "shared", "Cargo's own package-cache lock coordinates downloads");
+      assert.equal(/\bCARGO_HOME=(\S+) cargo\b/.exec(line)?.[1] ?? home, "/var/cache/cargo", "cargo uses the mounted home");
+      if (/\bcargo install\b/.test(line)) assert.match(line, / --root \/usr\/local\/cargo(?: |$)/, "installed CLI binaries stay in the tools image, outside the cache mount");
+    }
+    assert.ok(runs > 0, "the build's cargo commands were checked");
+  });
+}
+
+test("unrelated Rust app images never share a target cache id", () => {
+  const ids = new Map();
+  for (const file of rustDockerfiles) {
+    for (const mount of instructionsOf(readFileSync(join(repo, file), "utf8")).flatMap(mountsOf)
+      .filter((mount) => mount.type === "cache" && mount.target?.endsWith("/target"))) {
+      const id = mount.id ?? mount.target;
+      assert.ok(!ids.has(id), `${file} shares ${id} with ${ids.get(id)}`);
+      ids.set(id, file);
+    }
+  }
+});
+
+test("Rust recipes keep the mounted cargo home for dependencies, builds and development loops", () => {
+  for (const name of ["axum-maud", "leptos", "topcoat"]) {
+    const r = recipes[name];
+    assert.equal(r.env?.CARGO_HOME, "/var/cache/cargo", name);
+    assert.ok(sourceDockerfile(name).split("\n").includes('ENV CARGO_HOME="/var/cache/cargo"'), name);
+    for (const kind of ["deps", "build", "dev", "check", "test"]) {
+      assert.match(r[/** @type {"deps" | "build" | "dev" | "check" | "test"} */ (kind)] ?? "", /^cargo /, `${name}: ${kind} inherits the source image's cargo home`);
+    }
+  }
+});
 
 // The rebuild edits the item page, so an app without pages (`pages: false`) has no recipe.
 test("every app with pages has a recipe, and every recipe an app", () => {
@@ -67,8 +144,33 @@ test("a recipe built from a Dockerfile stage names one its Dockerfile has", () =
   }
 });
 
+test("server recipes use the refreshed production toolchain", () => {
+  for (const name of ["spring", "django", "fastapi"]) {
+    const dockerfile = readFileSync(join(repo, "bench/fullstack/apps", name, "Dockerfile"), "utf8");
+    const image = /^FROM (\S+)/m.exec(dockerfile)?.[1];
+    assert.equal(recipes[name].tools, image, `${name}: recipe and production image differ`);
+    assert.match(image, /@sha256:[a-f0-9]{64}$/, `${name}: immutable image required`);
+  }
+});
+
+test("native .NET CI tests use each production SDK", () => {
+  const workflow = parseYaml(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  for (const [app, job, name] of [
+    ["aspnet", "parity", "Test native Razor alert persistence and render failures"],
+    ["aspnet-aot", "json-aot", "Test reflection-disabled native record sources"],
+  ]) {
+    const dockerfile = readFileSync(join(repo, "bench/fullstack/apps", app, "Dockerfile"), "utf8");
+    const sdk = /^FROM (mcr\.microsoft\.com\/dotnet\/sdk:\S+) AS build$/m.exec(dockerfile)?.[1];
+    assert.ok(sdk, `${app}: production SDK required`);
+    const step = workflow.jobs[job].steps.find((step) => step.name === name);
+    assert.ok(step, `${app}: native CI test required`);
+    const images = step.run.match(/mcr\.microsoft\.com\/dotnet\/sdk:\S+/g);
+    assert.deepEqual(images, [sdk], `${app}: native CI and production SDK differ`);
+  }
+});
+
 test("the source image starts from the toolchain and copies the context", () => {
-  assert.equal(sourceDockerfile("nextjs"), 'FROM node:24-bookworm-slim\nENV NEXT_TELEMETRY_DISABLED="1"\nWORKDIR /app\nCOPY . .\n');
+  assert.equal(sourceDockerfile("nextjs"), 'FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\nENV NEXT_TELEMETRY_DISABLED="1"\nWORKDIR /app\nCOPY . .\n');
   assert.equal(contextOf("corten"), ".");
   assert.equal(contextOf("nextjs"), "bench/fullstack/apps/nextjs");
   assert.match(sourceDockerfile("gin"), /^FROM bb-tools-gin\nRUN apk add [^\n]+\nWORKDIR \/src\nCOPY \. \.\n$/);
@@ -169,11 +271,9 @@ test("cargo's timing units are found in its report and split between own crates 
  * @param {string} name
  */
 function stagesOf(name) {
-  const lines = readFileSync(join(repo, dockerfileOf(name)), "utf8").replace(/\r/g, "").split("\n").filter((l) => !/^\s*#/.test(l));
-  const text = lines.join("\n").replace(/\\\n/g, " ").replace(/[ \t]+/g, " ");
   /** @type {{ from: string, workdir: string[], env: string[], add: string[], run: string[] }[]} */
   const stages = [];
-  for (const line of text.split("\n").map((l) => l.trim()).filter(Boolean)) {
+  for (const line of instructionsOf(readFileSync(join(repo, dockerfileOf(name)), "utf8"))) {
     const [, op, rest] = /^(\S+) ?(.*)$/.exec(line) ?? [];
     if (op === "FROM") stages.push({ from: rest.split(" ")[0], workdir: [], env: [], add: [], run: [] });
     else if (stages.length && op === "WORKDIR") stages.at(-1)?.workdir.push(rest);

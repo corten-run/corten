@@ -9,7 +9,7 @@
 //! - Every failure is one JSON shape, a Problem Details document (RFC 9457,
 //!   `application/problem+json`), `{"title":"Not Found","status":404,"detail":"No item 7."}`: a
 //!   handler's [`crate::Error`], an extractor's rejection (a body that does not parse), an
-//!   unknown URL, a wrong method, the deadline. A 4xx message is shown, a 5xx message only under
+//!   unknown URL, a wrong method, a method no route in the app has (501), the deadline. A 4xx message is shown, a 5xx message only under
 //!   `corten dev`; the response's other headers (`Allow`, `WWW-Authenticate`) are kept. A failure
 //!   the handler answered with a JSON body of its own passes through unchanged.
 //! - Responses carry a fixed CSP, `default-src 'none'; frame-ancestors 'none'`, and no nonce.
@@ -175,6 +175,27 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<Root>(|api| api.route::<Evil>(get(|| async { "" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// Nor has it a `.` or `..` segment, which a browser resolves away before it asks, so no link
+    /// would reach the route (docs/design.md#limit-path-values):
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/apis")]
+    /// struct ApiRoot;
+    ///
+    /// struct Item;
+    /// impl corten::Route for Item {
+    ///     const PATH: &'static str = "/apis/a/../b";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("/apis/b");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Item>(get(|| async { "item" })));
+    /// # let _ = app.router();
+    /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
         self.place::<R>();
         self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
@@ -204,7 +225,7 @@ impl<P: Prefix> Api<P> {
             );
             assert!(
                 crate::route::route_shaped(R::PATH),
-                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text (the note below names the route)"
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text, no . or .. segment (the note below names the route)"
             );
         };
         // Before the router, which would merge the two or refuse them less clearly.
@@ -253,7 +274,8 @@ impl<P: Prefix> Api<P> {
     /// The JSON every failure Corten answers under the prefix is written as, in place of the
     /// Problem Details document (sent as `application/json` then), for an API that speaks another
     /// protocol's error shape:
-    /// an unknown URL (404), a wrong method (405, with `Allow`), a cross-site write (403), the
+    /// an unknown URL (404), a wrong method (405, with `Allow`), a method no route in the app has
+    /// (501), a cross-site write (403), the
     /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401, with its
     /// `WWW-Authenticate`, or 403) and a handler's `Error`. `message` is what the client may be told: a
     /// 4xx's message, a 5xx's reason (and its message under `corten dev`). A failure with a JSON
@@ -324,16 +346,16 @@ pub(crate) struct Mount {
     /// The origins it allows ([`Api::allow_origin`]): its own alone, never taken from an API around
     /// it, so nesting grants no other site anything.
     origins: Vec<String>,
-    /// Its deadline ([`Api::deadline`]): its own, else, once the router is built, that of the
-    /// nearest API or area around it that set one.
+    /// Its deadline ([`Api::deadline`]): its own, else that of the nearest API around it that set
+    /// one ([`Mount::inherit`]); the router takes an area's around it into its scope
+    /// ([`crate::app::Scope`]) when neither did.
     pub deadline: Option<Option<std::time::Duration>>,
-    /// Its body limit ([`Api::body_limit`]): its own, else, once the router is built, that of the
-    /// nearest API or area around it that set one.
+    /// Its body limit ([`Api::body_limit`]), the same way.
     pub body_limit: Option<usize>,
     /// How its failures are written ([`Api::errors`]): its own, else the nearest API's around it.
     pub errors: Option<ErrorShape>,
-    /// Its middleware ([`Api::middleware`]), in the order it runs: once the router is built, the
-    /// areas' and APIs' around it first.
+    /// Its middleware ([`Api::middleware`]), in the order it runs, the APIs' around it first
+    /// ([`Mount::inherit`]); the router moves it into its scope after the areas' around it.
     pub middleware: crate::middleware::Stack,
     /// Its routes' paths as written, so an API inside it can refuse one under its prefix.
     pub written: Vec<&'static str>,
@@ -449,6 +471,50 @@ const PREFLIGHT_VARY: &str = "origin, access-control-request-method, access-cont
 pub(crate) fn reaches(route: &str, prefix: &str) -> bool {
     let Some(at) = route.find('{') else { return false };
     !under(prefix, route) && format!("{}/", prefix.trim_end_matches('/')).starts_with(&route[..at])
+}
+
+/// Whether `route` (as the router holds it), outside `prefix`, can match a path at `prefix` or
+/// under it, segment by segment as matchit 0.8.4 matches: a parameter matches the text before it
+/// in its segment and then the rest of that segment, which may be empty where the route goes on
+/// after it but not where it ends the route (`/shop{x}/desk` matches `/shop/desk`, `/cor{x}`
+/// never `/cor`); a catch-all, the text before it and at least one more byte of the path.
+/// matchit 0.8.5 and 0.8.6 refuse an empty value before a `/`, which only narrows what matches.
+/// A `prefix` that ends in `/` (Corten's own, `/corten/`) holds only the paths with a segment
+/// after it. Narrower than [`reaches`], which counts only the text before the first parameter:
+/// `/{slug}` reaches `/shop/desk` but cannot match under it. The router holds no text after a
+/// parameter (Corten strips it, and matchit 0.8.4 refuses it); were there some, the parameter
+/// would match one byte or more before it, as matchit 0.8.6 matches it. It reads the route alone:
+/// a static route beside it may answer such a path first.
+pub(crate) fn can_match_under(route: &str, prefix: &str) -> bool {
+    if !route.contains('{') || under(prefix.strip_suffix('/').filter(|p| !p.is_empty()).unwrap_or(prefix), route) {
+        return false;
+    }
+    let (prefix, more) = match prefix.strip_suffix('/') {
+        Some(held) if !held.is_empty() => (held, true),
+        _ => (prefix, false),
+    };
+    let wanted: Vec<&str> = prefix.split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = route.split('/').skip(1).collect();
+    for (i, want) in wanted.iter().enumerate() {
+        let Some(segment) = segments.get(i) else { return false };
+        if let Some(at) = segment.find("{*") {
+            return want.starts_with(&segment[..at]);
+        }
+        let fits = match (segment.find('{'), segment.rfind('}')) {
+            (Some(open), Some(close)) if open < close => {
+                let (before, after) = (&segment[..open], &segment[close + 1..]);
+                // Empty only before a `/` the route goes on with, as matchit 0.8.4 matches.
+                let value = usize::from(i + 1 == segments.len() || !after.is_empty());
+                want.len() >= before.len() + after.len() + value && want.starts_with(before) && want.ends_with(after)
+            }
+            _ => segment == want,
+        };
+        if !fits {
+            return false;
+        }
+    }
+    // Every segment of the prefix can match: the route's paths are at it, or under it with one more.
+    segments.len() > wanted.len() || !more
 }
 
 /// True when `path` is `prefix` or below it (`/api` holds `/api` and `/api/items`, not `/apis`).

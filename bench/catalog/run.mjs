@@ -8,6 +8,8 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
+import { commandOutput } from "./output.mjs";
+import { describeK6, k6Image } from "../load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -16,17 +18,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // selection. Restore the caller's environment immediately after importing it.
 const saved = Object.fromEntries(["BENCH_APPS", "BENCH_TIER"].map((key) => [key, process.env[key]]));
 for (const key of Object.keys(saved)) delete process.env[key];
-let inventory, contract, grouping;
+let inventory, contract, grouping, observations;
 try {
   // Group contracts also import the registry: load them inside the same environment
   // boundary so ESM caching cannot capture a historical tier/subset inventory.
   contract = await import("./contract.mjs");
   grouping = await import("./group.mjs");
   inventory = (await import("../fullstack/apps.mjs")).pageApps;
+  observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
+const { containerEvidence, rawSchema } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
 const plan = timingPlan(options, sources, targets);
@@ -68,26 +72,26 @@ function killCommand(child) {
   force.unref();
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
+async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false } = {}) {
   if (interrupted && !cleanup) throw new Error("catalog run interrupted");
+  const output = commandOutput({ file, capture });
   const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
-  let output = "";
-  let error = "";
   let killed = false;
+  let ioError;
   const keep = (chunk, stderr) => {
-    const value = chunk.toString();
-    if (file) appendFileSync(file, value);
-    if (stderr) error = (error + value).slice(-65536); else output = (output + value).slice(-8 * 1024 * 1024);
+    try { (stderr ? output.stderr : output.stdout)(chunk); }
+    catch (e) { ioError ??= e; killCommand(child); }
   };
   child.stdout.on("data", (c) => keep(c, false));
   child.stderr.on("data", (c) => keep(c, true));
   const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
   try {
     const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${error || output}`);
-    return output.trim();
-  } finally { clearTimeout(timer); children.delete(child); }
+    if (ioError) throw ioError;
+    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+    return output.result();
+  } finally { clearTimeout(timer); children.delete(child); output.close(); }
 }
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
@@ -120,8 +124,7 @@ async function portOf(name) {
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
-const nodeImage = "node:24-bookworm-slim";
-const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
+const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
@@ -174,7 +177,7 @@ async function coldStart(name, source, target, image, raw) {
 async function cpu(containers) {
   const ids = await Promise.all(containers.map(async (name) => [name, (await inspect(name)).Id]));
   const usage = JSON.parse(await docker(["exec", cpuName, "node", "/bench/catalog/cgroup.mjs", ...ids.map(([, id]) => id)], { timeout: 15000 }));
-  return Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; }));
+  return { ids: Object.fromEntries(ids), values: Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; })) };
 }
 async function load(name, target, phase, seconds, raw) {
   const container = `${runId}-k6`;
@@ -187,17 +190,24 @@ async function load(name, target, phase, seconds, raw) {
   let sampler;
   let runError;
   let stats;
+  let identities = {};
+  let startedAt, finishedAt;
   try {
     await owned(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...env,
       k6Image, "run", "--quiet", "--summary-export", "/tmp/catalog-summary.json", "/bench/catalog/load.js"], container);
-    before = samples.length ? await cpu(samples) : {};
+    if (samples.length) { startedAt = Date.now(); const observed = await cpu(samples); before = observed.values; identities = observed.ids; }
     sampler = samples.length ? sampleStats(samples, join(raw, `${phase}-stats.log`), seconds + 35) : null;
     await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
   } catch (e) { runError = e; }
   finally {
     try { if (sampler) stats = await sampler.stop(); } catch (e) { runError ??= e; }
   }
-  try { if (samples.length && Object.keys(before).length) after = await cpu(samples); }
+  try { if (samples.length && Object.keys(before).length) {
+    const observed = await cpu(samples);
+    assert.deepEqual(observed.ids, identities, "CPU counter container identity changed");
+    after = observed.values;
+    finishedAt = Date.now();
+  } }
   catch (e) { runError ??= e; }
   try {
     // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
@@ -205,6 +215,7 @@ async function load(name, target, phase, seconds, raw) {
     catch (e) { runError ??= e; }
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
+    if (samples.length) writeFileSync(join(raw, `${phase}-cpu-counters.json`), JSON.stringify({ ids: identities, before, after, startedAt, finishedAt }, null, 2));
     if (runError) throw runError;
     const metrics = readLoad(JSON.parse(readFileSync(output, "utf8")));
     if (samples.length) {
@@ -227,6 +238,8 @@ try {
   const generated = (await import("./fixtures.mjs")).records();
   assert.deepEqual(catalog, generated, "generated fixture is stale: run node bench/catalog/fixtures.mjs");
   summary.fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
+  summary.savedEvidence = { schema: rawSchema, fixtureSha256: summary.fixtureSha256 };
+  writeFileSync(join(folder, "fixture.json"), fixture);
   for (const app of options.apps) {
     const entry = summary.apps[app] = { label: inventory[app].label, image: `cb-catalog-${app}`, checks: {}, runs: {}, phases: {} };
     try {
@@ -239,6 +252,8 @@ try {
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;
       entry.imageBytes = image.Size;
+      writeFileSync(join(folder, `image-${app}.json`), JSON.stringify({ imageId: image.Id, imageBytes: image.Size,
+        commit: summary.commit, built: options.build }, null, 2));
     } catch (e) { fail(app, null, "build/image", e); }
     save();
   }
@@ -264,6 +279,7 @@ try {
     checker = JSON.parse(await docker(["image", "inspect", checkerImage]))[0];
   }
   summary.tools.checker = { image: checkerImage, imageId: checker.Id, isolation: "owned PID namespace/cgroup; force-removed in finally, independent of Node/browser process groups" };
+  writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     for (const source of sources) for (const app of options.apps) {
       const entry = summary.apps[app];
       if (!entry.imageId) continue;
@@ -295,7 +311,7 @@ try {
       } catch (e) { fail(app, source, "checks", e); }
       finally {
         if (active.has(checkContainer)) await remove(checkContainer);
-        try { writeFileSync(join(out, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
+        try { await docker(["logs", name], { file: join(out, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       save();
@@ -304,8 +320,8 @@ try {
   save();
   if (!summary.checksPassed) throw new Error("parity failed; no app will be load-tested");
   if (!options.checkOnly) {
-    const k6 = JSON.parse(await docker(["image", "inspect", k6Image]).catch(async () => { await docker(["pull", k6Image], { timeout: 5 * 60 * 1000, file: join(folder, "pull-k6.log") }); return docker(["image", "inspect", k6Image]); }))[0];
-    summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
+    summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
+    writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     for (const { app, pass, source, target, ...profile } of plan) {
@@ -321,6 +337,7 @@ try {
       try {
         log(`cold ${app} ${source} ${target} pass ${pass}`);
         run.cold = await coldStart(name, source, target, entry.imageId, raw);
+        writeFileSync(join(raw, "container.json"), JSON.stringify(containerEvidence(await inspect(name)), null, 2));
         log(`warmup ${app} ${source} ${target} pass ${pass}`);
         run.warmup = await load(name, target, "warmup", options.warmup, raw);
         for (const phase of phases) {
@@ -331,7 +348,7 @@ try {
         run.complete = true;
       } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
       finally {
-        try { writeFileSync(join(raw, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
+        try { await docker(["logs", name], { file: join(raw, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       for (const phase of phases) {
@@ -355,6 +372,13 @@ finally {
       await docker(["network", "rm", info.Id], { cleanup: true });
     }
   } catch (e) { summary.cleanupFailures.push({ resource: network, error: e.message }); }
+  try {
+    const containers = (await docker(["ps", "-a", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+    const networks = (await docker(["network", "ls", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+    writeFileSync(join(folder, "cleanup.json"), JSON.stringify({ runId, containers, networks }, null, 2));
+    assert.deepEqual(containers, [], "owned containers remain");
+    assert.deepEqual(networks, [], "owned networks remain");
+  } catch (e) { summary.cleanupFailures.push({ resource: runId, error: e.message }); }
   if (group) {
     try {
       summary.commitAfter = await command("git", ["rev-parse", "HEAD"], { cleanup: true });

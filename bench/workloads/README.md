@@ -21,6 +21,12 @@ or remove Corten's features to manufacture parity.
 
 ## Implementation status
 
+The [client-heavy runner](../client-heavy/README.md) builds all selected native
+applications, observes their actual DOM and resources, and gates a separate
+measured journey on correctness. Its defaults are bounded local verification,
+not an isolated ranking or a cloud/nightly integration. Other native groups
+retain their independently reported implementation and qualification states.
+
 `registry.mjs` is the versioned selection and functional-work matrix. `evidence.mjs` keeps
 every selected app/case visible as unknown, implemented or not implemented, with separate
 parity and measurement states. Missing, unsupported and failed evidence is not zero throughput.
@@ -47,10 +53,60 @@ configuration. Neither gate can be borrowed from a passing subset or a different
 configuration. Native audit receipts and a complete matrix are prerequisites, not assumed
 readiness; no new baseline or cloud integration is claimed.
 
-Remaining groups stay pending runner/adapter integration. Their presence in this registry is
-not a claim that a new benchmark ran, that all native features exist, or that historical
-measurements are interchangeable. The mixed and live contract modules are testable oracles,
-not substitutes for native adapter implementation, browser captures or load evidence.
+The other groups now have explicit local native driver entry points. Their apparatus still
+requires complete native qualification, reviewed measurement settings and isolated evidence.
+Their presence is not a claim that all native features exist, a comparative benchmark passed,
+or historical measurements are interchangeable. Offline oracles do not replace native
+application observations. `plan.mjs` reports the distinction for each group.
+
+## Explicit execution
+
+Use one named group and one round, rather than a default that launches every server adapter:
+
+```sh
+node bench/workloads/run.mjs --plan catalog-page c3
+node bench/workloads/run.mjs client-heavy local-client
+node bench/workloads/run.mjs fullstack-browser w1 --build --out bench/fullstack-browser/work/w1
+```
+
+The first command only prints the exact native invocation and pending deployment intent.
+Execution delegates to the group's own runner, preserving its defaults, native exit status
+and raw evidence. The browser example requires a new output directory and the native runner's
+explicit development round (`wN`).
+It never launches a droplet or changes the nightly schedule. Contender and case filters
+are refused here; native diagnostic invocations remain separate and cannot qualify an
+incomplete group. Split-round `--part` is also refused, including `--part=1/2`.
+Planning reads the immutable inventory, independently of legacy `BENCH_APPS`, `BENCH_TIER`
+and `BENCH_EDGE`. Execution refuses these overrides when nonempty: unset them rather than
+silently changing the selected group or its native deployment.
+A dispatcher entry is not a passing result: missing native ports,
+failed controls and unsupported capabilities remain visible in the runner's ledger.
+The mixed, browser, live and hardening ports still require complete native qualification.
+
+Cancellation uses IPC to ask the native Node process to handle `SIGINT` or `SIGTERM`, not
+Windows' hard-terminating `kill`. Before native execution it skips startup; during startup
+it retains cancellation until a native signal handler registers. Parent disconnection also
+requests cancellation. The dispatcher waits for native exit without a force-kill deadline,
+so the native runner remains the owner of its processes, containers and `finally` cleanup.
+Repeated dispatcher signals do not force termination. Cancellation cannot become success,
+even if a native handler exits zero. Native nonzero failures remain nonzero.
+This is not a cleanup guarantee: synchronous work delays delivery, a runner without a signal
+handler may continue to completion, and a stuck or uncooperative runner may require operator
+intervention. The bootstrap reports unhandled cancellation if the native entry returns;
+only the native runner's own cleanup evidence can establish that resources were removed.
+
+[Deployment selection](deployments.md) names representative production configurations and
+bounded performance candidates without altering the legacy registry or any active round.
+Popular-choice and performance views use the same feature-parity work and raw evidence;
+they are not extra benchmark runs. A plan is not the effective runtime configuration.
+Alternatives need complete group-specific native and repeated performance evidence plus
+independent review. This dispatcher does not yet select or qualify alternative deployments.
+
+`npm run check:workloads` checks the shared contracts and dispatch. `npm run check:groups`
+also checks the integrated native driver apparatus and replays saved live evidence.
+Its socket controls run serially so unrelated test files do not compete for the same
+bounded observation window. Neither command substitutes for native application runs,
+browser captures, independent deployment review or a complete measured matrix.
 
 ```sh
 node bench/workloads/plan.mjs catalog-page

@@ -9,10 +9,13 @@ item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
 Astro's ClientRouter enhances the ordinary POST form. It is not opted out with data-astro-reload.
 
-Targets are ungrouped locale-decimal inputs with at most two fractional digits.
-Extra precision is rejected rather than rounded. Parsing constructs the positive
-integer minor amount directly from the digits, rejects unsafe integers, and
-formats the confirmation from that same exact amount with native Intl.
+Targets are ungrouped locale-decimal inputs. Fractional cents round half away
+from zero using decimal digits, not binary-float dollar arithmetic. The rounded
+minor amount must be positive and a safe integer; the native Intl confirmation
+is formatted from that same exact stored amount. Thus 2.005 becomes 201 minor
+units, 12.505 becomes 1251, and a rounded zero or unsafe integer is rejected.
+Extra-fraction acceptance follows this app's pre-persistence native form;
+other adapters' existing precision policies are unchanged.
 
 Each app owns its own in-process store, shared only by that app's native route
 bundles. Session tokens contain 256 random bits, are never accepted as
@@ -22,6 +25,23 @@ to 10,000 sessions and 1,000 alerts per session; expired sessions are reclaimed.
 This is request-to-request persistence in a single server process, not a
 restart-durable database or a multi-instance session service. Ordinary read-only
 page and item-JSON requests do not establish an alert session.
+
+## Write Boundaries
+
+The native page prepares its view, including URL encodings, before committing.
+Malformed link identifiers therefore fail without appending an alert.
+
+Separate simultaneous first requests with no cookie have no established shared
+identity. In particular, parallel no-JS first submissions from separate tabs
+cannot be correlated safely; their unknown sessions are not merged. Once the
+cookie is established, concurrent writes use that same session. This is not a
+global idempotency guarantee.
+
+The cross-app native write-boundary regression is
+`node --test --test-concurrency=1 ../nextjs/alerts-boundary.test.mjs`.
+Build all six apps first. It checks malformed links and retries in every locale,
+and fresh Next/TanStack JS forms without a readback prewarm against a delayed
+synthetic HTTP upstream, including failure recovery and independent readback.
 
 ## Checks
 

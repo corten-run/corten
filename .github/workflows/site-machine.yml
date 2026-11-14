@@ -1,0 +1,249 @@
+# Keeps the machine that serves examples/corten-site as examples/corten-site/deploy/infra says
+# it is (OpenTofu on DigitalOcean; examples/corten-site/deploy/README.md): a pull request's
+# configuration is checked, and each change on `main` is planned and applied. A machine made
+# here sets itself up as it starts; when it answers, the Site workflow is run to ship it the
+# site. Applies nothing until the repository variable SITE_STATE_BUCKET names where the state
+# is kept.
+name: Site machine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - examples/corten-site/deploy/infra/**
+      - examples/corten-site/deploy/provision.sh
+      - examples/corten-site/deploy/release.sh
+      - examples/corten-site/deploy/nginx.conf
+      - examples/corten-site/deploy/corten-site.service
+      - .github/workflows/site-machine.yml
+  pull_request:
+    paths:
+      - examples/corten-site/deploy/infra/**
+      - examples/corten-site/deploy/provision.sh
+      - examples/corten-site/deploy/release.sh
+      - examples/corten-site/deploy/nginx.conf
+      - examples/corten-site/deploy/corten-site.service
+      - .github/workflows/site-machine.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOFU_VERSION: 1.13.9
+  TF_IN_AUTOMATION: "1"
+
+defaults:
+  run:
+    # bash, so a step whose pipe fails in the middle fails.
+    shell: bash
+    working-directory: examples/corten-site/deploy/infra
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - run: tofu fmt -check -diff
+      # No backend, so no key: the providers are the ones the lock file names.
+      - run: tofu init -input=false -backend=false -lockfile=readonly
+      - run: tofu validate
+      # A script that parses but does not mean what it says is found here, not on the machine.
+      - name: The scripts the machine, a deploy and an operator run
+        run: shellcheck --severity=warning boot.sh bootstrap.sh ../provision.sh ../release.sh
+
+  apply:
+    needs: check
+    # Only main is applied, whatever ref the workflow is run from by hand.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SITE_STATE_BUCKET != ''
+    runs-on: ubuntu-24.04
+    # The keys are this environment's secrets, and its deployment branch rule is main
+    # (bootstrap.sh), so no other branch's workflow can read them.
+    environment: site-machine
+    # One apply at a time, and a running one is never cancelled: nothing else locks the state.
+    concurrency:
+      group: site-machine
+      cancel-in-progress: false
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # To run the Site workflow once a new machine answers.
+      actions: write
+    # No secret is here: each step below is given the ones it uses, so the action that installs
+    # OpenTofu and the step that waits for the machine hold none.
+    env:
+      AWS_ENDPOINT_URL_S3: ${{ vars.SITE_STATE_ENDPOINT }}
+      AWS_REGION: us-east-1
+      # Spaces does not take the checksums newer S3 clients add by default.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      STATE_BUCKET: ${{ vars.SITE_STATE_BUCKET }}
+      SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+      TF_VAR_domain: ${{ vars.SITE_DOMAIN }}
+      TF_VAR_zone: ${{ vars.SITE_ZONE }}
+      TF_VAR_redirects: ${{ vars.SITE_REDIRECTS || '[]' }}
+      TF_VAR_manage_dns: ${{ vars.SITE_DNS_ELSEWHERE != 'true' }}
+      TF_VAR_refuse_mail: ${{ vars.SITE_REFUSES_MAIL == 'true' }}
+      TF_VAR_machine: ${{ vars.SITE_MACHINE }}
+      TF_VAR_admin_keys: ${{ vars.SITE_ADMIN_KEYS || '[]' }}
+      TF_VAR_deploy_key: ${{ vars.SITE_DEPLOY_KEY }}
+      TF_VAR_host_key_public: ${{ vars.SITE_HOST_KEY_PUBLIC }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - name: The bucket the state is kept in, with each version of it
+        env:
+          # Spaces speaks S3's protocol: these are a Spaces key, not an AWS one.
+          AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$STATE_BUCKET"
+          aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
+      - env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+        run: tofu init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET"
+      # Planned and applied in one step, so the plan, which holds the values a machine is
+      # handed, is on the runner for that step alone.
+      - name: Plan and apply
+        id: apply
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+          TF_VAR_email: ${{ secrets.SITE_EMAIL }}
+          TF_VAR_host_key: ${{ secrets.SITE_HOST_KEY }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/plan"' EXIT
+          tofu plan -input=false -out="$RUNNER_TEMP/plan"
+          made=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select(.address == "digitalocean_droplet.site") | .change.actions[]] | index("create") != null')
+          echo "made=$made" >> "$GITHUB_OUTPUT"
+          tofu apply -input=false "$RUNNER_TEMP/plan"
+          # Read first, so a read that fails fails the step: echo's status would hide it.
+          address=$(tofu output -raw address)
+          echo "address=$address" >> "$GITHUB_OUTPUT"
+      # After every apply, not only one that made a machine: a run that failed after making one
+      # leaves a machine with no release, and the run after it plans no machine. The machine is
+      # asked at its own address, under the site's name, so the answer is that machine's and its
+      # certificate is the name's. nginx says 502 until a release is there, and also while the
+      # service is down or restarting: either way a deploy is what puts it right.
+      - name: Ship the site to a machine that has no release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_HOST: ${{ vars.SITE_HOST }}
+          ADDRESS: ${{ steps.apply.outputs.address }}
+          MADE: ${{ steps.apply.outputs.made }}
+          REDIRECTS: ${{ vars.SITE_REDIRECTS || '[]' }}
+        run: |
+          # A machine made now sets itself up first: half an hour for it, a minute otherwise.
+          if [ "$MADE" = true ]; then tries=60; else tries=3; fi
+          code=000
+          for _ in $(seq 1 "$tries"); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$SITE_DOMAIN:443:$ADDRESS" "https://$SITE_DOMAIN/" 2>/dev/null) || code=000
+            [ "$code" = 000 ] || break
+            sleep 20
+          done
+          if [ "$code" = 000 ]; then
+            if [ -n "$SITE_HOST" ]; then
+              echo "::error::The machine at $ADDRESS does not answer as $SITE_DOMAIN, and deploys are on: the site is down. A machine this run made may still be setting itself up. Run this workflow again: it ships the site once the machine answers. If that run ends here too, see in DigitalOcean's control panel whether the address is on the droplet: an apply does not notice an address that is on none."
+              exit 1
+            fi
+            echo "::warning::The machine at $ADDRESS does not answer as $SITE_DOMAIN yet. It sets itself up once the name reaches it: where the name's DNS is new, that waits on the registrar (deploy/README.md)."
+          elif [ "$MADE" != true ] && [ "$code" != 502 ]; then
+            echo "The machine at $ADDRESS answers as $SITE_DOMAIN ($code)."
+          elif [ -z "$SITE_HOST" ]; then
+            echo "::notice::The machine at $ADDRESS answers as $SITE_DOMAIN ($code). Deploys are off until the repository variable SITE_HOST is set (deploy/README.md)."
+          else
+            gh workflow run site.yml --ref main --repo "$GITHUB_REPOSITORY"
+            echo "The machine at $ADDRESS answers as $SITE_DOMAIN ($code); the Site workflow is started."
+          fi
+          # Each name that redirects is asked too, under its own name and so its own place on the
+          # certificate. A machine made now serves the site first and takes those names on once
+          # each reaches it, and tries a certificate it was refused again a quarter of an hour
+          # later: twenty minutes for all of them, so one new try is seen, and a minute otherwise.
+          [ "$code" != 000 ] || exit 0
+          # Read first, so a list jq cannot read fails the step: a loop over nothing would pass.
+          names=$(jq -r '.[]' <<< "$REDIRECTS")
+          if [ "$MADE" = true ]; then ends=$((SECONDS + 1200)); else ends=$((SECONDS + 60)); fi
+          lost=0
+          for name in $names; do
+            while :; do
+              to=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$name:443:$ADDRESS" "https://$name/" 2>/dev/null) || to=000
+              [ "$to" != "308 https://$SITE_DOMAIN/" ] || break
+              [ "$SECONDS" -lt "$ends" ] || break
+              sleep 20
+            done
+            if [ "$to" = "308 https://$SITE_DOMAIN/" ]; then
+              echo "https://$name/ sends its visitors to https://$SITE_DOMAIN/."
+            else
+              echo "::error::https://$name/ at $ADDRESS does not send its visitors to https://$SITE_DOMAIN/ (it answered: $to). The site is served without it. A new machine takes the name on once the name reaches it: on the machine, journalctl -u corten-site-boot says which name it waits for, or why its certificate was refused."
+              lost=1
+            fi
+          done
+          exit "$lost"
+      # What slows one address (deploy/nginx.conf and provision.sh) is asked for at the machine
+      # itself, since nothing else says the firewall's lines were read there. Of 300 requests at
+      # once nginx answers about 100 and refuses the rest with 429, before it asks the app, so
+      # a machine with no release is asked too. Of 40 connections at once the firewall lets 19
+      # in and leaves the rest to try again, a second later or more; all 40 are then answered.
+      # And 250 requests one after another take three connections, from each of nginx's servers:
+      # what one address can ask for in a second is those two counts together.
+      - name: See that the machine slows one address that asks too fast
+        env:
+          ADDRESS: ${{ steps.apply.outputs.address }}
+          REDIRECTS: ${{ vars.SITE_REDIRECTS || '[]' }}
+        run: |
+          at=(--resolve "$SITE_DOMAIN:443:$ADDRESS" --resolve "$SITE_DOMAIN:80:$ADDRESS" --max-time 20)
+          # Asked once first: curl makes the first connection of many alone, so for a machine that
+          # answers nothing the 300 below would each wait their 20 seconds in turn.
+          first=$(curl -s -o /dev/null -w '%{http_code}' "${at[@]}" "https://$SITE_DOMAIN/robots.txt" || true)
+          if [ "$first" = 000 ]; then
+            echo "::warning::The machine at $ADDRESS does not answer as $SITE_DOMAIN, so what it refuses was not asked for."
+            exit 0
+          fi
+          codes=$(curl -s -Z --parallel-max 100 -o /dev/null -w '%{http_code}\n' "${at[@]}" "https://$SITE_DOMAIN/robots.txt?[1-300]" || true)
+          refused=$(grep -c '^429$' <<< "$codes" || true)
+          answered=$(grep -c -v -e '^429$' -e '^000$' <<< "$codes" || true)
+          # The count of connections is over one second: these start after the ones above. They
+          # are made to port 80, which the firewall counts with 443: over TLS curl reads the
+          # runner's certificates for each connection in turn, and a connection long made is
+          # timed late for that alone (most of the 40 in a rig with no line in the firewall:
+          # deploy/README.md).
+          sleep 5
+          waits=$(curl -s -Z --parallel-immediate --parallel-max 40 --http1.1 -o /dev/null -w '%{time_connect}\n' "${at[@]}" "http://$SITE_DOMAIN/robots.txt?[1-40]" || true)
+          late=$(awk '$1 >= 0.9' <<< "$waits" | wc -l)
+          echo "Of 300 requests at once, $answered were answered and $refused refused; of 40 connections at once, $late waited a second or more."
+          lost=0
+          if [ "$refused" -lt 100 ] || [ "$answered" -lt 50 ]; then
+            echo "::error::nginx at $ADDRESS answered $answered of 300 requests at once and refused $refused: about 100 and 200 are what deploy/nginx.conf sets for one address."
+            lost=1
+          fi
+          if [ "$late" -lt 5 ]; then
+            echo "::error::Of 40 connections at once to $ADDRESS, $late waited a second or more: about 21 do where the firewall has the lines provision.sh writes for it."
+            lost=1
+          fi
+          # Over HTTP/1.1, where nginx counts a connection's requests only once it has chosen a
+          # location: the site's server, port 80, and the server for the names that redirect.
+          urls=("https://$SITE_DOMAIN/robots.txt" "http://$SITE_DOMAIN/robots.txt")
+          names=$(jq -r '.[]' <<< "$REDIRECTS")   # read first, as in the step above
+          for name in $names; do
+            at+=(--resolve "$name:443:$ADDRESS")
+            urls+=("https://$name/robots.txt")
+          done
+          for url in "${urls[@]}"; do
+            made=$(curl -s --http1.1 -o /dev/null -w '%{num_connects}\n' "${at[@]}" "$url?[1-250]" | awk '{ made += $1 } END { print made + 0 }' || true)
+            echo "Connections made for 250 requests one after another to $url: $made."
+            if [ "$made" -lt 3 ]; then
+              echo "::error::Connections made for 250 requests one after another to $url at $ADDRESS: $made. Three are, where deploy/nginx.conf ends a connection after 100 requests."
+              lost=1
+            fi
+          done
+          exit "$lost"

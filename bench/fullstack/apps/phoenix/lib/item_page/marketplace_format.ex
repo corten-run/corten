@@ -38,6 +38,11 @@ defmodule ItemPage.MarketplaceFormat do
   end
 
   def alert(email, target, title, locale) do
+    {message, _minor} = alert_result(email, target, title, locale)
+    message
+  end
+
+  def alert_result(email, target, title, locale) when is_binary(email) and is_binary(target) do
     text = labels(locale)
 
     if String.contains?(email, "@") do
@@ -46,18 +51,26 @@ defmodule ItemPage.MarketplaceFormat do
           if Decimal.compare(value, Decimal.new(0)) == :gt do
             values = %{"email" => email, "title" => title, "price" => amount(value, locale)}
 
-            Regex.replace(~r/\{(email|title|price)\}/, text["alert_set"], fn _, key ->
-              Map.fetch!(values, key)
-            end)
+            message =
+              Regex.replace(~r/\{(email|title|price)\}/, text["alert_set"], fn _, key ->
+                Map.fetch!(values, key)
+              end)
+
+            minor =
+              value |> Decimal.mult(100) |> Decimal.round(0, :half_up) |> Decimal.to_integer()
+
+            {message, minor}
           else
-            text["invalid_price"]
+            {text["invalid_price"], nil}
           end
 
         _ ->
-          text["invalid_price"]
+          {text["invalid_price"], nil}
       end
     else
-      text["invalid_email"]
+      {text["invalid_email"], nil}
     end
   end
+
+  def alert_result(_email, _target, _title, locale), do: {labels(locale)["invalid_price"], nil}
 end

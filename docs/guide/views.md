@@ -215,14 +215,14 @@ draws nothing there, and a `Public` page route never starts the read. An answer 
 app's middleware makes of the answer. So do the values a page drew, for an error page the
 middleware makes of that page. A read that fails or passes the request's deadline draws
 nothing in its place and is logged; the page is still sent. The error page for a failure the request
-is at fault for (an unknown URL, a wrong method, a refusal other than a 429, an extractor's or a
+is at fault for (an unknown URL, a wrong method, a method no route has (the router's 501), a refusal other than a 429, an extractor's or a
 handler's `Err(Refused::forbidden())?`, a form that does not read) starts the reads not started
 yet and waits for them as a page does, so a 404 shows the count every other page shows. A read
 it starts sees the head its extractors see (the URL, the cookies, `Authorization`, the language
 and the request's caller), not what the app's middleware
 added; one that has nothing to read without a session should return `None` from `start`, which
 keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's
-`Error` at any status but 404, a 5xx, a 429, which slows a client down, a cross-site write,
+`Error` at any status but 404, any other 5xx, a 429, which slows a client down, a cross-site write,
 refused before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
@@ -451,7 +451,7 @@ req.patch(html! { {Remove(OfferId(&sold.id))} })                             // 
 
 | What | Fails to compile when |
 |---|---|
-| `#[derive(Route)]` | the path names a parameter the struct lacks, text comes before a parameter in its segment, a link leaves a field out |
+| `#[derive(Route)]` | the path names a parameter the struct lacks, text comes before a parameter in its segment, the path has a `.` or `..` segment or `.` or `..` text after a parameter, a link leaves a field out |
 | `html!` | an element's URL attribute (`href`, `src`, `srcset`, `action`, `formaction`, `poster`, or the rarer `imagesrcset`, `data`, `ping` and `xlink:href`) is text, or one string literal in braces (`href={"/items"}`), that is a path in the app: it starts with one `/` (or `\`, which a browser reads as `/`), or is `http:` or `https:` without the `//` of a host (`https:/items`, a path in the app on a page of that scheme and a host on one of the other). Link to a route (`href={url::Items}`, `action={url::Watch}`), or name a static file by its constant (`src={req.asset(Static::LOGO_SVG)}`; with a fragment, `href={(req.asset(Static::SPRITE_SVG), "#arrow")}`; in a `srcset`, a tuple that keeps the descriptors). A path on this origin the app does not route (another service behind the same proxy, `/oauth2/sign_out`) is a `corten::Local`, as in a test, `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query and `#fragment`: an explicit opt-out the compiler takes on trust (a `Local` of a routed path compiles too). A fragment (`#top`), a full URL (`https://example.com`), another scheme (`mailto:`, `tel:`) and `//host` compile. Any other expression in braces (`href={format!(..)}`, a tuple), a spread, a component's prop, a relative path (`items/7`, `?page=2`) and a URL inside another attribute's text (`<meta http-equiv="refresh" content="0; url=/items">`) are not checked |
 | `messages!` | a locale lacks a key or has an extra one, a message takes different arguments in another locale, a call names a missing key or leaves out an argument, or passes one that is not text, an integer or a value `t` formats (a float goes through `t.number`) |
 | `#[derive(Href)]` | a variant holds no link or more than one (a unit variant has no URL) |
@@ -544,8 +544,8 @@ An app chooses once, by how many locales it has:
    a literal.
 
 Moving from the first to the second is mechanical: each literal becomes a key. card-market is
-the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery and listings-feed are
-the first.
+the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery, listings-feed and
+corten-site are the first.
 
 A message with one argument takes it as the method's parameter (`t.grid_items(count)`). One with two
 or more takes them by name, in a struct the catalog's module has for it (`Msg`'s is `msg`), so two

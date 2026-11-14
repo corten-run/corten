@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps } from "../fullstack/inventory.mjs";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 import { aggregate, cpuSettings as catalogCpus, phases, readLoad } from "../catalog/contract.mjs";
 import { records as catalogRecords } from "../catalog/fixtures.mjs";
@@ -10,8 +10,8 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const receiptSchema = "json-api-native-audit/v1";
-export const nodeImage = "node:24-bookworm-slim";
-export const k6Image = "grafana/k6@sha256:3e4186aea62e11a45560bfc51e19eeafe82fc07ce069c78aff44b7ff893d9a5e";
+export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export { k6Image } from "../load-tool.mjs";
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const payloads = Object.freeze({
   "catalog-v1": { path: "catalog", first: "record_1", fixture: "bench/catalog/fixtures/catalog.json", records: catalogRecords, errors: [503] },

@@ -41,6 +41,44 @@ class MarketplaceTest {
                 List.of(new MarketplaceRecord.Line("line", "item_2", "Other", 1000)), List.of());
     }
     static MarketplaceRecord.Listing row(String id, String seller, Long price) { return new MarketplaceRecord.Listing(id, seller, 425, 1000, "NM", "US", 2, price); }
+    @Test void writeInvariantsAreCheckedOnTheParsedRecord() {
+        var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
+        var valid = json.writeValueAsString(sample());
+        sample().validateForWrite("item_1");
+        assertThrows(IllegalStateException.class, () -> sample().validateForWrite("item_2"));
+        for (String key : List.of("listings", "offers", "contents")) {
+            var bad = (tools.jackson.databind.node.ObjectNode) json.readTree(valid);
+            var rows = (tools.jackson.databind.node.ArrayNode) bad.get(key);
+            rows.add(rows.get(0).deepCopy());
+            var record = json.treeToValue(bad, MarketplaceRecord.class);
+            assertThrows(IllegalStateException.class, () -> record.validateForWrite("item_1"));
+        }
+        for (long count : List.of(-1L, 1000000001L)) {
+            var bad = (tools.jackson.databind.node.ObjectNode) json.readTree(valid);
+            ((tools.jackson.databind.node.ObjectNode) bad.get("summary")).put("count", count);
+            var record = json.treeToValue(bad, MarketplaceRecord.class);
+            assertThrows(IllegalStateException.class, () -> record.validateForWrite("item_1"));
+        }
+    }
+
+    @Test void fixtureParsingCannotEraseMissingOrCoercedWriteFields() throws Exception {
+        var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
+        var file = java.nio.file.Files.createTempFile("marketplace-write", ".json");
+        try {
+            java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", sample())));
+            new MarketplaceSource(json, "http://unused", file.toString()).getForWrite("item_1").validateForWrite("item_1");
+            for (String key : List.of("description", "subtitle", "summary")) {
+                var bad = (tools.jackson.databind.node.ObjectNode) json.valueToTree(sample());
+                bad.remove(key);
+                java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", bad)));
+                assertThrows(RuntimeException.class, () -> new MarketplaceSource(json, "http://unused", file.toString()));
+            }
+            var bad = (tools.jackson.databind.node.ObjectNode) json.valueToTree(sample());
+            bad.put("id", 1);
+            java.nio.file.Files.writeString(file, json.writeValueAsString(java.util.Map.of("item_1", bad)));
+            assertThrows(RuntimeException.class, () -> new MarketplaceSource(json, "http://unused", file.toString()));
+        } finally { java.nio.file.Files.delete(file); }
+    }
     @Test void stableSortPrefixAndNumericJson() {
         var record = sample();
         assertEquals(List.of("a", "c"), MarketplaceFormat.listings(record, "Alice", "desc").stream().map(MarketplaceRecord.Listing::id).toList());
@@ -52,21 +90,22 @@ class MarketplaceTest {
         assertTrue(encoded.contains("\"lowest_minor\":-123450"));
         assertEquals(record, json.readValue(encoded, MarketplaceRecord.class));
     }
-    @Test void nativeTemplateEscapesAndLimitsRows() {
+    @Test void nativeTemplateEscapesAndLimitsRows() throws Exception {
         var resolver = new ClassLoaderTemplateResolver(); resolver.setPrefix("templates/"); resolver.setSuffix(".html");
         var engine = new SpringTemplateEngine(); engine.setTemplateResolver(resolver);
         var model = new ExtendedModelMap();
         var source = org.mockito.Mockito.mock(MarketplaceSource.class);
         org.mockito.Mockito.when(source.get("item_1")).thenReturn(sample());
-        var controller = new MarketplaceController(source);
+        var controller = new MarketplaceController(source, org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class));
         var request = new MockHttpServletRequest("GET", "/marketplace/fr-FR/item_1");
-        assertEquals("marketplace", controller.show("fr-FR", "item_1", "", "asc", "", "", "", request, model));
+        assertEquals("marketplace", controller.show("fr-FR", "item_1", "", "asc", "", "", "", request, new org.springframework.mock.web.MockHttpServletResponse(), model));
         // The web context expands @{...} routes in the actual MVC integration; this
         // unit test uses a link builder that preserves their already-parsed paths.
         engine.setLinkBuilder(new org.thymeleaf.linkbuilder.StandardLinkBuilder() {
             @Override protected String computeContextPath(org.thymeleaf.context.IExpressionContext context, String base, java.util.Map<String, Object> parameters) { return ""; }
         });
         String html = engine.process("marketplace", new Context(java.util.Locale.FRANCE, model));
+        assertTrue(html.contains("hx-boost:inherited=\"false\""));
         assertTrue(html.contains("lang=\"fr-FR\""));
         assertTrue(html.contains("&lt;script&gt; &amp; Title"));
         assertFalse(html.contains("data-offer-id=\"o5\""));
@@ -74,6 +113,9 @@ class MarketplaceTest {
         assertTrue(html.contains("<th>Vendeur</th>"));
         assertTrue(html.contains("<th>Acheteur</th>"));
         assertTrue(html.contains("1\u202f000\u202f000 d’annonces") || html.contains("1\u00a0000\u00a0000 d’annonces"));
+        model.put("marketplacePage", false);
+        String ordinary = engine.process("marketplace", new Context(java.util.Locale.FRANCE, model));
+        assertTrue(ordinary.contains("hx-boost:inherited=\"true\""));
     }
 
     @Test void fixtureAndHttpSourcesReadNumericRecordsWithoutResponseCaching() throws Exception {

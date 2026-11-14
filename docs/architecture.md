@@ -138,7 +138,8 @@ and `id`) when it arrives and trusts its rows as the server's `Row`
 ([design Choice 40](design.md#choice-script-boundaries)).
 
 Not checked: `data-*` attributes a script reads through `dataset` (strings on both sides; pass
-the value as a handler argument instead), that a ref inside an `if` is present when a handler
+the value as a handler argument instead), that the elements of a ref a `Map` parameter takes each
+have a `key=` (those without one share one entry of the map), that a ref inside an `if` is present when a handler
 runs (the call throws when it is not; the type says it is always there), the value a call passes to a
 handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to
 that), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is

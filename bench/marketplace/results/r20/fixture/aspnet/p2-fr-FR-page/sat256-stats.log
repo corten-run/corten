@@ -1,0 +1,60 @@
+{"BlockIO":"0B / 4.1kB","CPUPerc":"1.06%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.32%","MemUsage":"64.75MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"9.11MB / 264MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"1.06%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.32%","MemUsage":"64.75MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"9.11MB / 264MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.34%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.39%","MemUsage":"65.41MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"9.56MB / 276MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.34%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.39%","MemUsage":"65.41MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"9.56MB / 276MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.07%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.41%","MemUsage":"65.62MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"10MB / 290MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.07%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.41%","MemUsage":"65.62MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"10MB / 290MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.24%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.55%","MemUsage":"67.04MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"10.5MB / 303MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.24%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.55%","MemUsage":"67.04MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"10.5MB / 303MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.09%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.83%","MemUsage":"69.93MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11MB / 317MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.09%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.83%","MemUsage":"69.93MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11MB / 317MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.16%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.86%","MemUsage":"70.28MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11.4MB / 330MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.16%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.86%","MemUsage":"70.28MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11.4MB / 330MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.12%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.93%","MemUsage":"70.98MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11.8MB / 340MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.12%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"6.93%","MemUsage":"70.98MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"11.8MB / 340MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.02%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.19%","MemUsage":"73.64MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"12.3MB / 353MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.02%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.19%","MemUsage":"73.64MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"12.3MB / 353MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.47%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.55%","MemUsage":"77.36MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"12.9MB / 371MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.47%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.55%","MemUsage":"77.36MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"12.9MB / 371MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"99.93%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.67%","MemUsage":"78.52MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"13.6MB / 392MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"99.93%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.67%","MemUsage":"78.52MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"13.6MB / 392MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.05%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.63%","MemUsage":"78.11MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"14.1MB / 408MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.05%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.63%","MemUsage":"78.11MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"14.1MB / 408MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.10%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.63%","MemUsage":"78.12MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"14.6MB / 422MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.10%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.63%","MemUsage":"78.12MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"14.6MB / 422MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.27%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.61%","MemUsage":"77.98MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"15.4MB / 444MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.27%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.61%","MemUsage":"77.98MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"15.4MB / 444MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"99.97%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.64%","MemUsage":"78.2MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"16.1MB / 465MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"99.97%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.64%","MemUsage":"78.2MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"16.1MB / 465MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.16%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.71%","MemUsage":"78.93MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"16.9MB / 490MB","PIDs":"17"}
+
+{"BlockIO":"0B / 4.1kB","CPUPerc":"100.16%","Container":"marketplace-r20-a6ab17d79f-aspnet","ID":"33fc2983a428","MemPerc":"7.71%","MemUsage":"78.93MiB / 1GiB","Name":"marketplace-r20-a6ab17d79f-aspnet","NetIO":"16.9MB / 490MB","PIDs":"17"}
+

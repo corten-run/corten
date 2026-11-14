@@ -32,6 +32,7 @@ import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
 import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
@@ -104,7 +105,7 @@ const reset = () => {
   // docker-rebuild.mjs's builders first, with their state volumes: their containers match bb- too,
   // and buildx rm on a builder whose container is gone leaves its volume.
   for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
-  const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
+  const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], [`ancestor=${k6Image}`, "ancestor=alpine"]]
     .flatMap((filters) => docker("ps", "-aq", ...filters.flatMap((f) => ["--filter", f])).stdout?.split("\n").filter(Boolean) ?? []);
   if (ids.length) docker("rm", "-f", ...new Set(ids));
   // A state volume buildx rm left (its builder's container already gone), now no container uses
@@ -120,7 +121,7 @@ const reset = () => {
   }
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
-    "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
+    "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
   if (r.status !== 0) throw new Error(`could not start the item API: ${r.stderr || r.error?.message}`);
 };
 

@@ -1,0 +1,140 @@
+/* What belongs to no component: the brand's colors, the type, element defaults.
+   Colors are the logo pack's (docs/brand/corten-weathering-pack.md); ember and scale are the
+   site's own: hot metal for what just changed, mill scale for steel before it weathers.
+   No font files: the display face is the DIN already on the reader's machine (Bahnschrift on
+   Windows, DIN Condensed on Apple systems, Roboto Condensed on Android), or the narrow sans a
+   Linux desktop has; the text face is the system's. */
+:root {
+  --rust: #a84c27;
+  --rust-deep: #753620;
+  --charcoal: #272826;
+  --ink: #1c2020;
+  --bone: #eee8df;
+  --bone-dim: #b8afa1;
+  --ember: #f2a44b;
+  --scale: #2b3236;
+  --pit: #150d0a;
+
+  --display: "Bahnschrift", "DIN Condensed", "DIN Alternate", "Roboto Condensed", "sans-serif-condensed", "Nimbus Sans Narrow", "Liberation Sans Narrow", "DejaVu Sans Condensed", "Ubuntu Condensed", "Arial Narrow", sans-serif;
+  --text: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --mono: "Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --gutter: clamp(1.25rem, 5vw, 5.5rem);
+  --measure: 34rem;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ink);
+  scroll-behavior: smooth;
+  scroll-padding-top: 4.5rem;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--bone);
+  font-family: var(--text);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  overflow-x: clip;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 700;
+  font-stretch: 75%;
+  line-height: 1;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+
+p,
+ul,
+ol,
+dl,
+dd,
+figure,
+pre {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-color: var(--ember);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+/* Code in a block is the block's size, not smaller again. */
+pre code {
+  font-size: inherit;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+img,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ember);
+  outline-offset: 3px;
+  border-radius: 1px;
+}
+
+::selection {
+  background: var(--ember);
+  color: var(--ink);
+}

@@ -1,0 +1,450 @@
+{
+  "schema": "native-live-plan/v2",
+  "group": "live-delivery",
+  "round": "gin-native-final",
+  "startedAt": "2026-11-12T23:48:36.285Z",
+  "apps": [
+    "corten",
+    "aspnet",
+    "express",
+    "phoenix",
+    "rails",
+    "gin",
+    "drogon",
+    "leptos"
+  ],
+  "requested": [
+    "gin"
+  ],
+  "profile": "bounded",
+  "measurement": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "inventory": [
+    {
+      "app": "corten",
+      "directory": "corten",
+      "transport": "corten_feed::Feed / native subscribe() and keyed views / browser EventSource",
+      "image": "cb-parity-live-corten",
+      "profiles": [
+        "native-feed"
+      ],
+      "wire": "corten-feed",
+      "rootContext": true,
+      "dockerfile": "Dockerfile.parity",
+      "buildTimeoutMs": 1200000,
+      "implementation": "implemented",
+      "reason": "Native corten port requires explicit --profile native-feed; not run in bounded profile"
+    },
+    {
+      "app": "aspnet",
+      "directory": "aspnet",
+      "transport": "TypedResults.ServerSentEvents / bounded Channel / browser EventSource",
+      "image": "cb-parity-live-aspnet",
+      "implementation": "implemented",
+      "reason": "Native application port; qualification requires every scenario's browser evidence"
+    },
+    {
+      "app": "express",
+      "directory": "express",
+      "transport": "Express response SSE / browser EventSource",
+      "image": "cb-parity-live-express",
+      "implementation": "implemented",
+      "reason": "Native application port; qualification requires every scenario's browser evidence"
+    },
+    {
+      "app": "phoenix",
+      "implementation": "not-implemented",
+      "reason": "Missing phoenix native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "rails",
+      "implementation": "not-implemented",
+      "reason": "Missing rails native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "gin",
+      "directory": "gin",
+      "transport": "Gin SSEvent / bounded Go channel / browser EventSource",
+      "image": "cb-parity-live-gin",
+      "implementation": "implemented",
+      "reason": "Native application port; qualification requires every scenario's browser evidence"
+    },
+    {
+      "app": "drogon",
+      "implementation": "not-implemented",
+      "reason": "Missing drogon native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    },
+    {
+      "app": "leptos",
+      "implementation": "not-implemented",
+      "reason": "Missing leptos native keyed browser application, bounded queue/history instrumentation and recovery port under bench/live/apps; historical transport-only code is not parity"
+    }
+  ],
+  "workload": {
+    "schema": "live-keyed-state/v1",
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 24,
+    "initial": [
+      {
+        "id": "listing-0",
+        "version": 0,
+        "priceCents": 117,
+        "quantity": 17
+      },
+      {
+        "id": "listing-1",
+        "version": 0,
+        "priceCents": 64642,
+        "quantity": 18
+      },
+      {
+        "id": "listing-2",
+        "version": 0,
+        "priceCents": 29167,
+        "quantity": 19
+      },
+      {
+        "id": "listing-3",
+        "version": 0,
+        "priceCents": 93692,
+        "quantity": 20
+      },
+      {
+        "id": "listing-4",
+        "version": 0,
+        "priceCents": 58217,
+        "quantity": 21
+      }
+    ],
+    "events": [
+      {
+        "seq": 1,
+        "effectId": "live-17-1",
+        "key": "listing-0",
+        "op": "upsert",
+        "row": {
+          "id": "listing-0",
+          "version": 1,
+          "priceCents": 64642,
+          "quantity": 18
+        }
+      },
+      {
+        "seq": 2,
+        "effectId": "live-17-2",
+        "key": "listing-0",
+        "op": "remove"
+      },
+      {
+        "seq": 3,
+        "effectId": "live-17-3",
+        "key": "listing-0",
+        "op": "upsert",
+        "row": {
+          "id": "listing-0",
+          "version": 3,
+          "priceCents": 93692,
+          "quantity": 20
+        }
+      },
+      {
+        "seq": 4,
+        "effectId": "live-17-4",
+        "key": "listing-1",
+        "op": "upsert",
+        "row": {
+          "id": "listing-1",
+          "version": 4,
+          "priceCents": 22742,
+          "quantity": 22
+        }
+      },
+      {
+        "seq": 5,
+        "effectId": "live-17-5",
+        "key": "listing-1",
+        "op": "remove"
+      },
+      {
+        "seq": 6,
+        "effectId": "live-17-6",
+        "key": "listing-1",
+        "op": "upsert",
+        "row": {
+          "id": "listing-1",
+          "version": 6,
+          "priceCents": 51792,
+          "quantity": 24
+        }
+      },
+      {
+        "seq": 7,
+        "effectId": "live-17-7",
+        "key": "listing-2",
+        "op": "upsert",
+        "row": {
+          "id": "listing-2",
+          "version": 7,
+          "priceCents": 80842,
+          "quantity": 26
+        }
+      },
+      {
+        "seq": 8,
+        "effectId": "live-17-8",
+        "key": "listing-2",
+        "op": "remove"
+      },
+      {
+        "seq": 9,
+        "effectId": "live-17-9",
+        "key": "listing-2",
+        "op": "upsert",
+        "row": {
+          "id": "listing-2",
+          "version": 9,
+          "priceCents": 9892,
+          "quantity": 28
+        }
+      },
+      {
+        "seq": 10,
+        "effectId": "live-17-10",
+        "key": "listing-3",
+        "op": "upsert",
+        "row": {
+          "id": "listing-3",
+          "version": 10,
+          "priceCents": 38942,
+          "quantity": 30
+        }
+      },
+      {
+        "seq": 11,
+        "effectId": "live-17-11",
+        "key": "listing-3",
+        "op": "remove"
+      },
+      {
+        "seq": 12,
+        "effectId": "live-17-12",
+        "key": "listing-3",
+        "op": "upsert",
+        "row": {
+          "id": "listing-3",
+          "version": 12,
+          "priceCents": 67992,
+          "quantity": 1
+        }
+      },
+      {
+        "seq": 13,
+        "effectId": "live-17-13",
+        "key": "listing-4",
+        "op": "upsert",
+        "row": {
+          "id": "listing-4",
+          "version": 13,
+          "priceCents": 97042,
+          "quantity": 3
+        }
+      },
+      {
+        "seq": 14,
+        "effectId": "live-17-14",
+        "key": "listing-4",
+        "op": "remove"
+      },
+      {
+        "seq": 15,
+        "effectId": "live-17-15",
+        "key": "listing-4",
+        "op": "upsert",
+        "row": {
+          "id": "listing-4",
+          "version": 15,
+          "priceCents": 26092,
+          "quantity": 5
+        }
+      },
+      {
+        "seq": 16,
+        "effectId": "live-17-16",
+        "key": "listing-0",
+        "op": "upsert",
+        "row": {
+          "id": "listing-0",
+          "version": 16,
+          "priceCents": 32517,
+          "quantity": 2
+        }
+      },
+      {
+        "seq": 17,
+        "effectId": "live-17-17",
+        "key": "listing-0",
+        "op": "remove"
+      },
+      {
+        "seq": 18,
+        "effectId": "live-17-18",
+        "key": "listing-0",
+        "op": "upsert",
+        "row": {
+          "id": "listing-0",
+          "version": 18,
+          "priceCents": 61567,
+          "quantity": 4
+        }
+      },
+      {
+        "seq": 19,
+        "effectId": "live-17-19",
+        "key": "listing-1",
+        "op": "upsert",
+        "row": {
+          "id": "listing-1",
+          "version": 19,
+          "priceCents": 90617,
+          "quantity": 6
+        }
+      },
+      {
+        "seq": 20,
+        "effectId": "live-17-20",
+        "key": "listing-1",
+        "op": "remove"
+      },
+      {
+        "seq": 21,
+        "effectId": "live-17-21",
+        "key": "listing-1",
+        "op": "upsert",
+        "row": {
+          "id": "listing-1",
+          "version": 21,
+          "priceCents": 19667,
+          "quantity": 8
+        }
+      },
+      {
+        "seq": 22,
+        "effectId": "live-17-22",
+        "key": "listing-2",
+        "op": "upsert",
+        "row": {
+          "id": "listing-2",
+          "version": 22,
+          "priceCents": 48717,
+          "quantity": 10
+        }
+      },
+      {
+        "seq": 23,
+        "effectId": "live-17-23",
+        "key": "listing-2",
+        "op": "remove"
+      },
+      {
+        "seq": 24,
+        "effectId": "live-17-24",
+        "key": "listing-2",
+        "op": "upsert",
+        "row": {
+          "id": "listing-2",
+          "version": 24,
+          "priceCents": 77767,
+          "quantity": 12
+        }
+      }
+    ],
+    "cleanupProbe": {
+      "seq": 25,
+      "effectId": "live-17-25",
+      "key": "listing-3",
+      "op": "upsert",
+      "row": {
+        "id": "listing-3",
+        "version": 25,
+        "priceCents": 6817,
+        "quantity": 14
+      }
+    }
+  },
+  "scenarios": [
+    "normal",
+    "slow-reader"
+  ],
+  "settings": [
+    {
+      "group": "live-delivery",
+      "scenario": "normal",
+      "queueLimit": 2,
+      "historyLimit": 4,
+      "slowOutcome": "resnapshot",
+      "maxRecoveryMs": 10000,
+      "maxCleanupMs": 5000,
+      "cleanupObservationMs": 150,
+      "maxSlowMs": 10000,
+      "maxPublishLagMs": 5000
+    },
+    {
+      "group": "live-delivery",
+      "scenario": "slow-reader",
+      "queueLimit": 2,
+      "historyLimit": 4,
+      "slowOutcome": "resnapshot",
+      "maxRecoveryMs": 10000,
+      "maxCleanupMs": 5000,
+      "cleanupObservationMs": 150,
+      "maxSlowMs": 10000,
+      "maxPublishLagMs": 5000
+    }
+  ],
+  "commit": "13e9ce3a11d61e238cca936e43bf8ea17bb77378",
+  "diffSha256": "c3f1b75aef361a2c6a2f21d8d2f161101cbfd5d98c0b9f884616e7b1a7581135",
+  "code": {
+    "runner": "6fcb0ad9d5c66b9b3bce121dee82810969ae9cd498fa6b82716e7f90201b3f8e",
+    "verifier": "9e126a224cc647e2cd6ed57c715ead8460037209bab29add769d15f2281686f6",
+    "oracle": "4d80764b1b68c659c0dee733988bdaa9a7f1c8d6917023bc2ab71689c31d2f42",
+    "native": "df5c2ec8c56af42a3578177a938465216cebc283be4132153ad5da25763379c1",
+    "wire": "0b6e62c0110131a68132f70210442f529e0e475f6066f1a34fc261ef0975932e",
+    "fanout": "566877be78fae7cc7254f253bccc0a6c70ea1965fa48d4db11538c9a7e7e4eb3"
+  },
+  "contractSha256": "ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328",
+  "environment": {
+    "hostname": "TODD-XPS-17-9700",
+    "platform": "win32",
+    "release": "10.0.26300",
+    "arch": "x64",
+    "cpus": 16,
+    "node": "v24.22.1"
+  },
+  "budget": {
+    "appCpus": 1,
+    "appMemoryBytes": 1073741824,
+    "browsers": 1,
+    "clients": 1
+  },
+  "limits": [
+    "bounded local correctness probe, not load qualification or comparative ranking",
+    "slow native queue consumer, not TCP/network slow reader",
+    "no authentication, multi-node or process-restart durability",
+    "native process and application queue peaks; kernel socket memory is not measured",
+    "browser application delivery waits for the active publisher acknowledgement; receivedAt and raw CDP record actual native arrival separately"
+  ]
+}

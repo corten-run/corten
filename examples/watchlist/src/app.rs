@@ -106,9 +106,11 @@ async fn error_page(failure: Failure, req: Req, viewer: Option<Caller<Viewer>>) 
         Failure::NotFound => ("Not found", "There is nothing at this address."),
         Failure::Refused { .. } | Failure::CrossSite => ("Not allowed", "You do not have access to this page."),
         Failure::Unidentified { .. } | Failure::TimedOut | Failure::Offline => ("Not available", "Try again in a moment."),
-        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
-            ("Something went wrong", "Please try again.")
-        }
+        Failure::WrongMethod
+        | Failure::UnknownMethod
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
     };
     req.page(html! {
         <Layout req={&req} title={title} viewer={viewer.as_deref()} head="">

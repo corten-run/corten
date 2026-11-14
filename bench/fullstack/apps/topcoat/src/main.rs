@@ -2,12 +2,14 @@
 //! same markup and stylesheets, and the item as JSON. The listings' sort and the offers' "show
 //! all" are shards (rendered again on the server when their signal changes), the price alert a
 //! procedure, and links between pages Topcoat's client navigation.
+mod alerts;
 mod catalog;
 mod catalog_view;
 mod items;
 mod marketplace;
 mod marketplace_view;
 mod model;
+mod trace;
 
 use std::{
     sync::{Arc, LazyLock},
@@ -30,7 +32,7 @@ use topcoat::{
         header, href, page, path_param, request, route,
         tower::TowerLayer,
     },
-    runtime::{Event, RouterBuilderRuntimeExt, link, procedure, shard, signal},
+    runtime::{Event, RuntimeLayer, link, procedure, shard, signal},
     view::{Child, View, ViewExt, attributes, component, view},
 };
 use tower::ServiceBuilder;
@@ -62,13 +64,14 @@ fn router() -> Router {
         .route(item_json)
         .route(catalog_view::catalog_json)
         .route(marketplace_view::marketplace_json)
+        .route(alerts::read)
         .route(listings)
         .route(offers)
         .route(create_alert)
         .route(live_prices)
         .route(live_publish)
         .assets(AssetBundle::load().expect("asset bundle next to the binary (topcoat asset bundle)"))
-        .runtime();
+        .layer(RuntimeLayer::new());
     let builder = if matched() { builder.layer(profile_layer()) } else { builder };
     builder.build()
 }
@@ -114,7 +117,7 @@ fn profile_layer() -> impl Layer {
 
 /// The document every page shares, as card-market's layout writes it.
 #[component]
-async fn document(#[into] title: String, #[default] catalog: bool, #[default] child: Child<'_>) -> Result<impl View> {
+async fn document(cx: &Cx, #[into] title: String, #[default] catalog: bool, #[default] child: Child<'_>) -> Result<impl View> {
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -140,7 +143,7 @@ async fn document(#[into] title: String, #[default] catalog: bool, #[default] ch
 }
 
 #[page("/")]
-async fn home() -> Result<impl View> {
+async fn home(cx: &Cx) -> Result<impl View> {
     let shelf = items::shelf();
     Ok(view! {
         document(
@@ -149,7 +152,7 @@ async fn home() -> Result<impl View> {
             if shelf.is_empty() {
                 <ul class="item-list__list item-list__ids">
                     for n in 1..=50usize {
-                        <li>link(href: href!(item_page, Id(format!("item_{n}"))), "Item " (n))</li>
+                        <li>link(href: href!(item_page, id: format!("item_{n}")), "Item " (n))</li>
                     }
                 </ul>
             } else {
@@ -157,7 +160,7 @@ async fn home() -> Result<impl View> {
                     for item in shelf {
                         <li>
                             link(
-                                href: href!(item_page, Id(item.id.as_str())),
+                                href: href!(item_page, id: item.id.as_str()),
                                 attrs: attributes! { class="item-card__card" },
                                 <strong>(&item.title)</strong>
                                 if let Some(subtitle) = &item.subtitle {
@@ -193,7 +196,7 @@ path_param!(id);
 
 #[page([GET, POST] "/items/{id}")]
 async fn item_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<impl View> {
-    let id: &str = path_param::<Id>(cx);
+    let id = id(cx);
     let Some(item) = items::get(cx, id).await? else {
         return Ok(view! { missing() }.boxed());
     };
@@ -396,18 +399,18 @@ async fn offers(cx: &Cx, id: String, all: bool) -> Result<impl View> {
 
 /// The price alert: checked and answered on the server, the message shown by the page.
 #[procedure("/alerts")]
-async fn create_alert(title: String, email: String, target_price: String) -> Result<String> {
+async fn create_alert(cx: &Cx, title: String, email: String, target_price: String) -> Result<String> {
     Ok(alert_message(&title, &email, &target_price))
 }
 
 #[component]
-async fn content_list(title: &str, lines: &[ContentLine]) -> Result<impl View> {
+async fn content_list(cx: &Cx, title: &str, lines: &[ContentLine]) -> Result<impl View> {
     Ok(view! {
         <section class="item-detail__panel">
             <h2>(title)</h2>
             <ul>
                 for c in lines {
-                    <li>link(href: href!(item_page, Id(c.item_id.as_str())), (&c.title)) " × " (c.quantity)</li>
+                    <li>link(href: href!(item_page, id: c.item_id.as_str()), (&c.title)) " × " (c.quantity)</li>
                 }
             </ul>
         </section>
@@ -416,7 +419,7 @@ async fn content_list(title: &str, lines: &[ContentLine]) -> Result<impl View> {
 
 /// Corten's 404 page, for a missing item and for any address no other page serves.
 #[component]
-async fn missing() -> Result<impl View> {
+async fn missing(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         (StatusCode::NOT_FOUND)
         document(
@@ -431,14 +434,14 @@ async fn missing() -> Result<impl View> {
 path_param!(*rest);
 
 #[page("/{*rest}")]
-async fn not_found() -> Result<impl View> {
+async fn not_found(cx: &Cx) -> Result<impl View> {
     Ok(view! { missing() })
 }
 
 /// `GET /api/items/{id}`: the item as JSON for other services, the same data the page renders.
 #[route(GET "/api/items/{id}")]
 async fn item_json(cx: &Cx) -> Result<Json<Arc<ItemView>>> {
-    let item = items::shared(cx, path_param::<Id>(cx)).await?.ok_or_else(not_found_error)?;
+    let item = items::shared(cx, id(cx)).await?.ok_or_else(not_found_error)?;
     Ok(Json(item))
 }
 
@@ -465,7 +468,7 @@ fn counted(n: i64, one: &str, other: &str) -> String {
 static PRICES: LazyLock<broadcast::Sender<String>> = LazyLock::new(|| broadcast::channel(1024).0);
 
 #[route(GET "/live/prices")]
-async fn live_prices() -> Result<Sse<impl Stream<Item = Result<SseEvent>> + use<>>> {
+async fn live_prices(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<SseEvent>> + use<>>> {
     let stream = futures_util::stream::unfold(PRICES.subscribe(), |mut rx| async move {
         loop {
             match rx.recv().await {
@@ -480,7 +483,7 @@ async fn live_prices() -> Result<Sse<impl Stream<Item = Result<SseEvent>> + use<
 }
 
 #[route(POST "/live/publish")]
-async fn live_publish(body: String) -> Result<StatusCode> {
+async fn live_publish(cx: &Cx, body: String) -> Result<StatusCode> {
     let _ = PRICES.send(body);
     Ok(StatusCode::NO_CONTENT)
 }

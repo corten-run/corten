@@ -8,11 +8,17 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { runRound } from "./parity.mjs";
 import { appCpus, loadCpus, network } from "../fullstack/apps.mjs";
 import { live } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const [round = "r1", levelsArg = "1000,10000", appsArg = Object.keys(live).join(","), rate = "10", seconds = "30"] = process.argv.slice(2);
+export async function run(args) { return runRound("live-delivery", args); }
+
+async function historical(argv) {
+const [round = "r1", levelsArg = "1000,10000", appsArg = Object.keys(live).join(","), rate = "10", seconds = "30"] = argv;
 const dir = join(here, "results", round);
 mkdirSync(dir, { recursive: true });
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
@@ -60,7 +66,7 @@ for (const name of appsArg.split(",")) {
     const client = spawn("docker", ["run", "--rm", "--name", clientName, "--network", network, ...loadCpus, "--ulimit", "nofile=1048576:1048576", "-v", `${here}:/live`,
       "-e", `BASE=http://${container}:8080`, "-e", `STREAM=${app.path}`, "-e", `TRANSPORT=${app.transport}`, "-e", `WS_PORT=${app.wsPort ?? 8080}`,
       "-e", `PUBLISH=http://${container}:8080/live/publish`, "-e", `CLIENTS=${clients}`, "-e", `WORKERS=${process.env.BENCH_LIVE_WORKERS ?? 4}`, "-e", `RATE=${rate}`, "-e", `SECONDS=${seconds}`,
-      "-e", `OUT=/live/${out}`, "node:24-bookworm-slim", "node", "/live/client.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
+      "-e", `OUT=/live/${out}`, "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/live/client.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
     let connectedMiB = null;
     let sampler = null;
     let buffer = "";
@@ -90,3 +96,14 @@ for (const name of appsArg.split(",")) {
   }
 }
 log("done");
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const args = process.argv.slice(2);
+  if (args.includes("--group")) {
+    const at = args.indexOf("--group");
+    if (args[at + 1] !== "live-delivery") throw new Error("bench/live native group must be live-delivery");
+    args.splice(at, 2);
+    if (!await run(args)) process.exitCode = 1;
+  } else await historical(args);
+}

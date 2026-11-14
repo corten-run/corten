@@ -9,7 +9,7 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), "../..");
 test("Linux owned-container cleanup reaps detached descendants after their direct parent exits", { skip: process.env.CATALOG_DOCKER_TESTS !== "1", timeout: 180000 }, async () => {
   const id = `catalog-cleanup-${randomBytes(6).toString("hex")}`;
   const label = "run.corten.catalog.cleanup-test";
-  const image = "node:24-bookworm-slim";
+  const image = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
   const container = `${id}-check`;
   const observer = `${id}-observer`;
   const marker = `${id}-detached`;

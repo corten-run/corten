@@ -1,0 +1,14 @@
+✔ every native resource object is retained in order and HTTP records are excluded (5.7617ms)
+✔ native LiveView diff metadata is returned losslessly, never reconstructed (0.6566ms)
+✔ native cursors retain initial ready and reconnect order without inferring snapshot status (0.6009ms)
+✔ another topic cannot manufacture LiveView event evidence (0.3654ms)
+✔ malformed native envelopes and mismatched native row identity are rejected (2.8673ms)
+✔ snapshot read work must match its original rows (2.1282ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 618.7308

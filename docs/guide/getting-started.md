@@ -12,6 +12,9 @@ cd my-app
 corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 ```
 
+`cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
+build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary).
+
 `corten new` writes a working app: a page, a form that patches part of the page, a component
 with a script, a
 test and a Dockerfile.
@@ -43,6 +46,59 @@ a pin is being bumped (`Cargo.toml` asks for another revision than the lock was 
 cargo resolves it), the note compares the command with the revision `Cargo.toml` asks for, and
 says nothing for a new tag or branch. A path dependency (a checkout of corten) is not compared.
 
+## Verify a prebuilt binary
+
+The [GitHub releases](https://github.com/corten-run/corten/releases) have `corten-<target>.tgz`
+archives (Linux and macOS) and `corten-x86_64-pc-windows-msvc.zip` (Windows). Releases built by
+the current workflow include `SHA256SUMS` and GitHub build provenance for every archive; older
+releases may have neither. Download your archive and `SHA256SUMS` from the same release into
+one directory. Before extracting or running the binary, use the
+[GitHub CLI](https://cli.github.com/manual/gh_attestation_verify) (signed in with
+`gh auth login`; it reads the attestation through GitHub's API) to verify the archive against
+its build, then check its checksum. Substitute your archive's name and the release's tag:
+
+```sh
+gh attestation verify corten-x86_64-unknown-linux-musl.tgz -R corten-run/corten \
+  --signer-workflow corten-run/corten/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+On macOS, check the checksum with `shasum -a 256 -c --ignore-missing SHA256SUMS`; a `shasum`
+too old to know `--ignore-missing` can print the archive's digest with
+`shasum -a 256 corten-aarch64-apple-darwin.tgz` to compare with its line in `SHA256SUMS`.
+
+Both checks must succeed. `--ignore-missing` skips the other platforms' archives, not a bad
+checksum. The attestation shows that this repository's release workflow built the archive from
+that tag. The checksum only shows the archive matches the `SHA256SUMS` downloaded beside it,
+which catches a damaged download; it says nothing about who built either file.
+
+In PowerShell, verify provenance the same way and compare the selected archive's checksum:
+
+```powershell
+$archive = 'corten-x86_64-pc-windows-msvc.zip'
+gh attestation verify $archive -R corten-run/corten `
+    --signer-workflow corten-run/corten/.github/workflows/release.yml `
+    --source-ref refs/tags/vX.Y.Z
+if ($LASTEXITCODE -ne 0) { throw 'Build provenance verification failed' }
+$entry = @(Get-Content SHA256SUMS | Where-Object { ($_ -split '  ', 2)[1] -eq $archive })
+if ($entry.Count -ne 1) { throw "Expected one checksum for $archive" }
+$expected = ($entry[0] -split '  ', 2)[0]
+if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
+    throw "Checksum verification failed for $archive"
+}
+```
+
+`cargo binstall` does not consume `SHA256SUMS` or GitHub attestations, so today it checks the
+download only by HTTPS: its
+[supported metadata](https://github.com/cargo-bins/cargo-binstall/blob/main/SUPPORT.md) has no
+checksum-file setting, and its [signature support](https://github.com/cargo-bins/cargo-binstall/blob/main/SIGNING.md)
+uses minisign, not GitHub attestations, and Corten's releases are not minisign-signed. To verify
+a prebuilt binary before installing it,
+download and verify it as above, then extract it and put `corten` (`corten.exe` on Windows) in
+a directory on your `PATH`. Alternatively, `cargo install corten-cli` builds from the source
+crate whose checksum crates.io stores.
+
 ## What `corten new` writes
 
 | Path | What |
@@ -53,7 +109,7 @@ says nothing for a new tag or branch. A path dependency (a checkout of corten) i
 | `src/click_counter.js`, `.css` | the `ClickCounter` component's handlers and stylesheet, next to it |
 | `static/` | the app's own CSS (element defaults, the layout), its favicon (`favicon.svg`, Corten's mark until you replace it; also answered at `/favicon.ico`), images; compiled into the program (`embed!`, a constant per file) and served at versioned URLs |
 | `AGENTS.md` | the rules for an AI agent working on the app |
-| `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line); the server runs as an unprivileged user, `USER 10001:10001` (by number, so a cluster that requires non-root containers starts it; the server writes no file, and an app whose server does gives that user a directory) |
+| `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line); the build keeps the app's compiled crates in a cache of its own, named for the app, so other apps on the same Docker host build alongside it ([Building the image](deploy.md#building-the-image)); the server runs as an unprivileged user, `USER 10001:10001` (by number, so a cluster that requires non-root containers starts it; the server writes no file, and an app whose server does gives that user a directory) |
 
 ## A whole app in one file
 

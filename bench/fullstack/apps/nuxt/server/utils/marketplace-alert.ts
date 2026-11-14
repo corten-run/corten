@@ -1,7 +1,7 @@
 import type { H3Event } from "h3";
 import { getCookie, setCookie, getRequestURL, getHeader, createError, setHeader } from "h3";
 import { alertCookie, alertLifetime, appendAlert } from "./alerts";
-import { alertMessage, isLocale, targetMinor } from "../../shared/marketplace";
+import { alertMessage, isLocale, marketplacePath, targetMinor } from "../../shared/marketplace";
 import { fetchMarketplaceRecord } from "./marketplace";
 
 export async function submitMarketplaceAlert(event: H3Event, locale: string, id: string, form: FormData) {
@@ -11,6 +11,10 @@ export async function submitMarketplaceAlert(event: H3Event, locale: string, id:
     throw createError({ statusCode: 403, statusMessage: "Forbidden" });
   const record = await fetchMarketplaceRecord(id);
   if (!record) throw createError({ statusCode: 404, statusMessage: "Not found" });
+  // Check the native view's URL encodings before the alert can be committed.
+  marketplacePath(locale, record.id);
+  for (const line of record.contents) marketplacePath(locale, line.item_id);
+  for (const line of record.included_in) marketplacePath(locale, line.item_id);
   const email = String(form.get("email") ?? ""), target = String(form.get("target_price") ?? "");
   const minor = targetMinor(locale, target);
   const message = alertMessage(locale, record.title, email, target);
