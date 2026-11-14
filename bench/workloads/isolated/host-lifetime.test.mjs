@@ -403,6 +403,7 @@ for (const [name, change] of [
 ]) test(`${name} cannot pass host replay`, (t) => { const f = fixture(t, change); assert.throws(f.observation); });
 for (const [name, change] of [
   ["observer gap", (f) => { f.terminal.observerError = "host-observation-gap"; }],
+  ["diagnosed observer failure despite a cleared error flag", (f) => { f.terminal.observerFailures = { count: 1, first: {}, last: {} }; }],
   ["leak", (f) => { f.terminal.empty = false; f.terminal.terminal = false; }],
   ["missing accounting", (f) => { f.samples[1].groups[0].files["memory.peak"] = null; }],
   ["OOM", (f) => { f.samples[2].groups[0].files["memory.events"] = "oom_kill 1\n"; }],
