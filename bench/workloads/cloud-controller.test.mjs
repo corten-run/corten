@@ -106,19 +106,19 @@ test("download/pack/hash failures preserve evidence and prevent automatic overwr
     const h = harness(t); h.seed(); writeFileSync(join(h.local, filename), "unexplained"); await assert.rejects(h.task().collect(), /unrecorded/); assert.equal(h.deletes, 0);
   }
 });
-test("unsafe archive checksum/extensions/links/case/path/parent collisions fail before extraction", (t) => {
+test("unsafe archive checksum/extensions/links/case/path/parent collisions fail before extraction", async (t) => {
   for (const extra of [[{ name: "campaign/link", type: "2", target: "/root" }], [{ name: "campaign/link", type: "1", target: "host.txt" }],
     [{ name: "campaign/pax", type: "x", body: "path=/root" }], [{ name: "campaign/../escape" }], [{ name: "campaign/con.txt" }],
     [{ name: "campaign/A/x" }, { name: "campaign/a/y" }], [{ name: "campaign/a" }, { name: "campaign/a/x" }], [{ name: "campaign/a" }, { name: "campaign/a" }]]) {
     const h = harness(t), target = join(h.temp, "extract"); mkdirSync(target);
-    assert.throws(() => extractArchive(archive([...metadata(), ...extra]), target)); assert.ok(!existsSync(join(target, "run.log")));
+    await assert.rejects(extractArchive(archive([...metadata(), ...extra]), target)); assert.ok(!existsSync(join(target, "run.log")));
   }
-  assert.throws(() => archiveMembers(Buffer.from("not gzip")));
+  await assert.rejects(archiveMembers(Buffer.from("not gzip")));
   const corrupt = gunzipSync(archive(metadata())); corrupt[0] ^= 1;
-  assert.throws(() => archiveMembers(gzipSync(corrupt)), /checksum/);
-  assert.throws(() => archiveMembers(gzipSync(gunzipSync(archive(metadata())).subarray(0, -1024))), /incomplete/);
+  await assert.rejects(archiveMembers(gzipSync(corrupt)), /checksum/);
+  await assert.rejects(archiveMembers(gzipSync(gunzipSync(archive(metadata())).subarray(0, -1024))), /incomplete/);
   const trailing = gunzipSync(archive(metadata())); trailing[trailing.length - 1] = 1;
-  assert.throws(() => archiveMembers(gzipSync(trailing)), /trailing/);
+  await assert.rejects(archiveMembers(gzipSync(trailing)), /trailing/);
   for (const index of [124, 148]) {
     const numeric = gunzipSync(archive(metadata())); numeric[index] |= 128;
     if (index === 124) {
@@ -126,32 +126,31 @@ test("unsafe archive checksum/extensions/links/case/path/parent collisions fail 
       const sum = numeric.subarray(0, 512).reduce((a, b) => a + b, 0);
       numeric.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148);
     }
-    assert.throws(() => archiveMembers(gzipSync(numeric)), /numeric/);
+    await assert.rejects(archiveMembers(gzipSync(numeric)), /numeric/);
   }
 });
-test("GNU long names are bounded and inspected before writing", (t) => {
+test("GNU long names are bounded and inspected before writing", async (t) => {
   const h = harness(t), name = `campaign/${"x".repeat(110)}`, bytes = archive([...metadata(), { name: "././@LongLink", type: "L", body: `${name}\0` }, { name: "ignored", body: "long" }]);
-  const target = join(h.temp, "extract"); mkdirSync(target); extractArchive(bytes, target); assert.equal(readFileSync(join(target, name), "utf8"), "long");
-  assert.throws(() => archiveMembers(archive([...metadata(), { name: "././@LongLink", type: "L", body: "campaign/../escape\0" }, { name: "ignored" }])));
+  const target = join(h.temp, "extract"); mkdirSync(target); await extractArchive(bytes, target); assert.equal(readFileSync(join(target, name), "utf8"), "long");
+  await assert.rejects(archiveMembers(archive([...metadata(), { name: "././@LongLink", type: "L", body: "campaign/../escape\0" }, { name: "ignored" }])));
 });
 
 test("archive preflight counts all implicit directories before any extraction writes", async (t) => {
   const entries = metadata();
-  for (let i = 0; i < 2000; i++) {
-    const name = ["campaign", `d${i}`, ...Array(61).fill("x"), "f"].join("/");
+  for (let i = 0; i < 36000; i++) {
+    const name = ["campaign", `d${i}`, ...Array(29).fill("x"), "f"].join("/");
     entries.push({ name: "././@LongLink", type: "L", body: `${name}\0` }, { name: "ignored" });
   }
-  const bytes = archive(entries); assert.ok(bytes.length < 30000);
-  // Prove rejection in the read-only parser first, including on the unfixed code.
-  assert.throws(() => archiveMembers(bytes), /tree limit/);
+  const bytes = archive(entries); assert.ok(bytes.length < 1024 ** 2); // Over 1.1 million implicit nodes in less than 1 MiB.
+  await assert.rejects(archiveMembers(bytes), /tree limit/);
   const h = harness(t), target = join(h.temp, "extract"); mkdirSync(target);
-  assert.throws(() => extractArchive(bytes, target), /tree limit/); assert.deepEqual(readdirSync(target), []);
+  await assert.rejects(extractArchive(bytes, target), /tree limit/); assert.deepEqual(readdirSync(target), []);
   h.seed(); h.setArchive(bytes); await assert.rejects(h.task().collect(), /tree limit/);
   assert.equal(h.deletes, 0); assert.equal(h.inspections, 0); assert.ok(!h.saved().extractionAttempts);
   assert.ok(!h.saved().deletionIntentAt); assert.deepEqual(readFileSync(join(h.local, "results.tgz")), bytes);
 });
 
-test("archive preflight allows exactly 100000 physical nodes and rejects the next node", () => {
+test("archive preflight retains the exact 100000-node boundary when locally lowered", async () => {
   const entries = metadata();
   for (let i = 0; i < 1587; i++) {
     const name = ["campaign", `d${i}`, ...Array(61).fill("x"), "f"].join("/");
@@ -159,21 +158,21 @@ test("archive preflight allows exactly 100000 physical nodes and rejects the nex
   }
   // root + metadata + campaign + 1587 * (62 directories + file) + 14 files
   for (let i = 0; i < 14; i++) entries.push({ name: `campaign/f${i}` });
-  assert.equal(archiveMembers(archive(entries)).length, 1604);
-  assert.throws(() => archiveMembers(archive([...entries, { name: "campaign/one-too-many" }])), /tree limit/);
+  assert.equal((await archiveMembers(archive(entries), undefined, { nodes: 100000 })).entries, 1604);
+  await assert.rejects(archiveMembers(archive([...entries, { name: "campaign/one-too-many" }]), undefined, { nodes: 100000 }), /tree limit/);
 });
 
-test("full path, component and depth checks happen before writing, shared parents count once", (t) => {
+test("full path, component and depth checks happen before writing, shared parents count once", async (t) => {
   const h = harness(t), target = join(h.temp, "extract"); mkdirSync(target);
   const long = (name) => [{ name: "././@LongLink", type: "L", body: `${name}\0` }, { name: "ignored" }];
   const nearLimit = ["campaign", ...Array(15).fill("x".repeat(255)), "x".repeat(240)].join("/");
   assert.ok(nearLimit.length <= 4096 && Buffer.byteLength(join(target, nearLimit)) > 4096);
   for (const name of [`campaign/${"x".repeat(256)}`, ["campaign", ...Array(64).fill("x")].join("/"),
     nearLimit]) {
-    assert.throws(() => extractArchive(archive([...metadata(), ...long(name)]), target), /path|component/);
+    await assert.rejects(extractArchive(archive([...metadata(), ...long(name)]), target), /path|component/);
     assert.deepEqual(readdirSync(target), []);
   }
-  extractArchive(archive([...metadata(), { name: "campaign/a/f" }, { name: "campaign/a/", type: "5" }, { name: "campaign/a/g" }]), target);
+  await extractArchive(archive([...metadata(), { name: "campaign/a/f" }, { name: "campaign/a/", type: "5" }, { name: "campaign/a/g" }]), target);
   assert.deepEqual(readdirSync(join(target, "campaign/a")), ["f", "g"]);
 });
 test("tampered archive/tree/hardlink evidence or validator mutation cannot permit deletion", async (t) => {

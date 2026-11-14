@@ -1,5 +1,6 @@
 // Provider identity and transport boundaries only. This module cannot launch or qualify a run.
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { host } from "../catalog/droplet-contract.mjs";
 import { contractSha256, groupNames, registrySchema, selectedApps } from "./registry.mjs";
@@ -95,42 +96,85 @@ export function terminalUnit(output, s) {
   assert.ok(fields.ExecMainStartTimestamp && fields.ExecMainStartTimestamp !== "n/a", "unit never started");
   return true;
 }
+export const archivePathLimits = Object.freeze({ nodes: 1100000, nameBytes: 32 * 1024 ** 2, memberBytes: 64 * 1024 ** 2 });
+
+// A compact trie, not one retained JS string/map per full path or implicit prefix.
+// Each node is 12 bytes; the fixed hash table is 16 MiB and the name arena 32 MiB.
+// Limits may only be lowered by local tests, never raised by evidence or the CLI.
+export function archivePaths(bounds = {}) {
+  const limits = { ...archivePathLimits, ...bounds };
+  for (const key of Object.keys(limits)) assert.ok(Object.hasOwn(archivePathLimits, key)
+    && Number.isSafeInteger(limits[key]) && limits[key] >= 1 && limits[key] <= archivePathLimits[key], "archive index bound");
+  const nodes = Buffer.alloc(limits.nodes * 12), names = Buffer.alloc(limits.nameBytes), slots = new Uint32Array(2 ** 22);
+  const seed = randomBytes(32), parentBytes = Buffer.alloc(4);
+  let count = 1, used = 0, memberBytes = 0, pathBytes = 0, entries = 0;
+  const chargePath = (bytes) => { pathBytes += bytes; assert.ok(pathBytes <= limits.memberBytes, "archive index physical path budget"); };
+  const child = (parent, part, length) => {
+    parentBytes.writeUInt32LE(parent);
+    let slot = createHash("sha256").update(seed).update(parentBytes).update(part.toLowerCase(), "ascii").digest().readUInt32LE() & (slots.length - 1);
+    while (slots[slot]) {
+      const id = slots[slot], at = id * 12, offset = nodes.readUInt32LE(at + 4), length = nodes.readUInt16LE(at + 8);
+      if (nodes.readUInt32LE(at) === parent && length === part.length) {
+        const saved = names.toString("ascii", offset, offset + length);
+        if (saved.toLowerCase() === part.toLowerCase()) {
+          assert.equal(saved, part, "archive path casing differs"); return id;
+        }
+      }
+      slot = (slot + 1) & (slots.length - 1);
+    }
+    assert.ok(count < limits.nodes, "evidence tree limit");
+    assert.ok(used + part.length + 1 <= limits.nameBytes, "archive index name budget");
+    chargePath(length);
+    const id = count++, at = id * 12;
+    nodes.writeUInt32LE(parent, at); nodes.writeUInt32LE(used, at + 4); nodes.writeUInt16LE(part.length, at + 8);
+    names.write(part, used, part.length, "ascii"); used += part.length + 1; slots[slot] = id; return id;
+  };
+  const required = new Set(["run.log", "host.txt", "exit-code"]);
+  return {
+    add(name, directory) {
+      assert.equal(typeof name, "string"); assert.equal(typeof directory, "boolean");
+      assert.ok(++entries <= limits.nodes, "archive entry limit");
+      assert.ok(name.length <= 4096, "archive member size limit");
+      memberBytes += name.length; assert.ok(memberBytes <= limits.memberBytes, "archive index member budget");
+      assert.equal(directory, name.endsWith("/"), "archive path/type mismatch");
+      const path = name.replace(/\/$/, ""), parts = path.split("/");
+      assert.ok(parts.length <= 64 && parts.every((p) => p.length <= 255 && portableEvidenceSegment(p)), "unsafe archive path/component");
+      assert.ok(path === "campaign" || path.startsWith("campaign/") || ["run.log", "host.txt", "exit-code"].includes(path), "foreign archive member");
+      if (path === "campaign") assert.ok(directory, "campaign root must be a directory");
+      if (!path.includes("/") && path !== "campaign") assert.ok(!directory, "metadata must be a regular file");
+      let id = 0, length = 0;
+      for (const part of parts) {
+        const at = id * 12 + 10;
+        assert.ok(!(nodes[at] & 4), "archive file used as parent");
+        if (id && !(nodes[at] & 3)) chargePath(1); // An implicit directory's trailing slash.
+        nodes[at] |= 1;
+        length += part.length + (length ? 1 : 0); id = child(id, part, length);
+      }
+      const at = id * 12 + 10;
+      assert.ok(!(nodes[at] & 6), "duplicate archive path");
+      assert.ok(directory || !(nodes[at] & 1), "archive parent replaces existing child");
+      if (directory && !(nodes[at] & 1)) chargePath(1);
+      nodes[at] |= directory ? 2 : 4;
+      if (!directory) required.delete(path);
+    },
+    finish() { assert.equal(required.size, 0, "missing required archive metadata"); return { entries, nodes: count, nameBytes: used, memberBytes, pathBytes }; },
+  };
+}
+
 export function safeArchive(entries, verbose) {
   assert.equal(typeof entries, "string"); assert.equal(typeof verbose, "string");
   assert.ok(entries.length <= 16 * 1024 ** 2 && verbose.length <= 32 * 1024 ** 2, "archive listing size limit");
   // Remove only one listing terminator, never whitespace belonging to a filename.
   const lines = (value) => value.replace(/\r?\n$/, "").split(/\r?\n/);
-  const names = lines(entries), types = lines(verbose), seen = new Set(), files = new Set(), parents = new Set(), spelling = new Map();
+  const names = lines(entries), types = lines(verbose);
   assert.ok(names.length <= 100000, "archive entry limit");
   assert.equal(names.length, types.length, "archive listings differ");
+  const paths = archivePaths();
   for (let i = 0; i < names.length; i++) {
-    const name = names[i], path = name.endsWith("/") ? name.slice(0, -1) : name;
-    assert.ok(name.length <= 4096, "archive member size limit");
-    const parts = path.split("/");
-    assert.ok(parts.length <= 64 && parts.every(portableEvidenceSegment), "unsafe archive path");
-    // Tar may omit directory entries: every implicit parent has the same casing rule.
-    for (let j = 1; j <= parts.length; j++) {
-      const prefix = parts.slice(0, j).join("/"), key = prefix.toLowerCase();
-      assert.ok(!spelling.has(key) || spelling.get(key) === prefix, "archive path casing differs");
-      spelling.set(key, prefix);
-    }
-    assert.ok(!seen.has(path.toLowerCase()), "duplicate archive path"); seen.add(path.toLowerCase());
     assert.ok(/^[d-]/.test(types[i]), "archive link or special file");
-    assert.equal(types[i][0] === "d", name.endsWith("/"), "archive path/type mismatch");
-    assert.ok(path === "campaign" || path.startsWith("campaign/") || ["run.log", "host.txt", "exit-code"].includes(path), "foreign archive member");
-    if (path === "campaign") assert.equal(types[i][0], "d", "campaign root must be a directory");
-    if (!path.startsWith("campaign/") && path !== "campaign") assert.equal(types[i][0], "-", "metadata must be a regular file");
-    // A file cannot later become a parent; likewise a directory cannot replace a file.
-    for (let j = 1; j < parts.length; j++) {
-      const parent = parts.slice(0, j).join("/").toLowerCase();
-      assert.ok(!files.has(parent), "archive file used as parent"); parents.add(parent);
-    }
-    if (types[i][0] === "-") {
-      assert.ok(!parents.has(path.toLowerCase()), "archive parent replaces existing child");
-      files.add(path.toLowerCase());
-    }
+    paths.add(names[i], types[i][0] === "d");
   }
-  for (const name of ["run.log", "host.txt", "exit-code"]) assert.ok(seen.has(name), `missing ${name}`);
+  paths.finish();
 }
 
 // Native source snapshots include route brackets, npm scopes, Cargo versions
