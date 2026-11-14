@@ -30,7 +30,7 @@ try {
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
-const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence } = observations;
+const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
 const plan = timingPlan(options, sources, targets);
@@ -256,8 +256,9 @@ try {
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;
       entry.imageBytes = image.Size;
+      entry.imageExecution = imageCommandEvidence(image);
       writeFileSync(join(folder, `image-${app}.json`), JSON.stringify({ imageId: image.Id, imageBytes: image.Size,
-        commit: summary.commit, built: options.build }, null, 2));
+        commit: summary.commit, built: options.build, execution: entry.imageExecution }, null, 2));
     } catch (e) { fail(app, null, "build/image", e); }
     save();
   }
@@ -265,7 +266,10 @@ try {
   summary.networkCreated = true;
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/catalog/upstream.mjs"], upstreamName);
-  summary.tools = { upstream: { image: nodeImage, imageId: (await inspect(upstreamName)).Image } };
+  const upstreamImageId = (await inspect(upstreamName)).Image;
+  const upstreamImageInfo = JSON.parse(await docker(["image", "inspect", upstreamImageId]))[0];
+  assert.equal(upstreamImageInfo.Id, upstreamImageId);
+  summary.tools = { upstream: { image: nodeImage, imageId: upstreamImageId, execution: imageCommandEvidence(upstreamImageInfo) } };
   const upstream = await portOf(upstreamName);
   const upstreamDeadline = Date.now() + 20000;
   while (true) {
@@ -282,7 +286,7 @@ try {
     await docker(["pull", checkerImage], { timeout: 10 * 60 * 1000, file: join(folder, "pull-checker.log") });
     checker = JSON.parse(await docker(["image", "inspect", checkerImage]))[0];
   }
-  summary.tools.checker = { image: checkerImage, imageId: checker.Id, isolation: "owned PID namespace/cgroup; force-removed in finally, independent of Node/browser process groups" };
+  summary.tools.checker = { image: checkerImage, imageId: checker.Id, execution: imageCommandEvidence(checker), isolation: "owned PID namespace/cgroup; force-removed in finally, independent of Node/browser process groups" };
   writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     for (const source of sources) for (const app of options.apps) {
       const entry = summary.apps[app];

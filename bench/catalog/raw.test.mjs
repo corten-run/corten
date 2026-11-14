@@ -13,7 +13,7 @@ import { aggregate, cpuSettings, expectedPageChecks, parseArgs, phases, readLoad
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog } from "./report.mjs";
-import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage } from "./raw.mjs";
+import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage, imageCommandEvidence, checkBoundaryEvidence } from "./raw.mjs";
 import { recordAttemptSchema } from "./record-attempt.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
@@ -100,7 +100,10 @@ function failedFixture() {
   const f = fixture(), s = f.summary, app = s.group.apps[0], source = "fixture", start = Date.parse(s.startedAt);
   s.host = { checkout: "/synthetic/checkout" };
   s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";
-  s.tools.upstream.image = upstreamImage; s.tools.checker.image = checkerImage; f.put("tools.json", s.tools);
+  s.tools.upstream.image = upstreamImage; s.tools.checker.image = checkerImage;
+  s.tools.upstream.execution = { Entrypoint: ["docker-entrypoint.sh"], Cmd: ["node"] };
+  s.tools.checker.execution = { Entrypoint: null, Cmd: ["/bin/bash"] };
+  f.put("tools.json", s.tools);
   const requests = Object.keys(records()).slice(0, 8).map((id, index) => ({ id, index, path: `/api/catalog/${id}`, startedOrder: index,
     finishedOrder: index + 8, startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
   const failure = { schema: recordAttemptSchema, recordsSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), requests, source,
@@ -111,6 +114,8 @@ function failedFixture() {
   // No timing was performed after this functional gate. Remove synthetic timing files.
   for (const path of f.files.keys()) if (/\/p\d+-/.test(path)) f.files.delete(path);
   for (const [name, entry] of Object.entries(s.apps)) {
+    entry.imageExecution = { Entrypoint: ["/synthetic-image-entrypoint"], Cmd: ["/synthetic-app"] };
+    f.put(`image-${name}.json`, { imageId: entry.imageId, imageBytes: entry.imageBytes, commit: f.commit, built: true, execution: entry.imageExecution });
     entry.runs = {}; entry.phases = {};
     for (const src of s.group.sources) {
       const running = (image, role, memory, cmd = []) => ({ Id: (role === "api" ? "d" : "c").repeat(64), Image: image,
@@ -119,13 +124,18 @@ function failedFixture() {
           ExitCode: 0, Error: "", StartedAt: s.startedAt },
         HostConfig: { NanoCpus: s.measurement.cpus[role].quota * 1e9, CpusetCpus: s.measurement.cpus[role].cpuset ?? "", Memory: memory },
         Config: { Cmd: cmd, Env: [`CATALOG_SOURCE=${src}`, "CATALOG_FIXTURE_PATH=/fixtures/catalog.json", `API_BASE=http://${s.runId}-upstream:8080`], Labels: { "run.corten.catalog": s.runId } } });
-      const runtime = running(entry.imageId, "app", 2 ** 30), upstream = running(s.tools.upstream.imageId, "api", 512 * 2 ** 20, ["node", "/bench/catalog/upstream.mjs"]);
+      const runtime = running(entry.imageId, "app", 2 ** 30, entry.imageExecution.Cmd), upstream = running(s.tools.upstream.imageId, "api", 512 * 2 ** 20, ["node", "/bench/catalog/upstream.mjs"]);
       const negative = name === app && src === source;
       const checker = { ...running(s.tools.checker.imageId, "load", 2 ** 31), Id: "e".repeat(64), RestartCount: 0,
         State: { Status: "exited", Running: false, OOMKilled: false, Dead: false, Paused: false, Restarting: false, ExitCode: negative ? 1 : 0,
           Error: "", StartedAt: s.startedAt, FinishedAt: new Date(start + 2).toISOString() } };
       checker.HostConfig.NetworkMode = `container:${runtime.Id}`;
       checker.Config.Cmd = ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", src, `http://${s.runId}-upstream:8080`, "/results/checks.json"];
+      for (const [info, image] of [[runtime, entry.imageExecution], [upstream, s.tools.upstream.execution], [checker, s.tools.checker.execution]]) {
+        info.Config.Entrypoint = image.Entrypoint;
+        const argv = [...(image.Entrypoint ?? []), ...(info.Config.Cmd ?? [])];
+        info.Path = argv[0]; info.Args = argv.slice(1);
+      }
       const mount = (Source, Destination, RW = false) => ({ Type: "bind", Source, Destination, RW });
       for (const info of [runtime, upstream]) { info.networks = [`${s.runId}-net`]; info.mounts = [mount(`${s.host.checkout}/bench/catalog/fixtures`, "/fixtures")]; }
       upstream.mounts.push(mount(`${s.host.checkout}/bench`, "/bench"));
@@ -155,6 +165,32 @@ const overlays = [
 ].map(([role, Destination]) => ({ name: `${role} source overlay`, mutate: (p) => {
   p[role].mounts.push({ Type: "bind", Source: "/unreviewed/source", Destination, RW: false });
 } }));
+const executionOverrides = [
+  { name: "upstream command prefix", mutate: (p) => { p.upstream.Config.Cmd = ["node", "--eval", "process.exit(1)", "/bench/catalog/upstream.mjs"]; } },
+  { name: "upstream matching substituted command and argv", mutate: (p) => {
+    p.upstream.Config.Cmd = ["node", "--eval", "process.exit(1)", "/bench/catalog/upstream.mjs"];
+    p.upstream.Args = [...p.upstream.Config.Cmd];
+  } },
+  { name: "runtime substituted image command", mutate: (p) => { p.runtime.Config.Cmd = ["/unreviewed/app"]; p.runtime.Args = ["/unreviewed/app"]; } },
+  ...["checker", "runtime", "upstream"].flatMap((role) => [
+    { name: `${role} entrypoint override`, mutate: (p) => { p[role].Config.Entrypoint = ["/unreviewed/entrypoint"]; } },
+    { name: `${role} executable path`, mutate: (p) => { p[role].Path = "/unreviewed/executable"; } },
+    { name: `${role} executable arguments`, mutate: (p) => { p[role].Args = ["--eval", "process.exit(1)"]; } },
+  ]),
+];
+
+test("catalog boundary projection retains actual image and container execution without unrelated configuration", () => {
+  const proof = failedFixture().reader.readJson(boundaryFile);
+  const info = proof.upstream;
+  const projected = checkBoundaryEvidence({ ...info, Mounts: info.mounts, NetworkSettings: { Networks: { native: {} } },
+    Config: { ...info.Config, Env: [...info.Config.Env, "UNRELATED=SYNTHETIC_PRIVATE_SENTINEL"],
+      Labels: { ...info.Config.Labels, unrelated: "SYNTHETIC_PRIVATE_SENTINEL" } } });
+  assert.equal(projected.Path, info.Path); assert.deepEqual(projected.Args, info.Args);
+  assert.deepEqual(projected.Config.Entrypoint, info.Config.Entrypoint); assert.deepEqual(projected.Config.Cmd, info.Config.Cmd);
+  assert.deepEqual(imageCommandEvidence({ Config: { ...info.Config, Env: ["SYNTHETIC_PRIVATE_SENTINEL"] } }),
+    { Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd });
+  assert.ok(!JSON.stringify(projected).includes("SYNTHETIC_PRIVATE_SENTINEL"));
+});
 const participantStates = ["runtime", "upstream"].flatMap((role) => [
   ["restart count", (info) => { info.RestartCount = 1; }],
   ["restarting", (info) => { info.State.Restarting = true; info.State.Status = "restarting"; }],
@@ -174,7 +210,7 @@ test("catalog replay rejects every extra mount and unhealthy participant boundar
     { name: `${role} duplicate mount`, mutate: (p) => p[role].mounts.push({ ...p[role].mounts[0] }) },
     { name: `${role} missing mount`, mutate: (p) => p[role].mounts.pop() },
   ]);
-  for (const { name, mutate } of [...overlays, ...mounts, ...participantStates]) await t.test(name, () => {
+  for (const { name, mutate } of [...overlays, ...mounts, ...participantStates, ...executionOverrides]) await t.test(name, () => {
     const f = failedFixture(), proof = JSON.parse(f.files.get(boundaryFile));
     mutate(proof); f.put(boundaryFile, proof);
     assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
@@ -182,7 +218,7 @@ test("catalog replay rejects every extra mount and unhealthy participant boundar
 });
 
 test("catalog saved API and isolated bridge reject source overlays and interrupted participants", async (t) => {
-  for (const { name, mutate } of [...overlays, ...participantStates]) await t.test(name, async () => {
+  for (const { name, mutate } of [...overlays, ...participantStates, ...executionOverrides]) await t.test(name, async () => {
     const f = failedFixture(), proof = JSON.parse(f.files.get(boundaryFile));
     mutate(proof); f.put(boundaryFile, proof);
     const folder = mkdtempSync(join(tmpdir(), "catalog-invalid-boundary-"));

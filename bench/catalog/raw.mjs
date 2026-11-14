@@ -13,14 +13,17 @@ import { verifyK6Provenance } from "../load-tool.mjs";
 export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 export const checkerImage = `mcr.microsoft.com/playwright:v${JSON.parse(readFileSync(new URL("../../package.json", import.meta.url))).devDependencies["@playwright/test"]}-noble`;
+export function imageCommandEvidence(image) {
+  return { Entrypoint: image.Config.Entrypoint, Cmd: image.Config.Cmd };
+}
 // Keep only fields used for replay, never unrelated image environment or health logs.
 export function checkBoundaryEvidence(info) {
-  return { Id: info.Id, Image: info.Image, RestartCount: info.RestartCount,
+  return { Id: info.Id, Image: info.Image, RestartCount: info.RestartCount, Path: info.Path, Args: info.Args,
     networks: Object.keys(info.NetworkSettings?.Networks ?? {}).sort(),
     mounts: info.Mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })),
     State: Object.fromEntries(["Status", "Running", "OOMKilled", "Dead", "Paused", "Restarting", "ExitCode", "Error", "StartedAt", "FinishedAt"].map((key) => [key, info.State[key]])),
     HostConfig: Object.fromEntries(["NanoCpus", "CpusetCpus", "Memory", "NetworkMode"].map((key) => [key, info.HostConfig[key]])),
-    Config: { Cmd: info.Config.Cmd, Labels: { "run.corten.catalog": info.Config.Labels?.["run.corten.catalog"] },
+    Config: { Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd, Labels: { "run.corten.catalog": info.Config.Labels?.["run.corten.catalog"] },
       Env: info.Config.Env?.filter((e) => ["CATALOG_SOURCE", "CATALOG_FIXTURE_PATH", "API_BASE"].includes(e.split("=")[0])) ?? [] } };
 }
 export function containerEvidence(info) {
@@ -64,7 +67,20 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
     assert.equal(info.State.ExitCode, 0); assert.equal(info.State.Error, "");
     assert.ok(Date.parse(info.State.StartedAt) >= Date.parse(summary.startedAt));
   };
+  const execution = (info, image, command = image?.Cmd) => {
+    assert.ok(image && typeof image === "object" && !Array.isArray(image), "image execution observation missing");
+    assert.deepEqual(Object.keys(image).sort(), ["Cmd", "Entrypoint"]);
+    for (const value of [image.Entrypoint, image.Cmd, command]) assert.ok(value === null
+      || Array.isArray(value) && value.every((s) => typeof s === "string" && !s.includes("\0")), "invalid image command observation");
+    assert.deepEqual(info.Config.Entrypoint, image.Entrypoint, "container entrypoint differs from inspected image");
+    assert.deepEqual(info.Config.Cmd, command, "native command differs");
+    const argv = [...(image.Entrypoint ?? []), ...(command ?? [])];
+    assert.ok(argv.length && argv[0].length, "image executable missing");
+    assert.equal(info.Path, argv[0], "container executable differs");
+    assert.deepEqual(info.Args, argv.slice(1), "container executable arguments differ");
+  };
   running(runtime, entry.imageId, "app", 2 ** 30);
+  execution(runtime, entry.imageExecution);
   assert.deepEqual(runtime.networks, [`${summary.runId}-net`]);
   mounts(runtime, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")]);
   assert.equal(containerEvidence(runtime).source, source);
@@ -73,14 +89,14 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   running(upstream, summary.tools.upstream.imageId, "api", 512 * 2 ** 20);
   assert.deepEqual(upstream.networks, [`${summary.runId}-net`]);
   mounts(upstream, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures"), mount(`${checkout}/bench`, "/bench")]);
-  assert.equal(upstream.Config.Cmd.at(-1), "/bench/catalog/upstream.mjs");
+  execution(upstream, summary.tools.upstream.execution, ["node", "/bench/catalog/upstream.mjs"]);
   assert.match(checker.Id, /^[a-f0-9]{64}$/); assert.equal(checker.Image, summary.tools.checker.imageId);
   assert.equal(checker.Config.Labels?.["run.corten.catalog"], summary.runId);
   assert.equal(checker.HostConfig.NanoCpus, budget.load.quota * 1e9);
   assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
   mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
-  assert.deepEqual(checker.Config.Cmd, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${summary.runId}-upstream:8080`, "/results/checks.json"]);
+  execution(checker, summary.tools.checker.execution, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${summary.runId}-upstream:8080`, "/results/checks.json"]);
   assert.equal(checker.State.Status, "exited"); assert.equal(checker.State.Running, false);
   for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(checker.State[key], false);
   assert.equal(checker.State.ExitCode, failed ? 1 : 0); assert.equal(checker.State.Error, "");
@@ -125,7 +141,8 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
     if (gated) assert.deepEqual(entry.failures ?? [], []);
     assert.match(entry.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(entry.imageBytes) && entry.imageBytes > 0);
-    assert.deepEqual(readJson(`image-${app}.json`), { imageId: entry.imageId, imageBytes: entry.imageBytes, commit, built: true });
+    assert.deepEqual(readJson(`image-${app}.json`), { imageId: entry.imageId, imageBytes: entry.imageBytes, commit, built: true,
+      ...(entry.imageExecution === undefined ? {} : { execution: entry.imageExecution }) });
     assert.ok(readText(`build-${app}.log`).length, "missing native build log");
     for (const source of summary.group.sources) {
       const base = `${source}/${app}`;

@@ -427,7 +427,10 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
    additionally retains inspected checker/app/upstream identities, CPU/memory/source settings
    and checker terminal state. Catalog requires each role's entire exact native mount set
    (no extra binds or image volumes), zero participant restarts and normal running,
-   nonpaused/nonrestarting/error-free app/upstream observations; JSON binds actual child exit/clock plus its existing runtime
+   nonpaused/nonrestarting/error-free app/upstream observations. All three roles retain
+   actual image command configuration and container entrypoint/executable/arguments;
+   replay requires inherited image execution and the entire fixed checker/upstream
+   command, not just its script suffix. JSON binds actual child exit/clock plus its existing runtime
    and upstream observations. Every selected app/source/payload is still attempted. Native
    owned-resource cleanup and all existing source/image/configuration gates remain mandatory.
    A single proven negative gates timing for the whole group; healthy peers remain passed
