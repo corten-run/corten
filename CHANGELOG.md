@@ -9,7 +9,11 @@ Corten is pre-1.0, so any minor version may change the API.
   exact source and provider identity. Preserve native group defaults and complete
   contenders; permit only exact reserved sibling hosts, require room for the whole
   fleet, and keep single-group evidence distinct from a completed official round.
-  Existing all-group reservations and uncertain-host recovery remain separate.
+  Run controllers on isolated parallel worker event loops from verified source
+  snapshots, collect each host independently, and replay the full roster read-only.
+  Match failed inspections to the exact reserved selection before cleanup.
+  Existing all-group reservations and uncertain-host recovery remain separate;
+  local workload verification files run serially without changing measurements.
 
 - Retry entire host-lifetime snapshots for comm-only bookend changes within the
   existing three-attempt budget. Every accepted identity must still match in full;

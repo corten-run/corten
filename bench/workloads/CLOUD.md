@@ -44,6 +44,51 @@ The existing account, source, process-settlement, archive and deletion gates rem
 mandatory independently for every host. No host is retried or adopted after an
 ambiguous create/start.
 
+`fleet.mjs` is the complete-registry operator entry. Its root is a fresh physical
+directory outside the checkout, separate from legacy reservations. Preparation
+uses only local Git and exclusively saves `fleet-ROUND.json`; it neither allocates
+a host nor authorizes execution:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --prepare --commit SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+Preparation returns 3 with a saved roster. A preview cannot execute: independently
+review its exact source, physical root, complete roster and every contained child
+subject before supplying the batch approval. Source review and merged native
+readiness remain prerequisites; never automatically feed a preview into execution.
+The launch intent is durable before any child starts and prevents a second launch,
+including after partial failure. Each child has an independent state directory,
+operation lock, private credential worker and remote systemd unit.
+
+Each production controller runs on a separate worker event loop, so synchronous
+SSH/SCP calls do not serialize group launches. Worker entry and dependency modules
+execute captured, hash-checked source bytes with a deny-unlisted loader. Batch
+approval binds that executable closure. The parent propagates cancellation to all
+children and keeps its lock until every worker exits; uncertainty retains the lock.
+It never terminates a possibly mutating child merely to make a timeout look clean.
+
+Collection reuses only saved identities and independently collects terminal hosts:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --collect --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --collect --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit SHA
+```
+
+Missing, ambiguous or locked child state stays visible and never triggers another
+launch. Both successful and failed native inspections must match the host's exact
+reserved selection before cleanup. Batch receipts are diagnostics, not proof.
+The read-only fleet verifier replays every saved native archive, rechecks its
+immutable hashes and confirmed cleanup, and requires unique host identities for
+the entire roster. Its intrinsic `verified` status is not publication approval:
+`publishableBaseline` remains false until the separate review/results workflow
+qualifies and merges the evidence. Preparation/preview return 3; execution returns
+0 for all collected verified groups, 1 for terminal incomplete evidence, 3 while
+groups remain pending and 2 for control errors. No code means full-round readiness.
+
 A launch census permits only the exact names, ownership tags, sizes and regions
 of reserved siblings. An unrelated benchmark host still blocks allocation. The
 account must have room for the entire remaining roster, not just the next host.
