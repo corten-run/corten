@@ -21,6 +21,13 @@ or remove Corten's features to manufacture parity.
 
 ## Implementation status
 
+The [grouped cloud controller](CLOUD.md) and [single-host campaign procedure](isolated/CAMPAIGN.md)
+describe the complete registry campaign, its sequential native entries, independent source-audit
+waits and terminal-only evidence collection. They are separate from the legacy marketplace
+schedule and the per-group development commands below. Exact merged-source review, native
+producer/validator integration and host-readiness gates remain mandatory before allocation;
+an implemented controller or a passing portable suite is not a completed benchmark.
+
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate
 measured journey on correctness. Its defaults are bounded local verification,
