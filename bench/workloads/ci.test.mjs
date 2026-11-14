@@ -1,7 +1,7 @@
 // CI coverage checks, not native workload qualification.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 
 const root = new URL("../../", import.meta.url);
@@ -37,10 +37,19 @@ test("evidence suites cover isolated adapters, record failures and portable brow
   const scripts = packageJSON.scripts;
   const core = scripts["check:groups:evidence:core"], contracts = scripts["check:groups:evidence:contracts"];
   const browser = scripts["check:groups:evidence:browser"];
-  for (const path of ["bench/workloads/isolated/*.test.mjs", "bench/workloads/isolated/adapters/*.test.mjs"]) assert.ok(core.includes(path));
+  assert.ok(core.includes("bench/workloads/isolated/adapters/*.test.mjs"));
   for (const path of ["bench/catalog/record-attempt.test.mjs", "bench/json-api/*.test.mjs"]) assert.ok(contracts.includes(path));
   for (const leaf of ["evidence", "source", "responses", "execution", "lifetimes"]) assert.ok(contracts.includes(`bench/fullstack-browser/native-${leaf}.test.mjs`));
   for (const seam of ["runner", "qualification", "transports", "binding-dispatch", "binding-effects", "binding-window", "browser", "capture", "resources", "row7", "ledger", "lifecycle", "lifecycle-proof", "verify"]) assert.ok(browser.includes(`bench/fullstack-browser/${seam}.test.mjs`));
-  assert.ok(browser.includes("native binding-clock journal"));
+  assert.ok(browser.includes('--test-name-pattern="^(?!retained real w28 )"'));
   assert.ok(browser.includes(" && node --test "));
+});
+
+test("portable core selection excludes delegated-kernel controls but cannot omit another test file", () => {
+  const command = packageJSON.scripts["check:groups:evidence:core"];
+  assert.ok(!command.includes("bench/workloads/isolated/*.test.mjs"));
+  assert.ok(!command.includes("host-lifetime-linux.test.mjs"));
+  const files = readdirSync(new URL("bench/workloads/isolated/", root))
+    .filter((name) => name.endsWith(".test.mjs") && name !== "host-lifetime-linux.test.mjs");
+  for (const file of files) assert.ok(command.includes(`bench/workloads/isolated/${file}`), `portable test missing from CI: ${file}`);
 });
