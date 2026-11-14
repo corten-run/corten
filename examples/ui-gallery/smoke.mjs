@@ -182,6 +182,50 @@ const chosenUnderPointer = async (/** @type {import("@playwright/test").Page} */
 /** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
 const tabTypeIsTheThemes = (t) =>
   t.primary !== t.foreground && t.kit.every((s) => s === `500 500 ${t.foreground}`) && t.themed.every((s) => s === `600 600 ${t.primary}`);
+// Kit Checkbox, Radio and Switch: the label is the whole click and tap target, so one line of it is
+// a control's height, --control-height, the kit's 2.25rem and a theme's 44 px (2.75rem) alike, with
+// the box on the line's middle, and on the first line's middle when the label wraps (#1388). For
+// the labels `selector` finds: each one's height in rem with the kit's theme and with a theme that
+// sets 2.75rem, and under that theme how far the box's middle is from the label's (px), and a copy
+// whose label wraps: its height in rem, and how far its box is from where the one-line label has it,
+// from the label's top (px).
+const choiceTargets = (/** @type {string} */ selector) => {
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  const labels = /** @type {HTMLElement[]} */ (Array.from(document.querySelectorAll(selector)));
+  const box = (/** @type {Element} */ l) => /** @type {Element} */ (l.querySelector(":scope > input")).getBoundingClientRect();
+  const heights = () => labels.map((l) => l.getBoundingClientRect().height / rem);
+  const kit = heights();
+  const theme = new CSSStyleSheet();
+  theme.replaceSync(":root { --control-height: 2.75rem; }");
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+  const touch = heights();
+  const centered = labels.map((l) => {
+    const [b, t] = [box(l), l.getBoundingClientRect()];
+    return (b.top + b.bottom) / 2 - (t.top + t.bottom) / 2;
+  });
+  const wraps = labels.map((l) => {
+    const copy = /** @type {HTMLElement} */ (l.cloneNode(true));
+    for (const name of ["name", "id", "required"]) copy.querySelector("input")?.removeAttribute(name);
+    const text = /** @type {HTMLElement} */ (copy.querySelector(":scope > span"));
+    text.textContent = "A label long enough to wrap onto lines of its own";
+    // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+    copy.style.width = "8rem";
+    document.body.append(copy);
+    const [b, t, one, oneLabel] = [box(copy), copy.getBoundingClientRect(), box(l), l.getBoundingClientRect()];
+    copy.remove();
+    return { height: t.height / rem, off: b.top - t.top - (one.top - oneLabel.top) };
+  });
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  return { kit, touch, centered, wraps };
+};
+/** @param {{ kit: number[], touch: number[], centered: number[], wraps: { height: number, off: number }[] }} t */
+const choiceTargetsFit = (t) =>
+  t.kit.length > 0 &&
+  t.kit.every((h) => Math.abs(h - 2.25) < 0.02) &&
+  t.touch.every((h) => Math.abs(h - 2.75) < 0.02) &&
+  t.centered.every((off) => Math.abs(off) <= 0.5) &&
+  // Two lines or more under the 2.75rem theme's padding: 1.25rem each, and .75rem around them.
+  t.wraps.every((w) => w.height >= 3.99 && Math.abs(w.off) <= 0.5);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -1430,6 +1474,12 @@ async function run(browser) {
     "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
     choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
     JSON.stringify(choiceSpacing),
+  );
+  const boxTargets = await page.evaluate(choiceTargets, "label[class*='checkbox__checkbox'], label[class*='radio-group__radio']");
+  check(
+    "Checkbox and Radio: the label, the whole target, is --control-height on one line (the kit's and a 44 px theme's), its box on the first line's middle when it wraps",
+    boxTargets.kit.length === 5 && choiceTargetsFit(boxTargets),
+    JSON.stringify(boxTargets),
   );
   const tabsType = await page.evaluate(tabType, [
     ["[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]", "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"false\"]"],
@@ -4779,6 +4829,12 @@ async function run(browser) {
     "Switch: drawn as a switch only with role=switch",
     drawnSwitch.role.appearance === "none" && drawnSwitch.role.width > 20 && drawnSwitch.plain.appearance === "auto" && drawnSwitch.plain.width < 20,
     JSON.stringify(drawnSwitch),
+  );
+  const switchTargets = await orders.evaluate(choiceTargets, "label[class*='switch__switch']");
+  check(
+    "Switch: the label, the whole target, is --control-height on one line (the kit's and a 44 px theme's), the switch on the first line's middle when it wraps",
+    switchTargets.kit.length === 1 && choiceTargetsFit(switchTargets),
+    JSON.stringify(switchTargets),
   );
   await orders.getByLabel("Ship from").selectOption("toronto");
   await orders.getByRole("switch", { name: "Email me when an order ships" }).uncheck();

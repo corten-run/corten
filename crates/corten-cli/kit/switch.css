@@ -1,9 +1,12 @@
 /* corten ui {{version}}: switch */
 /* Only a checkbox with role="switch" is drawn as one: without the role, a screen reader says
    "checkbox", so it is left to the browser's own checkbox look. */
-.switch { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
+/* The label is the whole target: its block padding is what one line leaves of --control-height, so
+   one line is a control's height (a 44 px touch target under a theme that sets it so), and the switch
+   sits on the first line's middle when the label wraps. */
+.switch { display: inline-flex; align-items: start; gap: .5rem; padding-block: max(0px, (var(--control-height) - 1.25rem) / 2); font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .switch > input[role="switch"] {
-  appearance: none; flex: none; display: inline-flex; align-items: center; margin: 0; padding: 1px;
+  appearance: none; flex: none; display: inline-flex; align-items: center; margin: .05rem 0; padding: 1px;
   width: 2rem; height: 1.15rem; border: 1px solid transparent; border-radius: 999px;
   background: var(--input); cursor: inherit; transition: background-color .15s;
 }
