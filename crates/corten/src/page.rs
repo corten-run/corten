@@ -1192,7 +1192,7 @@ impl Req {
             write,
             fetched,
             fills: !shared.layout_reads.is_empty()
-                && (extensions.get::<crate::layout::StartHere>().is_some() || signal.head_kept()),
+                && (signal.head_kept() || extensions.get::<crate::layout::StartHere>().is_some()),
             shared,
             signal,
         }
@@ -2705,8 +2705,7 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // that page draws and is filled (`layout::kept_for_its_page`). A patch or a redirect starts none, and
     // its error page is a swap of `<main>`, which draws none.
     if action_write {
-        signal.mark_action_write(until);
-        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
+        return page_or_error(shared, req, next.late(until), deadline, signal, (mode, fetched)).await;
     }
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());

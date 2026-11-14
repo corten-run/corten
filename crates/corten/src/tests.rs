@@ -14363,11 +14363,17 @@ mod layout_reads {
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
         // A route of Corten's own takes `Req`, which starts the reads before its answer is known.
-        let routes = Table::new().route("/", get(for_all));
-        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
-        let (status, headers, body) = call(router, "GET", None).await;
+        let routes = Table::new().route("/", get(for_all).post(for_all));
+        let count = CartCount::default();
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).layout_read(SignedIn).router();
+        let (status, headers, body) = call(router.clone(), "GET", None).await;
         assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
         assert!(headers[http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+        // A write's own page in an action, whose reads would start after the handler (#1370).
+        let (status, _, body) = call_with(router, "POST", "/", Some("action"), None).await;
+        assert!(status.is_success() && body.contains("<header>") && !body.contains("count"), "{body}");
+        assert!(!body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "only the GET's route of Corten's own started it");
     }
 
     /// A count whose view panics.
@@ -14813,23 +14819,26 @@ mod layout_reads {
 
     #[crate::routes]
     mod wrapped_url {
-        #[route("/wrapped", get = wrapped)]
+        #[route("/wrapped", get = wrapped, post = wrapped)]
         pub struct Wrapped;
     }
 
     /// A page from an answer type that does not say it is one starts no read: a debug build says
-    /// why rather than draw the layout without its values.
+    /// why rather than draw the layout without its values. So does a write's own page from it, in
+    /// an action too, whose reads start after the handler (#1370).
     // A debug build's check.
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
         let count = CartCount::default();
         let router = App::new(wrapped_url::router()).layout_read(count.clone()).layout_read(SignedIn).dev(false).router();
-        let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        // Named where a router test, with no logger and outside `corten dev`, sees it.
-        assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
-        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        for (method, mode) in [("GET", None), ("POST", None), ("POST", Some("action"))] {
+            let (status, _, body) = call_with(router.clone(), method, "/wrapped", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {mode:?}: {body}");
+            // Named where a router test, with no logger and outside `corten dev`, sees it.
+            assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 0, "{method} {mode:?}");
+        }
     }
 
     #[cfg(debug_assertions)]

@@ -1868,6 +1868,12 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
     }
+    // A page with places from a route whose answer type says it is not one: a write's own page,
+    // filled after its handler, starts no read for it, as such a route's `GET` does not
+    // (`crate::layout::fill_after`). Also a constant for a page route.
+    if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
+        res.extensions_mut().insert(crate::layout::NotAPageAnswer);
+    }
     res
 }
 
@@ -1884,13 +1890,6 @@ where
         // after the middleware, beside the handler's own reads.
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
             here.arrive(&mut req, O::PAGE, self.shared);
-        }
-        // A write the runtime sent whose answer is `Public` or not a page draws no read
-        // (`crate::layout::kept_for_its_page`), as no read is started for such a `GET`.
-        if (!O::PAGE || self.shared) && !matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
-            if let Some(signal) = req.extensions().get::<crate::Signal>() {
-                signal.keep_head(false);
-            }
         }
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.

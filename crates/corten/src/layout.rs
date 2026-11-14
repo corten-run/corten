@@ -530,34 +530,38 @@ pub(crate) async fn fill_after(
         return res;
     }
     let here = StartHere::new(shared, until);
-    here.lock().kept = Some(kept);
+    {
+        let mut here = here.lock();
+        here.kept = Some(kept);
+        if res.extensions().get::<NotAPageAnswer>().is_some() {
+            here.state = State::NotAPage;
+        }
+    }
     here.fill(res).await
 }
+
+/// On a page with places whose route's answer type says it is not a page (`Answer::PAGE`): no
+/// read is started for it, as none is for such a route's `GET` ([`fill_after`]).
+#[derive(Clone, Copy)]
+pub(crate) struct NotAPageAnswer;
 
 /// On a write the runtime sent (`Mode::Action`) in an app with layout reads, whose own page is
 /// whole (#1370), as its route is called: the request's head, kept for the page the handler may
 /// answer with, and the app and deadline its reads need. Nothing runs beside the handler, whose
 /// reads must see what it wrote, and nothing is started for a patch, a redirect or an error, which
 /// answer with no page; the route keeps the head only because `HtmlResult` does not say which it
-/// answers. A `Public` or JSON route's page draws no read (`Signal::keep_head`). None for any
-/// other request, which pays one look at its method; the mark is the request's `Signal`, so its
-/// extensions stay within their first allocation.
-#[inline]
+/// answers. A `Public` answer, or a page from a route whose answer type is not one, starts no read
+/// ([`NotAPageAnswer`]). No other
+/// request comes here (`page::render_errors` says which do, as the route's `Next`); the mark the
+/// route reads is the request's `Signal`, so its extensions stay within their first allocation.
+#[inline(never)]
 pub(crate) fn kept_for_its_page(
     req: &mut crate::http::Request,
+    until: Option<tokio::time::Instant>,
 ) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
-    if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
-        return None;
-    }
-    keep(req)
-}
-
-#[inline(never)]
-fn keep(req: &mut crate::http::Request) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
     let signal = req.extensions().get::<crate::Signal>()?;
-    let until = signal.action_write()?;
     let shared = signal.shared()?.clone();
-    signal.keep_head(true);
+    signal.keep_head();
     let (parts, body) = std::mem::take(req).into_parts();
     let kept = parts.clone();
     *req = crate::http::Request::from_parts(parts, body);
