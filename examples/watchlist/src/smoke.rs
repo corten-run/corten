@@ -1,6 +1,7 @@
 //! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::for_the_smoke`):
 //! a live stream whose one event is larger than a page's usual patch and is followed by nothing, and
-//! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it.
+//! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
+//! argument and as the value an element gives its ref.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -15,7 +16,8 @@ pub mod url {
     #[route("/smoke/live/large", get = large)]
     pub struct LargeLive;
 
-    /// A handler given text and a JSON value that have an apostrophe, quotes, `&` and `<` in them.
+    /// A handler given text and a JSON value that have an apostrophe, quotes, `&` and `<` in them,
+    /// and elements with the text or a `bool` each gives its ref.
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
 }
@@ -30,10 +32,25 @@ const QUOTED: &str = r#"It's "<b>" & more"#;
 #[derive(Id)]
 struct QuotedId;
 
-/// Writes what its handler was given into the page, for the test to compare.
+/// Writes what its handler was given into the page, for the test to compare: the arguments, and
+/// each item with the text and the `bool` it gives its refs (`ref={said.with(..)}`), which
+/// reach the script as a string and a boolean.
 #[component(js)]
 fn Quoted() -> impl Render {
-    html! { <output id={QuotedId} on:connect={js::show(target, QUOTED, [QUOTED])}></output> }
+    let (said, held) = refs();
+    html! {
+        <div>
+            <output id={QuotedId} on:connect={js::show(target, QUOTED, [QUOTED], said, held)}></output>
+            <ul>
+                <li ref={said.with(QUOTED)}>{QUOTED}</li>
+                <li ref={said.with("plain")}>"plain"</li>
+            </ul>
+            <ul>
+                <li ref={held.with(true)}>"on"</li>
+                <li ref={held.with(false)}>"off"</li>
+            </ul>
+        </div>
+    }
 }
 
 async fn quoted(req: Req) -> HtmlResult {

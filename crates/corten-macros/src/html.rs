@@ -1169,6 +1169,9 @@ impl Cursor {
                     if lower == "data-ref" || lower == "data-on" || lower == "data-scope" {
                         return err(span, "data-ref, data-on and data-scope are printed by Corten: write ref={rows} (with let (rows) = refs();) or on:click={js::show(rows)}");
                     }
+                    if lower == "data-ref-value" {
+                        return err(span, "data-ref-value is printed by Corten: give the value with the element's ref, ref={row.with(cents)}, and take it in the handler as a Map<El, number> (or string, boolean)");
+                    }
                     if lower == "style" && name != "style" {
                         return err(span, format!("write style, not {name}: style={{FILL.pct(42.0)}} is checked only as style"));
                     }

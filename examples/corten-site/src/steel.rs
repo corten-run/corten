@@ -352,7 +352,7 @@ pub(crate) fn Answer<'a>(here: Here<'a>, t: Msg) -> impl Render {
                     for (name, note) in HEADERS {
                         <div class={Head}>
                             <dt class={Name}>{name}</dt>
-                            <dd ref={value} class={Value} data-header={name}></dd>
+                            <dd ref={value.with(name)} class={Value}></dd>
                             <dd class={Note}>{note}</dd>
                         </div>
                     }
