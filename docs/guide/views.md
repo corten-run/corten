@@ -351,7 +351,11 @@ runs beside the handler of such a write, and one that answers a patch or a redir
 value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
 it as it draws that page, swapping in `<main>` and each element around it that changed, in the same
 document and at the same address; until it is in, a navigation reads the whole page, so one that
-leaves it on its way still shows what the write changed. Only a `GET` form's page (a search) is
+leaves it on its way still shows what the write changed. With two writes out at once, the page of
+one draws what the other changed only if the other was answered before it was asked for, so until
+the other's page is in too, a navigation still reads the whole page. A page the app's or an area's
+middleware makes with `Req` in the route's place (a sign-in page) is filled the same way, after the
+middleware, from the request's head as it had it. Only a `GET` form's page (a search) is
 `<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer
 costs the layout's markup and its reads; a page that differs from the one on screen in more than
 such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and

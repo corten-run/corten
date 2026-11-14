@@ -463,8 +463,12 @@ Corten is pre-1.0, so any minor version may change the API.
   where its `<main>` swap took 23,042 (two layout reads), 25,173 where it took 22,794 without
   reads; a patch in an app with layout reads takes 26,562 where it took 21,556 (its route keeps a
   copy of the request's head for a page it may answer with), and one in an app without them
-  21,487 where it took 21,382. The runtime is 93 bytes larger with gzip. A read an `Ahead` starts
-  before the handler may not see the write. **Breaking:** an app that skips a layout value of its own when
+  21,487 where it took 21,382 (counted before a page a middleware makes was filled too). The
+  runtime is 190 bytes larger with gzip. A read an `Ahead` starts
+  before the handler may not see the write. With two writes out at once, the page drawn first
+  stands only for the writes answered before it was asked for, so the next navigation still reads
+  the whole page until the other's is in; a page the app's or an area's middleware makes with `Req`
+  in the route's place is filled too. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; skip it only for a `GET`
   (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does

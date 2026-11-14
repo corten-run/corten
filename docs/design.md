@@ -3470,7 +3470,12 @@ rules something out.
     the runtime applies it with the comparison it runs on the page a write redirects to
     ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
     changed, in the same document. Until it is in, every navigation reads the whole page, as after a
-    write that redirects, so one that leaves it on its way still shows what the write changed. A
+    write that redirects, so one that leaves it on its way still shows what the write changed. The
+    runtime keeps the writes whose change no layout has drawn, numbered as their answers come, and a
+    page's layout stands for those answered before it was asked for and the write it answers: with
+    two writes out, the page drawn first leaves the other's change to the next whole page. A page
+    the app's or an area's middleware makes with `Req` in the route's place is filled after the
+    middleware, from the head that `Req` was taken with, as a plain write's is. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
@@ -3496,8 +3501,10 @@ rules something out.
     layout reads takes 26,562 instructions where it took 21,556 (callgrind puts about 3,450 in the
     copy and its drop, the rest in the boxed fill around the route, which a whole document's `GET`
     pays too); in an app without them a patch takes 21,487 where it took 21,382 (by reasoning, not a
-    profile, the mark carried through the middleware's futures). The runtime is 341 bytes larger
-    raw, 93 with gzip (15,069 to 15,162) and 80 with brotli. A `GET` form and a navigation pay
+    profile, the mark carried through the middleware's futures); these are the counts before a page a
+    middleware makes was filled too, which adds a check of one atomic to a write's `Req` and, only
+    for a `Req` taken before the route, a copy of the head. The runtime is 572 bytes larger raw and
+    190 with gzip (15,069 to 15,259) with the writes it numbers. A `GET` form and a navigation pay
     nothing.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`, the
@@ -3512,12 +3519,19 @@ rules something out.
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
     whose page is too costly to draw again), which would reopen markers on the places; or a route's
     answer type says it answers patches alone, when its route need not keep the head; or the
-    patch's cost in an app with layout reads grows past 10% of a write's handler time measured in a
-    real app.
+    instructions a patch pays over the base in an app with layout reads
+    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit
+    before the change) pass 10% of what the watchlist's watch costs in process
+    (`what_a_watch_costs`: a real write's handler answering with its patch, a lower bound since it
+    has no I/O). Neither count has been taken on the change as it now is: the second harness was
+    added with the late fill, and the Linux machine that runs callgrind was down.
 
     Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `e59c32c28` with the harness test added
     against `934c94367` (earlier rounds: `e760a5385` and `de46e974b` against the change as it was),
-    and the runtime's size on `de46e974b` against the change.
+    and the runtime's size on `de46e974b` against the change; 2026-11-14, the runtime's size on
+    `1f449f98a` (15,259 bytes with gzip, 97 more for numbering the writes a layout draws), and the
+    two-write race and a middleware's page by the watchlist smoke in Chromium and the crate's tests
+    on `1f449f98a`, whose request path (the late fill) was not counted again.
 
 ## Rules
 

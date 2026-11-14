@@ -532,7 +532,7 @@ mod tests {
     /// answered with its patch (the prices and the form), `WRITE_REQUESTS` (200) times, one at a
     /// time. Counting it under callgrind at two numbers of requests gives the instructions per
     /// request, the write the cost a write pays in an app with layout reads is set against (#1370,
-    /// design Choice 49). Run in release:
+    /// docs/design.md#choice-write-own-page-whole). Run in release:
     /// `WRITE_REQUESTS=200 cargo test --release -p watchlist -- --ignored what_a_watch_costs`
     #[test]
     #[ignore]
