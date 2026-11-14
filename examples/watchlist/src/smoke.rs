@@ -1,7 +1,7 @@
 //! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::for_the_smoke`):
-//! a live stream whose one event is larger than a page's usual patch and is followed by nothing, and
-//! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
-//! argument and as the value an element gives its ref.
+//! a live stream whose one event is larger than a page's usual patch and is followed by nothing, a
+//! page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an argument
+//! and as the value an element gives its ref, and a write that answers with its own page.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -20,6 +20,12 @@ pub mod url {
     /// and elements with the text or a `bool` each gives its ref.
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
+
+    /// A form whose write answers with its own page, as a form drawn again with what it refused
+    /// does: the page is whole with JavaScript too, so the runtime draws what the write changed
+    /// around `<main>` (#1370).
+    #[route("/smoke/written", get = unwritten, post = written)]
+    pub struct Written;
 }
 
 /// The components the smoke's pages draw.
@@ -75,6 +81,28 @@ fn LargeList() -> impl Render {
             }
         </ul>
     }
+}
+
+async fn unwritten(req: Req) -> HtmlResult {
+    written_page(&req, false)
+}
+
+async fn written(req: Req) -> HtmlResult {
+    written_page(&req, true)
+}
+
+/// The form, and once it is sent the write's own page, in the layout the smoke's other pages draw.
+fn written_page(req: &Req, written: bool) -> HtmlResult {
+    req.page(html! {
+        <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head="">
+            <form method="post" action={url::Written} data-patch>
+                if written {
+                    <p>"Written by the form's own page."</p>
+                }
+                <button>"Write"</button>
+            </form>
+        </Layout>
+    })
 }
 
 /// One large event and then nothing: the browser must show it without more of the stream coming.

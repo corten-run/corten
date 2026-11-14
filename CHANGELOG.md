@@ -314,6 +314,24 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A `data-patch` write that answers with its own page (`req.page` for a method other than `GET`
+  or `HEAD`, a form drawn again with what it refused, a partial result) gets the whole document
+  with JavaScript too, its layout reads started and `give` honored, and the runtime draws it as the
+  page a write redirects to: `<main>` and each element around it that changed, in the same
+  document. A layout value the write changed (a cart count) is now current with JavaScript as
+  without; before, only `<main>` was swapped and the count kept its value from before the write. A
+  `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
+  answer must change one answers its page
+  ([design Choice 47](docs/design.md#choice-write-own-page-whole)). Measured against `main` with
+  callgrind: such a write takes 59,222 instructions where its `<main>` swap took 23,034 (two layout
+  reads), 25,089 where it took 22,786 without reads; a patch in an app with layout reads takes
+  29,867 where it took 21,549, and one in an app without them is unchanged. The runtime is 101
+  bytes larger raw and 45 with gzip. **Breaking:** an app that skips a layout value of its own when
+  `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
+  page, which the runtime then shows; skip it only for a `GET`
+  (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does
+  ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+
 - The app `corten new` writes posts its form to the page's own route
   (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
   with no `GET`, where a browser without JavaScript was left at an address that answers 405 when

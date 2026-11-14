@@ -3650,6 +3650,48 @@ async function run(browser) {
     check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
     await whole.context().close();
   }
+  // A write that answers with its own page (a form drawn again with what it refused) gets it whole,
+  // as the page a write redirects to is, so what the write changed around <main> is drawn, in the
+  // same document and at the same address (#1370). The stand-in changes the brand in the server's
+  // answer, as for the write's page above, so the write has something to change in the layout.
+  {
+    const own = await (await browser.newContext()).newPage();
+    let asked = "";
+    /** @type {Record<string, string>} */
+    let answered = {};
+    await own.route(
+      (url) => url.pathname === "/smoke/written",
+      async (route) => {
+        asked = route.request().headers().corten ?? "-";
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        answered = res.headers();
+        const headers = { ...answered };
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        const body = (await res.text()).replace(">Watchlist</span>", ">Watchlist, written</span>");
+        await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+      },
+    );
+    await own.goto(`${base}/smoke/written`);
+    await own.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
+    await own.click("main form button");
+    const drawn = await own
+      .waitForFunction(() => document.querySelector("main")?.textContent?.includes("Written by the form's own page.") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .then(() => true, () => false);
+    const shown = await own.evaluate(() => ({
+      brand: document.querySelector("header span")?.textContent,
+      same: (/** @type {any} */ (window)).__marker === 1,
+      path: location.pathname,
+      title: document.title,
+    }));
+    check(
+      "a write's own page is whole, and what the write changed around <main> is drawn in the same document",
+      drawn && asked === "action" && !("corten-page" in answered) && "corten-shell" in answered && shown.brand === "Watchlist, written" && shown.same && shown.path === "/smoke/written" && shown.title === "Written | Watchlist",
+      JSON.stringify({ drawn, asked, page: answered["corten-page"] ?? null, shown }),
+    );
+    await own.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();

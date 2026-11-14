@@ -29,12 +29,13 @@ use crate::view::Render;
 /// load, a reload, the page a write redirects to), after the app's and the area's middleware, so it
 /// runs beside the handler's own reads, and draws its [`LayoutRead::view`] where the layout put
 /// [`later`] once the handler has answered, before the app's middleware sees the page. A client
-/// navigation or a form the runtime submits keeps the layout the page has, so the read is not
-/// started for it; neither is it for a `HEAD`, an API, a data client, a route that answers
-/// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
-/// page is the same for everyone, so it draws no one's value. A write that draws a page rather
-/// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered. The error page for a failure Corten finds the request at fault for (an unknown
+/// navigation, a `GET` form the runtime submits and a patch keep the layout the page has, so the
+/// read is not started for them; neither is it for a `HEAD`, an API, a data client, a route that
+/// answers something other than a page (a file, text, JSON) or Corten's own paths. A
+/// [`crate::Public`] page is the same for everyone, so it draws no one's value. A write that draws
+/// its own page rather than redirect (a refused form, a partial result), with JavaScript or without,
+/// answers it whole and starts the reads its page draws once it has answered, so the runtime draws
+/// what the write changed around `<main>`. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, the router's `501` for a method no route in the app has, a refusal
 /// other than a 429 by an extractor or by the handler's own `Refused` (a 429 slows a client
 /// down), a request that does not parse) starts the reads not started yet and waits for them as a
@@ -514,6 +515,9 @@ struct Here {
     gives: &'static [fn() -> TypeId],
     /// The values a filled page gave itself, kept for an error page made of it.
     given: Vec<Gift>,
+    /// A write the runtime sent (`Mode::Action`): its own page is filled, and its error page, a
+    /// swap of `<main>` alone, starts none.
+    action: bool,
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
@@ -527,7 +531,7 @@ fn names(gives: &[fn() -> TypeId], id: TypeId) -> bool {
 }
 
 impl StartHere {
-    pub(crate) fn new(shared: Arc<crate::page::Shared>, until: Option<tokio::time::Instant>) -> Self {
+    pub(crate) fn new(shared: Arc<crate::page::Shared>, until: Option<tokio::time::Instant>, action: bool) -> Self {
         StartHere(Arc::new(Mutex::new(Here {
             shared,
             until,
@@ -537,6 +541,7 @@ impl StartHere {
             error_waits: false,
             gives: &[],
             given: Vec::new(),
+            action,
         })))
     }
 
@@ -580,7 +585,7 @@ impl StartHere {
     /// A `HEAD` starts none, and a request whose answer was `Public` stays refused.
     pub(crate) fn at_error_page(&self, parts: &mut Parts, waits: bool) {
         let mut here = self.lock();
-        if !waits || parts.method == http::Method::HEAD {
+        if !waits || parts.method == http::Method::HEAD || here.action {
             return;
         }
         here.error_waits = true;

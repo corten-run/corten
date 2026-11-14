@@ -17,7 +17,7 @@ use std::{
 /// one that does not cannot draw the count, and none joins the read with its own by hand.
 ///
 /// ```
-/// use corten::{extract::FromRequestParts, http::request::Parts, prelude::*, Ahead};
+/// use corten::{extract::FromRequestParts, http::{request::Parts, Method}, prelude::*, Ahead};
 ///
 /// #[derive(Clone)]
 /// struct Carts;
@@ -32,8 +32,9 @@ use std::{
 ///     type Rejection = std::convert::Infallible;
 ///
 ///     async fn from_request_parts(parts: &mut Parts, carts: &Carts) -> Result<Self, Self::Rejection> {
-///         if Mode::of(&parts.headers).swaps() {
-///             return Ok(Chrome { cart: Ahead::ready(None) }); // the runtime keeps the header
+///         // The runtime keeps the header for a swap, but a write's own page is whole.
+///         if Mode::of(&parts.headers).swaps() && parts.method == Method::GET {
+///             return Ok(Chrome { cart: Ahead::ready(None) });
 ///         }
 ///         let carts = carts.clone();
 ///         Ok(Chrome { cart: Ahead::start(async move { Some(carts.count().await) }) })

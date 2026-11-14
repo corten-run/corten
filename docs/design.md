@@ -390,8 +390,9 @@ rules something out.
    title for a data client; the title, head tags and `<main>` for a navigation), so a layout
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
-   same bytes). The one navigation that reads the whole document is the one after a `data-patch`
-   write that redirects, so what the write changed in the layout is drawn as a full load draws it.
+   same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
+   write, the page it redirects to and its own ([Choice 47](#choice-write-own-page-whole)), so what
+   the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
    to the shell key: a key would turn every link across sections into a full load, and a layout
@@ -3184,6 +3185,59 @@ rules something out.
     and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
     card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
     `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
+
+47. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
+    redirects to; a patch does not fill a layout read.** A `data-patch` write that answers with its
+    own result (a form drawn again with what it refused, a bulk add whose failed lines the page
+    lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
+    alone, and a patch carries elements by id where a read's view, drawn at two places, has none. So
+    the shell's count was right without JavaScript and stale with it, the split
+    [#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/corten-run/corten/issues/538)
+    closed for a write that redirects
+    ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+    Now a write's `req.page` (any method but `GET` and `HEAD`) is the whole document with
+    JavaScript as without: the layout reads start as for a document write, `give` is honored, and
+    the runtime applies it with the comparison it runs on the page a write redirects to
+    ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
+    changed, in the same document. A `GET` form's page stays `<main>` alone, as a navigation's,
+    since a `GET` changes nothing the layout shows. A page whose frame differs swaps `<main>` alone
+    and the next navigation reads the whole page; it cannot load in full, as the redirect's page
+    does, since loading the address would not draw the write's answer.
+
+    Not chosen: a patch that gives a value (`req.patch(..)?.give::<CartCount>(n)`) filling each
+    place on screen. Every page with a layout read would carry a marker per place for the runtime to
+    find, a cost on every page to serve the few writes that answer in place, and it would be a second
+    way to bring a read up to date beside the page (Values 5). A notice that carries a list, so the
+    write can redirect: narrower, since a form drawn again is no notice. A built-in client behavior
+    or a second handler model: what the issue asks for is a page, which the server already draws.
+    So a patch still fills no layout read; a write whose answer must change one answers its page,
+    and a layout value a patch updates is a component with an id, passed its value as a prop.
+
+    What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
+    reads, as the same write without JavaScript always did; in the test app (two reads, a small
+    layout) it takes 59,222 instructions where its `<main>` swap took 23,034, and 25,089 where it
+    took 22,786 in an app without layout reads. In an app with layout reads every action write now
+    keeps its request's head for a page it may draw, as a document write already did, so a patch
+    there takes 29,867 instructions where it took 21,549 (about 8,300 more, a few microseconds);
+    in an app without them a patch is unchanged. The runtime is 101 bytes larger raw, 45 with gzip
+    (15,016 to 15,061) and 35 with brotli. A `GET` form and a navigation pay nothing.
+
+    Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`, the
+    difference of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every
+    range within 30 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
+    patch carries elements by id, and a layout read's view at two places has none, so filling it
+    needs a marker on every page; a write's own answer is not at an address a full load would
+    draw); value (the page shows the same values with JavaScript as without, Values 3; one answer
+    brings a layout read up to date after a write, a page, Values 5; correctness before the few
+    microseconds a write in an app with layout reads now pays, the order of the values).
+
+    Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
+    whose page is too costly to draw again), which would reopen markers on the places; or the
+    patch's cost in an app with layout reads grows past 10% of a write's handler time measured in a
+    real app, when the head could be kept only for a route that may answer a page.
+
+    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `e760a5385` against the change, and the
+    runtime's size on `9c867b5e7` against the change.
 
 ## Rules
 

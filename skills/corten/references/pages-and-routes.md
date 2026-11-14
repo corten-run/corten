@@ -82,9 +82,12 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    `None` when there is nothing to read (no session), so an unknown URL costs no read. Never pass
    it through handlers with an extractor, never read it after the page's own reads (a full load then waits for both), and do
    not fetch it from a script on every load to draw it the first time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
-   write sends it to whole and draws the layout again. One that answers in place with a patch reads
-   it only when `req.mode == Mode::Action` and answers `req.patch(Badge { count })` then, passing
-   the value: a patch is not a page, so a `later` in it draws nothing (a debug error). Write each nav link from
+   write sends it to whole and draws the layout again. One that answers with its own page (a form
+   drawn again, a partial result) needs nothing more either: a write's `req.page(..)` is whole in
+   every mode, `Mode::Action` included, its reads start, and the runtime draws the layout again;
+   give the value it read after the write with `.give::<CartCount>(n)`. A patch is not a page and
+   fills no layout read (a `later` in it is a debug error), so a write whose answer must change one
+   answers its page, never a patch of the read's view. Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and
    `aria-current` separately.
