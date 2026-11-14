@@ -210,13 +210,22 @@ rules something out.
    JavaScript takes as declared even when the class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
-   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`);
+   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
+   TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
+   `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
+   The repository's AST checks use `typescript/unstable/sync`, `typescript/unstable/fs` and
+   `typescript/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
+   and the lockfile, not a compatible-version range);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
    component behavior is exported functions, not classes; the runtime's one hand-written class,
    `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
    (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
    declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
-   was read, and none's value is used as a type it is not); measured (deck-builder's and
+   was read, and none's value is used as a type it is not; the unstable parser API lets
+   `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
+   maps with `crates/corten-macros/src/dom.rs` without a second TypeScript install or a separate
+   parser dependency. The exact pin and negative parser fixtures bound this dependency, but
+   do not make the API stable); measured (deck-builder's and
    seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
    bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
    serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
@@ -239,7 +248,8 @@ rules something out.
    reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
    function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
-   show.
+   show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
+   update changes the unstable sync, filesystem or AST APIs they use.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -278,7 +288,12 @@ rules something out.
    `InputEvent`. The old JavaScript parser API is gone, so the event and unsafe-escape checks
    use the native API too, with their existing negative fixtures retained.
    The [HTML checkbox activation steps](https://html.spec.whatwg.org/multipage/input.html#checkbox-state-(type=checkbox))
-   were read for the plain `input` event (no interface override).
+   were read for the plain `input` event (no interface override);
+   2026-11-14, TypeScript 7.0.2's installed `package.json` export map, `lib/version.cjs` and
+   root module exports inspected at `e8d4165cd`: only version information is stable, and all
+   parsing entry points are explicitly unstable. The exact pin is retained, with no second
+   TypeScript install. The AST checks and their negative parser fixtures are exercised by
+   the root `npm run check`, independently of the benchmark apps' own compiler pins.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

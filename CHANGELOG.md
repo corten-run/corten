@@ -7,7 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Check scripts with TypeScript 7.0.2, matching npm's newest stable release installed by the
   getting-started guide, and use its DOM declarations for the Navigation API. Move the
-  repository's AST checks and benchmark rendering fixtures off the removed JavaScript API.
+  repository's AST checks off the removed JavaScript API, using the exactly pinned compiler's
+  unstable native parser API until a stable parsing entry point is available.
 
 - Link to [corten.run](https://corten.run) from the README's introduction.
 

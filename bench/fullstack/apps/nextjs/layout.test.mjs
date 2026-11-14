@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transpile } from "../../transpile.mjs";
+import ts from "typescript";
 
 // Use Next's real prerender stores and connection(), not a mock that always resolves.
 globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
@@ -12,7 +12,9 @@ const { workAsyncStorage } = await import("next/dist/server/app-render/work-asyn
 const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external.js");
 const { connection } = await import("next/dist/server/request/connection.js");
 const require = createRequire(import.meta.url);
-const compiled = transpile(readFileSync(new URL("./app/layout.tsx", import.meta.url), "utf8"), import.meta.url, true);
+const compiled = ts.transpileModule(readFileSync(new URL("./app/layout.tsx", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+}).outputText;
 
 for (const PROFILE of ["", "matched"]) {
   test(`native legacy prerender probe: ${PROFILE || "default"} layout`, async () => {

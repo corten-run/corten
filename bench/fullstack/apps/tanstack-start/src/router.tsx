@@ -7,7 +7,7 @@ export function getRouter() {
     routeTree,
     // The catalog's ordinary GET field is text, not a JSON-encoded search value.
     parseSearch: (search) => {
-      const parsed: Record<string, unknown> = defaultParseSearch(search);
+      const parsed = defaultParseSearch(search);
       const field = new URLSearchParams(search).get("field");
       if (field !== null) parsed.field = field;
       return parsed;

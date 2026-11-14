@@ -1,5 +1,6 @@
 // TypeScript 7 parses through its native API rather than createSourceFile(). Keep the
 // source virtual so checks of fixture text never write files or read an app's config.
+// The API is unstable, held to the exact compiler pin: docs/design.md#choice-handlers-checked-where-called.
 import { resolve, basename } from "node:path";
 import { API } from "typescript/unstable/sync";
 import { createVirtualFileSystem } from "typescript/unstable/fs";

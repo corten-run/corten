@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { transpile } from "../../transpile.mjs";
+import ts from "typescript";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -93,10 +93,11 @@ test("locale-decimal alert validation uses native money, not stored formatted st
 
 test("native React page renders complete escaped data, only visible offers, localized links and empty states", async () => {
   const source = (await readFile(new URL("marketplace-page.tsx", directory), "utf8")).replace('from "./marketplace"', 'from "./marketplace.ts"');
-  const compiled = transpile(source, import.meta.url);
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX } });
   const path = new URL(".marketplace-test-render.mjs", directory);
   try {
-    await writeFile(path, compiled);
+    await writeFile(path, compiled.outputText);
     const { Marketplace } = await import(path.href);
     for (const locale of ["en-US", "fr-FR", "de-DE"]) {
       const html = renderToStaticMarkup(createElement(Marketplace, { record, locale, query }));
@@ -224,7 +225,9 @@ test("HTTP rejects redirects without following Location and Next API responds 50
     const { fetchMarketplaceRecord } = await import(new URL("marketplace-server.ts?redirect", directory));
     const source = (await readFile(new URL("pages/api/marketplace/[id].ts", import.meta.url), "utf8"))
       .replace('from "../../../lib/marketplace-server"', 'from "./marketplace-server.ts?redirect"');
-    await writeFile(apiPath, transpile(source, import.meta.url));
+    await writeFile(apiPath, ts.transpileModule(source, { compilerOptions: {
+      target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+    } }).outputText);
     const { default: handler } = await import(apiPath.href);
     for (const status of [301, 302, 303, 307, 308]) {
       await assert.rejects(fetchMarketplaceRecord(String(status)), new RegExp("API returned " + status));
