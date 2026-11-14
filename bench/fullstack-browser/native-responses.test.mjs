@@ -221,7 +221,8 @@ test("native template inventory shares bounds and allows unreflected private fie
       for (let i = 0; i < 10000; i++) parent.append(document.createElement(kind === "options" ? "option" : "input"));
     }, kind);
     const read = await collectBrowserDOM(f.page, identity);
-    assert.equal(read.failure, "credential-filter-blocked"); assert.deepEqual(read.events, []);
+    // The native population cap rejects this document before private-value reads.
+    assert.equal(read.failure, "native-dom-snapshot-failed"); assert.deepEqual(read.events, []);
     assert.equal(replayBrowserDOM(read, expectation(read)).extractionComplete, false);
   });
 });
