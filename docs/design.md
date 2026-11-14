@@ -3110,10 +3110,15 @@ rules something out.
     elements like any other, and what they hold is, except in its `<foreignObject>`, `<desc>` and
     `<title>`, the HTML standard's integration points, whose children are HTML's), and an element's
     ref and key are noted on it until its tag is written, so a view an attribute's expression
-    renders meanwhile notes its own. Its limit: a component's markup does not see an `<svg>` its
+    renders meanwhile notes its own. Its limit is at a component's edge, where the markup on
+    either side cannot know the other's context: a component's markup does not see an `<svg>` its
     parent writes it into, so it takes its own `<template>` there for HTML's, and the keys in it,
-    which the runtime finds, are not checked; following the namespace across components would have
-    every element's markup report it to the check, for a duplicate few apps can write. It follows
+    which the runtime finds, are not checked; and a component's children do not see where the
+    component writes them (in an `<svg>`'s `<desc>`, say, where a `<template>` is HTML's), so a
+    `<template>`'s or a `<noscript>`'s content among them is not checked either, unless it is in
+    an `<svg>` the children write themselves, which is SVG's wherever it lands. Following the
+    namespace across components would have every element's markup report it to the check, for a
+    duplicate few apps can write. It follows
     markup where `html!` writes it, not where a browser moves an HTML element written straight into
     an `<svg>`. It decodes the five references Corten's escapers write and no others, and leaves
     out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
@@ -3218,11 +3223,15 @@ rules something out.
     Last checked: 2026-11-14, the release cost of the key check on markup that has it,
     `key_check_cost` in `examples/watchlist/src/home.rs` (`LivePrices` with 50 rows and two keyed
     cells each, and `KeyedMarkup`, with cells keyed by `key={..}` and by a static `key=".."`, a
-    `<template>` and a `<noscript>`, 1,000 renders each), on `e59c32c28` with the test added
-    against `2178db6eb`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
-    instructions for `render_live_prices` and 7,579,107 for `render_keyed_markup` in every run of
-    both, the same bytes, and both compile to the same instructions (1,611 lines each, differing
-    only in the mangled name of `data_ref`, which names the key's type);
+    `<template>` and a `<noscript>`, and a `<template>` among a component's children in an
+    `<svg>`'s `<desc>`, 1,000 renders each), on `50b9c52bf` with the test added against
+    `6caa34f39`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
+    instructions for `render_live_prices` and 7,668,108 for `render_keyed_markup` in every run of
+    both, the same bytes, and both compile to the same instructions (1,809 lines each, differing
+    only in the mangled name of `data_ref`, which names the key's type, and constants' addresses);
+    2026-11-14, a `<template>` among a component's children, which the component writes into an
+    `<svg>`'s `<desc>`, not counted, and one in an `<svg>` the children write themselves counted,
+    on `7c2fba42a`, as the tests beside `DescribedKeys` and `BoxedSvgKeys` hold the check to;
     2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), a
     `<template>` in an `<svg>`'s `<desc>` or `<title>` is HTML's and its content is not found, and
     one in an `<svg>` is SVG's and its content is, as the tests beside `DescTemplateKeys` and

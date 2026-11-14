@@ -420,8 +420,10 @@ Corten is pre-1.0, so any minor version may change the API.
   (`None`), since the `Map` would hold one entry for them, counting the elements the runtime finds
   (none in a `<template>`'s or a `<noscript>`'s content, outside an `<svg>` or in its
   `<foreignObject>`, `<desc>` or `<title>`), leaving out a key written with a reference Corten does
-  not write (an app's own `AttrValue`) and the keys in a `<template>` a component writes into its
-  parent's `<svg>`, which the component's markup cannot tell from HTML's; whether it runs is
+  not write (an app's own `AttrValue`) and the keys in a `<template>` whose context the markup
+  cannot know: one a component writes into its parent's `<svg>`, and one among a component's
+  children, which the component may write in an `<svg>`'s `<desc>` (unless it is in an `<svg>` of
+  the children's own); whether it runs is
   `corten-run`'s debug-assertions setting, for every crate's markup, release builds do not check,
   and the runtime is unchanged
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),

@@ -412,8 +412,10 @@ stop on a number past 2^53; release builds do not check. They count the elements
 so an element in a `<template>`'s or a `<noscript>`'s content is not one of them (inside an `<svg>`,
 where both are elements like any other, it is, except in its `<foreignObject>`, `<desc>` or
 `<title>`, which hold HTML). A component's markup does not see an `<svg>` its parent writes it into,
-so the keys in a `<template>` a component writes into an outer `<svg>` are not checked: where the
-check cannot be sure, it lets a duplicate pass rather than stop a correct render. They see what one
+and a component's children do not see where the component writes them, so the keys in a
+`<template>` or `<noscript>` a component writes into an outer `<svg>`, or one among a component's
+children (outside an `<svg>` the children write themselves), are not checked: where the check
+cannot be sure, it lets a duplicate pass rather than stop a correct render. They see what one
 render writes: rows a patch or a script adds later are the page's, so give every row a key of its
 own (an id, not a name two rows can share). A key an `AttrValue` of the app's writes with any other
 `&` (`&#128;`, `&nbsp;`) is not checked, since what a browser reads there follows rules of HTML's
