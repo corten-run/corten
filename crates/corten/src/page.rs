@@ -960,6 +960,7 @@ impl FormPatch<'_> {
     pub fn draw(self, view: impl crate::view::Patch) -> Result<DrawnPatch> {
         let mut body = String::new();
         self.0.render_into(view, &mut body, false)?;
+        self.0.section_links(&mut body);
         Ok(DrawnPatch(body))
     }
 }
@@ -1652,7 +1653,7 @@ impl Req {
             crate::form::collect_hints(|| crate::script::collect(|| crate::style::collect(|| view.render(out))));
         #[cfg(not(debug_assertions))]
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
-        self.check_rendered(&used)?;
+        self.check_rendered(&used, page)?;
         #[cfg(debug_assertions)]
         self.check_modules(&modules)?;
         #[cfg(debug_assertions)]
@@ -1806,37 +1807,50 @@ impl Req {
 
     /// In a debug build: an error when the page rendered a component whose script or stylesheet
     /// it does not get, because the app does not list it or lists it in a section the page is
-    /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
+    /// not under. A patch (`page` false) brings the stylesheets of its handler's path wherever it
+    /// lands, so its components are checked against that path too. Kept out of
+    /// [`Req::render_into`], which is compiled once per view.
     #[cold]
     #[inline(never)]
-    fn check_rendered(&self, used: &[&'static crate::Component]) -> Result<()> {
+    fn check_rendered(&self, used: &[&'static crate::Component], page: bool) -> Result<()> {
         if let Some(missing) = used.iter().find(|c| !self.shared.components.contains(c.name)) {
             let what = match (missing.script.is_some(), missing.style.is_some()) {
                 (true, true) => "script and stylesheet are",
                 (true, false) => "script is",
                 _ => "stylesheet is",
             };
-            return Err(self.unserved(format!(
-                "the page renders {name}, which the app does not list, so its {what} not served: add {name} to App::components",
-                name = missing.name
-            )));
+            let name = missing.name;
+            return Err(self.unserved(if page {
+                format!("the page renders {name}, which the app does not list, so its {what} not served: add {name} to App::components")
+            } else {
+                format!(
+                    "the patch renders {name}, which the app does not list, so its {what} not served: add {name} to App::components"
+                )
+            }));
         }
         for component in used {
             let Some(&index) = self.shared.section_of.get(component.name) else { continue };
             let prefixes = &self.shared.sections[index].0;
             if !prefixes.iter().any(|prefix| crate::api::under(prefix, self.path())) {
-                return Err(self.unserved(format!(
-                    "{path} renders {name}, whose stylesheet is linked from the area {areas} only: list {name} in this page's area too, or route the page in that area",
-                    path = self.path(),
-                    name = component.name,
-                    areas = prefixes.join(" and the area ")
-                )));
+                let (path, name, areas) = (self.path(), component.name, prefixes.join(" and the area "));
+                return Err(self.unserved(if page {
+                    format!(
+                        "{path} renders {name}, whose stylesheet is linked from the area {areas} only: list {name} in this page's area too, or route the page in that area"
+                    )
+                } else {
+                    format!(
+                        "{path} answers with a patch that renders {name}, whose stylesheet is linked from the area {areas} only, and a patch brings the stylesheets of its handler's area: list {name} in this route's area too, or route the handler in that area"
+                    )
+                }));
             }
         }
         Ok(())
     }
 
-    /// The `<link>` tags of the section stylesheets for this request's path.
+    /// The `<link>` tags of the section stylesheets for this request's path: in a page's head, a
+    /// navigation's answer, or after a patch, whose page may be in another area (the runtime adds
+    /// those the page lacks before it puts the patch in place). Nothing in an app whose areas list
+    /// no components.
     #[inline]
     fn section_links(&self, out: &mut String) {
         let path = self.uri.path();
@@ -2046,6 +2060,11 @@ impl Req {
         }
         #[cfg(not(debug_assertions))]
         self.render_into(view, &mut body, false)?;
+        // In an app whose areas have stylesheets, a patch under one ends with their links, after
+        // its elements, where adding them moves nothing; the runtime takes them out first.
+        if !self.shared.sections.is_empty() {
+            self.section_links(&mut body);
+        }
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if crate::form::DREW_KEY.take() {

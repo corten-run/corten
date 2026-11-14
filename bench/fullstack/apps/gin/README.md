@@ -28,6 +28,35 @@ The focused socket tests cover fixture/API reads, JSON methods and errors,
 headers/body stalls, caller disconnects, upstream closure and recovery. They are
 functional checks, not independent serialization-audit receipts or a load baseline.
 
+## Marketplace request traces
+
+Marketplace page/form and record-JSON handlers snapshot incoming trace headers into
+an immutable value in the explicit Go request context, before reading a form body.
+The native source copies that value onto each new HTTP request, never onto shared
+client defaults. Delayed reads retain their original identity; missing/invalid
+parents do not reuse another request's trace. Native cancellation and deadlines
+remain attached to the context. This does not introduce detached/background work.
+
+`traceparent` uses the native Corten/Express known-field rules: lowercase hex,
+nonzero trace/span IDs, correct separators, no `ff` version, duplicates or combined
+parents. Version 00 is forwarded unchanged; valid known fields of future versions
+are down-versioned to 00 with only the sampled flag and without their unknown suffix. With a valid parent,
+`tracestate` is opaque HTTP field data, including 8-bit obs-text; repeated fields
+are joined in order. CR, LF, DEL and controls other than HTAB drop the state, not
+the valid parent. This is transport preservation, not validation of vendor state
+grammar. An absent/invalid parent drops state too. Fixture reads still do no HTTP;
+catalog and legacy item reads are unchanged.
+
+`go test -run TestMarketplaceTrace -count=1 -v ./...` exercises actual native Go
+HTTP sockets in default/matched profiles and fixture/API modes: all page/form
+locales, JSON GET/HEAD, overlapping header/body reads, unfinished native forms,
+untraced requests and independent alert readback. Unit tests cover invalid and
+future parents, duplicates, state byte safety, immutable snapshots and a delayed
+source invocation after another request's context. The delayed snapshot test alone
+detaches cancellation to examine retained identity; production never does so.
+Raw local proof and its limits are in `results/trace-proof/README.md`. This is not
+an independent native source audit, mixed-workload admission or a performance claim.
+
 ## Session alerts
 
 Accepted marketplace form POSTs append one native Go record after localized
@@ -77,6 +106,43 @@ For API-sourced alert writes, required/non-nullable fields are checked recursive
 against the existing native Go record declarations, including nested rows, before
 native decoding. Optional pointer fields retain their native null/missing behavior.
 No separate schema or record types, dependencies, or GET-path rules are introduced.
+
+## Trace Downgrade Regression
+
+Future-version parents are emitted as version 00 with only their sampled bit,
+per [W3C Trace Context 3.2.4](https://www.w3.org/TR/2021/REC-trace-context-1-20211123/#versioning-of-traceparent).
+Existing version-00 flag transport is unchanged. The committed native Go HTTP
+test compares response body bytes with an untraced request, not just status.
+
+From this app directory, `node check-trace-flags.mjs IMAGE` checks a normal release
+image in both profiles and both sources: JSON GET/HEAD, page GETs and native alert
+POSTs in all three locales, exact body bytes, future flags `80/81/fe/ff`, unchanged
+v00 flags, malformed parents, obs-text state and raw NUL/control/DEL headers.
+It retains image identity, body lengths/hashes and source observations under
+`results/trace-proof/row7-*.ndjson`. It removes its containers and temporary fixtures.
+This is focused correctness evidence, not a native audit, qualification or
+performance result. `repeated-state` as a second argument checks ordered native
+combination of repeated state fields against the W3C requirement.
+
+Historical source-lane Row7 evidence (2026-11-13, not release-head verification):
+the author fetched upstream `8b02835d6987150ce8bc3d6a48c9e700fa81c27a`
+without merging it into the local source lane. Before the runtime fix, the new unit
+test and committed HTTP test failed on `80/81/fe/ff` downgrade flags. The normal
+optimized image reproduced 64 source-header failures in
+`row7-flags-1794549171284.ndjson`. After the fix,
+`row7-flags-1794549797160.ndjson` passes all 524 checks (512 route/header cases
+and 12 hostile-control probes); `row7-repeated-state-1794549797173.ndjson` passes
+all 96 ordered repeated-state cases. Every compared response body is byte-equal.
+The unit-tool image ran `go test -count=1 -timeout=180s ./...`, `go vet ./...`
+and a gofmt check successfully. An initial host wrapper misquoted command
+substitution and did not run that check; the corrected container command passed.
+No test or validation rule was weakened. Earlier trace-proof evidence is retained.
+
+The release image was built from the local working context, not a clean retained
+archive; its identity is in the raw observations. No instruction/timing comparison,
+browser matrix, full Corten framework checks or independent review was run for
+this repair. Shared guide/changelog edits and another agent are outside the
+authorized scope. This does not confer audit or mixed-production admission.
 
 ## Native production profile
 

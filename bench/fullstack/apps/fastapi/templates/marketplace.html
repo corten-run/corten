@@ -2,7 +2,7 @@
 {% block title %}{{ record.title }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/static/marketplace.css">{% endblock %}
 {% block main %}
-<article class="marketplace" hx-boost="false">
+<article class="marketplace" hx-boost:inherited="false">
 <nav class="marketplace__categories">{% for category in record.categories %}<a href="{{ item_path('item_1') }}">{{ category.name }}</a>{% endfor %}</nav>
 <h1>{{ record.title }}</h1>
 {% if record.subtitle is not none %}<p class="marketplace__subtitle">{{ record.subtitle }}</p>{% endif %}

@@ -21,7 +21,8 @@ path_param!(locale);
 pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<impl View> {
     let locale = PageLocale::parse(locale(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
     let query = Form::<Query>::from_bytes(request::uri(cx).query().unwrap_or_default().as_bytes())?.0;
-    let record = marketplace::source::get(id(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let trace = crate::trace::TraceContext::from_request(cx);
+    let record = marketplace::source::get(id(cx), &trace).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
     let posted = request::method(cx).as_str() == "POST";
     if posted && !record.valid_for_alert(id(cx)) {
         return Err(topcoat::Error::msg("malformed marketplace record"));
@@ -63,7 +64,8 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
 }
 #[route(GET "/api/marketplace/{id}")]
 pub async fn marketplace_json(cx: &Cx) -> Result<Json<Arc<Record>>> {
-    let record = marketplace::source::get(id(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
+    let trace = crate::trace::TraceContext::from_request(cx);
+    let record = marketplace::source::get(id(cx), &trace).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
     Ok(Json(record))
 }
 #[component]

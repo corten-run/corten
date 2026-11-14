@@ -39,7 +39,7 @@ import { quote } from "./round.mjs";
 export const button = { from: '<button type="submit">', to: '<button type="submit" title="Set the price alert">' };
 
 /** The htmx their Dockerfiles ADD (checked by its digest), into the directory each serves it from. */
-const htmx = (/** @type {string} */ dest) => `--checksum=sha256:d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717 https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js ${dest}`;
+const htmx = (/** @type {string} */ dest) => `--checksum=sha256:a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130 https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js ${dest}`;
 
 /** cargo fetch's flag for the platform it runs on, so it downloads no other platform's crates. */
 const hostTarget = '--target "$(rustc -vV | sed -n "s/^host: //p")"';
@@ -127,6 +127,7 @@ export const recipes = {
     stage: "bench/fullstack/apps/leptos",
     context: "",
     workdir: "/src",
+    env: { CARGO_HOME: "/var/cache/cargo" },
     deps: `cargo fetch ${hostTarget} --target wasm32-unknown-unknown`,
     build: "cargo leptos build --release --cargo-locked",
     dev: "cargo leptos build",
@@ -141,6 +142,7 @@ export const recipes = {
     stage: "bench/fullstack/apps/topcoat",
     context: "",
     workdir: "/src",
+    env: { CARGO_HOME: "/var/cache/cargo" },
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked && topcoat asset bundle --release",
     dev: "cargo build --locked",
@@ -153,6 +155,7 @@ export const recipes = {
     tools: "rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31",
     context: "",
     workdir: "/src",
+    env: { CARGO_HOME: "/var/cache/cargo" },
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked",
     dev: "cargo build --locked",
@@ -203,7 +206,7 @@ export const recipes = {
   astro: node("src/pages/items/[id].astro"),
   nuxt: node("app/pages/items/[id].vue"),
   aspnet: {
-    tools: "mcr.microsoft.com/dotnet/sdk:10.0",
+    tools: "mcr.microsoft.com/dotnet/sdk:11.0.100",
     context: "",
     workdir: "/src",
     add: htmx("wwwroot/htmx.min.js"),
@@ -212,7 +215,7 @@ export const recipes = {
     edit: "Pages/Item.cshtml",
   },
   spring: {
-    tools: "maven:3.9-eclipse-temurin-25",
+    tools: "maven:3.10-eclipse-temurin-27@sha256:3175c44b207d6698aecb9bbb5bf285b5b4efcf7f567d6f65d88cd218276a6ab2",
     context: "",
     workdir: "/src",
     add: htmx("src/main/resources/static/htmx.min.js"),
@@ -221,7 +224,7 @@ export const recipes = {
     edit: "src/main/resources/templates/item.html",
   },
   django: {
-    tools: "python:3.14-slim",
+    tools: "python:3.15.2-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928",
     context: "",
     workdir: "/app",
     env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", DJANGO_SETTINGS_MODULE: "itempage.settings" },
@@ -240,7 +243,7 @@ export const recipes = {
     edit: "views/item.ejs",
   },
   fastapi: {
-    tools: "python:3.14-slim",
+    tools: "python:3.15.2-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928",
     context: "",
     workdir: "/app",
     env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1" },

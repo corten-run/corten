@@ -143,6 +143,11 @@ test("full synthetic saved tree replays but v1 proof gaps block every native/ran
   assert.ok(before.blockers.some((b) => b.includes("source-to-bundle")));
 });
 
+test("v1 dispatch preserves the historical result-file bound above sixteen MiB", async (t) => {
+  const f = await fixture(t); f.result.provenance.note = "x".repeat(17 * 1024 ** 2); await f.save();
+  const r = await f.validate(); assert.equal(r.status, "blocked", JSON.stringify(r.errors)); assert.equal(r.diagnosticsPassed, true);
+});
+
 const mutations = {
   "wrong round": ["wrong-run-identity", (f) => { f.result.round = "another"; }],
   "wrong commit": ["wrong-source-provenance", (f) => { f.result.provenance.commit = "0".repeat(40); }],

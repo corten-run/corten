@@ -4511,6 +4511,70 @@ paths! {
 #[cfg(feature = "json")]
 paths! { ApiQuote = "/api/quote" }
 
+/// The patch [`what_a_patch_in_an_area_costs`] answers with.
+#[derive(crate::view::Id)]
+struct CostNoteId;
+
+#[crate::component]
+fn CostNote() -> impl crate::view::Patch {
+    html! { <p id={CostNoteId}>"Saved"</p> }
+}
+
+/// A component with a stylesheet, which the area lists, so the area has a section stylesheet.
+const COST_STYLED: crate::Component = crate::Component {
+    name: "CostStyled",
+    script: None,
+    style: Some(crate::style::Style {
+        name: "cost-styled",
+        file: "cost_styled.css",
+        css: ".cost-styled__a{color:red}",
+        classes: &["a"],
+        media: &[],
+        breakpoints: &[],
+    }),
+    event: None,
+    view: None,
+    anchor: &0,
+};
+
+/// What a patch costs where its handler is: `PATCH_REQUESTS` (200) action requests in process,
+/// one at a time. `PATCH_WHERE` is where: `styled`, a handler in an area that lists a styled
+/// component, so its patch links the area's stylesheet; `plain` (the default), the same handler
+/// at the same path in an app whose area lists none; `outside`, the same handler at an app route
+/// `/elsewhere/item`, outside the area, which lists the styled component as in `styled`.
+/// Counting it under callgrind at two numbers of requests gives the instructions per request. Run
+/// in release: `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_in_an_area_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_in_an_area_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let at = std::env::var("PATCH_WHERE").unwrap_or_else(|_| "plain".to_string());
+    async fn cost_patch(req: Req) -> HtmlResult {
+        req.patch(CostNote {})
+    }
+    // The styled component in the area, or in the app's one stylesheet, which no patch links.
+    let (shared, listed): (&'static [crate::Component], &'static [crate::Component]) =
+        if at == "plain" { (&[COST_STYLED], &[]) } else { (&[], &[COST_STYLED]) };
+    let outside = at == "outside";
+    // The app's own route only where the patch is outside the area: `styled` and `plain` are the
+    // app they were.
+    let routes = if outside { Routes::from(Table::new().route("/elsewhere/item", get(cost_patch))) } else { Routes::new() };
+    let router = App::new(routes)
+        .components(shared)
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(cost_patch))).components(listed))
+        .router();
+    let path = if outside { "/elsewhere/item" } else { "/shop/item" };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = call_with(router.clone(), "GET", path, Some("action"), None).await;
+            assert!(status == StatusCode::OK && body.starts_with(r#"<p id="cost-note">Saved</p>"#), "{status}: {body}");
+        }
+    });
+}
+
 /// A JSON answer for [`what_a_request_in_an_area_costs`].
 #[cfg(feature = "json")]
 #[derive(crate::ToJson)]

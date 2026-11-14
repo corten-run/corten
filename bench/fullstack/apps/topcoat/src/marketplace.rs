@@ -262,6 +262,7 @@ impl Locale {
 
 pub mod source {
     use super::Record;
+    use crate::trace::TraceContext;
     use std::{
         collections::HashMap,
         sync::{Arc, OnceLock},
@@ -289,11 +290,11 @@ pub mod source {
         })
     }
     /// No memoization, pass-through JSON, or response cache.
-    pub async fn get(id: &str) -> Result<Option<Arc<Record>>, String> {
-        source().get(id).await
+    pub async fn get(id: &str, trace: &TraceContext) -> Result<Option<Arc<Record>>, String> {
+        source().get(id, trace).await
     }
     impl Source {
-        pub async fn get(&self, id: &str) -> Result<Option<Arc<Record>>, String> {
+        pub async fn get(&self, id: &str, trace: &TraceContext) -> Result<Option<Arc<Record>>, String> {
             let (client, base) = match self {
                 Self::Fixture(records) => return Ok(records.get(id).cloned()),
                 Self::Api { client, base } => (client, base),
@@ -304,7 +305,7 @@ pub mod source {
                 "records",
                 id,
             ]);
-            let response = client.get(url).send().await.map_err(|error| error.to_string())?;
+            let response = trace.apply(client.get(url)).send().await.map_err(|error| error.to_string())?;
             if response.status() == reqwest::StatusCode::NOT_FOUND {
                 return Ok(None);
             }
@@ -357,12 +358,13 @@ mod tests {
         });
         let source =
             source::Source::Api { client: reqwest::Client::new(), base: format!("http://{addr}/root/").parse().unwrap() };
+        let trace = crate::trace::TraceContext::default();
         for index in 0..2 {
-            assert_eq!(source.get("id /?").await.unwrap().unwrap().title, format!("Fresh {index}"));
+            assert_eq!(source.get("id /?", &trace).await.unwrap().unwrap().title, format!("Fresh {index}"));
         }
-        assert!(source.get("missing").await.unwrap().is_none());
-        assert!(source.get("failure").await.is_err());
-        assert!(source.get("bad-json").await.is_err());
+        assert!(source.get("missing", &trace).await.unwrap().is_none());
+        assert!(source.get("failure", &trace).await.is_err());
+        assert!(source.get("bad-json", &trace).await.is_err());
         let paths = thread.join().unwrap();
         assert_eq!(paths.len(), 5);
         assert_eq!(paths[0], "GET /root/marketplace/records/id%20%2F%3F HTTP/1.1");

@@ -1,0 +1,10 @@
+
+Algorithm : SHA256
+Hash      : E02D6039A3C33D00ADCCF5703D53196020EBE7F9263DBBDFE326A3E911981E2F
+Path      : D:\Users\ToddS\Source\Repos\corten-bench-parity-gin-trace\bench\fullstack\apps\gin\marketplace.go
+
+Algorithm : SHA256
+Hash      : 40248F9BF4899C44322F4762FD7E3DA4AA5346A6AB2954C23174FCBA3B4855A4
+Path      : D:\Users\ToddS\Source\Repos\corten-bench-parity-gin-trace\bench\fullstack\apps\gin\trace.go
+
+sha256:f1bbf74fd7e98d436a2c9cc46965c6c23b5d858f86ad308288d24e638b174db2

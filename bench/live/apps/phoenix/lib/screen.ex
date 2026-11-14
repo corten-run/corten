@@ -1,0 +1,122 @@
+defmodule NativeLive.Screen do
+  use Phoenix.LiveView, layout: false
+  alias NativeLive.Store
+
+  def mount(_, %{"client" => client}, socket) do
+    if connected?(socket), do: :ok = Store.call({:connect, self(), client})
+
+    {:ok,
+     socket
+     |> assign(client: client, through: 0, count: 0)
+     |> stream_configure(:rows, dom_id: & &1["id"])
+     |> stream(:rows, [])}
+  end
+
+  def handle_event(
+        "start",
+        %{"from" => from, "initial" => initial, "observed" => observed},
+        socket
+      ) do
+    case Store.call({:subscribe, self(), from, initial, observed}) do
+      {:error, reason} ->
+        {:noreply, push_event(socket, "parity", %{kind: "error", message: reason})}
+
+      ready ->
+        socket = push_event(socket, "parity", Map.put(ready, :kind, "ready"))
+
+        cond do
+          initial || ready.needs_snapshot ->
+            {:noreply, snapshot(socket, observed)}
+
+          ready.status == "expired" ->
+            {:noreply, socket}
+
+          true ->
+            state = Store.call({:client, socket.assigns.client})
+            {:noreply, socket |> replace(state) |> push_event("parity", %{kind: "restore"})}
+        end
+    end
+  end
+
+  def handle_event("snapshot", observed, socket), do: {:noreply, snapshot(socket, observed)}
+
+  def handle_event("pause", _, socket) do
+    :ok = Store.call({:pause, self(), true})
+    {:reply, %{paused: true}, socket}
+  end
+
+  def handle_event("resume", _, socket) do
+    :ok = Store.call({:pause, self(), false})
+    {:reply, %{paused: false}, socket}
+  end
+
+  def handle_event("acknowledge", observed, socket) do
+    :ok = Store.call({:ack, self(), observed})
+    {:noreply, socket}
+  end
+
+  def handle_event("finish", _, socket) do
+    :ok = Store.call({:finish, self(), socket.assigns.client})
+    {:noreply, push_event(socket, "parity", %{kind: "finished"})}
+  end
+
+  def handle_info({:parity_event, event, disposition, state}, socket) do
+    socket =
+      if disposition == "applied" do
+        socket = assign(socket, through: state.through, count: state.count)
+
+        if event["op"] == "remove",
+          do: stream_delete_by_dom_id(socket, :rows, event["key"]),
+          else: stream_insert(socket, :rows, event["row"])
+      else
+        socket
+      end
+
+    {:noreply,
+     push_event(socket, "parity", %{kind: "event", event: event, disposition: disposition})}
+  end
+
+  def handle_info({:parity_overflow, resources}, socket) do
+    {:noreply,
+     push_event(socket, "parity", %{kind: "overflow", outcome: "resnapshot", resources: resources})}
+  end
+
+  defp snapshot(socket, observed) do
+    case Store.call({:snapshot, self(), socket.assigns.client, observed}) do
+      {:error, reason} ->
+        push_event(socket, "parity", %{kind: "error", message: reason})
+
+      {snapshot, state} ->
+        socket |> replace(state) |> push_event("parity", %{kind: "snapshot", snapshot: snapshot})
+    end
+  end
+
+  defp replace(socket, state) do
+    socket
+    |> assign(through: state.through, count: state.count)
+    |> stream(:rows, Map.values(state.rows), reset: true)
+  end
+
+  def render(assigns) do
+    ~H"""
+    <main id="native-screen">
+      <div id="native-controls" phx-hook="Parity"></div>
+      <h1>Native Phoenix LiveView</h1>
+      <noscript>This live screen requires JavaScript and a native LiveView connection.</noscript>
+      <output id="effects" data-through={@through}>{@count}</output>
+      <table>
+        <thead>
+          <tr>
+            <th>Version</th><th>Price</th><th>Quantity</th>
+          </tr>
+        </thead>
+        <tbody id="rows" phx-update="stream">
+          <tr :for={{id, row} <- @streams.rows} id={id}>
+            <td>{row["version"]}</td><td>{row["priceCents"]}</td><td>{row["quantity"]}</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+    """
+  end
+end

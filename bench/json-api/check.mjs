@@ -28,8 +28,12 @@ export async function captureJson(spec) {
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let spec;
   try {
-    const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+    spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
     writeFileSync(spec.resultPath, JSON.stringify(await captureJson(spec), null, 2));
-  } catch (error) { console.error(error.stack ?? error); process.exitCode = 1; }
+  } catch (error) {
+    if (spec && error.recordAttempt) writeFileSync(`${spec.resultPath}.failure.json`, JSON.stringify({ identity: spec.identity, attempt: error.recordAttempt }, null, 2));
+    console.error(error.stack ?? error); process.exitCode = 1;
+  }
 }

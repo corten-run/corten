@@ -368,7 +368,7 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 ```
 
 Either way there is one answer that brings a layout read up to date after a write, a page: the page
-the write redirects to, or its own ([design Choice 47](../design.md#choice-write-own-page-whole)).
+the write redirects to, or its own ([design Choice 48](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link

@@ -14,7 +14,7 @@ const fixture = records();
 const canonicalFixtureSha256 = createHash("sha256").update(`${JSON.stringify(fixture)}\n`).digest("hex");
 const checkedPageCount = expectedPageChecks(fixture);
 const profileKeys = ["desktop-light", "desktop-dark", "phone-light", "phone-dark"].flatMap((p) => [false, true].map((js) => `${p}:${js}`));
-function completeChecks(check, source) {
+export function completeChecks(check, source) {
   if (check?.jsonRecords !== 500 || !Number.isInteger(check.pages) || check.pages < checkedPageCount || !Array.isArray(check.profiles) || check.profiles.length !== 8) return false;
   const profiles = check.profiles.map((p) => `${p.profile}:${p.javaScriptEnabled}`);
   if (new Set(profiles).size !== 8 || !profileKeys.every((key) => profiles.includes(key))
@@ -123,7 +123,8 @@ export function inspectCatalog(summary, expectedCommit) {
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true
     && (group === null || group.complete);
   if (!everyPass) warnings.push(`Some sat64 passes are missing or belong to unsuccessful runs; available values are partial, not a complete ${passes}-pass comparison.`);
-  return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings, ...(group ? { group: group.descriptor } : {}),
+  return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings,
+    attemptGates: { validClock, allAppsPresent, fixtureMatches, configurationComplete }, ...(group ? { group: group.descriptor } : {}),
     status: baseline ? "COMPLETE" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
 }
 

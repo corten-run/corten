@@ -68,7 +68,7 @@ try {
   const upstream = `${task}-upstream`;
   run(upstream, ["--cpus", "1", "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${resolve(repo, "bench")}:/bench:ro`, "-e", "MARKETPLACE_FIXTURE_PATH=/bench/marketplace/fixtures/marketplace.json",
-    "node:24-bookworm-slim", "node", "/bench/marketplace/upstream.mjs"]);
+    "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/bench/marketplace/upstream.mjs"]);
   await ready(`${port(upstream)}/health`);
   for (const source of ["fixture", "api"]) {
     const app = `${task}-${source}`;

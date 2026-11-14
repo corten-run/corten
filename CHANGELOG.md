@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Keep grouped cloud create actions with a numeric zero resource ID pending until
+  the matching action completes with the exact owned droplet ID. Preserve strict
+  identity/link checks, bounded polling and the single-create rule; this fixes a
+  synthetic API-schema compatibility case, not a confirmed cause of the r21 failure.
+
 - Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
   is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
   Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left
@@ -15,9 +20,84 @@ Corten is pre-1.0, so any minor version may change the API.
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
-  other native group integrations remain pending, not measured results.
+  native qualification and complete group measurements remain separate from source registration.
 
 ### Added
+
+- Bind native browser DOM evidence to bounded public reads, the actual document and
+  network origin, with exact replay and separate semantic and apparatus lifetimes.
+  Unsupported structure, private data, missing proof and uncertain cleanup remain
+  ineligible; timed-out body reads retain capacity until their actual sends settle.
+
+- Stream grouped cloud evidence through bounded physical-file hashing, durable copying
+  and complete archive preflight before extraction. Explicit byte, node and path budgets
+  cover the campaign phases without loading the complete archive into memory; oversized
+  or invalid evidence remains preserved rather than truncated or promoted to a result.
+
+- Run grouped benchmark evidence, isolated adapters and browser proof controls in
+  dedicated serial CI suites, plus required real Linux process and Docker-participant
+  controls in disposable delegated units. These checks do not stand in for native
+  framework qualification or an official benchmark run.
+
+- Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
+  including dependency-policy and whole-group timing gates. Failed and unsupported
+  outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
+
+- Quote Spring's colon-bearing htmx attribute name in the native Thymeleaf layout,
+  restoring catalog and marketplace HTML without changing boosting behavior or checks.
+
+- Refresh the native Rails, Phoenix, Gin and Drogon live build inputs to reviewed
+  stable versions and immutable base images. Bind deployment runtime descriptions
+  to those sources; changed inputs still require new qualification evidence.
+
+- Keep the native Razor and AOT benchmark CI test SDKs aligned with their production
+  Dockerfiles, so a runtime upgrade cannot leave the test jobs on an older SDK.
+
+- Preserve literal route, scoped-package and vendor-version filenames when collecting
+  native benchmark evidence. Collection, archive and artifact namespaces share the
+  portable-name check without decoding names or relaxing traversal, link or collision checks.
+
+- Prepare current Git in the browser CI image so native immutable-source checks run
+  with replacement objects and lazy fetching disabled, instead of failing on an older CLI.
+  Run source-replay checks as the checkout owner, retaining Git's ownership protection.
+
+- Register the native Rails, Phoenix and Laravel live ports without promoting
+  historical captures. Retain Livewire/Reverb wire and DOM evidence, including
+  negative HTTP controls and request timings on failed journeys; Laravel's
+  observed native-feed deadline misses remain unqualified outcomes.
+
+- Align server build recipes with the refreshed Python 3.15 and Java 27 images,
+  the native Spring JSON check with its production toolchain, deployment runtime
+  descriptions with their current sources, and the Express Node/Bun comparison
+  with the reviewed htmx 4 artifact. Changed inputs require new native qualification;
+  older captures remain historical.
+
+- Bind grouped comparison eligibility to the committed offline latest-stable dependency
+  policy while preserving every contender's native outcomes and failed evidence.
+
+- Reconcile grouped deployment manifests with the checked-in Node 26 and .NET 11
+  launch paths and native Corten/Topcoat/Leptos live ports. Source registration remains
+  separate from qualification; no older captures qualify changed images.
+
+- Align the native Corten parity and Leptos live Dockerfiles with the reviewed
+  digest-pinned Rust/trixie production toolchain and cargo-leptos version. Prior
+  captures remain historical, not qualification of the new image inputs.
+
+- Pin grouped benchmark helper images, native live Express and the Express/Bun
+  Node comparator to Node 26.13.1 by immutable digest. Retain their separate
+  native qualification requirements instead of borrowing older runtime results.
+  Django's local production-qualification helper uses that same upstream pin.
+
+- Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
+  preserving native rendering and source clients. Keep Drogon's native parser
+  normalization and repeated-header failures explicit; this does not qualify
+  that contender for traced production work. Add an opt-in native instruction-cost
+  diagnostic with complete dump validation and all-resource cleanup.
+
+- Register the native Topcoat keyed live application in its selected recoverable-live
+  group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
+  Historical missing-port evidence stays unchanged; functional integration is not a
+  completed group timing baseline.
 
 - A value the markup gives an element for its script is the element's ref's: `ref={row.with(cents)}`
   (a number, text or a `bool`), and a handler parameter typed `Map<HTMLTableRowElement, number>`
@@ -44,6 +124,7 @@ Corten is pre-1.0, so any minor version may change the API.
   images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
   and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
   historical results; the new toolchain and dependency graph are new-round inputs.
+
 - The marketplace browser gate observes native LiveView WebSocket and long-poll
   saves with exact form and reply correlation, waits for readiness before editing,
   and retains bounded case diagnostics on transport failure. Livewire saves must
@@ -70,6 +151,21 @@ Corten is pre-1.0, so any minor version may change the API.
   the complete native matrix, upstream identity continuity and exact aggregates; historical summaries cannot
   acquire missing evidence retroactively. Host isolation and independent source
   audit remain separate gates, not inferred from replay success.
+
+- A native Drogon keyed live application uses its own acknowledged WebSocket
+  delivery, bounded reader queues, snapshot recovery and reader-scoped cleanup.
+  Group registration preserves original wire observations and historical missing
+  outcomes; bounded correctness diagnostics are not a completed timing baseline.
+
+- Native workload-group driver entry points retain all selected contenders and explicit
+  failure/unsupported coverage. Deployment manifests separate representative production
+  choices from performance candidates and bind qualification to exact native evidence.
+  These local apparatus integrations and read-only plans are not completed group baselines
+  or automatic qualification of alternative runtimes.
+
+- Native Rails, Laravel and Phoenix marketplace alert stores expose independent,
+  session-isolated readback for accepted writes. Their adapters retain native
+  LiveView, Turbo and Livewire behavior; group qualification remains separate.
 
 - Native Corten, ASP.NET and Express marketplace reads retain request-owned
   cancellation and explicit trace context. ASP.NET and Express also bound
@@ -322,7 +418,7 @@ Corten is pre-1.0, so any minor version may change the API.
   without; before, only `<main>` was swapped and the count kept its value from before the write. A
   `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
   answer must change one answers its page
-  ([design Choice 47](docs/design.md#choice-write-own-page-whole)). Measured against `main` with
+  ([design Choice 48](docs/design.md#choice-write-own-page-whole)). Measured against `main` with
   callgrind: such a write takes 59,222 instructions where its `<main>` swap took 23,034 (two layout
   reads), 25,089 where it took 22,786 without reads; a patch in an app with layout reads takes
   29,867 where it took 21,549, and one in an app without them is unchanged. The runtime is 101
@@ -471,6 +567,31 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
+  the answer links its handler's section stylesheets after its elements, as a navigation's
+  answer does, and the runtime loads the ones the page lacks with the patch's modules before it
+  puts the patch in place, so a `data-patch` form on a page outside the area no longer draws the
+  area's components unstyled. A second patch or a navigation that links a stylesheet still
+  loading waits for the same load. One that fails to load is taken out again and the patch goes in
+  unstyled; the next patch that links it tries again. The link goes by the handler's path, not by
+  what the patch draws, so a page outside the area fetches the area's stylesheet, and the answer
+  waits for it, for any patch from the area's handlers, even one that only removes a row; the
+  stylesheet is under that page's CSP, not `Area::policy`'s. The debug check of a patch's
+  components, which read the handler's path while the page the patch lands on linked other
+  stylesheets, is now right for that path, and its messages say it was a patch. **Breaking:**
+  every patch whose handler is under an area with a stylesheet ends with that `<link>`, so an
+  app's test that compares such a patch's body whole changes (the watchlist's Load more test now
+  splits it off)
+  ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
+- Give the Rust benchmark images distinct locked target caches and a shared whole Cargo home,
+  including the package-cache lock. Keep pinned CLI binaries outside that mount and align the
+  fullstack recipes' dependency, build and development paths with the images. Historical results
+  remain historical; no build timings or native qualification are inferred from this change.
+
+- The marketplace browser gate recognizes Livewire's native enhanced alert response
+  only for the same origin, matching component, item, locale, save call and submitted
+  values. Native transport and plain-form behavior remain unchanged.
 
 - The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
   (`<app>-target`), so a build waits only for another build of the same app, where every app on a
@@ -638,6 +759,10 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- Benchmark deployment refreshes target the newest stable framework, runtime and build
+  tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
+  silently downgrading them or removing selected contenders; qualify new inputs afresh.
 
 - The corten-site deploy guide has the times of the first replacement of the site's machine
   (on `cd3f67f43`: about two minutes down by chance of a Site run the merge had started, six

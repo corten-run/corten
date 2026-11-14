@@ -1,4 +1,5 @@
 #pragma once
+#include "trace_context.h"
 #include <json/value.h>
 #include <unicode/numberformatter.h>
 #include <unicode/plurrule.h>
@@ -39,6 +40,7 @@ struct View {
 using ViewPtr = std::shared_ptr<View>;
 std::string url(const std::string &locale, const std::string &id);
 void load();
-void get(const std::string &id, std::function<void(RecordPtr record, bool failed)> done);
+void get(const std::string &id, const trace_context::Context &trace,
+         std::function<void(RecordPtr record, bool failed)> done, bool completeDocument = false);
 void routes();
 }
