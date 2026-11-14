@@ -25,7 +25,9 @@ use crate::{
 /// reaches one (they are sent to the watchlist, where the sign-in button is).
 #[corten::routes(area = Account, caller = Viewer, state = app::Shared)]
 pub mod url {
-    #[route("/account", get = page)]
+    /// The account page and its picture's form, which posts back to it, so the page an upload
+    /// draws without JavaScript is at the page's own address.
+    #[route("/account", get = page, post = avatar)]
     pub struct Account;
 }
 
@@ -351,7 +353,7 @@ pub(crate) fn PictureUpload<'a>(viewer: &'a Viewer, result: &'a str) -> impl Ren
         <form
             id={AvatarFormId}
             method="post"
-            action={app::url::Avatar}
+            action={url::Account}
             enctype="multipart/form-data"
             data-patch
             on:corten:progress={js::sending(event, bar)}
@@ -401,13 +403,13 @@ mod tests {
 
     use super::{Pictures, Sessions, Viewer, picture_type, url::Account};
     use crate::{
-        app::url::{Avatar, Home, Picture, SignIn, SignOut},
+        app::url::{Home, Picture, SignIn, SignOut},
         testing::{client, sign_in},
     };
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 
-    /// `POST /avatar` from `session` with one file, as the runtime sends it (`Mode::Action`) or a
+    /// `POST /account` from `session` with one file, as the runtime sends it (`Mode::Action`) or a
     /// browser without JavaScript (`Mode::Document`).
     async fn upload(app: &Client, mode: Mode, session: &str, name: &str, bytes: &[u8]) -> Answer {
         let mut body = format!(
@@ -416,7 +418,7 @@ mod tests {
         .into_bytes();
         body.extend_from_slice(bytes);
         body.extend_from_slice(b"\r\n--b--\r\n");
-        app.call(Method::POST, &Avatar).mode(mode).cookie("session", session).body("multipart/form-data; boundary=b", body).await
+        app.call(Method::POST, &Account).mode(mode).cookie("session", session).body("multipart/form-data; boundary=b", body).await
     }
 
     /// Where an answer that is not the page sends the browser.
@@ -507,8 +509,10 @@ mod tests {
             (StatusCode::NOT_FOUND, "private, no-cache")
         );
 
-        // Without JavaScript the answer is the account page, the picture in it.
+        // Without JavaScript the answer is the account page, the picture in it, at the page's own
+        // address.
         let page = upload(&app, Mode::Document, &session, "me.png", PNG).await;
+        assert_eq!(page.status(), StatusCode::OK);
         let page = page.text();
         assert!(
             page.contains("<h1>Account</h1>") && page.contains("Saved me.png as your picture.") && page.contains(&img),
@@ -536,7 +540,7 @@ mod tests {
             assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.headers().get("set-cookie").is_none());
             assert!(res.text().contains(message), "{message}");
         }
-        let signed_out = app.call(Method::POST, &Avatar).body("multipart/form-data; boundary=b", "").await;
+        let signed_out = app.call(Method::POST, &Account).body("multipart/form-data; boundary=b", "").await;
         assert_eq!(signed_out.status(), StatusCode::SEE_OTHER, "only someone signed in uploads");
     }
 
