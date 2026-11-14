@@ -24,6 +24,8 @@ no request. When the server is needed, a small runtime swaps pages and patches p
 live data streams in over server-sent events. One handler answers the browser, native apps and
 AI agents.
 
+Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
+
 ## Highlights
 
 - **HTML that works on its own.** Every page arrives rendered. Links are links and forms post,
