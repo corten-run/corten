@@ -3741,7 +3741,12 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Methods(
-        crate::router::get(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)),
+        crate::router::get(__private::endpoint(
+            handler,
+            <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<
+                <H as crate::answer::Signature<T>>::Args,
+            >>::SHARED,
+        )),
         true,
         None,
         std::marker::PhantomData,
@@ -3761,7 +3766,12 @@ impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
         T: 'static,
     {
         Methods(
-            self.0.get(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)),
+            self.0.get(__private::endpoint(
+                handler,
+                <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<
+                    <H as crate::answer::Signature<T>>::Args,
+                >>::SHARED,
+            )),
             true,
             self.2,
             std::marker::PhantomData,

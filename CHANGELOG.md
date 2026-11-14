@@ -419,7 +419,11 @@ Corten is pre-1.0, so any minor version may change the API.
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
   the call or at the handler's name ([design Choice 48](docs/design.md#choice-patch-routes)). A
-  route given by hand (`Area::route`, a `#[derive(Route)]` struct) is never one. **Breaking:** an
+  route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
+  by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
+  `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
+  any other `get` there stops the build (`E0080`, as a route's path of the wrong shape does).
+  **Breaking:** an
   app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
   its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
   has a second type parameter (`Kind`, `AnyAnswer` by default), which `req.patch`,
@@ -432,7 +436,14 @@ Corten is pre-1.0, so any minor version may change the API.
   `req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(..)`, six type arguments with its lifetime
   left out (was `::<ForOne, _, _, _, _>`). A closure handler whose result nothing else fixes
   names them too, `get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(..) })`, and is
-  `E0283` (type annotations needed) without them. Nothing changes at run time: the marker is zero-sized and the check a `const` with
+  `E0283` (type annotations needed) without them, as is a handler that hides its answer,
+  `corten::Result<impl Answer<Inputs = AnyInputs>>`, and calls them directly (one that returns
+  a helper's `HtmlResult` is fine): `req.patch::<ForOne, AnyAnswer>(..)` or
+  `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` there. `Answer` has an associated type,
+  `Kind`: an answer type of an app's own says `type Kind = AnyAnswer;`. `Methods` has a second
+  type parameter, `AnyAnswer` by default, so `let _: Methods = get(h)` still compiles for every
+  handler but one that returns `HtmlResult<Patches>`, whose `Methods` is
+  `Methods<(), Patches>`. Nothing changes at run time: the marker is zero-sized and the check a `const` with
   nothing to run (callgrind, a `patch_or` request in process, `what_a_patch_or_request_costs` on
   `0ff569c69` and `811324247`: 17,972 instructions for the patch before and 17,973 after, 18,405
   before and 18,390 after for the page, the same for `HtmlResult` and `HtmlResult<Patches>`). The requests guide now says

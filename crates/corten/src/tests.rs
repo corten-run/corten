@@ -2586,7 +2586,8 @@ async fn a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_
     #[route("/saved")]
     struct SavedArea;
     async fn again(req: Req) -> HtmlResult<crate::Patches> {
-        req.patch_or(html! { <p id={MsgId}>"Saved again"</p> }, || async { req.redirect(&url_patches::Saved { after: None }) }).await
+        req.patch_or(html! { <p id={MsgId}>"Saved again"</p> }, || async { req.redirect(&url_patches::Saved { after: None }) })
+            .await
     }
     let app = App::new(Routes::new()).area::<SavedArea>(|area| area.route::<url_patches::Saved>(crate::route::get(again))).test();
     let read = app.get(&url_patches::Saved { after: None }).mode(crate::Mode::Action).await;
