@@ -485,9 +485,21 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
    verify(folder).proof API, but not a complete framework campaign. Its adapter/native
    chain must be routed separately. Core consumes verified native Docker resource/cleanup
    proof plus actual host-child observations, never an unsigned review-reference approval.
-5. Browser adapter at 831de1cf is imported unchanged. Native b3597261f still reports genuine
-   source/whole-terminal/capture gaps; its fixed validator must establish semantic browser
-   closure separately from core OS exit. All 240 selected native cells remain required.
+5. Browser v2 uses the fixed native `validateSaved({folder,round,commit})` API, with
+   exact effective options, settings, profiles, full immutable source closure and all 240
+   selected cells. Completeness/dispositions, apparatus cleanup and strict qualification
+   remain separate. A replayed complete observed target/prerequisite failure retains the
+   selected app, requires exact native exit one and supplies no comparison eligibility.
+   Legacy v1 remains diagnostic only. No saved summary flag supplies absent raw replay.
+   The adapter forwards only the replayed v2 host subject; core checks its execution seal
+   and the complete regular-file byte seal against the safely inspected native tree.
+   Independent kernel observations must still establish the actual process, Docker
+   population, executable, PID/start, cgroup and continuous-window proof. Intrinsic
+   qualification or HostConfig declarations never establish OS resources. The reviewed
+   caller at cef285ea0 still omits replayed `toolIdentities.lockSha256`; until the native
+   caller forwards that identity, core explicitly withholds the host handoff rather than
+   substituting saved source declarations. Native public DOM/tool producer work remains
+   separately reviewed; this adapter is not whole-browser or whole-campaign qualification.
 6. Catalog/JSON raw replay distinguishes a complete failed functional attempt from a
    successful baseline. The bounded negative path is an initial JSON record-sweep violation:
    actual request intents and complete responses replay against canonical records, all

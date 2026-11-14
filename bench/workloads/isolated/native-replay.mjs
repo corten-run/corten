@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { groupNames } from "../registry.mjs";
 import { inspectEvidence, readRegular, tree } from "./evidence.mjs";
@@ -67,6 +68,13 @@ export async function inspectNative(binding, folder) {
   try {
     if (adapters[group]) {
       result = await (await adapters[group]()).inspectSaved(binding, folder);
+      if (group === "fullstack-browser" && result.hostSubject) {
+        // Match the native reader's sorted depth-first regular-file seal using
+        // the already safely read snapshot, without replaying the native API twice.
+        const files = before.entries.filter((e) => e.type === "file").map(({ path, sha256 }) => ({ path, sha256 }));
+        const seal = createHash("sha256").update(JSON.stringify(files) + "\n").digest("hex");
+        assert.equal(result.hostSubject.filesSha256, seal);
+      }
       if (group === "client-heavy" && result.attemptComplete) {
         const native = await (await import("../../client-heavy/verify.mjs")).validateSaved({ folder, round, commit });
         assert.equal(native.schema, "client-heavy-saved-verification/v2");
