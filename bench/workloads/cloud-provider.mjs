@@ -6,6 +6,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
+import { providerDiagnostic } from "./cloud-options.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const worker = join(directory, "cloud-provider-worker.mjs");
@@ -24,7 +25,6 @@ function snapshot() {
   return { sources, bootstrap };
 }
 const installed = snapshot().sources;
-const uncertain = () => Object.assign(new Error("provider worker uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true });
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)
   && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...names].sort());
 
@@ -33,6 +33,9 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
   assert.equal(resolve(repo), repo);
   const env = controlEnvironment("doctl");
   let child, pending, sequence = 0, closed = false, failed = false, exitPromise, closing;
+  let diagnostic;
+  const uncertain = () => Object.assign(new Error("provider worker uncertain; preserve locks/state/evidence/host"),
+    { controlTreeUncertain: true, controlUncertain: true }, diagnostic ? { providerDiagnostic: { ...diagnostic } } : {});
   const fail = () => { failed = true; if (pending) { const { reject } = pending; pending = undefined; reject(uncertain()); } };
   const start = async () => {
     const current = snapshot();
@@ -52,11 +55,17 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       if (!pending || !keys(message, ["schema", "sequence", "nonce", "ok", "result"]) || message.schema !== "cloud-provider-result/v1"
         || message.sequence !== pending.sequence || message.nonce !== nonce || typeof message.ok !== "boolean") { fail(); return; }
       const slot = pending; pending = undefined;
-      if (!message.ok) { failed = true; slot.reject(uncertain()); return; }
+      if (!message.ok) {
+        const value = providerDiagnostic(message.result);
+        if (message.result !== null && !value) { fail(); slot.reject(uncertain()); return; }
+        diagnostic ??= value; failed = true; slot.reject(uncertain()); return;
+      }
       const value = message.result;
+      const permittedDiagnostic = value?.status === 1 ? providerDiagnostic(value.providerDiagnostic) : undefined;
       if (slot.sequence === 0) {
         if (value !== "ready") { fail(); slot.reject(uncertain()); } else slot.resolve();
-      } else if (!keys(value, ["status", "stdout", "stderr"]) || ![0, 1].includes(value.status)
+      } else if (!(keys(value, ["status", "stdout", "stderr"])
+        || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"]) && value.stdout === "") || ![0, 1].includes(value.status)
         || typeof value.stdout !== "string" || Buffer.byteLength(value.stdout) > 16 * 1024 ** 2 || value.stderr !== "") {
         fail(); slot.reject(uncertain());
       } else slot.resolve(value);

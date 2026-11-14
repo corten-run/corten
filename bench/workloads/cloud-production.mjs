@@ -119,7 +119,7 @@ export function productionSignals() {
 export async function productionCli(args) {
   const signals = productionSignals();
   try { return await productionMain(args, { interrupted: signals.interrupted }); }
-  catch { console.error(publicError()); return 2; }
+  catch (error) { console.error(publicError(error)); return 2; }
   finally { signals.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href)
