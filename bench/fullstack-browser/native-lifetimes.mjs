@@ -86,6 +86,7 @@ export function replayPeerApplicability(journal, workerProof) {
       || e.at > start[0].at + (e.receivedAt - start[0].startedAt) / 1000 || e.receivedAt > s.b.endedAt) block("native-network-event-outside-clock");
     if (e.event === "Network.requestWillBeSent") {
       const previous = requests.get(e.request);
+      if (!previous && (e.redirectResponse != null || e.redirectStatus != null)) block("native-redirect-predecessor-missing");
       if (previous) {
         // Same bounded redirect-hop identity contract as lifecycle.mjs. Native
         // ExtraInfo enumerates each dispatch independently of the reused ID.
@@ -114,6 +115,32 @@ export function replayPeerApplicability(journal, workerProof) {
       if (e.event === "Network.loadingFinished" && !request.response) block("native-network-response-missing");
       if (e.event === "Network.loadingFailed" && (typeof e.canceled !== "boolean" || typeof e.errorText !== "string")) block("native-network-failure-incomplete");
     }
+  }
+  // Independent positive receipts cannot disappear merely because the main
+  // Network rows were deleted. Reconcile every retained ExtraInfo and HTTP
+  // document observation before calling the long-lived population empty.
+  const chains = new Map(), extras = new Map();
+  for (const e of s.events) {
+    const map = e.event === "Network.requestWillBeSent" ? chains : e.event === "Network.requestWillBeSentExtraInfo" ? extras : null;
+    if (!map) continue;
+    if (!map.has(e.request)) map.set(e.request, []); map.get(e.request).push(e);
+  }
+  for (const [request, rows] of extras) {
+    if (!text(request) || chains.get(request)?.length !== rows.length
+      || rows.some((e, i) => !finite(e.at) || i && e.at <= rows[i - 1].at)) block("native-network-extra-info-unmatched");
+  }
+  const completedDocuments = [...requests.values()].filter((r) => r.dispatch.type === "Document" && r.response && r.terminal?.event === "Network.loadingFinished");
+  for (const commit of s.events.filter((e) => e.event === "Page.frameNavigated" && ["http:", "https:"].includes(e.scheme))) {
+    const matches = completedDocuments.filter(({ dispatch: d, response: r, terminal: t }) => d.frame === commit.frame && d.loader === commit.loader
+      && d.scheme === commit.scheme && d.path === commit.path && d.receivedAt <= commit.receivedAt && r.receivedAt <= commit.receivedAt && commit.receivedAt <= t.receivedAt);
+    if (matches.length !== 1) block("native-http-document-commit-unmatched");
+  }
+  if (journal.documents !== undefined && !Array.isArray(journal.documents)) block("native-parser-document-inventory-invalid");
+  for (const doc of Array.isArray(journal.documents) ? journal.documents : []) {
+    const matches = completedDocuments.filter(({ dispatch: d }) => d.frame === doc?.frame && d.loader === doc.loader && d.path === doc.path
+      && finite(doc.observedAt) && doc.observedAt >= d.receivedAt && doc.observedAt <= s.b.endedAt
+      && (!doc.identityObservation?.documentSha256 || doc.identityObservation.documentSha256 === d.urlSha256));
+    if (matches.length !== 1) block("native-parser-document-network-unmatched");
   }
   for (const [request, value] of requests) if (!value.terminal) { peers.push(request); block("request-or-stream-still-open"); }
   // No peer endpoint collector is claimed here, even if CDP says socket closed.
