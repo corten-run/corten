@@ -1771,8 +1771,11 @@ page without JavaScript, at the same URL. The route says `patches`, and its `get
 `req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
 `patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
 and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
-build rather than the page. A route given by hand (`Area::route`, a `#[derive(Route)]` struct) is
-not one: the compiler cannot see the handler that serves it. What is checked is the handler's
+build rather than the page. A route given by hand, a `#[derive(Route)]` struct, is not one: the
+compiler cannot see the handler that serves it. A route that says `patches` mounted by hand
+(`Area::route`, `Api::route`) takes only a `get` handler that returns `HtmlResult<Patches>`, or
+the app does not build: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and those two
+check it where they check the route's path. What is checked is the handler's
 answer. Two things can still answer the read otherwise: a stage or an extractor that answers
 before the handler runs (a `Caller` that refuses someone signed out answers `Mode::Action` with a
 `204` and `corten-location`, sending the browser to sign in), and a handler that replaces its

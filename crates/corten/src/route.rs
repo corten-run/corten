@@ -1315,6 +1315,12 @@ pub trait Route {
     #[doc(hidden)]
     const WRITTEN: &'static str = Self::PATH;
 
+    /// Whether the route says `patches` in its routes module, which tells `#[derive(Route)]` so:
+    /// [`crate::Area::route`] and [`crate::Api::route`] then take it only with a `get` handler
+    /// that answers a patch ([`crate::Patches`]). Not a public API.
+    #[doc(hidden)]
+    const PATCHES: bool = false;
+
     /// Whether the runtime may fetch this URL ahead of a click (on a hover): `false` for a route
     /// declared `#[route("/..", prefetch = false)]`, a page costly to draw, so a link to it
     /// (`href={..}`, a nav's `{..req.nav(..)}` and `req.nav_of`, a `&dyn Href` prop) is written
@@ -1626,6 +1632,7 @@ pub trait Route {
 impl<R: Route + ?Sized> Route for &R {
     const PATH: &'static str = R::PATH;
     const WRITTEN: &'static str = R::WRITTEN;
+    const PATCHES: bool = R::PATCHES;
 
     fn write_href(&self, out: &mut String, html: bool) {
         (**self).write_href(out, html);
@@ -1641,8 +1648,9 @@ impl<R: Route + ?Sized> Route for &R {
 /// ([`crate::Patches`]): what [`crate::ReadAgain::from`] reads. `#[corten::routes]` makes a route
 /// one when it says `patches` ([`crate::routes`]), and checks its `get` handler returns
 /// `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it). No other route is one: the
-/// compiler cannot tie a route given by hand (`Area::route`, a `#[derive(Route)]` struct) to the
-/// handler that serves it.
+/// compiler cannot tie a route given by hand (a `#[derive(Route)]` struct) to the handler that
+/// serves it. Such a route mounted by hand (`Area::route`, `Api::route`) takes only a `get`
+/// handler that answers a patch too ([`Methods`]).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a route `ReadAgain::from` can read: nothing holds its get handler to answering a patch",
     label = "its route does not say `patches`",
@@ -3582,9 +3590,79 @@ pub trait FromUrl {
 ///
 /// `S` is the state its handlers take (`State<S>`), given with [`Methods::with_state`].
 ///
+/// `K` is what its `get` handler's answer is ([`crate::Answer::Kind`]): [`crate::Patches`] for
+/// one that returns `HtmlResult<Patches>`, [`crate::AnyAnswer`] for any other and for handlers with no
+/// `get` among them. A route that says `patches`, mounted by hand, takes only the first, so the
+/// handler the runtime's read of it reaches answers a patch as its routes module said
+/// ([`PatchRoute`]):
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/admin/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// #[derive(Id)]
+/// struct StatusId;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.patch(html! { <p id={StatusId}>"Saved"</p> })
+/// }
+///
+/// async fn saved(req: Req) -> HtmlResult<Patches> {
+///     req.patch(html! { <p id={StatusId}>"Saved again"</p> })
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Status>(get(saved)));
+/// # let _ = (app.router(), status);
+/// ```
+///
+/// A `get` handler that may answer the page or a redirect does not compile there (an error when
+/// the app is built, as the path checks above are):
+///
+/// ```compile_fail,E0080
+/// use corten::prelude::*;
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/admin/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// #[derive(Id)]
+/// struct StatusId;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.patch(html! { <p id={StatusId}>"Saved"</p> })
+/// }
+///
+/// async fn page(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Status>(get(page)));
+/// # let _ = (app.router(), status);
+/// ```
+///
 /// It also knows whether one of its handlers is for `GET`, so [`crate::Req::serves`] counts only
 /// routes a redirect can land on.
-pub struct Methods<S = ()>(pub(crate) crate::router::MethodSet<S>, pub(crate) bool, pub(crate) Option<Companion>);
+pub struct Methods<S = (), K = crate::AnyAnswer>(
+    pub(crate) crate::router::MethodSet<S>,
+    pub(crate) bool,
+    pub(crate) Option<Companion>,
+    pub(crate) std::marker::PhantomData<fn() -> K>,
+);
 
 /// A route Corten serves with one an app mounts, at a path made from that route's: an MCP
 /// endpoint's protected-resource metadata (`agent::Authorization`). Given the
@@ -3592,39 +3670,106 @@ pub struct Methods<S = ()>(pub(crate) crate::router::MethodSet<S>, pub(crate) bo
 #[derive(Clone)]
 pub(crate) struct Companion(pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, crate::router::MethodSet) + Send + Sync>);
 
-impl<S: Clone + Send + Sync + 'static> Methods<S> {
+impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
     /// The handlers with the state they take (`State<S>`), for a router without it:
     /// `get(item_json).with_state(source)`.
-    pub fn with_state<S2>(self, state: S) -> Methods<S2> {
-        Methods(self.0.with_state(state), self.1, self.2)
+    pub fn with_state<S2>(self, state: S) -> Methods<S2, K> {
+        Methods(self.0.with_state(state), self.1, self.2, std::marker::PhantomData)
     }
 
-    /// Used by `#[corten::routes]`: a route's handlers for two sets of methods. Not a public API.
+    /// Used by `#[corten::routes]`: a route's handlers for two sets of methods, of any kind until
+    /// `__patches` says otherwise. Not a public API.
     #[doc(hidden)]
-    pub fn __merge(self, other: Methods<S>) -> Self {
-        Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2))
+    pub fn __merge<K2>(self, other: Methods<S, K2>) -> Methods<S> {
+        Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2), std::marker::PhantomData)
     }
 
     /// Used by `#[corten::routes]`: `gives(CartCount)`, the layout reads the route's `GET` page
     /// gives itself, so none of them is started for it. Not a public API.
     #[doc(hidden)]
     pub fn __gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
-        Methods(self.0.gives(gives), self.1, self.2)
+        Methods(self.0.gives(gives), self.1, self.2, std::marker::PhantomData)
     }
 
+    /// Used by `#[corten::routes]` for a route that says `patches`, once it has checked the
+    /// route's `get` handler answers one (`__private::patches`). Not a public API.
+    #[doc(hidden)]
+    pub fn __patches(self) -> Methods<S, crate::Patches> {
+        Methods(self.0, self.1, self.2, std::marker::PhantomData)
+    }
+}
+
+impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
     pub(crate) fn reads(methods: crate::router::MethodSet<S>) -> Self {
-        Methods(methods, true, None)
+        Methods(methods, true, None, std::marker::PhantomData)
     }
 
     /// Handlers built here by hand, none of them for `GET`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn writes(methods: crate::router::MethodSet<S>) -> Self {
-        Methods(methods, false, None)
+        Methods(methods, false, None, std::marker::PhantomData)
     }
 }
 
+/// A route's handlers given by hand at `R` ([`crate::Area::route`], [`crate::Api::route`]) and
+/// by `#[corten::routes]` (`Routes::__route`): a route that says `patches` takes only a `get`
+/// that answers one (`K`, [`Methods`]), checked when the app is built. Its routes module checks
+/// its own `get` before this, with an error at the handler's name.
+#[inline]
+pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind>(_: &Methods<S, K>) {
+    const {
+        assert!(
+            !R::PATCHES || K::PATCHES,
+            "corten: the route says `patches`, and the get handler it is given here may answer the runtime's read with a page or a redirect: give it one that returns HtmlResult<Patches> (req.patch_or), as its routes module does"
+        )
+    };
+}
+
+/// The handler for `get` requests to a route, checked when the crate compiles; see [`Methods`],
+/// which carries what its answer is ([`crate::Answer::Kind`]).
+#[inline]
+pub fn get<H, T, S>(handler: H) -> Methods<S, <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Kind>
+where
+    H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
+    <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
+    <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
+    <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
+        crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    Methods(
+        crate::router::get(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)),
+        true,
+        None,
+        std::marker::PhantomData,
+    )
+}
+
+impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
+    /// This route's handler for `get` requests too, checked as [`get()`] checks it.
+    #[inline]
+    pub fn get<H, T>(self, handler: H) -> Methods<S, <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Kind>
+    where
+        H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
+        <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
+            crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
+        T: 'static,
+    {
+        Methods(
+            self.0.get(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)),
+            true,
+            self.2,
+            std::marker::PhantomData,
+        )
+    }
+}
+
+// Every method but `get`, whose handler's answer is no route's `Kind`.
 macro_rules! methods {
     ($($method:ident),*) => {
         $(
@@ -3640,11 +3785,11 @@ macro_rules! methods {
                 T: 'static,
                 S: Clone + Send + Sync + 'static,
             {
-                Methods(crate::router::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
+                Methods(crate::router::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), false, None, std::marker::PhantomData)
             }
         )*
 
-        impl<S: Clone + Send + Sync + 'static> Methods<S> {
+        impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
             $(
                 #[doc = concat!("This route's handler for `", stringify!($method), "` requests too, checked as [`", stringify!($method), "()`] checks it.")]
                 #[inline]
@@ -3657,13 +3802,13 @@ macro_rules! methods {
                         crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
                     T: 'static,
                 {
-                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1 || stringify!($method) == "get", self.2)
+                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1, self.2, std::marker::PhantomData)
                 }
             )*
         }
     };
 }
-methods!(get, post, put, delete, patch, head, options, trace);
+methods!(post, put, delete, patch, head, options, trace);
 
 /// The app's routes, each at its path with its handlers: what [`crate::App::new`] takes, made by a
 /// `#[corten::routes]` module's `router()`. An app whose every route is under
@@ -3715,7 +3860,8 @@ impl Routes {
 
     /// Used by `#[corten::routes]`: `R`'s handlers at its path. Not a public API.
     #[doc(hidden)]
-    pub fn __route<R: Route>(self, methods: Methods) -> Self {
+    pub fn __route<R: Route>(self, methods: Methods<(), impl crate::answer::AnswerKind>) -> Self {
+        mounted_with::<R, _, _>(&methods);
         let mut paths = self.1;
         paths.push((R::WRITTEN, methods.1));
         Routes(written::<R, ()>(self.0, methods.0), paths, self.2)
@@ -4110,7 +4256,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(crate::router::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None, std::marker::PhantomData)
                 }
             )*
 
@@ -4144,7 +4290,7 @@ pub mod __private {
                         // Never `Public`: the bound above refuses it.
                         shared: false,
                     };
-                    Methods(crate::router::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint), matches!(stringify!($method), "get" | "any"), None, std::marker::PhantomData)
                 }
             )*
         };

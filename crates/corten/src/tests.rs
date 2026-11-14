@@ -2577,6 +2577,23 @@ async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
     assert_eq!((page.status(), page.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/saved"));
 }
 
+/// A route that says `patches` mounted by hand (`Area::route`) with a `get` handler that answers
+/// one, as its routes module would: the runtime's read of it still gets the patch. One that may
+/// answer the page does not compile (`Methods`'s doctest).
+#[tokio::test]
+async fn a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_a_patch() {
+    #[derive(crate::Route)]
+    #[route("/saved")]
+    struct SavedArea;
+    async fn again(req: Req) -> HtmlResult<crate::Patches> {
+        req.patch_or(html! { <p id={MsgId}>"Saved again"</p> }, || async { req.redirect(&url_patches::Saved { after: None }) }).await
+    }
+    let app = App::new(Routes::new()).area::<SavedArea>(|area| area.route::<url_patches::Saved>(crate::route::get(again))).test();
+    let read = app.get(&url_patches::Saved { after: None }).mode(crate::Mode::Action).await;
+    assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+    assert_eq!(read.text(), r#"<p id="msg">Saved again</p>"#);
+}
+
 /// What a request through `req.patch_or` costs: `PATCH_REQUESTS` (200) requests in process, one
 /// at a time, read by the runtime (`corten: action`, the patch) or, with `PATCH_MODE=document`, by
 /// a browser without JavaScript (the page), to a handler that returns `HtmlResult` or, with
@@ -14627,6 +14644,7 @@ mod layout_reads {
         const FORMAT: crate::answer::Format = crate::answer::Format::Html;
         type Inputs = crate::answer::AnyInputs;
         type Rows = crate::answer::NotAFeed;
+        type Kind = crate::AnyAnswer;
     }
 
     async fn wrapped(req: Req) -> Wrapped {

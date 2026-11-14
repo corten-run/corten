@@ -415,6 +415,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
+        // `patches`: its `get` checked above, the methods say so, as `get` of such a handler does.
+        if route.patches.is_some() {
+            methods = q("::corten::Methods::__patches(__A0)", &[methods]);
+        }
         // An unstaged route is added apart from the others, in an area's or API's module too: the
         // app serves it outside the stages, its host check aside.
         let template = if route.unstaged.is_some() {
@@ -1260,6 +1264,13 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             );
         }
         keep.extend(q(", prefetch = false", &[]));
+    }
+    // `patches`, right after the path, for `#[derive(Route)]`: the route's `Route::PATCHES`, which
+    // `Area::route` and `Api::route` hold the `get` they are given to.
+    if serves.patches.is_some() {
+        let mut marked: Vec<TokenTree> = q(", __patches", &[]).into_iter().collect();
+        marked.append(&mut keep);
+        keep = marked;
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
     cut_args.set_span(attr.span());

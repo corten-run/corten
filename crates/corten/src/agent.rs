@@ -703,7 +703,7 @@ impl<A: Send + 'static> Tools<A> {
             let tools = tools.clone();
             async move { tools.handle(headers, &body).await }
         }));
-        crate::Methods(methods.0, methods.1, companion)
+        crate::Methods(methods.0, methods.1, companion, std::marker::PhantomData)
     }
 
     async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {

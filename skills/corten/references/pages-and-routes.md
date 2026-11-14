@@ -65,7 +65,8 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    where `route` carries the write's receipt, says `patches` (`#[route("/alerts", get = alerts,
    patches)]`) and its `get` handler returns `HtmlResult<Patches>`, answering `req.patch_or(..)`
    (the part, or the page without JavaScript): `ReadAgain::from` takes no other route, and a page
-   or redirect outside `patch_or` there does not compile. Keep every other handler `HtmlResult`;
+   or redirect outside `patch_or` there does not compile, nor does mounting that route by hand
+   (`Area::route`) with a `get` that is not `HtmlResult<Patches>`. Keep every other handler `HtmlResult`;
    never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's

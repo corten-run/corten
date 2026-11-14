@@ -102,6 +102,27 @@ pub trait Answer: IntoResponse {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
+    /// What a request from the runtime ([`crate::Mode::Action`]) can get: [`Patches`] for
+    /// `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch whenever the
+    /// runtime asked, and [`AnyAnswer`] for any other answer, an app's own too. A [`crate::Methods`]
+    /// carries its `get` handler's, so a route that says `patches` mounted by hand
+    /// ([`crate::Area::route`], [`crate::Api::route`]) takes only a `get` that answers one.
+    type Kind: AnswerKind;
+}
+
+/// The two kinds of answer ([`Answer::Kind`]): [`AnyAnswer`] and [`Patches`].
+pub trait AnswerKind: sealed::Kind {
+    /// Whether the answer is a patch whenever the runtime asked.
+    #[doc(hidden)]
+    const PATCHES: bool;
+}
+
+impl AnswerKind for AnyAnswer {
+    const PATCHES: bool = false;
+}
+
+impl AnswerKind for Patches {
+    const PATCHES: bool = true;
 }
 
 /// The rows ([`Answer::Rows`]) of an answer that is not a feed.
@@ -132,6 +153,44 @@ pub struct ForAll;
 /// An answer that may be a page, a patch or a redirect, whatever the request: what
 /// [`HtmlResult`] is, and what [`Req::page`](crate::Req::page) and
 /// [`Req::redirect`](crate::Req::redirect) make.
+///
+/// A handler's return type says which a patch-making method's answer is. One that hides it,
+/// `Result<impl Answer<Inputs = AnyInputs>>`, does not (both kinds are such an answer), so a patch
+/// made there names it after `For`:
+///
+/// ```
+/// use corten::{answer::AnyInputs, prelude::*, Answer, AnyAnswer, ForOne};
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[derive(Route)]
+/// #[route("/admin/part")]
+/// struct Part;
+///
+/// #[derive(Route)]
+/// #[route("/admin/either")]
+/// struct Either;
+///
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn part(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
+///     req.patch::<ForOne, AnyAnswer>(html! { <p id={PartId}>"Saved"</p> })
+/// }
+///
+/// async fn either(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
+///     let part = html! { <p id={PartId}>"Saved"</p> };
+///     req.patch_or::<ForOne, AnyAnswer, _, _>(part, || async {
+///         req.page(html! { <html><head><title>"Saved"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+///     })
+///     .await
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Part>(get(part)).route::<Either>(get(either)));
+/// # let _ = app.router();
+/// ```
 pub struct AnyAnswer;
 
 /// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
@@ -220,6 +279,10 @@ impl SetsCookies for ForOne {}
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
+
+    pub trait Kind {}
+    impl Kind for super::AnyAnswer {}
+    impl Kind for super::Patches {}
 
     pub trait Immutable {}
     impl Immutable for super::Media {}
@@ -340,6 +403,7 @@ impl Answer for HtmlResponse<ForOne, AnyAnswer> {
     const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// Without JavaScript it is still the page (`patch_or`'s other side), so the route starts the
@@ -349,6 +413,7 @@ impl Answer for HtmlResponse<ForOne, Patches> {
     const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = Patches;
 }
 
 /// An answer that can be [`Public`], and what it is there: the same answer, made for everyone.
@@ -679,6 +744,7 @@ impl Answer for JsonResponse {
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A JSON handler's error: an [`Error`] (`?` on any error, as in a page handler), the
@@ -802,6 +868,7 @@ impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "json")]
@@ -812,6 +879,7 @@ where
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl<A: Answer> Answer for Result<A, Error> {
@@ -819,18 +887,21 @@ impl<A: Answer> Answer for Result<A, Error> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = A::Kind;
 }
 
 impl Answer for &'static str {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl Answer for String {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A status and no body: `StatusCode::NO_CONTENT` for a write that has nothing to say. An error
@@ -846,6 +917,7 @@ impl Answer for StatusCode {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// Another server's answer, passed on as it came, for a route that relays an upstream (a gateway,
@@ -921,6 +993,7 @@ impl Answer for Relay {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
@@ -1196,6 +1269,7 @@ impl Answer for Media {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A file or a page: what a route that sends a file ([`Media`], a [`Relay`] of another service's)
@@ -1326,6 +1400,7 @@ impl<A: FileAnswer> Answer for PageOr<A> {
     const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl<A: FileAnswer + ForEveryone<Named = A> + Shareable<ForAll = A>> Shareable for PageOr<A> {
@@ -1360,6 +1435,7 @@ impl Answer for LiveResponse {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A feed's snapshot or live stream, read by the runtime.
@@ -1368,6 +1444,7 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = T;
+    type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "feed")]
@@ -1743,6 +1820,7 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     const PAGE: bool = A::PAGE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
+    type Kind = A::Kind;
 }
 
 /// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
@@ -1815,6 +1893,7 @@ where
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = A::Kind;
 }
 
 /// Bytes a URL can name, which [`Public::immutable`] takes: [`Media`], or `corten::Result<Media>`.
