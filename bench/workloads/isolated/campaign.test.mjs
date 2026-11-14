@@ -1,6 +1,7 @@
 // Test module substitution is confined to this process. Production has no injected
 // runners/validators/probes. Real filesystem sealing and real IPC supervision remain.
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -27,7 +28,7 @@ mock.module("./evidence.mjs", { namedExports: { ...evidence,
   },
 } });
 mock.module("./worker.mjs", { namedExports: {
-  verifyWorkingSources(binding) { assert.deepEqual(binding, expectedPlan.bindings[0]); if (mode === "source-changed") throw new Error("working source differs"); },
+  verifyWorkingSources(binding) { assert.ok(isDeepStrictEqual(binding, expectedPlan.bindings[0]), "working source binding differs"); if (mode === "source-changed") throw new Error("working source differs"); },
   matchesWorkingSource: () => true,
 } });
 function jsonPhase(plan, phase, receiptPath) {
@@ -41,7 +42,7 @@ function jsonPhase(plan, phase, receiptPath) {
   return b;
 }
 mock.module("./campaign-contract.mjs", { namedExports: { ...contracts,
-  validateCampaign(plan) { assert.deepEqual(plan, expectedPlan); }, jsonPhase,
+  validateCampaign(plan) { assert.ok(isDeepStrictEqual(plan, expectedPlan), "campaign plan differs"); }, jsonPhase,
   mixedPhase(plan, id) {
     const b = structuredClone(plan.bindings.find((b) => b.request.group === "mixed-production"));
     b.execution.invocation.argv.push("--native-audits", join(root, id, "mixed-native-audits.json")); return b;
@@ -55,10 +56,10 @@ mock.module("./mixed-staging.mjs", { exports: {
   },
   replayMixedSubject(plan, subject, repo, directory) {
     const { subjectSha256, ...body } = subject; assert.equal(subjectSha256, evidence.digest(JSON.stringify(body)));
-    assert.equal(subject.commit, plan.commit); assert.deepEqual(subject.sourcesManifest.snapshot, evidence.tree(directory)); return subject;
+    assert.equal(subject.commit, plan.commit); assert.ok(isDeepStrictEqual(subject.sourcesManifest.snapshot, evidence.tree(directory)), "mixed source snapshot differs"); return subject;
   },
   validateMixedDelivery(delivery, subject) {
-    assert.deepEqual(delivery, mixedDelivery(subject.subjectSha256)); return delivery;
+    assert.ok(isDeepStrictEqual(delivery, mixedDelivery(subject.subjectSha256)), "mixed audit delivery differs"); return delivery;
   },
   validateMixedRun() { return mode === "complete"; },
 } });
@@ -188,7 +189,7 @@ for (const group of groupNames) test(`${group}: one complete group runs and repl
   writeFileSync(join(h.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(h)));
   const request = { folder: root, round: s.plan.round, commit: s.plan.commit };
   const before = evidence.tree(root), saved = await validateSavedCampaign(request);
-  assert.deepEqual(evidence.tree(root), before, "inspection is read-only");
+  assert.ok(isDeepStrictEqual(evidence.tree(root), before), "inspection is read-only");
   assert.equal(saved.status, "verified", JSON.stringify(saved));
   assert.equal(saved.schema, "benchmark-isolated-group-campaign-inspection/v1");
   assert.deepEqual(saved.selection.groups, [{ group, apps: s.plan.bindings[0].selection.apps, contractSha256: undefined }]);

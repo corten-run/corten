@@ -1,5 +1,6 @@
 // Intrinsic native replay only. Review transport and operator authority remain separate.
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { validateSaved } from "../../../mixed-production/verify.mjs";
 import { parseArgs } from "../../../mixed-production/run.mjs";
@@ -91,7 +92,7 @@ export async function inspectSaved(binding, folder) {
     result.attemptComplete = false; result.cleanupComplete = false; result.comparisonEligibleApps = [];
     result.blockers = ["mixed-native-proof-missing-or-contradictory"];
   } finally {
-    if (before) assert.deepEqual(tree(folder), before, "native-evidence-mutated-or-invalid");
+    if (before) assert.ok(isDeepStrictEqual(tree(folder), before), "native-evidence-mutated-or-invalid");
   }
   return result;
 }
