@@ -5,6 +5,7 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rea
 import { join, posix } from "node:path";
 import { durable, readRegular, tree } from "./evidence.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
+import { executableReference, participantExecutables } from "./participant-executables.mjs";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const serial = (v) => `${JSON.stringify(v)}\n`;
@@ -55,7 +56,7 @@ function executableHash(at, executables) {
   if (!hash) { hash = sha(readFileSync(`${at}/exe`)); executables.set(key, hash); }
   return hash;
 }
-function snapshot(path, executables) {
+function snapshot(path, executables, pending) {
   const groups = [], processes = [];
   function walk(current) {
     const group = readGroup(current); groups.push(group);
@@ -63,11 +64,12 @@ function snapshot(path, executables) {
       assert.match(pid, /^[1-9]\d*$/);
       // A racing exit is an observation gap, never silently omitted membership.
       const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
-      const executableSha256 = executableHash(at, executables);
+      const executable = pending ? pending.capture(identity.pid) : { executableSha256: executableHash(at, executables) };
       const cgroup = readFileSync(`${at}/cgroup`, "utf8"); assert.equal(groupPath(cgroup), current);
       const type = readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null;
       assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
-      processes.push({ stat, cgroup, executableSha256, type }); // No environment or arbitrary arguments.
+      pending?.recheck(identity.pid, executable);
+      processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
     for (const entry of readdirSync(join(root, current), { withFileTypes: true })) {
       assert.ok(!entry.isSymbolicLink());
@@ -99,7 +101,7 @@ function participantGroup(path, id) {
 }
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
-export function captureBrowserParticipant(id, executables = new Map()) {
+export function captureBrowserParticipant(id, executables = new Map(), pending) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
   const inspect = () => {
@@ -114,7 +116,7 @@ export function captureBrowserParticipant(id, executables = new Map()) {
   assert.equal(identity.pid, pid);
   const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
   participantGroup(path, id);
-  const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables);
+  const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
   assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
   assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
   assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
@@ -122,12 +124,12 @@ export function captureBrowserParticipant(id, executables = new Map()) {
   return { startedAt, endedAt: Date.now(), container,
     kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
 }
-function browserDocker(excluded, executables) {
+function browserDocker(excluded, executables, pending) {
   const inventory = docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort();
   assert.equal(new Set(inventory).size, inventory.length); inventory.forEach((id) => assert.match(id, containerId));
   const participants = [], gaps = [];
   for (const id of inventory.filter((id) => !excluded.has(id))) {
-    try { participants.push(captureBrowserParticipant(id, executables)); }
+    try { participants.push(captureBrowserParticipant(id, executables, pending)); }
     catch { gaps.push(id); } // No daemon diagnostics, commands, labels or environment retained.
   }
   return { inventory, participants, gaps };
@@ -168,19 +170,19 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     // kernel child is removable; retained partial disk evidence is not deleted.
     rmdirSync(join(root, path)); throw error;
   }
-  const executables = new Map(), records = new Set();
+  const executables = new Map(), records = new Set(), pending = browser ? participantExecutables() : null;
   let bytes = 0, samples = 0, closed = false, timer, observerError = null, attached = false;
   function sample() {
     let observed;
     for (let attempt = 0; ; attempt++) {
-      try { observed = snapshot(path, executables); break; }
+      try { observed = snapshot(path, executables, pending); break; }
       catch (error) { if (attempt >= 2 || !["ENOENT", "ESRCH"].includes(error.code)) throw error; }
     }
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
     observed.processes = observed.processes.map((p) => {
-      const key = sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup, executableSha256: p.executableSha256, type: p.type }));
+      const key = processRecordKey(p);
       if (!records.has(key)) {
         const value = serial(p); bytes += Buffer.byteLength(value);
         assert.ok(bytes <= 256 * 2 ** 20, "host observation byte bound exceeded");
@@ -188,7 +190,7 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
       }
       return key;
     });
-    if (browser) observed.docker = browserDocker(excluded, executables);
+    if (browser) observed.docker = browserDocker(excluded, executables, pending);
     const value = serial(observed); bytes += Buffer.byteLength(value);
     assert.ok(bytes <= 256 * 2 ** 20, "host observation byte bound exceeded");
     const data = Buffer.from(value); let offset = 0;
@@ -199,7 +201,7 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
   // Hash its actual executable before sampling starts, not across the empty-to-
   // attached boundary. Attach independently rechecks the executable cache key.
   try { executableHash(`/proc/${pid}`, executables); sample(); }
-  catch (error) { closeSync(fd); rmdirSync(join(root, path)); throw error; }
+  catch (error) { pending?.close(); closeSync(fd); rmdirSync(join(root, path)); throw error; }
   return Object.freeze({
     attach(pid) {
       assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
@@ -214,6 +216,10 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
       let empty = false;
       try { sample(); empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
       catch { observerError = "host-observation-gap"; }
+      if (pending) {
+        try { durable(join(directory, "executables.json"), serial(pending.finish())); }
+        catch { observerError = "host-executable-proof-incomplete"; }
+      }
       try { fsyncSync(fd); } finally { closeSync(fd); }
       const terminal = result.terminal && empty;
       durable(join(directory, "terminal.json"), `${JSON.stringify({ terminal, attached, empty, samples, observerError,
@@ -222,6 +228,24 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
       return tree(directory);
     },
   });
+}
+
+function processRecordKey(p) {
+  return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
+    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
+      : { executableSha256: p.executableSha256 }), type: p.type }));
+}
+
+export function resolveParticipantExecutables(process, proof) {
+  if (!Object.hasOwn(process, "executableRef")) return process;
+  assert.equal(proof?.schema, "benchmark-participant-executables/v1");
+  assert.ok(!Object.hasOwn(process, "executableSha256"));
+  assert.equal(process.executableRef, executableReference(process.executableIdentity));
+  const matches = proof.executables.filter((e) => e.ref === process.executableRef); assert.equal(matches.length, 1);
+  const entry = matches[0];
+  assert.deepEqual(Object.keys(entry).sort(), ["identity", "ref", "sha256"]);
+  assert.deepEqual(entry.identity, process.executableIdentity); assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+  return { ...process, executableSha256: entry.sha256 };
 }
 
 /** Intrinsic replay of actual retained observations, not authentication of their origin. */
@@ -248,6 +272,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   for (let i = 0; i < ancestorPaths.length; i++) for (const field of ["cpu.max", "cpuset.cpus.effective", "memory.max"])
     assert.equal(terminal.ancestors[i].files[field], context.ancestors[i].files[field], "inherited resource controls changed");
   const samples = readRegular(join(directory, "samples.jsonl")).toString().trimEnd().split("\n").map((s) => JSON.parse(s));
+  const executableProof = before.entries.some((e) => e.path === "executables.json") ? read("executables.json") : null;
   assert.equal(samples.length, terminal.samples); assert.ok(samples.length >= 3);
   let previous = -1, controlsComplete = true; const identities = new Map(), accounting = new Map(), records = new Map();
   for (const sample of samples) {
@@ -255,16 +280,17 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     if (previous >= 0 && sample.at - previous > maximumSampleGapMs) controlsComplete = false;
     previous = sample.at;
     sample.processes = sample.processes.map((p) => {
-      if (typeof p !== "string") return p; // Full raw observations are also replayable.
+      if (typeof p !== "string") return p.executableRef ? resolveParticipantExecutables(p, executableProof) : p;
       assert.match(p, /^[a-f0-9]{64}$/);
       if (!records.has(p)) {
         const record = read(`processes/${p}.json`);
-        assert.equal(sha(serial({ ...processIdentity(record.stat), cgroup: record.cgroup,
-          executableSha256: record.executableSha256, type: record.type })), p);
-        records.set(p, record);
+        assert.equal(processRecordKey(record), p);
+        records.set(p, record.executableRef ? resolveParticipantExecutables(record, executableProof) : record);
       }
       return records.get(p);
     });
+    for (const participant of sample.docker?.participants ?? []) if (participant.kernel)
+      participant.kernel.processes = participant.kernel.processes.map((p) => resolveParticipantExecutables(p, executableProof));
     const members = new Map(), groups = new Set();
     for (const group of sample.groups) {
       assert.ok(!groups.has(group.path)); groups.add(group.path);
@@ -318,21 +344,54 @@ export function inspectBrowserParticipants(subject, observation) {
   assert.equal(subject.schema, "native-browser-host-subject/v2");
   assert.ok(Array.isArray(subject.participants));
   const ids = new Set(), { samples } = observation;
+  const baseline = new Set(observation.context.dockerBaseline);
+  assert.equal(baseline.size, observation.context.dockerBaseline.length);
+  for (const id of baseline) assert.match(id, containerId);
   for (const p of subject.participants) {
     assert.match(p.id, containerId); assert.ok(!ids.has(p.id)); ids.add(p.id);
+    assert.ok(!baseline.has(p.id));
+  }
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i], d = sample.docker;
+    if (!d) return false;
+    assert.ok(Number.isSafeInteger(sample.at));
+    if (i && (sample.at < samples[i - 1].at || sample.at - samples[i - 1].at > maximumSampleGapMs)) return false;
+    assert.ok(Array.isArray(d.inventory) && Array.isArray(d.participants) && Array.isArray(d.gaps));
+    const inventory = new Set(d.inventory), captured = new Set(), gaps = new Set(d.gaps);
+    assert.equal(inventory.size, d.inventory.length); assert.equal(gaps.size, d.gaps.length);
+    for (const id of inventory) {
+      assert.match(id, containerId);
+      if (!baseline.has(id) && !ids.has(id)) return false;
+    }
+    for (const r of d.participants) {
+      const id = r.container.id; assert.match(id, containerId);
+      assert.ok(!captured.has(id) && inventory.has(id) && !baseline.has(id)); captured.add(id);
+      if (!ids.has(id)) return false;
+      assert.ok(Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.endedAt) && r.endedAt >= r.startedAt);
+      if (sample.at > r.endedAt || r.startedAt - sample.at > maximumSampleGapMs
+        || samples[i + 1] && samples[i + 1].at < r.endedAt) return false;
+    }
+    for (const id of gaps) { assert.match(id, containerId); assert.ok(inventory.has(id) && !baseline.has(id)); }
+    if (gaps.size || [...inventory].some((id) => !baseline.has(id) && !captured.has(id))) return false;
+  }
+  for (const p of subject.participants) {
     assert.match(p.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(["application", "upstream", "artifact"].includes(p.role));
     assert.equal(p.terminal.id, p.id); assert.equal(p.terminal.imageId, p.imageId);
-    assert.ok(!observation.context.dockerBaseline.includes(p.id));
+    assert.equal(p.terminal.restartCount, 0);
+    for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(p.terminal.state[key], false);
     if (p.window === null) {
       assert.equal(p.terminal.restartCount, 0);
       assert.equal(p.terminal.state.Status, "created");
       assert.equal(p.terminal.state.Running, false); assert.equal(p.terminal.state.Pid, 0);
+      assert.equal(p.terminal.state.ExitCode, 0);
       for (const key of ["Paused", "Restarting", "OOMKilled", "Dead"]) assert.equal(p.terminal.state[key], false);
       for (const key of ["StartedAt", "FinishedAt"]) assert.match(p.terminal.state[key], /^0001-01-01T00:00:00(?:\.0+)?Z$/);
       for (const r of samples.flatMap((s) => s.docker?.participants.filter((r) => r.container.id === p.id) ?? [])) {
         assert.equal(r.kernel, null); assert.equal(r.container.imageId, p.imageId); assert.equal(r.container.restartCount, 0);
         assert.equal(r.container.state.Status, "created"); assert.equal(r.container.state.Running, false); assert.equal(r.container.state.Pid, 0);
+        assert.equal(r.container.state.ExitCode, 0);
+        for (const key of ["Paused", "Restarting", "OOMKilled", "Dead"]) assert.equal(r.container.state[key], false);
         for (const key of ["StartedAt", "FinishedAt"]) assert.equal(r.container.state[key], p.terminal.state[key]);
       }
       continue; // Replayed stopped extraction or witnessed failed start, not an OS quota claim.
@@ -341,15 +400,25 @@ export function inspectBrowserParticipants(subject, observation) {
     const { startedAt, endedAt } = p.window;
     assert.ok(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt >= startedAt);
     assert.ok(startedAt >= subject.executionWindow.startedAt && endedAt <= subject.executionWindow.endedAt);
+    if (p.terminal.state.Running) {
+      assert.equal(p.terminal.state.Status, "running");
+      assert.ok(Number.isSafeInteger(p.terminal.state.Pid) && p.terminal.state.Pid > 0);
+    } else {
+      assert.equal(p.terminal.state.Status, "exited"); assert.equal(p.terminal.state.Pid, 0);
+    }
     const covering = samples.filter((s, i) => s.at >= startedAt && s.at <= endedAt
       || s.at <= startedAt && samples[i + 1]?.at >= startedAt
       || s.at >= endedAt && samples[i - 1]?.at <= endedAt);
     if (covering.length < 2 || covering.some((s) => !s.docker || s.docker.gaps.includes(p.id))) return false;
-    const records = covering.flatMap((s) => s.docker.participants.filter((r) => r.container.id === p.id));
+    const records = samples.flatMap((s) => s.docker.participants.filter((r) => r.container.id === p.id));
     const live = records.filter((r) => r.kernel !== null);
     if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
       || live[0].startedAt > startedAt + maximumSampleGapMs
       || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;
+    for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
+      && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
+    for (const s of samples.filter((s) => s.at >= startedAt && s.at <= endedAt))
+      if (!s.docker.participants.some((r) => r.container.id === p.id && r.kernel)) return false;
     let identity, previousEnd = -1;
     const accounting = new Map(), ancestorControls = new Map();
     for (const r of records) {
@@ -358,20 +427,35 @@ export function inspectBrowserParticipants(subject, observation) {
       if (r.endedAt - r.startedAt > maximumSampleGapMs) return false;
       const c = r.container;
       assert.equal(c.imageId, p.imageId); assert.equal(c.restartCount, 0);
-      assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
       for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(c.state[key], false);
-      if (!r.kernel) { assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0); continue; }
+      if (!r.kernel && c.state.Status === "created") {
+        assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0); assert.equal(c.state.OOMKilled, false);
+        for (const key of ["StartedAt", "FinishedAt"]) assert.match(c.state[key], /^0001-01-01T00:00:00(?:\.0+)?Z$/);
+        if (r.startedAt > startedAt + maximumSampleGapMs) return false;
+        continue;
+      }
+      assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
+      if (!r.kernel) {
+        assert.equal(c.state.Status, "exited"); assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
+        if (r.endedAt < endedAt - maximumSampleGapMs) return false;
+        if (!p.terminal.state.Running) for (const key of ["ExitCode", "OOMKilled", "FinishedAt"])
+          assert.equal(c.state[key], p.terminal.state[key]);
+        continue;
+      }
       assert.equal(c.state.Status, "running"); assert.equal(c.state.Running, true);
       const k = r.kernel, rootIdentity = processIdentity(k.stat), path = groupPath(k.cgroup);
       assert.equal(k.bootId, observation.context.bootId); participantGroup(path, p.id);
       assert.equal(rootIdentity.pid, c.state.Pid);
+      if (p.terminal.state.Running) assert.equal(rootIdentity.pid, p.terminal.state.Pid);
       const currentIdentity = `${rootIdentity.pid}:${rootIdentity.startTicks}:${path}`;
       identity ??= currentIdentity; assert.equal(currentIdentity, identity);
-      assert.ok(k.at >= r.startedAt && k.at <= r.endedAt);
+      assert.ok(Number.isSafeInteger(k.at) && k.at >= r.startedAt && k.at <= r.endedAt);
       const ancestors = []; for (let at = posix.dirname(path); ; at = posix.dirname(at)) { ancestors.push(at); if (at === "/") break; }
       assert.deepEqual(k.ancestors.map((g) => g.path), ancestors);
       for (const g of k.ancestors) {
-        if (!effectiveControls(g.files)) return false;
+        // cgroup v2 exposes no cpu.max/memory.max on its actual root. Their
+        // absence there is retained, not interpreted as child defaults or caps.
+        if (!effectiveControls(g.files) && (g.path !== "/" || g.files["cpuset.cpus.effective"] === null)) return false;
         const controls = ["cpu.max", "cpuset.cpus.effective", "memory.max"].map((f) => g.files[f]);
         if (ancestorControls.has(g.path)) assert.deepEqual(controls, ancestorControls.get(g.path));
         ancestorControls.set(g.path, controls);

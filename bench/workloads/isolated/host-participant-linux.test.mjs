@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
-import { captureBrowserParticipant, inspectBrowserParticipants, processIdentity } from "./host-lifetime.mjs";
+import { captureBrowserParticipant, inspectBrowserParticipants, processIdentity, resolveParticipantExecutables } from "./host-lifetime.mjs";
+import { participantExecutables } from "./participant-executables.mjs";
 
 const enabled = process.platform === "linux" && process.env.BROWSER_PARTICIPANT_OS_TESTS === "1";
 test("actual owned Docker participant has host-visible PID/start/cgroup and effective controls", {
@@ -18,13 +19,20 @@ test("actual owned Docker participant has host-visible PID/start/cgroup and effe
     console.log("Actual private-PID namespace mismatch rejected; no OS qualification");
     return;
   }
-  const records = [], executables = new Map();
-  for (let i = 0; i < 3; i++) { records.push(captureBrowserParticipant(id, executables)); await setTimeout(100); }
+  const records = [], executables = new Map(), pending = participantExecutables();
+  let proof, hashMs;
+  try {
+    for (let i = 0; i < 3; i++) { records.push(captureBrowserParticipant(id, executables, pending)); await setTimeout(100); }
+    const before = Date.now(); proof = pending.finish(); hashMs = Date.now() - before;
+  } finally { pending.close(); }
+  for (const r of records) if (r.kernel)
+    r.kernel.processes = r.kernel.processes.map((p) => resolveParticipantExecutables(p, proof));
   const first = records[0], last = records.at(-1);
   assert.ok(records.every((r) => r.kernel));
   const p = { id, imageId: first.container.imageId, role: "application", app: "fixture", case: "kernel-control",
     window: { startedAt: first.endedAt, endedAt: last.startedAt }, terminal: { id, imageId: first.container.imageId,
-      state: last.container.state, limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } };
+      restartCount: last.container.restartCount, state: structuredClone(last.container.state),
+      limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } };
   const subject = { schema: "native-browser-host-subject/v2", executionWindow: { startedAt: first.startedAt, endedAt: last.endedAt }, participants: [p] };
   const observation = { context: { bootId: first.kernel.bootId, dockerBaseline: [] },
     samples: records.map((r) => ({ at: r.kernel.at, docker: { inventory: [id], participants: [r], gaps: [] } })) };
@@ -32,8 +40,13 @@ test("actual owned Docker participant has host-visible PID/start/cgroup and effe
   console.log(JSON.stringify({ observations: records.map((r) => ({ duration: r.endedAt - r.startedAt, at: r.kernel.at,
     ancestors: r.kernel.ancestors.map((g) => ({ path: g.path,
       controls: Object.fromEntries(["cpu.max", "cpuset.cpus.effective", "memory.max"].map((k) => [k, g.files[k]])) })) })),
-    resourceReplay: verified ? "verified" : "blocked" }));
+    postSampleHashMs: hashMs, resourceReplay: verified ? "verified" : "blocked" }));
   assert.equal(verified, true);
+  const crossedPid = structuredClone(subject); crossedPid.participants[0].terminal.state.Pid++;
+  assert.throws(() => inspectBrowserParticipants(crossedPid, observation));
+  assert.equal(inspectBrowserParticipants({ ...subject, participants: [] }, observation), false);
+  const unknown = structuredClone(observation); unknown.samples[1].docker.inventory.push("0".repeat(64));
+  assert.equal(inspectBrowserParticipants(subject, unknown), false);
   const root = last.kernel.groups.find((g) => g.path === last.kernel.cgroup.trim().slice(3));
   console.log(JSON.stringify({ participant: id, ...processIdentity(first.kernel.stat), cgroup: first.kernel.cgroup.trim(),
     bootId: first.kernel.bootId, samples: records.length,

@@ -220,6 +220,58 @@ code need not redundantly claim the same external host fact.
 already inside this explicitly prepared delegated test-unit layout. On other hosts it
 skips with that reason. It does not create a service or run a benchmark.
 
+Browser v2 host composition additionally reconciles every nonbaseline Docker inventory
+member with the native replay's original full-ID population and its actual snapshot.
+Unknown scopes, contradictory inventories, unexplained gaps or an internal participant
+observation gap over one second cannot qualify. Creation before a running window and
+exit after it remain explicit states, not missing live samples. A still-running native
+terminal snapshot must name the actually observed PID/incarnation and zero restart count;
+a replay-proven exited failure keeps PID zero and does not become a passing app. CPU and
+memory limit files may be absent only on the actual cgroup-v2 root. Actual root observations
+are retained and compared unchanged; required non-root/command controls remain mandatory.
+
+For browser processes, the sampler opens the actual `/proc/<observed-pid>/exe` inode,
+records its device/inode/size/nanosecond modification/change identity and rechecks it
+with the live PID/start/cgroup bookends. It pins that descriptor while continuing raw
+sampling; it does not hash executable contents synchronously in a sampling interval.
+After the final resource sample, a fixed local Node helper hashes only those inherited
+descriptors. Before/after descriptor identity must equal the original sampled identity.
+The helper must exit successfully within the existing 30-second bootstrap bound before
+finish returns or another command starts. Descriptor closure is unconditional. Unresolved,
+changed or unsealed hashes cannot qualify; `executables.json` binds the resolved digest
+to its sampled reference. Sample timestamps and the one-second gap gate are not rewritten
+or relaxed. This post-sampling work is not benchmark timing and is not an OS authority
+claim by the saved JSON. The existing pre-gated bootstrap executable check is unchanged.
+
+`host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
+or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
+with one CPU and 1 GiB memory, using the native pinned image
+`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+The test only reads the original full ID; it does not create, stop or remove containers.
+It requires root-readable `/proc` and cgroup v2 in the Docker daemon's actual host PID
+and cgroup namespaces, plus the local Docker CLI/socket and Linux Node. Socket access
+alone does not prove namespace correspondence. The caller must independently verify
+the fixture's ownership before removal and save positive original-ID absence afterward.
+
+Run with `BROWSER_PARTICIPANT_OS_TESTS=1`, `BROWSER_PARTICIPANT_ID=<original-full-id>` and
+`BROWSER_PARTICIPANT_NAMESPACE=matched`:
+
+```sh
+node --test --test-concurrency=1 bench/workloads/isolated/host-participant-linux.test.mjs
+```
+
+For the mandatory delegated-unit control, use the same fresh owned unit properties and
+fixed round as the lifetime fixture above; set those three environment values on the
+unit and execute `sh test-fixtures/linux-participant-unit.sh <absolute-node> <checkout>`
+from this directory. That helper uses the production `supervisorBootstrap`; it does not
+create/adopt a unit or alter resource budgets. Separately run the same Node test with
+`BROWSER_PARTICIPANT_NAMESPACE=mismatched` in a fresh private PID namespace while retaining
+the same daemon socket and original container ID. Only an actual `/proc` identity/namespace
+mismatch passes this negative control, not Docker timeout or permission failure. Portable
+CI must exclude this file explicitly and mandatory Linux CI must select it explicitly.
+These controls do not establish the full browser matrix, source authority, host exclusivity
+or campaign readiness. The v2 native adapter/producer integration remains a separate gate.
+
 ## Awaitable intrinsic API
 
 `await validateCampaign({folder,round,commit})` from campaign-verify.mjs accepts the extracted
