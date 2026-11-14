@@ -2701,7 +2701,11 @@ rules something out.
     (a service worker's global, `navigator.connection`) they declare the part
     they use and cast once where the value enters. TypeScript 7.0.2's DOM library now declares
     the Navigation API, so the former `navigation.d.ts` is removed: only `NavigateEvent.info`
-    is narrowed to the runtime's own symbol-keyed `Info` at the listener boundary. The DOM's
+    is narrowed to the runtime's own symbol-keyed `Info` at the listener boundary. The shared
+    `RuntimeNavigateEvent` typedef also types `startedBy`, so its separately annotated event
+    cannot restore the DOM's unchecked `info`. `scripts/navigation-types.test.mjs` compiles
+    misspelled source-property reads inside both functions in memory and requires TS2339,
+    without exporting the runtime's private symbol keys for a fixture. The DOM's
     `NavigationResult` dictionary has optional fields; `go` asserts both returned promises,
     which `navigate()` always supplies. These are type-only changes, with the same minified
     runtime. A form's
@@ -2765,7 +2769,9 @@ rules something out.
     again on 2026-11-09; 2026-11-14, reopened for TypeScript 7.0.2 on `4cbc5e627` and the change:
     its DOM declarations read, the redundant Navigation API declarations removed, the runtime
     type-checked and its minified build checked unchanged, and the existing unsafe-escape
-    fixtures run through TypeScript 7's native parser API.
+    fixtures run through TypeScript 7's native parser API; 2026-11-14, TypeScript 7.0.2 on
+    `c34532753` and the change: the helper's unchecked `info` reproduced by the compiler probe,
+    then both helper and listener checked through the shared event typedef and the probes.
 
 41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
     `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept

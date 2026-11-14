@@ -9,6 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   getting-started guide, and use its DOM declarations for the Navigation API. Move the
   repository's AST checks off the removed JavaScript API, using the exactly pinned compiler's
   unstable native parser API until a stable parsing entry point is available.
+  Keep navigation `info` checked in both the listener and its `startedBy` helper through one
+  shared narrowed event type, with compiler regression probes for both reads.
 
 - Link to [corten.run](https://corten.run) from the README's introduction.
 

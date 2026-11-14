@@ -2407,6 +2407,7 @@ function readLater(seconds, wanted, read) {
 /**
  * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
  * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
+ * @typedef {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} RuntimeNavigateEvent
  */
 // The Navigation API, where the browser has it.
 const navigation = window.navigation;
@@ -2462,7 +2463,7 @@ function sendsAs(form, submitter) {
 
 /**
  * What started a navigation, if anything: a link, a form, or the button that sent one.
- * @param {NavigateEvent} event
+ * @param {RuntimeNavigateEvent} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
@@ -2490,7 +2491,7 @@ function posts(event) {
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
 // Only this module has these symbol keys; another script's info has none of them.
-navigation?.addEventListener("navigate", (/** @type {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} */ event) => {
+navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
