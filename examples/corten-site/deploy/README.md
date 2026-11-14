@@ -119,8 +119,10 @@ The relay gives the new droplet ten minutes to take the key and twenty-five to s
 is one new try of a step that failed on it; when either runs out the apply fails with the
 address where it was, the new droplet is left as it is, and the next run
 (`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
-is there. A droplet that cannot set itself up from what it was handed, however often it is
-asked, is replaced by one that is handed nothing
+is there. A droplet such a run left, which says it is set up already and does not serve, is
+replaced by another that is handed the same (`gh workflow run site-machine.yml -f replace=true`):
+the address still moves only once that one serves. Where no droplet sets itself up from what
+it is handed, the next is handed nothing
 (`gh workflow run site-machine.yml -f without_handover=true`, which makes a new one): the address
 moves first, as below. What the address's own move costs is in each run's log: the site is
 asked once a second while the apply runs, and the run says how many of those went
@@ -129,14 +131,21 @@ unanswered.
 The address moves first, and the site is away until the new droplet has a certificate and a
 release of its own, where nothing can be handed over: there is no handover key, the droplet
 serving was made before there was one or with another, or the site does not answer when the
-apply reaches that step (it is asked three times). The run says which, and warns where a
+apply reaches that step (it is asked twelve times, five seconds apart, so a deploy being put
+back is not taken for a site that is down). The run says which, and warns where a
 droplet that serves would not hand over. A droplet that serves and could not be asked over
-SSH at all is not among these: the apply fails with the address where it was, so whoever
-keeps its sshd busy does not take the site away. A repository set up before there was a handover
+SSH at all is not among these: the apply fails with the address where it was, and says what
+ssh said, so whoever keeps its sshd busy does not take the site away. That is also what
+happens, at every apply, where the droplet's host key is no longer the one the workflow
+holds, until a run with `-f without_handover=true`; and where the handover key is not one
+the runner's ssh can read, which every droplet would refuse. A repository set up before
+there was a handover
 gets its key from a second run of `bootstrap.sh`, and that is best done before the change
 that brings the handover is applied: the droplet made with the key is then the one that
-change makes anyway. That is also every replacement made before
-there was a handover, and that time is a machine's to install its packages and get a
+change makes anyway.
+
+Every replacement made before there was a handover moved the address first, and the time
+the site is then away is a machine's to install its packages and get a
 certificate, and then a whole run of the Site workflow, which waits for a runner and tests
 and builds before it ships. For the first machine made for
 corten.run (one run, on `a7bbe4cc9`, with the name already at DigitalOcean's servers) the
@@ -877,9 +886,14 @@ GitHub reading the lines the workflow prints as a warning, the input that hands 
 nothing, how long a reserved address takes to move and whether a request in flight is lost
 to it, and a renewal on a machine that was handed its certificate. The rig is not in the
 repository, as none of this directory's rehearsals are: CI lints these scripts, validates
-`main.tf`, and runs the handover's command in a container against the names a deploy could
-give a release, a handover cut short and one with no release in it
-(`infra/handover.test.sh`); the rest is rehearsed again by whoever changes it. The
+`main.tf`, and runs three tests in containers. `infra/handover.test.sh` runs the handover's
+command against the names a deploy could give a release, a handover cut short and one with
+no release in it. `provision.test.sh` runs the lines of `provision.sh` that write in the
+deploy user's directories, over links that user could have put there.
+`infra/relay.test.sh` runs the relay against two sshds, with a stand-in for the command
+the key runs on a machine and one for the site, and with the relay's waits passing at once:
+it sees which way the relay decides, and none of what a real machine does. The rest is
+rehearsed again by whoever changes it. The
 machine serving when this was merged was made before there was a handover, so the first
 replacement after it moves the address first; the one after that is the first to be handed
 anything, and its run's count is the first measure of the move.

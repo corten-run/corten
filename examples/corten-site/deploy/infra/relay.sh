@@ -28,15 +28,18 @@ serves() {
     got=$(curl -fsS --max-time 10 "$@" "https://$DOMAIN/" 2>/dev/null) || return 1
     grep -q 'built from' <<< "$got"
 }
-# Three times, five seconds apart: one refusal may be the network's, or a deploy's restart.
-thrice() {
-    local _
-    for _ in 1 2 3; do
+# asks <how often> <command>: asked five seconds apart until it is so.
+asks() {
+    local often=$1 tries
+    shift
+    for ((tries = 0; tries < often; tries++)); do
         if "$@"; then return 0; fi
         sleep 5
     done
     return 1
 }
+# One refusal may be the network's, or a deploy's restart.
+thrice() { asks 3 "$@"; }
 moves_first() {
     say "$1" "$2 The address moves to the new machine first, and the site is away until that machine has a certificate and a release of its own."
     exit 0
@@ -45,15 +48,22 @@ moves_first() {
 if [ -z "${HANDOVER_KEY:-}" ]; then
     moves_first notice "There is no handover key (SITE_HANDOVER_KEY, deploy/README.md), or this run was told to go without it."
 fi
-# Nothing to keep serving: the first machine, or a site that is down already.
-if ! thrice serves; then
-    moves_first notice "https://$DOMAIN/ does not answer as the site now."
+# Nothing to keep serving: the first machine, or a site that is down already. Asked for a
+# minute and more, since what is decided is whether the site goes away: a deploy that failed
+# and is being put back, or a network that drops a few requests, is not a site that is down.
+if ! asks 12 serves; then
+    moves_first notice "https://$DOMAIN/ does not answer as the site now, asked twelve times."
 fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-printf '%s\n' "$HANDOVER_KEY" > "$work/key"
-chmod 600 "$work/key"
+(umask 077 && printf '%s\n' "$HANDOVER_KEY" > "$work/key")
+# A key ssh cannot read is refused by every machine, as a key the machine does not know is,
+# and that one would move the address first.
+if ! ssh-keygen -y -P '' -f "$work/key" > /dev/null 2>&1; then
+    say error "The handover key (SITE_HANDOVER_KEY) is not a private key ssh can read. The address has not moved, and the old machine serves. Make the key again (deploy/README.md)."
+    exit 1
+fi
 host=$(cut -d' ' -f1-2 <<< "$HOST_KEY_PUBLIC")
 printf '%s %s\n' "$DOMAIN" "$host" "$NEW" "$host" > "$work/known_hosts"
 # A machine that stops answering ends the connection within the minute, as in the Site
@@ -92,7 +102,11 @@ done
 if [ "$old" = no ]; then
     moves_first warning "The machine serving $DOMAIN does not hand over what it serves with."
 elif [ "$old" = away ]; then
-    say error "The machine serving $DOMAIN could not be asked over SSH whether it hands over, in three tries. The address has not moved, and that machine goes on serving. Run the workflow again; where it never answers, a new machine that is handed nothing takes its place (deploy/README.md)."
+    # What ssh said last, as one line: a host key that is not the one given is told from a
+    # machine that did not answer by it.
+    why=$(tail -n 1 "$work/refusal" | tr -d '\r' | cut -c1-200)
+    why=${why%.}
+    say error "The machine serving $DOMAIN could not be asked over SSH whether it hands over, in three tries: ${why:-ssh said nothing}. The address has not moved, and that machine goes on serving. Run the workflow again; where it never answers, or its host key is not the one given, a new machine that is handed nothing takes its place (deploy/README.md)."
     exit 1
 fi
 
@@ -120,7 +134,7 @@ if ! serves --resolve "$DOMAIN:443:$NEW"; then
     # A machine that is set up already takes nothing: one that an earlier run handed
     # everything, and that did not answer the one question above.
     elif ! thrice serves --resolve "$DOMAIN:443:$NEW"; then
-        say error "What $DOMAIN is served with did not reach the new machine at $NEW: the lines above say which end refused. The address has not moved, and the old machine serves. Run the workflow again; a new machine that says it is set up already and does not serve is replaced by one that is handed nothing (deploy/README.md)."
+        say error "What $DOMAIN is served with did not reach the new machine at $NEW: the lines above say which end refused. The address has not moved, and the old machine serves. Run the workflow again; a new machine that says it is set up already and does not serve is replaced by another that is handed the same (-f replace=true, deploy/README.md)."
         exit 1
     fi
     # Twenty-five minutes: a step that fails on the new machine (a package mirror out of

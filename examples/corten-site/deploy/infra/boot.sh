@@ -116,6 +116,8 @@ take_over() {
         # link there. What that user's tar writes is that user's, whatever its mode was.
         runuser -u deploy -- rm -rf "/opt/corten-site/releases/$name"
         tar -cf - -C "$handed" "$name" | runuser -u deploy -- tar -xf - -C /opt/corten-site/releases
+        # The pipe ends as its reader does, whatever the tar that writes into it met.
+        [ -x "/opt/corten-site/releases/$name/corten-site" ] || continue
         # As release.sh points `current` at a release: made beside it and moved over it.
         runuser -u deploy -- ln -sfn "/opt/corten-site/releases/$name" /opt/corten-site/next
         runuser -u deploy -- mv -T /opt/corten-site/next /opt/corten-site/current

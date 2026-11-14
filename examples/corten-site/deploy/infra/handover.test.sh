@@ -51,6 +51,8 @@ install -d "$releases/$good/etc/letsencrypt"
 echo "the release's own" > "$releases/$good/etc/letsencrypt/cli.ini"
 cp /bin/true "$releases/$good/runs-as-owner"
 chmod 4755 "$releases/$good/runs-as-owner"
+echo "a deploy's" > "$releases/$good/anothers"
+chown 12345:12345 "$releases/$good/anothers"
 ln -s /etc/shadow "$releases/$good/link"
 serve "$releases/$good"
 is "give sends the release that is served" status 0 handover give
@@ -86,6 +88,13 @@ is "  the certificate" [ -e "$handed/etc/letsencrypt/live/site.test/fullchain.pe
 is "  and the release" [ -x "$handed/$good/corten-site" ]
 is "  with no file that runs as its owner" [ "$(find "$handed" -perm /6000 | wc -l)" = 0 ]
 is "  and nothing half written" [ ! -e "$handed.new" ]
+is "  for root alone to read" [ "$(stat -c %a "$handed")" = 700 ]
+is "  every file root's, whoever owned it there" [ "$(find "$handed" ! -user root | wc -l)" = 0 ]
+# A run after one that failed hands over again, to a machine that kept the first.
+touch "$handed/left-by-the-first"
+in_its_place() { [ ! -e "$handed/left-by-the-first" ] && [ -d "$handed/etc" ] && [ ! -e "$handed/${handed##*/}.new" ]; }
+is "take again keeps what it is sent" status 0 handover take < /tmp/given
+is "  in place of what the first kept" in_its_place
 rm -rf "$handed"
 head -c "$(($(wc -c < /tmp/given) / 2))" /tmp/given > /tmp/half
 is "take refuses half of it" status 2 handover take < /tmp/half
@@ -101,6 +110,21 @@ ln -s /bin /tmp/linked/abc
 ln -s true /bin/corten-site
 tar -czf /tmp/linked.tgz -C /tmp/linked etc abc
 is "take refuses a release that is a link" status 1 handover take < /tmp/linked.tgz
+is "  keeping nothing" nothing_kept
+tar -czf /tmp/no-certificate.tgz -C "$releases" "$good"
+is "take refuses a release with no certificate" status 1 handover take < /tmp/no-certificate.tgz
+is "  keeping nothing" nothing_kept
+# Certbot's directory lies beside the release in what is sent, and is not one.
+cp /bin/true /tmp/linked/etc/corten-site
+tar -czf /tmp/only-etc.tgz -C /tmp/linked etc
+is "take does not count certbot's directory as the release" status 1 handover take < /tmp/only-etc.tgz
+is "  keeping nothing" nothing_kept
+# boot.sh may finish setting the machine up with an earlier handover while this one is
+# taken: here it does so as the new one is moved into place.
+install -d /tmp/meanwhile
+printf '#!/bin/sh\n/usr/bin/mv "$@"\ntouch /var/lib/corten-site-boot.site\n' > /tmp/meanwhile/mv
+chmod 755 /tmp/meanwhile/mv
+is "take ends well on a machine set up while it took" status 0 env PATH="/tmp/meanwhile:$PATH" sh "$(dirname "$0")/handover.sh" take < /tmp/given
 is "  keeping nothing" nothing_kept
 touch /var/lib/corten-site-boot.site
 is "take is refused on a machine that is set up" status 1 handover take < /tmp/given

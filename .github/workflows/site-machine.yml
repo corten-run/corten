@@ -51,7 +51,7 @@ defaults:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -64,11 +64,21 @@ jobs:
       - run: tofu validate
       # A script that parses but does not mean what it says is found here, not on the machine.
       - name: The scripts the machine, a deploy and an operator run
-        run: shellcheck --severity=warning boot.sh bootstrap.sh handover.sh handover.test.sh relay.sh ../provision.sh ../release.sh
+        run: >-
+          shellcheck --severity=warning boot.sh bootstrap.sh handover.sh handover.test.sh relay.sh
+          relay.test.sh ../provision.sh ../provision.test.sh ../release.sh
       # The one command the handover key runs as root, with the names a deploy could give a
       # release: in a container, since it writes where a machine keeps its certificates.
       - name: What the handover's command gives, takes and refuses
         run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 sh /deploy/infra/handover.test.sh
+      # What root does in the deploy user's directories each time provision.sh runs, with
+      # links that user could have put there.
+      - name: What provision.sh writes in the deploy user's directories
+        run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 sh /deploy/provision.test.sh
+      # Whether the address moves, moves first or stays, by what two sshds and a stand-in for
+      # the site answer.
+      - name: What the relay decides
+        run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 bash /deploy/infra/relay.test.sh
 
   apply:
     needs: check
@@ -82,7 +92,8 @@ jobs:
     concurrency:
       group: site-machine
       cancel-in-progress: false
-    timeout-minutes: 60
+    # The relay's thirty-five minutes and the twenty for names that redirect, with the rest.
+    timeout-minutes: 75
     permissions:
       contents: read
       # To run the Site workflow once a new machine answers.

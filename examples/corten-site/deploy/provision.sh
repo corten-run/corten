@@ -15,6 +15,8 @@ fi
 domain=$1
 email=$2
 key=$3
+# Read through a pipe further down, where a file that is not there would stop nothing.
+[ -r "$key" ] || { echo "the deploy key's public half is not a file that can be read: $key" >&2; exit 1; }
 machine=${4:-}
 redirects=${5:-}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -69,9 +71,11 @@ id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/sh deploy
 # What lies in a directory of that user's is written by that user: when this runs again the
 # deploy key is on the machine, and root would follow a link put where one of these goes.
 runuser -u deploy -- install -d -m 700 /home/deploy/.ssh
-# The key runs commands and copies files, and nothing else: no forwarding, no terminal.
+# The key runs commands and copies files, and nothing else: no forwarding, no terminal. A file
+# that was there keeps its mode when written over, and sshd reads none that others can write.
 sed 's/^/restrict /' "$key" |
-    runuser -u deploy -- sh -c 'umask 077; cat > /home/deploy/.ssh/authorized_keys'
+    runuser -u deploy -- sh -c 'umask 077
+        cat > /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/.ssh/authorized_keys'
 install -d -o deploy -g deploy /opt/corten-site
 runuser -u deploy -- install -d /opt/corten-site/releases
 
