@@ -34,8 +34,9 @@ nobody signs in to it. Anywhere else, the same scripts are run by hand.
 `s-1vcpu-512mb-10gb`, with Ubuntu 24.04), an address that stays when the droplet is replaced, a
 firewall, and the DNS zone with the name's record. The `Site machine` workflow checks it on a
 pull request and applies it on `main`, keeping its state in a Spaces bucket. A droplet made this
-way is handed `provision.sh`, `nginx.conf` and the service file as it starts (cloud-init), waits
-until the site's name reaches it, and runs them itself.
+way is handed `provision.sh`, `nginx.conf` and the service file as it starts (cloud-init), and
+runs them itself: the first one once the site's name reaches it, and one that replaces another
+with that one's certificate and release, before the address moves to it.
 
 1. In DigitalOcean, make an API token and a Spaces access key. The token makes and removes
    droplets, reserved addresses, firewalls, tags, and domains with their records; one with
@@ -51,10 +52,11 @@ until the site's name reaches it, and runs them itself.
    ```
 
    It makes the environments `site` and `site-machine`, which only `main` may use; makes the
-   deploy key and the machine's SSH host key, and stores each half with the workflow that uses
-   it; and sets the variables both workflows read. A fifth argument, `refuse-mail`, adds
-   records that say the zone sends no mail (`v=spf1 -all`, and DMARC's `p=reject`): only for a
-   zone that has none. Run again, it keeps the keys.
+   deploy key, the machine's SSH host key and the handover key, and stores each half with the
+   workflow that uses it; and sets the variables both workflows read. A fifth argument,
+   `refuse-mail`, adds records that say the zone sends no mail (`v=spf1 -all`, and DMARC's
+   `p=reject`): only for a zone that has none. Run again, it keeps the keys, and makes the
+   handover key for a repository set up before there was one.
 3. Type the three secrets that are yours alone, each at `gh`'s prompt:
 
    ```sh
@@ -91,16 +93,64 @@ ship to the machine being replaced or fail against the new one while it sets its
 run the `Site machine` workflow starts afterwards ships whatever became of the first (where
 the first reached the new machine, as on `cd3f67f43`, the second ships the same commit again
 and the service restarts once more). A droplet is never changed in place. A change to
-anything it is handed, a comment in one
-of those files included, makes a new droplet, moves the address to it once it exists, and
-removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
-the workflow asks the machine at the address for the site, and starts the Site workflow when a
-machine it made answers or the one there answers 502, as nginx does with no release behind it
-and also while the service is down.
+anything it is handed, a comment in one of those files included, makes a new droplet, and the
+address moves to it once it answers as the site; the old one is removed after that. A droplet
+that cannot be made, or that does not come to serve, leaves the old one serving. After every
+apply the workflow asks the machine at the address for the site, and starts the Site workflow
+when a machine it made answers or the one there answers 502, as nginx does with no release
+behind it and also while the service is down.
 
-The site is down from the move until that release is served. That is the time a machine takes
-to install its packages and get a certificate, and then a whole run of the Site workflow, which
-waits for a runner and tests and builds before it ships. For the first machine made for
+A new droplet serves before the address moves because it is handed what the old one serves
+with. Every droplet lets one key, the handover key, run one command as root
+(`infra/handover.sh`), which gives certbot's directory and the release being served, or takes
+them on a machine that is not set up yet. The key signs in as a user of its own, `handover`,
+which may do nothing else, and not as root: a droplet made with no key of the account is
+sent a password for root, and where that password must be changed first, sshd lets no key
+sign in as root either (seen in a container; not looked at on a droplet). The key's private
+half is the `Site machine` workflow's alone (`SITE_HANDOVER_KEY`), and is not among what a
+droplet is handed. Between
+making the new droplet and moving the address, the apply runs `infra/relay.sh` on the runner:
+it asks the machine at the site's name to give and the new one, at its own address, to take,
+one into the other and never to a file, and then asks the new one for the page at the site's
+name until it answers, with the certificate checked. The new droplet sets itself up with the
+names the certificate holds, so it asks Let's Encrypt for nothing, and serves the same
+release. Then the address moves, and the Site workflow the apply starts ships `main` to it.
+The relay gives the new droplet ten minutes to take the key and twenty-five to serve, which
+is one new try of a step that failed on it; when either runs out the apply fails with the
+address where it was, the new droplet is left as it is, and the next run
+(`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
+is there. For a droplet that did not take the key the run says what ssh said: one that
+refuses the key or shows another host key, run after run, was made with a public half that
+is not its secret's (the table below). A droplet that a run which failed left, and that
+says it is set up already and does not serve, is replaced by another that is handed the
+same (`gh workflow run site-machine.yml -f replace=true`): the address still moves only
+once that one serves. Where no droplet sets itself up from what
+it is handed, the next is handed nothing
+(`gh workflow run site-machine.yml -f without_handover=true`, which makes a new one): the address
+moves first, as below. What the address's own move costs is in each run's log: the site is
+asked once a second while the apply runs, and the run says how many of those went
+unanswered.
+
+The address moves first, and the site is away until the new droplet has a certificate and a
+release of its own, where nothing can be handed over: there is no handover key, the droplet
+serving was made before there was one or with another, or the site does not answer when the
+apply reaches that step (it is asked twelve times, five seconds apart, so a deploy being put
+back is not taken for a site that is down). The run says which, and warns where a
+droplet that serves would not hand over. A droplet that serves and could not be asked over
+SSH at all is not among these: the apply fails with the address where it was, and says what
+ssh said, so whoever keeps its sshd busy does not take the site away. That is also what
+happens, at every apply, where the droplet's host key is no longer the one the workflow
+holds, until a run with `-f without_handover=true`; and where the handover key is not one
+the runner's ssh can read, which every droplet would refuse. A repository set up before
+there was a handover
+gets its key from a second run of `bootstrap.sh`, and that is best done before the change
+that brings the handover is applied: the droplet made with the key is then the one that
+change makes anyway.
+
+Every replacement made before there was a handover moved the address first, and the time
+the site is then away is a machine's to install its packages and get a
+certificate, and then a whole run of the Site workflow, which waits for a runner and tests
+and builds before it ships. For the first machine made for
 corten.run (one run, on `a7bbe4cc9`, with the name already at DigitalOcean's servers) the
 machine answered under its certificate 1 min 42 s after the apply ended, and the Site run
 started then had shipped and checked the release 1 min 53 s after that, 4 s of it waiting for
@@ -113,16 +163,21 @@ so a Site run of its own had started; it waited 2 min 54 s for a runner, finishe
 before the workflow first saw the machine answer, and was answered by its release 2 min 7 s
 after the address began to move and 1 min 51 s after it had moved. With the 4 s wait of the
 first machine's run it would by reckoning have shipped to the old machine before the move.
-So reckon on what is left of the apply after the move (39 s here, from its beginning), the
-machine's minute and a half and a Site run, of which the wait for a runner is the part that
-moves. The old machine and its certificate are gone by then, and Let's Encrypt issues the
-same names five certificates a week: a sixth replacement inside a week leaves the site down
-until its limit allows another (with names that redirect, a machine asks for two, one for the
-site's name and one for all of them, and each set of names has its own five). So gather
-changes to those files into one merge. When an apply fails, run the workflow again
-(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
-site to a machine that answers 502. With deploys on, a run fails when the machine does not
-answer.
+For the replacement on `00d1a09c8` (one run) the machine answered 2 min 2 s after the apply
+ended, and the Site run started then was answered by its release 1 min 25 s after that. So
+without a handover reckon on what is left of the apply after the move (39 s on `cd3f67f43`,
+from its beginning), the machine's minute and a half to two and a Site run, of which the
+wait for a runner is the part that moves. The old machine and its certificate are gone by
+then, and Let's Encrypt issues the same names five certificates a week: a sixth such
+replacement inside a week leaves the site down until its limit allows another (with names
+that redirect, a machine asks for two, one for the site's name and one for all of them, and
+each set of names has its own five). A machine that is handed a certificate asks for none,
+unless the names given are no longer the ones it holds, and then for one, once the address
+is there. When an apply fails, run the workflow again (`gh workflow run site-machine.yml`):
+what it made is in the state, and the run ships the site to a machine that answers 502. With
+deploys on, a run fails when the machine does not answer. To make a new machine where
+nothing it is made from has changed, run the workflow with its input `replace`
+(`gh workflow run site-machine.yml -f replace=true`).
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
 when it moves it.
@@ -131,7 +186,8 @@ when it moves it.
 |---|---|---|
 | environment `site` | `SITE_SSH_KEY`, `SITE_KNOWN_HOSTS` (secrets) | the deploy key, and the machine's host key under the site's name |
 | environment `site-machine` | `DIGITALOCEAN_TOKEN`, `SPACES_ACCESS_KEY_ID`, `SPACES_SECRET_ACCESS_KEY` (secrets) | what makes the machine and keeps the state |
-| environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC` (variables) | what a new machine is handed |
+| environment `site-machine` | `SITE_HOST_KEY`, `SITE_EMAIL` (secrets), `SITE_DEPLOY_KEY`, `SITE_HOST_KEY_PUBLIC`, `SITE_HANDOVER_KEY_PUBLIC` (variables) | what a new machine is handed |
+| environment `site-machine` | `SITE_HANDOVER_KEY` (secret) | the key one machine's certificate and release are carried to the next with |
 | repository variables | `SITE_DOMAIN`, `SITE_STATE_BUCKET`, `SITE_STATE_ENDPOINT`, `SITE_REFUSES_MAIL` | set by `bootstrap.sh` |
 | repository variables | `SITE_HOST` | set last, by hand: the Site workflow ships once it is |
 | repository variables, optional | `SITE_MACHINE`, `SITE_ADMIN_KEYS`, `SITE_ZONE`, `SITE_DNS_ELSEWHERE`, `SITE_REDIRECTS` | below |
@@ -151,10 +207,13 @@ on the next apply.
 site's, such as `["www.example.com"]` for a site at `example.com`. Each gets a record at the
 same address and a place on the site's certificate, and nginx answers it on both ports with a
 redirect (308) to the same path at the site's name; the app never sees it. With the zone
-elsewhere the records are yours to make, before the variable is set. A new machine serves the
+elsewhere the records are yours to make, before the variable is set. A machine that is
+handed a certificate serves the names that certificate holds, and takes on the names given
+once the address is there: where they are the same it asks for no certificate, and where
+the list has changed, for one. A machine that is handed nothing serves the
 site under its own name first, with a certificate for that name alone, and then waits for
 each of the other names to reach it and asks for one certificate that holds them all: two
-certificates for each machine, and a name that is late, or that Let's Encrypt refuses, holds
+certificates for such a machine, and a name that is late, or that Let's Encrypt refuses, holds
 back only itself. The machine says which name it waits for, or why a certificate was refused
 (`journalctl -u corten-site-boot`), and tries a refused one again each quarter of an hour.
 Taking the names on runs `provision.sh` a second time, which writes the deploy key's file,
@@ -179,6 +238,24 @@ the metadata address by any process there. The site's service cannot reach that 
 other but the machine's own (`IPAddressDeny=` in the service file). nginx's workers and whoever
 signs in as `deploy` can: the holder of the deploy key can read the host key, so the two keys
 are kept apart on GitHub and not on the machine.
+
+The handover key is not among what a droplet is handed: a droplet has its public half, and
+the private half is a secret of the `site-machine` environment, given to the apply's step
+alone. Its holder can run one command as root on a droplet, and so read certbot's directory
+there, the certificate's private key and the Let's Encrypt account's among it, and the
+release. On a droplet that is not set up yet it can also put those in place, and that makes
+it root there: certbot's directory holds the hooks certbot runs as root when it renews, and
+the release is what the service runs. The same environment holds the DigitalOcean token,
+whose holder can read a droplet's disk, and make one, without it. The release is put in
+place by the `deploy` user, whose directory it goes into, so what a deploy left in a release
+gains nothing by being carried; and a release is carried only under a name of letters,
+digits, `.`, `_` and `-` that starts with a letter or a digit and is not `etc`, since the
+deploy user names it and root's tar reads the name. A replacement fails, with the address
+where it was, while the release served has another. The deploy key cannot run the command,
+and nothing on the
+machine holds the private half. A new handover key (the secret and the variable removed, and
+`bootstrap.sh` run again) replaces the droplet on the next apply, and the droplet serving
+then does not know it: that one replacement moves the address first.
 
 ### By hand, on any machine
 
@@ -713,6 +790,139 @@ where nginx's answers and the firewall's counts were read after one, nothing had
 refused. A click that Playwright's Firefox acknowledges late on a loaded Windows machine is
 known ([CONTRIBUTING.md](../../../CONTRIBUTING.md#checks)), and the workstation was loaded.
 Four runs say that no limit acted in them, not that none ever does in this test.
+
+The handover was rehearsed in containers and not on a droplet, at `7af97547d` and, after a
+review, every case again at `7d835fe17`; the numbers here are the second time's unless they
+say otherwise. Two containers of Ubuntu 24.04 with systemd as their first process, sudo and
+sshd were each handed by a script what `main.tf` hands a droplet, the same host key among
+it, and a third holds the site's name and sends ports 22, 80 and 443 on to one of them,
+which stands in for the address. Root on each was held to a password that must be changed,
+and no key was root's. The first machine held a self-signed certificate laid out as certbot
+keeps one, with an account and a renewal file beside it, and a release shipped by
+`release.sh`; Let's Encrypt's names led nowhere, so a machine that asked for a certificate
+failed. `relay.sh` ran in a fourth container, as the apply runs it. In a whole replacement
+it ended 65 seconds after the new machine was made, most of that the machine installing its
+packages, and the address was moved then: of 102 requests a second apart none went
+unanswered (the first time, 152 and 118 seconds, and one of 203 and none of 170, the one as
+the rig's address moved, which says nothing of DigitalOcean's). The new machine had the same
+certificate and key, the account and the renewal file, the release owned by `deploy` and
+served under the unit's sandbox, no log from certbot, the firewall started once, and
+nothing left of what it was sent; its boot unit finished once the address was there, and a
+deploy to it by the deploy key was served. A file left in the first machine's release that
+runs as its owner arrived as `deploy`'s without that bit, nothing under the releases was
+root's, and certbot's `cli.ini`, changed on the first machine, was the package's own on the
+second. On a machine that is set up the handover key was refused `take`, any other command,
+a word with more after it, no word, a terminal and a forwarded port, and did not sign in as
+root or as `deploy`; the `handover` user without sudo, and `deploy` through sudo, were
+refused the command. Cut short at each tenth of its length and one byte from its end, what
+`give` writes was refused by `take` ten times of ten, with nothing kept; the same tar
+without gzip, cut between two files, was read by tar as whole both times tried (the first
+time), which is why it is sent as gzip.
+
+With no key, with a key the serving machine does not know, and with the site stopped, the
+relay said so and ended well, and the address moved first; for the first it wrote a notice
+and for the second a warning to the file the workflow prints. What such a machine then does
+is as it was before, and was not run again. With the relay's clock run fast, a new machine
+that was handed no key was given up on as not taking it, and one that had taken everything
+as not serving in time: each ended in failure with an error in that file, the address
+stayed, and none of 26 and of 39 requests went unanswered. Run again for the second machine
+once it served, the relay handed nothing over a second time and ended well. A new machine
+given no names that redirect, where the certificate held one, served with the certificate it
+was handed and, once the address was there, asked for another, which in this rig fails: the
+site went on answering meanwhile. That step has not been run against a server that issues.
+
+The order the apply keeps was tried in OpenTofu 1.13.9 with `terraform_data` standing in
+for the droplet and the address, wired as they are in `main.tf`: the new one made, the relay
+run, the address changed, the old one removed; and where the relay failed, the address
+unchanged, the new one kept, and the relay run again by the next apply (a review ran the
+same, and a first apply on a state made before this, a relay failing twice, and a
+replacement asked for after a failure). A plan with the provider itself and stand-in values
+makes the eight things, the address's droplet known only after the apply. `bootstrap.sh`,
+against the stand-in for `gh`, made the three keys for a repository with nothing, kept them
+on a second run, made the handover key alone for a repository that had the other two, and
+made both its halves again where one was missing. The workflow's step that plans and
+applies was run from its own text with a stand-in for `tofu`: it passed the option that
+replaces the machine when asked to, printed what the relay had written, said how many
+requests went unanswered when the apply ended well and when it failed (6 of 6 for a name
+that does not answer as the site), and left nothing asking afterwards. Its reading of a plan
+says a machine was made for a first apply, a replacement, and the run after a relay that
+failed, where the plan makes none and moves the address, and not for a plan that changes
+neither.
+
+A second review found that a release's name, which the deploy user chooses, reached root's
+tar unchecked: it ran `give` for a release named `etc`, whose files were then merged into
+certbot's directory on the machine that took them, and for names tar reads as options, one
+of which removed the certificates and one of which ran a command as root. At `712be1e57`,
+in the same rig, `give` refused a served release named `etc`, `--remove-files`, `-x`,
+`.hidden`, one with a space in it, one inside another, and `current` pointing at certbot's
+directory: each time nothing was sent, nothing was run and the certificate was still there,
+and the release as a deploy names it was sent whole. A whole replacement again ended 108
+seconds after the new machine was made, with none of 145 requests unanswered and the new
+machine as above. Run again for that machine with its first question whether the machine
+serves made to fail, the relay was refused by `take`, found that the machine served, and
+ended well; with the old machine serving a release named `etc`, it ended in failure with an
+error for the workflow, and the address stayed.
+
+A third review found nothing in those changes by which the deploy key gains from a
+handover, and found that `provision.sh`, as it was before the handover too, wrote as root
+into directories the deploy user owns whenever it ran a second time: with links that user
+had put there, a file under `/etc` became that user's (the review's run). At `0d1725e6d` it
+writes there as that user. Run again on a machine that had taken over, with
+`authorized_keys`, then `.ssh`, then `releases` replaced by a link into `/etc`, it failed
+for the first two and passed for the third, and what the links pointed at was root's and
+unchanged each time; with the links gone it passed, and a deploy to that machine was served.
+The relay, for an old machine that refuses the key, moved the address first with its warning
+as before; for one whose sshd was stopped while the site answered, it ended in failure with
+the address where it was and none of 35 requests unanswered; and with the old machine's tar
+made to end badly after sending everything, it went on, since the new machine had kept it,
+and the replacement ended with none of 276 requests unanswered, 286 seconds after the
+machine was made on a workstation busy with other work. `handover.test.sh` passes as it is
+and fails with any of five lines of `handover.sh` changed: the names refused, gzip, the
+package's `cli.ini` left out, a release required, and the bit that runs a file as its owner
+dropped.
+
+A fourth review found that nothing in the repository ran the relay, or the lines of
+`provision.sh` that write in the deploy user's directories, and that six lines of
+`handover.sh` could go with its test still passing. It also ran the relay with a handover
+key that is not a key, which read as the serving machine's refusal and would have moved the
+address first, and with a serving machine that has another host key, which failed every
+apply without saying why. At `2f0d2706d` `infra/handover.test.sh`, `provision.test.sh` and
+`infra/relay.test.sh` pass (55, 18 and 45 lines), and each fails with one line of what it
+guards changed, eighteen such changes tried one at a time: among them root's writes put
+back in `provision.sh`, a refusal read as a machine that could not be asked, the key not
+checked, and the site asked three times where it is now asked twelve. The relay's test,
+before that commit, found the relay as first changed for it asking a site that does not
+answer without end. A whole replacement in the rig at that commit ended with none of 132
+requests unanswered, the relay done 107 seconds after the new machine was made, and a
+deploy to the new machine served.
+
+A fifth review found the relay's test passing with either of the relay's two waits cut to
+one ask, since no case had a new machine that answers late, as every droplet just made
+does; and passing with four more of the relay's lines changed. At `daee4a89d` the tests
+have those cases (56, 21 and 62 lines pass), and the eleven changes that review named or
+implied each fail one of them. The relay says what ssh said for a new machine that did not
+take the key, as for the old one. A whole replacement in the rig at that commit ended with
+none of 189 requests unanswered, the relay done 161 seconds after the new machine was made.
+
+What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
+the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
+signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
+the relay says which), whether root there is held to a password, the relay from a runner,
+GitHub reading the lines the workflow prints as a warning, the input that hands a machine
+nothing, how long a reserved address takes to move and whether a request in flight is lost
+to it, and a renewal on a machine that was handed its certificate. The rig is not in the
+repository, as none of this directory's rehearsals are: CI lints these scripts, validates
+`main.tf`, and runs three tests in containers. `infra/handover.test.sh` runs the handover's
+command against the names a deploy could give a release, a handover cut short and one with
+no release in it. `provision.test.sh` runs the lines of `provision.sh` that write in the
+deploy user's directories, over links that user could have put there.
+`infra/relay.test.sh` runs the relay against two sshds, with a stand-in for the command
+the key runs on a machine and one for the site, and with the relay's waits passing at once:
+it sees which way the relay decides, and none of what a real machine does. The rest is
+rehearsed again by whoever changes it. The
+machine serving when this was merged was made before there was a handover, so the first
+replacement after it moves the address first; the one after that is the first to be handed
+anything, and its run's count is the first measure of the move.
 
 Among what has still not run on a real machine: an apply that fails once begun or a droplet
 that cannot be made, a first deploy that fails, a put-back of the release before, a machine
