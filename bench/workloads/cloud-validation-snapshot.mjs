@@ -251,4 +251,3 @@ export function validationTask(input, { snapshot = captureValidation(input.commi
     return { result, stop, unref: () => worker.unref() };
   } catch { throw validationFailure(); }
 }
-
