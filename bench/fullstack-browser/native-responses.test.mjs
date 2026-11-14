@@ -389,12 +389,17 @@ test("native boundary retains complete typed population and UA roots but rejects
     (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-check" && c.result).result.mutations.push("changed"); },
     (o) => { o.boundaryObservation.commands.find((c) => c.role === "semantic-read" && c.observer).observer = randomUUID(); },
     (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-check").executionContextId++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "observer-document").backendNodeId++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "observer-document").frameId = "other-frame"; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-cleanup").backendNodeId++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-cleanup").result.observer = randomUUID(); },
     (o) => { o.boundaryObservation.commands.find((c) => c.method === "DOM.requestChildNodes").nodeId++; },
     (o) => { o.boundaryObservation.commands.find((c) => c.nodes?.length).nodes[0].attributes = []; },
     (o) => { o.boundaryObservation.commands.find((c) => c.nodes?.length).nodes[0].childNodeCount++; },
     (o) => { const c = o.boundaryObservation.commands.find((c) => c.nodes?.some((n) => n.shadowRoots.length)); c.nodes.find((n) => n.shadowRoots.length).shadowRoots[0].type = "closed"; },
     (o) => { const c = o.boundaryObservation.commands.find((c) => c.nodes?.some((n) => n.templateContent)); c.nodes.find((n) => n.templateContent).templateContent = 999999; },
     (o) => { o.snapshotSha256 = "220e441a44d3fdd628383d1cd891b347e2f2d56d3c393652fcb2e1a86d735696"; },
+    (o) => { o.snapshotSha256 = "083e43c875d6ffd071c6a532743604384afc61663d651b5e6c8d2847c87bcb55"; },
   ]) { const changed = structuredClone(observation); mutate(changed); assert.throws(() => replayBrowserDOM(changed, expected)); }
   const changed = structuredClone(observation), native = changed.boundaryObservation.commands.flatMap((c) => c.nodes ?? []).find((n) => n.nodeType === 3);
   native.backendNodeId += 1000000;
@@ -417,6 +422,125 @@ test("native boundary refuses incomplete population observer loss and over-bound
     });
     let observation; try { observation = await collectBrowserDOM(f.page, identity); } finally { restore(); }
     assert.equal(acted, true); assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+  });
+});
+
+test("native observer recovery leaves failed capture unknown and next same-document capture complete", async (t) => {
+  const f = await browserDOMFixture(t), { identity, observation: baseline } = await f.read();
+  assert.equal(baseline.failure, null); comparePage(sealedBrowserDOM(t, baseline).page, records().item_2, "en-US");
+  let detached = false; const sessions = new Set();
+  const restore = interceptDOMSession(f.page, async (method, _params, session) => {
+    sessions.add(session);
+    if (!detached && method === "DOM.resolveNode") { detached = true; await session.detach(); }
+  });
+  let failed; try { failed = await collectBrowserDOM(f.page, identity); } finally { restore(); }
+  assert.equal(detached, true); assert.equal(sessions.size, 2); assert.equal(failed.failure, "native-dom-snapshot-failed");
+  assert.deepEqual(failed.events, []); assert.equal(failed.boundaryObservation, null);
+  assert.equal(sealedBrowserDOM(t, failed).extractionComplete, false);
+  comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+  const next = await collectBrowserDOM(f.page, identity);
+  assert.notEqual(next.observer, failed.observer); assert.equal(next.failure, null);
+  comparePage(sealedBrowserDOM(t, next).page, records().item_2, "en-US");
+});
+
+test("native observer recovery covers lost start reply population read and cleanup without semantic retry", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const phase of ["start-reply", "before-population", "after-read", "cleanup"]) await t.test(phase, async () => {
+    const { identity } = await f.read(), context = f.page.context(), original = context.newCDPSession;
+    let sessions = 0, started = false, detached = false, semanticReads = 0;
+    context.newCDPSession = async function (page) {
+      sessions++; const session = await original.call(this, page), send = session.send.bind(session);
+      session.send = async (method, params) => {
+        if (params?.arguments?.[0]?.value?.context) semanticReads++;
+        const start = params?.functionDeclaration?.startsWith("function startNativeMutations(");
+        if (!detached && (phase === "before-population" && started && method === "DOM.getDocument"
+          || phase === "after-read" && method === "DOM.describeNode"
+          || phase === "cleanup" && params?.functionDeclaration?.startsWith("function clearNativeMutations("))) {
+          detached = true; await session.detach();
+        }
+        const result = await send(method, params);
+        if (start) {
+          started = true;
+          if (!detached && phase === "start-reply") { detached = true; await session.detach(); throw Error("lost start reply"); }
+        }
+        return result;
+      }; return session;
+    };
+    let failed; try { failed = await collectBrowserDOM(f.page, identity); } finally { context.newCDPSession = original; }
+    assert.equal(detached, true); assert.equal(sessions, 2); assert.equal(semanticReads, ["after-read", "cleanup"].includes(phase) ? 1 : 0);
+    assert.equal(failed.failure, "native-dom-snapshot-failed"); assert.deepEqual(failed.events, []);
+    assert.equal(sealedBrowserDOM(t, failed).extractionComplete, false);
+    const next = await collectBrowserDOM(f.page, identity);
+    assert.equal(next.failure, null); comparePage(sealedBrowserDOM(t, next).page, records().item_2, "en-US");
+  });
+});
+
+test("native observer recovery refuses foreign ownership changed documents and uncertain cleanup", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const variant of ["foreign-observer", "wrong-document", "new-document", "wrong-receiver", "session-unavailable", "detach-uncertain"]) await t.test(variant, async () => {
+    const { identity } = await f.read(), context = f.page.context(), original = context.newCDPSession;
+    const diagnostic = await original.call(context, f.page), foreign = randomUUID();
+    const world = async () => {
+      const { frameTree } = await diagnostic.send("Page.getFrameTree");
+      return (await diagnostic.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "corten-native-dom-boundary" })).executionContextId;
+    };
+    const inspect = async (fn, args = []) => {
+      const result = await diagnostic.send("Runtime.callFunctionOn", { executionContextId: await world(),
+        functionDeclaration: fn.toString(), arguments: args.map((value) => ({ value })), returnByValue: true });
+      assert.ok(!result.exceptionDetails); return result.result.value;
+    };
+    let detached = false, sessions = 0;
+    context.newCDPSession = async function (page) {
+      sessions++; if (sessions === 2 && variant === "session-unavailable") throw Error("cleanup session unavailable");
+      const session = await original.call(this, page), send = session.send.bind(session), detach = session.detach.bind(session);
+      if (sessions === 2 && variant === "detach-uncertain") session.detach = async () => { await detach(); throw Error("cleanup detach uncertain"); };
+      session.send = async (method, params) => {
+        if (!detached && method === "DOM.resolveNode") {
+          detached = true;
+          if (variant === "new-document") {
+            await f.page.reload();
+            await inspect(function (observer) {
+              const watch = new MutationObserver(() => {}); watch.observe(document, { childList: true, subtree: true });
+              globalThis.__cortenNativeDOMBoundary = { observer, document, watch };
+            }, [foreign]);
+          } else if (variant === "foreign-observer") await inspect(function (observer) { globalThis.__cortenNativeDOMBoundary.observer = observer; }, [foreign]);
+          else if (variant === "wrong-document") await inspect(function () { globalThis.__cortenNativeDOMBoundary.document = document.implementation.createHTMLDocument(); });
+          await session.detach();
+        }
+        if (sessions === 2 && variant === "wrong-receiver" && method === "DOM.resolveNode") {
+          const result = await send("Runtime.evaluate", { contextId: params.executionContextId, expression: "document.body", objectGroup: params.objectGroup });
+          return { object: result.result };
+        }
+        return send(method, params);
+      }; return session;
+    };
+    try {
+      let failed; try { failed = await collectBrowserDOM(f.page, identity); } finally { context.newCDPSession = original; }
+      assert.equal(detached, true); assert.equal(sessions, 2);
+      assert.equal(failed.failure, "native-dom-snapshot-failed"); assert.deepEqual(failed.events, []);
+      assert.equal(failed.boundaryObservation, null); assert.equal(sealedBrowserDOM(t, failed).extractionComplete, false);
+      const state = await inspect(function () {
+        const state = globalThis.__cortenNativeDOMBoundary;
+        return state ? { observer: state.observer, documentMatches: state.document === document } : null;
+      });
+      if (variant === "detach-uncertain") {
+        assert.equal(state, null);
+        const next = await collectBrowserDOM(f.page, identity); assert.equal(next.failure, null);
+        comparePage(sealedBrowserDOM(t, next).page, records().item_2, "en-US");
+      } else {
+        const owner = ["new-document", "foreign-observer"].includes(variant) ? foreign : failed.observer;
+        assert.deepEqual(state, { observer: owner, documentMatches: variant !== "wrong-document" });
+        const next = await collectBrowserDOM(f.page, identity);
+        assert.equal(sealedBrowserDOM(t, next).extractionComplete, false); assert.deepEqual(next.events, []);
+        assert.deepEqual(await inspect(function () { const s = globalThis.__cortenNativeDOMBoundary; return { observer: s.observer, documentMatches: s.document === document }; }), state);
+        // Diagnostic cleanup is restricted to this fixture's exact observer.
+        assert.equal(await inspect(function (owner) {
+          const state = globalThis.__cortenNativeDOMBoundary;
+          if (!state || state.observer !== owner) throw Error("wrong fixture owner");
+          state.watch.disconnect(); delete globalThis.__cortenNativeDOMBoundary; return true;
+        }, [owner]), true);
+      }
+    } finally { context.newCDPSession = original; await diagnostic.detach(); }
   });
 });
 

@@ -236,13 +236,15 @@ function finishNativeMutations(observer) {
 
 function clearNativeMutations(observer) {
   const state = globalThis.__cortenNativeDOMBoundary;
-  if (state?.observer === observer) { state.watch.disconnect(); delete globalThis.__cortenNativeDOMBoundary; }
+  if (!state || state.observer !== observer || this !== document || this !== state.document) throw Error("native-dom-snapshot-failed");
+  state.watch.disconnect(); delete globalThis.__cortenNativeDOMBoundary;
+  return { observer };
 }
 
 async function readNativeBoundary(page, identity, collect, observer, startedAt) {
   const failed = () => ({ roots: { document: 0, location: 1, global: 2 }, events: [], result: unknown(),
     failure: "native-dom-snapshot-failed", scopeObservation: null, urlObservation: null, boundaryObservation: null });
-  let session, candidate = failed(), changed = false, pending = null, bytes = 0, frameId, world, watching = false;
+  let session, candidate = failed(), changed = false, pending = null, bytes = 0, frameId, world, ownedDocument, watching = false;
   const commands = [], nodes = new Map(), ids = new Set(), backends = new Set();
   const budget = async (operation) => {
     const remaining = 15000 - (Date.now() - startedAt); assert.ok(remaining > 0);
@@ -251,9 +253,13 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     finally { clearTimeout(timer); }
   };
   const check = () => { assert.equal(changed, false); assert.ok(Date.now() - startedAt <= 15000); };
-  const consume = (raw) => {
+  const measure = (raw) => {
     // This transient size check is never written to evidence or diagnostics.
     assert.ok((bytes += Buffer.byteLength(JSON.stringify(raw))) <= 32 * 1024 ** 2);
+    return raw;
+  };
+  const consume = (raw) => {
+    measure(raw);
     const records = nativeNodeRecords(raw, frameId);
     for (const n of records) {
       for (const member of [n, ...n.shadowRoots]) {
@@ -263,6 +269,20 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
       assert.ok(ids.size <= 10000); nodes.set(n.nodeId, structuredClone(n));
     }
     return records;
+  };
+  const clearOwned = async (active) => {
+    const send = (method, params = {}) => budget(() => active.send(method, params));
+    const { frameTree } = measure(await send("Page.getFrameTree")); assert.equal(frameTree.frame.id, ownedDocument.frameId);
+    const { root } = measure(await send("DOM.getDocument", { depth: 0, pierce: false }));
+    assert.equal(root.nodeType, 9); assert.equal(root.backendNodeId, ownedDocument.backendNodeId);
+    const isolated = await send("Page.createIsolatedWorld", { frameId, worldName: "corten-native-dom-boundary" });
+    assert.equal(isolated.executionContextId, world);
+    const resolved = await send("DOM.resolveNode", { backendNodeId: ownedDocument.backendNodeId, executionContextId: world, objectGroup: observer });
+    assert.equal(resolved.object.type, "object"); assert.equal(typeof resolved.object.objectId, "string");
+    const cleared = await send("Runtime.callFunctionOn", { objectId: resolved.object.objectId, functionDeclaration: clearNativeMutations.toString(),
+      arguments: [{ value: observer }], returnByValue: true });
+    assert.ok(!cleared.exceptionDetails); assert.deepEqual(cleared.result.value, { observer });
+    await send("Runtime.releaseObjectGroup", { objectGroup: observer }); await send("DOM.disable"); watching = false;
   };
   try {
     session = await page.context().newCDPSession(page); check();
@@ -281,6 +301,10 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     });
     const { frameTree } = await send("Page.getFrameTree"); check(); assert.ok(!frameTree.childFrames?.length); frameId = frameTree.frame.id;
     commands.push({ method: "Page.getFrameTree", frameId, childFrames: [] });
+    const { root: originalDocument } = measure(await send("DOM.getDocument", { depth: 0, pierce: false })); check();
+    assert.equal(originalDocument.nodeType, 9); assert.ok(Number.isSafeInteger(originalDocument.backendNodeId) && originalDocument.backendNodeId > 0);
+    ownedDocument = { backendNodeId: originalDocument.backendNodeId, frameId };
+    commands.push({ method: "DOM.getDocument", role: "observer-document", ...ownedDocument });
     const isolated = await send("Page.createIsolatedWorld", { frameId, worldName: "corten-native-dom-boundary" }); check(); world = isolated.executionContextId;
     commands.push({ method: "Page.createIsolatedWorld", frameId, executionContextId: world });
     watching = true;
@@ -289,6 +313,7 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     assert.ok(!started.exceptionDetails && started.result.value);
     commands.push({ method: "Runtime.callFunctionOn", role: "mutation-start", executionContextId: world, result: started.result.value });
     const { root } = await send("DOM.getDocument", { depth: 1, pierce: false }); check();
+    assert.equal(root.backendNodeId, ownedDocument.backendNodeId);
     const document = { nodeId: root.nodeId, backendNodeId: root.backendNodeId, frameId };
     commands.push({ method: "DOM.getDocument", root: root.nodeId, nodes: consume([root]) });
     for (const n of nodes.values()) if (n.children === null) {
@@ -313,9 +338,9 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
       arguments: [{ value: observer }], returnByValue: true, awaitPromise: false }); check();
     assert.ok(!unchanged.exceptionDetails && unchanged.result.value);
     commands.push({ method: "Runtime.callFunctionOn", role: "mutation-check", ...document, executionContextId: world, result: unchanged.result.value });
-    const cleared = await send("Runtime.callFunctionOn", { executionContextId: world, functionDeclaration: clearNativeMutations.toString(), arguments: [{ value: observer }], returnByValue: true }); check();
-    assert.ok(!cleared.exceptionDetails); watching = false;
-    commands.push({ method: "Runtime.callFunctionOn", role: "mutation-cleanup", executionContextId: world, observer });
+    const cleared = await send("Runtime.callFunctionOn", { objectId: isolatedDocument.object.objectId, functionDeclaration: clearNativeMutations.toString(), arguments: [{ value: observer }], returnByValue: true }); check();
+    assert.ok(!cleared.exceptionDetails); assert.deepEqual(cleared.result.value, { observer }); watching = false;
+    commands.push({ method: "Runtime.callFunctionOn", role: "mutation-cleanup", ...document, executionContextId: world, observer, result: cleared.result.value });
     await send("Runtime.releaseObjectGroup", { objectGroup: observer }); check(); commands.push({ method: "Runtime.releaseObjectGroup" });
     await send("DOM.disable"); check(); commands.push({ method: "DOM.disable" });
     const boundaryObservation = { schema: "native-browser-dom-boundary/v1", observer, document, commands };
@@ -326,11 +351,16 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     if (session) {
       try {
         if (world && watching) {
-          const cleared = await budget(() => session.send("Runtime.callFunctionOn", { executionContextId: world, functionDeclaration: clearNativeMutations.toString(), arguments: [{ value: observer }], returnByValue: true }));
-          assert.ok(!cleared.exceptionDetails);
+          try { await clearOwned(session); }
+          catch {
+            candidate = failed();
+            let recovery;
+            try { recovery = await budget(() => page.context().newCDPSession(page)); await clearOwned(recovery); }
+            finally { if (recovery) await budget(() => recovery.detach()); }
+          }
         }
       } catch { candidate = failed(); }
-      try { await session.detach(); } catch { candidate = failed(); }
+      try { await budget(() => session.detach()); } catch { candidate = failed(); }
     }
   }
   return candidate;
@@ -369,6 +399,7 @@ function replayNativeBoundary(boundary, observer) {
   assert.ok(Array.isArray(boundary.commands) && boundary.commands.length <= 10013);
   exact(take("DOM.enable"), ["method"]);
   assert.deepEqual(take("Page.getFrameTree"), { method: "Page.getFrameTree", frameId: boundary.document.frameId, childFrames: [] });
+  assert.deepEqual(take("DOM.getDocument"), { method: "DOM.getDocument", role: "observer-document", backendNodeId: boundary.document.backendNodeId, frameId: boundary.document.frameId });
   const isolated = take("Page.createIsolatedWorld"); exact(isolated, ["method", "frameId", "executionContextId"]);
   assert.equal(isolated.frameId, boundary.document.frameId); const world = isolated.executionContextId; assert.ok(Number.isSafeInteger(world) && world > 0);
   const start = take("Runtime.callFunctionOn"); exact(start, ["method", "role", "executionContextId", "result"]);
@@ -398,7 +429,7 @@ function replayNativeBoundary(boundary, observer) {
   assert.deepEqual(take("DOM.resolveNode"), { method: "DOM.resolveNode", role: "mutation-check", ...boundary.document, executionContextId: world });
   assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "mutation-check", ...boundary.document, executionContextId: world,
     result: { observer, roots: start.result.roots, mutations: [] } });
-  assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "mutation-cleanup", executionContextId: world, observer });
+  assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "mutation-cleanup", ...boundary.document, executionContextId: world, observer, result: { observer } });
   exact(take("Runtime.releaseObjectGroup"), ["method"]); exact(take("DOM.disable"), ["method"]); assert.equal(at, boundary.commands.length);
 }
 

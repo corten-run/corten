@@ -289,6 +289,7 @@ is distinguished from a subdocument owner using actual Page.getFrameTree.
   commands: [
     {method:'DOM.enable'},
     {method:'Page.getFrameTree',frameId,childFrames:[]},
+    {method:'DOM.getDocument',role:'observer-document',backendNodeId,frameId},
     {method:'Page.createIsolatedWorld',frameId,executionContextId},
     {method:'Runtime.callFunctionOn',role:'mutation-start',executionContextId,
       result:{observer,roots}},
@@ -301,7 +302,8 @@ is distinguished from a subdocument owner using actual Page.getFrameTree.
     {method:'DOM.resolveNode',role:'mutation-check',...document,executionContextId},
     {method:'Runtime.callFunctionOn',role:'mutation-check',...document,
       executionContextId,result:{observer,roots,mutations:[]}},
-    {method:'Runtime.callFunctionOn',role:'mutation-cleanup',executionContextId,observer},
+    {method:'Runtime.callFunctionOn',role:'mutation-cleanup',...document,
+      executionContextId,observer,result:{observer}},
     {method:'Runtime.releaseObjectGroup'}, {method:'DOM.disable'}
   ]
 }
@@ -311,7 +313,10 @@ is distinguished from a subdocument owner using actual Page.getFrameTree.
  shadowRoots:[{nodeId,backendNodeId,type:'user-agent'}]}
 ```
 
-Initial and incremental receipts are the actual depth-1, pierce-false native
+The observer-document receipt projects only the original depth-0 native document's
+backend identity and main frame, obtained before observer installation. Its backend
+must match the subsequently populated document. Initial and incremental population
+receipts are the actual depth-1, pierce-false native
 responses, projected immediately. Null children means not yet populated; every
 positive child count must acquire its exact child list. Template fragments need
 explicit population even when a whole-document CDP query claims deep traversal.
@@ -337,10 +342,24 @@ DOM.resolveNode supplies the exact inventoried document object for the installed
 synchronous semantic read. It must equal that world's current top-level document.
 The same ordered native session checks the document again after the read, resolves
 it into the observer world, and checks that exact receiver against the observer's
-original document with no pending/delivered mutations. Observers are disconnected,
-remote groups released and the native session detached, including on failure.
+original document with no pending/delivered mutations. Normal cleanup uses that
+same exact isolated document receiver and must return its owned observer UUID;
+remote groups are released and the native session detached.
 Missing replies, document replacement or lost session return unknown with no
 partial reads. A clean final tree or a saved coverage flag is not accepted instead.
+
+Failure cleanup first attempts the original native session. If that cannot
+complete, at most one fresh session may recover this capture's owned observer,
+within the same remaining read budget. It checks the current main frame and native
+document backend against the pre-install identity, reopens the same isolated
+execution context, and resolves only that original document backend. The fixed
+cleanup function refuses unless its receiver is both the current document and the
+observer's original document, and the observer UUID is this capture's exact UUID.
+It never deletes a foreign observer, cleans a replacement document, reinstalls an
+observer, reruns semantic reads, or qualifies the failed capture. Missing/uncertain
+cleanup stays unknown; apparatus cleanup remains a separate integrating obligation.
+After successful recovery, a later independent same-document capture can start
+normally, without an application action or production retry inside this leaf.
 
 All preparation/read/check/cleanup remains inside the existing 15-second read
 budget. Native ordinary/template/UA-root identities share the 10,000-node cap;
