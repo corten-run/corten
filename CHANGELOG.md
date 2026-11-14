@@ -330,13 +330,14 @@ Corten is pre-1.0, so any minor version may change the API.
 - A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500
   that says what to do when a path whose `#[corten::routes]` route has no `GET` handler answers
   it with a page and a success status, keeping the handler's cookies and `Clear-Site-Data`; a
-  release build compiles none of the check. **Breaking (debug builds only):** an app from an earlier `corten new`
-  (`/greet`, with no `GET`), or any post-only route that answers a browser's plain post with a
-  200 page (a payment provider's return, a sign-in provider's `form_post` callback, a refusal
-  sent with 200), now gets a 500 in debug builds and in its router tests. To move: post the form
-  to the page's own route (`get = .., post = ..`), or answer the write with `req.redirect` or
-  `req.redirect_with_notice` once it is done and refuse with `req.invalid`. A router built by
-  hand, an `unstaged` route and an `any = ..` route are not checked
+  release build compiles none of the check. **Breaking (debug builds only):** an app from an
+  earlier `corten new` (`/greet`, with no `GET`), or any post-only route that answers a
+  browser's plain post with a 200 page (a payment provider's return, a sign-in provider's
+  `form_post` callback, a refusal sent with 200), now gets a 500 in debug builds and in its
+  router tests. To move: post the form to the page's own route (`get = .., post = ..`), or
+  answer the write with `req.redirect` or `req.redirect_with_notice` once it is done and refuse
+  with `req.invalid`. A router built by hand, an `unstaged` route and an `any = ..` route are
+  not checked
   ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
 
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,

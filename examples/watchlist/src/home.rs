@@ -509,6 +509,25 @@ mod tests {
         assert_eq!(rows(list.text()), ["ACME", "GLBX", "INIT", "SOLR"]);
     }
 
+    /// A browser with no id that sends a stock the market does not list gets none with the
+    /// refusal's patch or Problem Details document, and one with the watchlist drawn to refuse it.
+    #[tokio::test]
+    async fn a_refusal_makes_an_id_only_when_it_draws_the_watchlist() {
+        let app = client();
+        for mode in [Mode::Action, Mode::Data] {
+            let watch = app.post(&url::Watch).mode(mode).field(StockForm::FIELDS.id, "ZZZZ").await;
+            let unwatch = app.post(&url::Unwatch).mode(mode).field(UnwatchForm::FIELDS.remove, "ZZZZ").await;
+            for refused in [watch, unwatch] {
+                assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY, "{mode:?}: {}", refused.text());
+                let cookies: Vec<_> = refused.headers().get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
+                assert!(!cookies.iter().any(|c| c.starts_with("visitor=")), "{mode:?}: {cookies:?}");
+            }
+        }
+        let drawn = app.post(&url::Watch).mode(Mode::Document).field(StockForm::FIELDS.id, "ZZZZ").await;
+        assert_eq!(drawn.status(), StatusCode::UNPROCESSABLE_ENTITY, "{}", drawn.text());
+        assert_eq!(drawn.cookie("visitor").map(str::len), Some(32), "the watchlist's page names the browser");
+    }
+
     #[tokio::test]
     async fn two_removals_sent_at_once_both_land() {
         let app = client();

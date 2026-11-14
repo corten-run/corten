@@ -2579,6 +2579,11 @@ async fn post_item_drawn(req: Req, Params(_): Params<post_page_url::ItemSave>) -
     post_page_drawn(req).await
 }
 
+/// The same write under any first segment, the API's prefix and Corten's own included.
+async fn post_section_drawn(req: Req, Params(_): Params<post_page_url::SectionSave>) -> HtmlResult {
+    post_page_drawn(req).await
+}
+
 /// A write refused for its input: the page again, with the refusal's status.
 async fn post_page_refused(req: Req) -> HtmlResult {
     let mut res = req.test_page("Refused", html! { <p>"refused"</p> })?;
@@ -2590,8 +2595,9 @@ async fn post_page_redirected(req: Req) -> HtmlResult {
     req.redirect(&post_page_url::Home)
 }
 
-/// An API's answer carrying a page's shell header, as the check reads a page: at a post-only
-/// path of the app's it would be an error, and at the API's it is not.
+/// An API's answer carrying a page's shell header, as the check reads a page, at a path the app's
+/// post-only `/{section}/save` also matches. A request under an API's prefix is answered as the
+/// API's before the page stages (`render_errors`), so the check never sees it.
 async fn post_api_saved() -> HtmlResult {
     let res = crate::response::Response::builder().header(crate::page::SHELL_HEADER, "api").body(Body::from("saved"));
     Ok(HtmlResponse::new(res.unwrap()))
@@ -2608,6 +2614,11 @@ mod post_page_url {
     #[route("/items/{id}/save", post = post_item_drawn)]
     pub struct ItemSave {
         pub id: u32,
+    }
+
+    #[route("/{section}/save", post = post_section_drawn)]
+    pub struct SectionSave {
+        pub section: String,
     }
 
     #[route("/refuse", post = post_page_refused)]
@@ -2665,8 +2676,10 @@ const POST_PAGE_BROWSER: &[(&str, &str)] = &[("accept", "text/html")];
 /// browser would show it at an address that answers 405 when it is opened again. The handler's
 /// cookies and `Clear-Site-Data` go out with it, and the page's other headers do not. A page's own
 /// route, a refusal, a redirect, the runtime's patch, a client that does not ask for HTML, an
-/// `any = ..` route (which answers `GET` too) and an API's path (answered with a page's shell
-/// header) are not.
+/// `any = ..` route (which answers `GET` too), an API's path (answered with a page's shell
+/// header; an API's requests never reach the check) and a path of Corten's own are not. The last
+/// two are paths the app's post-only `/{section}/save` matches, and at Corten's own only
+/// `NotPages`, read by the check itself, keeps the page from being taken for that route's.
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_builds() {
@@ -2683,6 +2696,9 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
     assert!(body.contains("post to /items/{id}/save, which has no GET handler"), "{body}");
     let (status, _, body) = post_page_send(&router, "/shop/save", POST_PAGE_BROWSER).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "an area's route: {body}");
+    let (status, _, body) = post_page_send(&router, "/news/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "the route that also matches the API's path: {body}");
+    assert!(body.contains("post to /{section}/save, which has no GET handler"), "{body}");
     assert_eq!(post_page_send(&router, "/", POST_PAGE_BROWSER).await.0, StatusCode::OK, "the page's own route");
     assert_eq!(post_page_send(&router, "/refuse", POST_PAGE_BROWSER).await.0, StatusCode::UNPROCESSABLE_ENTITY, "a refusal");
     assert_eq!(post_page_send(&router, "/done", POST_PAGE_BROWSER).await.0, StatusCode::SEE_OTHER, "a redirect");
@@ -2691,7 +2707,13 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
     assert_eq!(
         (status, headers.get("corten-shell").is_some()),
         (StatusCode::OK, true),
-        "an API's path, its answer read as a page: {body}"
+        "an API's path, answered as the API's before the check: {body}"
+    );
+    let (status, headers, body) = post_page_send(&router, "/corten/save", POST_PAGE_BROWSER).await;
+    assert_eq!(
+        (status, headers.get("corten-shell").is_some()),
+        (StatusCode::OK, true),
+        "a path of Corten's own, which only NotPages keeps from the check: {body}"
     );
     let patch = post_page_send(&router, "/save", &[("accept", "text/html"), ("corten", "action")]).await;
     assert_eq!(patch.0, StatusCode::OK, "the runtime's patch");
@@ -2703,7 +2725,7 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
 #[tokio::test]
 async fn a_page_answering_a_post_to_a_path_with_no_get_is_sent_in_release_builds() {
     let router = post_page_router();
-    for path in ["/save", "/items/7/save", "/shop/save"] {
+    for path in ["/save", "/items/7/save", "/shop/save", "/news/save"] {
         let (status, _, body) = post_page_send(&router, path, POST_PAGE_BROWSER).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");
         assert!(body.contains("<p>saved</p>"), "{path}: {body}");
