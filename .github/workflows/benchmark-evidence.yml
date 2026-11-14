@@ -1,0 +1,46 @@
+# Replay and observer controls, not an official benchmark or framework qualification.
+name: Benchmark Evidence
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: benchmark evidence (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, contracts, browser]
+    steps:
+      # Source replay needs the actual history and evidence tags, without lazy fetching.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - name: Prepare the existing Git-capable Playwright test image
+        run: |
+          image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
+          docker pull "$image"
+          docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
+      - name: Run serial evidence controls as the checkout owner
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          # Tool-byte replay reads the integrity-checked archives npm ci actually used.
+          # No Docker socket is exposed: native application qualification is separate.
+          docker run --rm --init --ipc host --network host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_cache=/npm-cache \
+            -v "$PWD:/src" -v "$(npm config get cache):/npm-cache:ro" -w /src \
+            corten-evidence-tools npm run "check:groups:evidence:$SUITE"

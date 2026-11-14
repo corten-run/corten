@@ -5,14 +5,24 @@ import os from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { mock, test } from "node:test";
-import { result } from "../../json-api/test-fixtures.mjs";
+import { result, failedResult } from "../../json-api/test-fixtures.mjs";
 import { descriptor } from "../../json-api/contract.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { digest, inside, inspectEvidence, tree } from "./evidence.mjs";
+import { inspectNative } from "./native-replay.mjs";
+import { composePhase } from "./composition.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
 const fixture = result(), s = fixture.summary;
+// Synthetic independent image observations for the saved-audit equality controls.
+const images = descriptor().apps.flatMap((app) => descriptor().payloads.map((payload) => {
+  const saved = s.apps[app].images[payload];
+  return { app, payload, imageId: saved.imageId, labels: saved.labels,
+    config: { entrypoint: saved.execution.Entrypoint, cmd: saved.execution.Cmd } };
+}));
+for (const tool of ["node", "k6"]) images.push({ tool, imageId: s.tools[tool].imageId,
+  config: { entrypoint: s.toolExecutions[tool].Entrypoint, cmd: s.toolExecutions[tool].Cmd } });
 const receipts = descriptor().apps.flatMap((app) => descriptor().cases.map((p) => fixture.load(s.apps[app].checks[p.key].native).receipt));
 for (const app of descriptor().apps) for (const p of descriptor().cases) {
   const { files } = fixture.load(s.apps[app].checks[p.key].native);
@@ -35,7 +45,7 @@ test("actual native raw functional replay can stage only an honestly blocked che
   const prepared = inspectPreparation(binding, native);
   assert.equal(prepared.report.baseline, false); assert.equal(s.options.build, true); assert.equal(s.options.checkOnly, true);
   const manifest = snapshotSources({ sources: { files: sourceFiles } }, source, sealedSources);
-  subject = auditSubject({ campaignSha256: "campaign", commit: s.commit, sourceSha256: "sources" }, prepared, tree(native), manifest, []);
+  subject = auditSubject({ campaignSha256: "campaign", commit: s.commit, sourceSha256: "sources" }, prepared, tree(native), manifest, images);
   assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 36);
   for (const mutate of [(x) => x.cleanupFailures.push({ resource: "leaked" }), (x) => x.failures.pop(),
     (x) => { x.apps.corten.checks[descriptor().cases[0].key].nativeSourceVerified = true; }, (x) => { x.dirtyAfter = true; }]) {
@@ -43,15 +53,42 @@ test("actual native raw functional replay can stage only an honestly blocked che
     for (const key of Object.keys(s)) delete s[key]; Object.assign(s, original); save();
   }
 });
+
+test("replayed negative preparation can await the same independent image/source audit without approving itself", () => {
+  const f = failedResult(), summary = f.summary, folder = join(temporary, "negative-preparation"); mkdirSync(folder);
+  summary.options.build = true; summary.options.checkOnly = true;
+  for (const entry of Object.values(summary.apps)) for (const checked of Object.values(entry.checks)) {
+    delete checked.native; checked.nativeSourceVerified = false; checked.nativeSerializationVerified = false;
+  }
+  summary.failures = structuredClone(s.failures);
+  for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+  const save = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); save();
+  const b = { ...binding, execution: { effectiveOptions: summary.options } };
+  const prepared = inspectPreparation(b, folder);
+  assert.equal(prepared.report.baseline, false); assert.equal(prepared.report.attemptComplete, false);
+  assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functionalComplete, true);
+  assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functional, false);
+  const target = auditSubject({ campaignSha256: "campaign", commit: summary.commit, sourceSha256: "sources" }, prepared, tree(folder),
+    { files: sourceFiles }, []);
+  assert.equal(target.qualified, false); assert.equal(target.identities.length, 36);
+  delete summary.cleanup; save(); assert.throws(() => inspectPreparation(b, folder), "missing cleanup must not stage");
+});
 test("exact current built image identity is required, not generic source presence", () => {
   const inspect = mock.method(childProcess, "execFileSync", (binary, args, options) => {
     assert.equal(binary, "docker"); assert.deepEqual(args.slice(0, 2), ["image", "inspect"]); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
-    const saved = Object.values(s.apps).flatMap((a) => Object.values(a.images)).find((i) => i.imageId === args[2]);
-    return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
+    const saved = images.find((i) => i.imageId === args[2]);
+    return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Entrypoint: saved.config.entrypoint,
+      Cmd: saved.config.cmd, Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
   });
   syncBuiltinESMExports();
   try {
-    const images = imageProof(s); assert.equal(images.length, 18); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    const images = imageProof(s); assert.equal(images.length, 20); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    for (const [owner, key] of [[s.apps.express.images[descriptor().payloads[0]], "execution"], [s.toolExecutions, "node"], [s.toolExecutions, "k6"]]) {
+      const before = owner[key];
+      owner[key] = { ...before, Cmd: ["/unreviewed/node", "--eval", "process.exit(1)"] };
+      assert.throws(() => imageProof(s), "same image ID cannot excuse changed saved execution");
+      owner[key] = before;
+    }
     inspect.mock.mockImplementation(() => '[{"Id":"sha256:wrong"}]'); assert.throws(() => imageProof(s));
   } finally { inspect.mock.restore(); syncBuiltinESMExports(); }
 });
@@ -84,6 +121,69 @@ test("all timed native audits must equal the accepted receipts and sealed source
   delete checked.native; save();
   assert.equal(validateTimingAudit(timingBinding, folder, subject, bundle, sealedSources).complete, false, "missing failed cells are not fabricated or promoted");
 });
+test("consistent negative runtime/image rewrites still differ from independently inspected accepted images", () => {
+  for (const role of ["app", "upstream"]) {
+    const f = failedResult("express"), summary = f.summary, folder = join(temporary, `execution-${role}`); mkdirSync(folder);
+    const b = { request: { group: "json-api", round: summary.round, commit: summary.commit },
+      execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } };
+    const bundle = { schema: "json-api-native-audits/v1", receipts };
+    const save = () => {
+      for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+      writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+    };
+    save(); assert.equal(validateTimingAudit(b, folder, subject, bundle, sealedSources).complete, true);
+    const payload = descriptor().payloads[0];
+    const execution = role === "app" ? summary.apps.express.images[payload].execution : summary.toolExecutions.node;
+    if (role === "app") execution.Cmd = ["/unreviewed/node", "--eval", "process.exit(1)"];
+    else execution.Entrypoint = ["/unreviewed/node"];
+    for (const [app, entry] of Object.entries(summary.apps)) for (const profile of descriptor().cases) {
+      if (role === "app" && (app !== "express" || profile.payload !== payload)) continue;
+      const checked = entry.checks[profile.key], raw = f.load(checked.raw);
+      const cfg = (role === "app" ? raw.runtime : raw.participants.upstream).configuration;
+      if (role === "app") cfg.command = execution.Cmd;
+      cfg.entrypoint = execution.Entrypoint;
+      const argv = [...(cfg.entrypoint ?? []), ...(cfg.command ?? [])]; cfg.path = argv[0]; cfg.args = argv.slice(1);
+      checked.raw = f.put(raw);
+    }
+    save();
+    const native = inspectEvidence(b, folder);
+    assert.equal(native.attemptComplete, true, "intrinsic consistency alone is insufficient for accepted execution binding");
+    assert.equal(native.baseline, false);
+    assert.throws(() => validateTimingAudit(b, folder, subject, bundle, sealedSources), /timing execution differs/);
+  }
+});
+
+test("k6 execution rewrites cannot pass the actual accepted-audit and core bridge", async () => {
+  const f = result(), summary = f.summary, folder = join(temporary, "k6-execution"); mkdirSync(folder);
+  const b = { request: { group: "json-api", round: summary.round, commit: summary.commit }, selection: { apps: descriptor().apps },
+    preparation: { fixtures: [] }, execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } };
+  const bundle = { schema: "json-api-native-audits/v1", receipts };
+  const save = () => { for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+    writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); };
+  const compose = (native, audit) => composePhase(b, native, { cleanupComplete: true, resources: "verified" },
+    [{ terminal: true, code: 0, error: null, cancelled: false, forced: false, success: true }], audit);
+  save();
+  assert.equal(inspectEvidence(b, folder).baseline, true);
+  const original = await inspectNative(b, folder); assert.equal(original.status, "verified");
+  assert.equal(compose(original, validateTimingAudit(b, folder, subject, bundle, sealedSources).complete).outcome, "native-validated");
+  summary.toolExecutions.k6.Entrypoint = ["/unreviewed/k6"];
+  for (const entry of Object.values(summary.apps)) for (const runs of Object.values(entry.runs)) for (const run of runs) {
+    for (const phase of [run.warmup, ...Object.values(run.phases)]) {
+      const raw = f.load(phase.raw), cfg = raw.participants.load.configuration;
+      cfg.entrypoint = summary.toolExecutions.k6.Entrypoint; cfg.path = cfg.entrypoint[0]; cfg.args = [...cfg.command];
+      phase.raw = f.put(raw);
+    }
+  }
+  save();
+  assert.equal(inspectEvidence(b, folder).baseline, true, "self-consistent raw replay alone cannot anchor image configuration");
+  const changed = await inspectNative(b, folder); assert.equal(changed.status, "verified");
+  let audited = false;
+  try { audited = validateTimingAudit(b, folder, subject, bundle, sealedSources).complete; }
+  catch (error) { assert.match(error.message, /timing execution differs from independently inspected image/); }
+  assert.equal(audited, false, "unchanged accepted image proof must reject a consistently rewritten k6 entrypoint");
+  assert.notEqual(compose(changed, audited).outcome, "native-validated");
+});
+
 test("independent review data must match all 36 actual subjects and sealed source bytes", () => {
   const delivery = { schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject.subjectSha256,
     review: { reviewer: "independent-human", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },

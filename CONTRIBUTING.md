@@ -58,6 +58,24 @@ the framework itself.
 
 ## Checks
 
+Grouped benchmark replay and observer controls also run in the separate
+`Benchmark Evidence` workflow: `npm run check:groups:evidence:core`,
+`npm run check:groups:evidence:contracts` and `npm run check:groups:evidence:browser`.
+They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
+the full repository history and the integrity-checked npm cache used by `npm ci`.
+The workflow uses the existing Git-capable Playwright image and serial test files;
+it does not mount a Docker socket or qualify native framework images. The actual
+Docker/native controls and official campaign remain separate checks, not skipped
+qualifications disguised as passing evidence tests.
+
+The portable core selection excludes `bench/workloads/isolated/host-lifetime-linux.test.mjs`:
+its real kernel controls require an explicitly owned delegated systemd test unit,
+and must run there separately before host-lifetime changes are qualified. A static
+coverage check rejects any other omitted core test file. Browser CI runs every
+portable saved-verifier test, excluding only the optional historical `retained real w28`
+capture test. Native production-image and Docker collector controls are also separate;
+their absence cannot establish framework or host qualification.
+
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
 `checkout=$(basename "$PWD")` for the first line, and, for the three lines from `$env:SITE_HELD` to

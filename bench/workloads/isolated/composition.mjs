@@ -24,8 +24,8 @@ export function composePhase(binding, native, host, commands, timingAudit = true
   const policy = binding.latestStable;
   const policyAllowsComparison = policy?.schema === latestStableSchema && policy.group === binding.request.group && policy.valid === true
     && policy.status === "not-applicable" && policy.groupComparisonEligible === null;
-  // Mixed gates timing for the whole group, not just the failed functional cell.
-  const nativeAllowsComparison = (app) => binding.request.group !== "mixed-production"
+  // These native runners gate timing for the whole group after a parity failure.
+  const nativeAllowsComparison = (app) => !["mixed-production", "catalog-page", "json-api"].includes(binding.request.group)
     || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   const browserAllowsComparison = (app) => !browser || native.qualificationPassed === true && native.expectedExitCode === 0
     && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app);

@@ -15,6 +15,14 @@ const adapters = Object.freeze({
 });
 export const executionGroups = Object.freeze([...groupNames]);
 const states = ["verified", "failed", "blocked", "invalid"];
+function httpAttempt(binding, report) {
+  assert.equal(report.attemptComplete, true, "native HTTP attempt incomplete");
+  assert.deepEqual(report.outcomes.map((r) => r.app), binding.selection.apps);
+  assert.ok(report.outcomes.every((r) => ["passed", "failed"].includes(r.outcome)));
+  return { status: report.outcomes.some((r) => r.outcome === "failed") ? "failed" : "verified",
+    attemptComplete: true, cleanupComplete: true, resources: "verified", outcomes: report.outcomes,
+    comparisonEligibleApps: report.comparisonEligibleApps, blockers: ["external-os-proof-required"] };
+}
 function missing(binding) {
   return { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
     outcomes: binding.selection.apps.map((app) => ({ app, outcome: "not-run" })), blockers: ["fixed-native-replay-not-available"] };
@@ -68,9 +76,7 @@ export async function inspectNative(binding, folder) {
     }
     else if (group === "json-api") {
       const report = inspectEvidence(binding, folder);
-      assert.equal(report.baseline, true);
-      result = { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
-        outcomes: binding.selection.apps.map((app) => ({ app, outcome: "passed" })), blockers: ["external-os-proof-required"] };
+      result = httpAttempt(binding, report);
     } else {
       const api = group === "catalog-page" ? await import("../../catalog/verify.mjs") : await import("../../marketplace/validate.mjs");
       const saved = await api.validateSaved({ folder, round, commit });
@@ -92,9 +98,7 @@ export async function inspectNative(binding, folder) {
       } else if (saved.status === "invalid") { result.status = "invalid"; result.resources = "invalid"; }
       else if (saved.status === "verified" && saved.complete === true) {
         if (group === "catalog-page") {
-          assert.equal(saved.report.baseline, true);
-          result = { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
-            outcomes: binding.selection.apps.map((app) => ({ app, outcome: "passed" })), blockers: ["external-os-proof-required"] };
+          result = httpAttempt(binding, saved.report);
         }
       }
     }

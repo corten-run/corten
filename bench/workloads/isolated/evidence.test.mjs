@@ -138,9 +138,9 @@ test("JSON validator uses its actual hash-bound raw reader and cannot accept rec
   assert.equal(inspectEvidence(b, root).baseline, true);
   const key = s.group.cases[0].key;
   const raw = join(root, s.apps.corten.checks[key].raw.path), bytes = fs.readFileSync(raw);
-  fs.writeFileSync(raw, "{}"); assert.throws(() => inspectEvidence(b, root), /raw artifact digest/); fs.writeFileSync(raw, bytes);
+  fs.writeFileSync(raw, "{}"); assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/); fs.writeFileSync(raw, bytes);
   const bad = structuredClone(s); bad.apps.corten.checks[key].native = "approved-by-caller";
-  fs.writeFileSync(file, JSON.stringify(bad)); assert.throws(() => inspectEvidence(b, root), /native audit/);
+  fs.writeFileSync(file, JSON.stringify(bad)); assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/);
   assert.notEqual(digest(bytes), digest("{}"));
 });
 test("marketplace uses its native schema, exact configuration and full excluded-candidate ledger", (t) => {

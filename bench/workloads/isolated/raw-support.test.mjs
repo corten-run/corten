@@ -13,8 +13,11 @@ for (const group of ["catalog-page", "localized-marketplace"]) test(`${group}: e
   const root = mkdtempSync(join(tmpdir(), "isolated-raw-support-"));
   t.after(() => { assert.ok(inside(resolve(tmpdir()), resolve(root))); rmSync(root, { recursive: true, force: true }); });
   const marketplace = group === "localized-marketplace", name = "native-corten", samples = [{ cpu: 40, mem: 8 }, { cpu: 60, mem: 10 }];
-  const k6 = { metrics: { http_reqs: { values: { count: 100, rate: 10 } }, http_req_duration: { values: { avg: 2, "p(50)": 1, "p(95)": 3, "p(99)": 4, max: 5 } },
-    http_req_failed: { values: { rate: 0 } }, checks: { values: { passes: 200, fails: 0 } }, dropped_iterations: { values: { count: 0 } } },
+  const k6 = { metrics: { http_reqs: { values: { count: 100, rate: 10 } }, iterations: { values: { count: 100, rate: 10 } },
+    vus_max: { values: { value: 64, min: 64, max: 64 } },
+    http_req_duration: { values: { avg: 2, "p(50)": 1, "p(95)": 3, "p(99)": 4, max: 5 } },
+    iteration_duration: { values: { avg: 2, "p(50)": 1, "p(95)": 3, "p(99)": 4, max: 5 } },
+    http_req_failed: { values: { rate: 0, passes: 0, fails: 100 } }, checks: { values: { rate: 1, passes: 200, fails: 0 } }, dropped_iterations: { values: { count: 0 } } },
     root_group: { checks: { "marketplace status 200": { passes: 100, fails: 0 }, "marketplace content type": { passes: 100, fails: 0 } } } };
   const metric = (marketplace ? readOutcome : readLoad)(k6), stats = summarizeSamples(samples);
   const measured = { ...metric, ...stats, cpuUsec: 1000000, perCpuSecond: 100, upstream: null };

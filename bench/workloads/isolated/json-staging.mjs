@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { descriptor, identity, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
+import { descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
 import { inspectJson } from "../../json-api/report.mjs";
 import { contained, reader } from "../../json-api/artifacts.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -20,8 +20,9 @@ export function inspectPreparation(binding, root) {
   assert.deepEqual(summary.cleanupFailures, []);
   const report = inspectJson(summary, { load: reader(root), commit: binding.request.commit });
   assert.equal(report.baseline, false);
-  assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => r.functional && !r.nativeQualified && r.passes === 0)),
-    "all 36 functional cells must pass without prebuild audit claims");
+  assert.equal(report.functionalAttemptComplete, true, "functional raw matrix/configuration incomplete");
+  assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => r.functionalComplete && !r.nativeQualified && r.passes === 0)),
+    "all 36 functional attempts must replay without prebuild audit claims");
   assert.equal(summary.failures.length, 36, "only the 36 missing independent audits may block staging");
   const seen = new Set();
   for (const failure of summary.failures) {
@@ -48,10 +49,18 @@ export function imageProof(summary) {
     assert.equal(raw.length, 1); const info = raw[0];
     assert.equal(info.Id, saved.imageId);
     for (const [key, value] of Object.entries(saved.labels)) assert.equal(info.Config?.Labels?.[key], value);
+    assert.deepEqual(imageCommandEvidence(info), saved.execution, "saved app execution differs from actual built image");
     // Preserve actual configuration without forwarding image Env, which may contain secrets.
     images.push({ app, payload, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
       rootFS: info.RootFS, config: { entrypoint: info.Config?.Entrypoint, cmd: info.Config?.Cmd, workingDir: info.Config?.WorkingDir },
       labels: saved.labels });
+  }
+  for (const tool of ["node", "k6"]) {
+    const raw = JSON.parse(dockerRead(["image", "inspect", summary.tools[tool].imageId]));
+    assert.equal(raw.length, 1); const info = raw[0]; assert.equal(info.Id, summary.tools[tool].imageId);
+    assert.deepEqual(imageCommandEvidence(info), summary.toolExecutions[tool], "saved execution differs from actual tool image");
+    images.push({ tool, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
+      rootFS: info.RootFS, config: { entrypoint: info.Config.Entrypoint, cmd: info.Config.Cmd, workingDir: info.Config.WorkingDir } });
   }
   return images;
 }
@@ -125,6 +134,21 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
   assert.equal(bundle.schema, "json-api-native-audits/v1");
   assert.equal(subject.identities.length, descriptor().apps.length * descriptor().cases.length);
   assert.equal(bundle.receipts.length, subject.identities.length);
+  assert.equal(subject.images.length, descriptor().apps.length * descriptor().payloads.length + 2);
+  const execution = (saved, accepted) => {
+    assert.equal(saved.imageId, accepted.imageId, "timing image differs from independently inspected image");
+    assert.deepEqual(saved.execution, { Entrypoint: accepted.config.entrypoint, Cmd: accepted.config.cmd },
+      "timing execution differs from independently inspected image");
+  };
+  for (const app of descriptor().apps) for (const payload of descriptor().payloads) {
+    const saved = summary.apps?.[app]?.images?.[payload]; verifyImage(saved, summary.commit, app, payload);
+    const accepted = subject.images.filter((i) => i.app === app && i.payload === payload);
+    assert.equal(accepted.length, 1); execution(saved, accepted[0]); assert.deepEqual(saved.labels, accepted[0].labels);
+  }
+  for (const tool of ["node", "k6"]) {
+    const accepted = subject.images.filter((i) => i.tool === tool); assert.equal(accepted.length, 1);
+    execution({ imageId: summary.tools?.[tool]?.imageId, execution: summary.toolExecutions?.[tool] }, accepted[0]);
+  }
   let complete = true;
   for (const app of descriptor().apps) for (const profile of descriptor().cases) {
     const expected = subject.identities.filter((i) => i.app === app && i.key === profile.key);

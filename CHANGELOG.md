@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Run grouped benchmark evidence, isolated adapters and browser proof controls in
+  dedicated serial CI suites. These replay checks do not stand in for native
+  framework qualification or an official benchmark run.
+
 - Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
   including dependency-policy and whole-group timing gates. Failed and unsupported
   outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
@@ -66,6 +70,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - Pin grouped benchmark helper images, native live Express and the Express/Bun
   Node comparator to Node 26.13.1 by immutable digest. Retain their separate
   native qualification requirements instead of borrowing older runtime results.
+  Django's local production-qualification helper uses that same upstream pin.
 
 - Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
   preserving native rendering and source clients. Keep Drogon's native parser
@@ -77,6 +82,27 @@ Corten is pre-1.0, so any minor version may change the API.
   group, retaining its runtime WebSocket and app-local replay/acknowledgement bounds.
   Historical missing-port evidence stays unchanged; functional integration is not a
   completed group timing baseline.
+
+- A value the markup gives an element for its script is the element's ref's: `ref={row.with(cents)}`
+  (a number, text or a `bool`), and a handler parameter typed `Map<HTMLTableRowElement, number>`
+  gets every element of the ref with its value, a number as a number. The call is checked as any
+  ref's is, so a ref whose elements give no value, give one of another type, or give one on some
+  elements and not others does not compile, where a `data-` attribute read through `dataset` was
+  text on both sides that nothing checked. `examples/card-market`'s listing sort reads its cents
+  this way, and the scripts guide recommends it for rows a script only reorders;
+  `examples/corten-site`'s wall, `apart.js` and `answer.js` read their values the same way. Measured
+  against `main`: the runtime is 107 bytes larger raw, 21 with gzip and 24 with brotli;
+  card-market's item page, whose 22 listing rows (on average) each give a value, is 418 bytes larger
+  and takes about 930 instructions more to render (2.4%); a page whose elements give no value is
+  unchanged, to the instruction ([design Choice 46](docs/design.md#choice-ref-values)). An integer
+  handler argument is now written as markup writes a number, with the same digits as before.
+  **Breaking:** `data-ref-value` is printed by Corten, as `data-ref` is, so markup that writes it by
+  hand no longer compiles; give the value with the element's ref. A spread of pairs (`{..attrs}`)
+  now skips `data-ref-value`, `data-ref`, `data-on` and `data-scope`, whole names in any case, as it
+  skipped `data-vars`, so pairs that wrote them are dropped; it costs at most five length-checked
+  comparisons per pair, on pair spreads only. corten-ui's `rows::sort` still reads the `data-sort`
+  an app writes (moving it onto ref values is
+  [#1387](https://github.com/corten-run/corten/issues/1387)).
 
 - Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
   images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12

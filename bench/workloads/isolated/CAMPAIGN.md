@@ -261,6 +261,15 @@ to regular content-addressed `audit-sources/blobs/<sha256>` files by the source 
 they are not unsafe archive path names. Environment values are not forwarded from Docker image configuration.
 `json-audit-subject.json` binds those images, 36 identities, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
+The retained image list includes the 18 app images and both actual Node/k6 tool images.
+The fixed k6 image/version is prepared before functional checks, even in check-only mode;
+this runs no load. Staging independently inspects both tool image execution configurations.
+App and tool image-default entrypoint/command observations are compared with actual Docker
+image inspection during staging and with the accepted subject during timing. Native JSON
+receipts retain every role's entrypoint, command, effective executable and arguments: app
+defaults are exact, and upstream/probe/load commands are the full fixed native invocations.
+Missing fields or substitutions cannot be attributed as a complete target failure; old
+captures need new evidence, not a waiver. Image environment values are not copied.
 
 While the process stays alive, the authorized parent/operator may deliver exactly
 `<campaign-id>/json-audit-delivery.json`, at most 16 MiB, regular/no-hardlink, same UID and
@@ -420,11 +429,26 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
 5. Browser adapter at 831de1cf is imported unchanged. Native b3597261f still reports genuine
    source/whole-terminal/capture gaps; its fixed validator must establish semantic browser
    closure separately from core OS exit. All 240 selected native cells remain required.
-6. Catalog/marketplace raw validators are fixed imports, pending parent integration and
-   current producer review. Catalog's positive-only baseline replay cannot yet classify a
-   complete negative framework attempt. JSON retains its original strict report and exact
-   accepted-audit binding: no negative attempt is promoted merely to make that baseline
-   pass. Failure-aware raw completeness must be native-derived before such attempts qualify.
+6. Catalog/JSON raw replay distinguishes a complete failed functional attempt from a
+   successful baseline. The bounded negative path is an initial JSON record-sweep violation:
+   actual request intents and complete responses replay against canonical records, all
+   started requests settle, and the fixed checker exits normally with code one. Catalog
+   additionally retains inspected checker/app/upstream identities, CPU/memory/source settings
+   and checker terminal state. Catalog requires each role's entire exact native mount set
+   (no extra binds or image volumes), zero participant restarts and normal running,
+   nonpaused/nonrestarting/error-free app/upstream observations. All three roles retain
+   actual image command configuration and container entrypoint/executable/arguments;
+   replay requires inherited image execution and the entire fixed checker/upstream
+   command, not just its script suffix. JSON binds actual child exit/clock plus its existing runtime
+   and upstream observations. Every selected app/source/payload is still attempted. Native
+   owned-resource cleanup and all existing source/image/configuration gates remain mandatory.
+   A single proven negative gates timing for the whole group; healthy peers remain passed
+   but comparison-ineligible, and baseline remains false. No unsupported outcome is inferred.
+   Network errors, missing responses, later browser assertions, timeouts, OOM, failed audits,
+   harness errors or incomplete cleanup are not converted into complete target failures.
+   JSON preparation may stage these replayed negative cells for independent review, but
+   cannot approve itself. Timing-phase native receipts must still match the separately
+   accepted exact image/source audit; core OS/lifecycle gates remain separate prerequisites.
 
 The parent owns provider lifecycle, remote transport, unit ownership, archive validation,
 reviewed merge, guide/changelog integration and broader repository checks outside this

@@ -566,7 +566,8 @@ try {
       const plain = await plainContext.newPage();
       await plain.goto(`${base}/items/item_5`);
       const sortShown = await plain.isVisible("[data-scope=listing-sort] > button");
-      const cents = await plain.$$eval("[data-scope=listing-sort] tbody tr", (rows) => rows.map((r) => Number(r.getAttribute("data-cents"))));
+      // The cents each row gives its ref (`ref={row.with(sort_cents(l))}`), as JSON.
+      const cents = await plain.$$eval("[data-scope=listing-sort] tbody tr", (rows) => rows.map((r) => Number(JSON.parse(r.getAttribute("data-ref-value") ?? "null"))));
       check(
         `${name} without JavaScript: the listings' sort button is not drawn, and the listings are cheapest first`,
         !sortShown && cents.length > 1 && cents.every((c, i) => i === 0 || cents[i - 1] <= c),
