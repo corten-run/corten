@@ -323,9 +323,10 @@ Corten is pre-1.0, so any minor version may change the API.
   against main `0ff569c6`: a small component's patch costs 17,537.5 instructions a request
   against 18,734.5 and a 4 KiB component's 26,695.9 against 32,414.8; a bare `html!` patch
   (17,512.2) and a 45-byte `Remove` and a 4 KiB `html!` patch in turn (22,728.4 a request)
-  cost what they did. The string a response holds until it is written is the size it needs: a
-  4 KiB component's is 4,628 bytes where it was 8,192, and a small one's 256 where it was 32, as
-  an `html!` patch's already was.
+  cost what they did. The string a response holds until it is written is near the size it
+  needs: a 4 KiB component's is 4,628 bytes where it grew to 8,192, and a small one's 256 where it
+  grew to 32, as an `html!` patch's already was (the new sizes asserted by a test, the old ones
+  reasoned from `String`'s doubling from empty).
 
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
