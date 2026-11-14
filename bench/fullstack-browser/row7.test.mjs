@@ -489,8 +489,8 @@ test("row7: the repository's native Next marketplace handler remains supported",
       // itself still parses, never invokes or evaluates, these functions.
       const record = { id: "item_2" }, locale = "fr-FR", form = document.querySelector("form");
       const component = new Function(`return (${componentSource})`)();
-      const handler = new Function("record", "locale", "setSubmitted", `return (${handlerSource})`)(record, locale,
-        (message) => { document.querySelector("p").textContent = message; });
+      const handler = new Function("record", "locale", "setSubmitted", "submitting", "setPending", `return (${handlerSource})`)(record, locale,
+        (message) => { document.querySelector("p").textContent = message; }, { current: false }, () => {});
       form.__reactProps$control = { onSubmit: handler };
       form.__reactFiber$control = { type: component, memoizedProps: { record, locale } };
     }, observed);
@@ -537,8 +537,11 @@ test("row7: native Next helper effects are not resolved by identical component s
         // Execute the real component with its real repository value helpers.
         // Only the test JSX/runtime adapter and the adversarial helper differ.
         const jsx = (tag, props) => ({ tag, props }), form = document.querySelector("form");
-        const component = new Function("_jsx", "_jsxs", "_Fragment", "Fragment", "useState", "formatters", "marketplacePath", "sortedListings", `return (${componentSource})`)(
-          jsx, jsx, Symbol("Fragment"), Symbol("Fragment"), () => [null, (message) => { document.querySelector("p").textContent = message; }],
+        let stateCalls = 0;
+        const useState = (initial) => [initial, stateCalls++ === 0
+          ? (message) => { document.querySelector("p").textContent = message; } : () => {}];
+        const component = new Function("_jsx", "_jsxs", "_Fragment", "Fragment", "useState", "useRef", "formatters", "marketplacePath", "sortedListings", `return (${componentSource})`)(
+          jsx, jsx, Symbol("Fragment"), Symbol("Fragment"), useState, (current) => ({ current }),
           helpers.formatters, helpers.marketplacePath, sortedListings);
         const props = { record, locale: "fr-FR", query: { seller: "", sort: "asc", allOffers: false } }, tree = component(props);
         const find = (node) => !node || typeof node !== "object" ? null
