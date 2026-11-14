@@ -14545,7 +14545,7 @@ mod layout_reads {
             )
             .route(
                 "/patch",
-                crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }),
+                crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> }) }),
             )
             .route("/away", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Done) }))
             .route("/refused", crate::router::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }));
@@ -14611,7 +14611,7 @@ mod layout_reads {
         let routes =
             Table::new().route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") })).route(
                 "/patch",
-                crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }),
+                crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> }) }),
             );
         let router = App::new(Routes::from(routes))
             .layout_read(count.clone())
@@ -15372,7 +15372,7 @@ mod layout_reads {
             "/form",
             crate::router::post(move |req: Req| async move {
                 if patch {
-                    req.patch::<ForOne>(html! { <p id={MsgId}>"too short"</p> })
+                    req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"too short"</p> })
                 } else {
                     refused(&req, "too short")
                 }
