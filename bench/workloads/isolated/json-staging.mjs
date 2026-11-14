@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
@@ -163,18 +164,18 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
     const bytes = readRegular(contained(root, checked.native.path));
     assert.equal(digest(bytes), checked.native.sha256);
     const native = JSON.parse(bytes); exact(native, ["receipt", "files"]);
-    assert.deepEqual(native.receipt, accepted[0], "timing audit differs from accepted receipt");
-    assert.deepEqual(Object.keys(native.files).sort(), accepted[0].sourceFiles.map((f) => f.path).sort());
+    assert.ok(isDeepStrictEqual(native.receipt, accepted[0]), "timing audit differs from accepted receipt");
+    assert.ok(isDeepStrictEqual(Object.keys(native.files).sort(), accepted[0].sourceFiles.map((f) => f.path).sort()), "timing source file inventory differs");
     for (const file of accepted[0].sourceFiles) {
       const saved = subject.sourcesManifest.files.find((f) => f.path === file.path);
       assert.ok(saved && saved.sha256 === file.sha256); assert.equal(saved.storedAs, `blobs/${file.sha256}`);
       assert.match(file.sha256, /^[a-f0-9]{64}$/);
       const source = readRegular(join(sourceRoot, saved.storedAs));
       assert.equal(digest(source), file.sha256); assert.equal(typeof native.files[file.path], "string");
-      assert.deepEqual(Buffer.from(native.files[file.path], "utf8"), source, "timing source differs from accepted source snapshot");
+      assert.ok(isDeepStrictEqual(Buffer.from(native.files[file.path], "utf8"), source), "timing source differs from accepted source snapshot");
     }
     verifyNativeReceipt(native.receipt, expected[0], native.files);
   }
-  assert.deepEqual(tree(root), before);
+  assert.ok(isDeepStrictEqual(tree(root), before), "timing audit evidence mutated");
   return freeze({ complete });
 }

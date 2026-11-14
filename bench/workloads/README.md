@@ -21,9 +21,11 @@ or remove Corten's features to manufacture parity.
 
 ## Implementation status
 
-The [grouped cloud controller](CLOUD.md) and [single-host campaign procedure](isolated/CAMPAIGN.md)
-describe the complete registry campaign, its sequential native entries, independent source-audit
-waits and terminal-only evidence collection. They are separate from the legacy marketplace
+The [grouped cloud controller](CLOUD.md) supports a dedicated fresh host for each complete
+registry group. The fleet launches those hosts in parallel; each host runs only its group's
+native entries. The [campaign procedure](isolated/CAMPAIGN.md) retains independent source-audit
+waits and terminal-only evidence collection for each host. A separate fleet gate requires
+every current group before reporting a complete round. These are separate from the legacy marketplace
 schedule and the per-group development commands below. Exact merged-source review, native
 producer/validator integration and host-readiness gates remain mandatory before allocation;
 an implemented controller or a passing portable suite is not a completed benchmark.
