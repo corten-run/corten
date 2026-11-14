@@ -14,6 +14,15 @@ test("fixed entry grammar refuses filters, extra paths, duplicate args, stale id
     ["r17", "--commit", "HEAD", ...args.slice(3)], ["r17", "--commit", commit, "--state-dir", "/bench/group2"],
     ["r17", "--commit", commit, "--commit", commit], [["r17"], ...args.slice(1)]]) assert.throws(() => parseCampaignArgs(input));
 });
+test("fixed entry accepts one exact registry group, never app filters or overrides", () => {
+  for (const group of ["catalog-page", "json-api", "localized-marketplace", "mixed-production", "fullstack-browser",
+    "client-heavy", "live-delivery", "recoverable-live", "hardening"]) {
+    assert.deepEqual(parseCampaignArgs([...args, "--group", group]), { round: "r17", commit, stateRoot: "/bench/campaign", group });
+  }
+  for (const tail of [["--group", "foreign"], ["--group", ""], ["--group"], ["--apps", "corten"],
+    ["--group", "catalog-page", "--group", "json-api"], ["--group", "catalog-page", "--apps", "corten"],
+    ["--group", "catalog-page", "--recipe", "native-defaults"]]) assert.throws(() => parseCampaignArgs([...args, ...tail]));
+});
 test("private inbox has bounded physical bytes, never follows producer hardlinks", () => {
   for (const group of ["json-api", "mixed-production"]) {
     const directory = join(temporary, group); mkdirSync(directory);

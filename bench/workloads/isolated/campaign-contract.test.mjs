@@ -6,6 +6,8 @@ import { bindExecution } from "./contract.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import * as campaigns from "./campaign-contract.mjs";
+import { deploymentSha256 } from "../deployments.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
@@ -54,4 +56,37 @@ test("full campaign binds real committed procedures, all groups, exact native de
   const bad = structuredClone(plan); bad.bindings[0].execution.invocation.argv.push("--apps", "corten");
   assert.throws(() => validateCampaign(bad), /differs from fixed native/);
   assert.throws(() => bindCampaign({ round: "r17", commit, groups: ["catalog-page"] }));
+});
+test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
+  const all = bindCampaign({ round: "r17", commit });
+  assert.equal(typeof campaigns.bindGroupCampaign, "function");
+  for (const group of groupNames) {
+    const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group });
+    assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
+    assert.deepEqual(plan.order, [group]); assert.deepEqual(plan.bindings, all.bindings.filter((b) => b.request.group === group));
+    for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
+      assert.deepEqual(plan[field], all[field]);
+    assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
+    const { campaignSha256, ...body } = plan; assert.equal(campaignSha256, deploymentSha256(body));
+    validateCampaign(plan);
+  }
+  validateCampaign(all); assert.equal(all.schema, "benchmark-isolated-campaign/v1");
+  for (const group of ["unknown", "", ["catalog-page"], undefined]) assert.throws(() => campaigns.bindGroupCampaign({ round: "r17", commit, group }));
+  for (const extra of [{ apps: ["corten"] }, { selection: {} }, { recipe: "native-defaults" }, { options: {} }, { groups: groupNames }])
+    assert.throws(() => campaigns.bindGroupCampaign({ round: "r17", commit, group: "catalog-page", ...extra }));
+  const original = campaigns.bindGroupCampaign({ round: "r17", commit, group: "catalog-page" });
+  for (const change of [
+    (p) => { p.bindings[0].selection.apps.pop(); },
+    (p) => { p.bindings[0].execution.invocation.argv.push("--apps", "corten"); },
+    (p) => { p.bindings[0].execution.effectiveOptions.duration = 1; },
+    (p) => { p.recipes["catalog-page"] = "marketplace-short-window"; },
+    (p) => { p.schema = "benchmark-isolated-campaign/v1"; },
+    (p) => { p.order = []; }, (p) => { p.order = ["json-api"]; },
+    (p) => { p.bindings.push(all.bindings[1]); },
+    (p) => { p.schema = "unknown"; },
+  ]) {
+    const edited = structuredClone(original); change(edited);
+    const { campaignSha256, ...body } = edited; edited.campaignSha256 = deploymentSha256(body);
+    assert.throws(() => validateCampaign(edited));
+  }
 });
