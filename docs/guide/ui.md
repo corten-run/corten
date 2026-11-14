@@ -232,6 +232,8 @@ the page the server sorts, which the click then does not use. A cell can also so
 `LocalTime` sorts by its time, not its text. A time sorts as an instant when it is a date or a date
 and time with `Z` or an offset, as `LocalTime` writes it; a duration, a week, or a number written
 for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENTS` and it is served.
+`data-sort` is the one `data-*` attribute an app writes for a script to read: `rows::sort` predates
+ref values ([scripts guide](scripts.md)), and moving it onto one is [#1387](https://github.com/corten-run/corten/issues/1387).
 
 ```rust,ignore
 <thead data-no-prefetch>

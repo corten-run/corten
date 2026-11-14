@@ -15,8 +15,8 @@ use crate::{
     looks::{Built, Slab},
 };
 
-/// The elements the wall's markup names for its script: the tiles are many, each with its
-/// reading as its key, so no file reads a name back as text.
+/// The elements the wall's markup names for its script: the tiles are many, each giving its ref
+/// its reading, so no file reads a name back as text.
 const REFS: [&str; 3] = ["grid", "readout", "tiles"];
 
 /// The functions its markup calls.
@@ -175,9 +175,9 @@ type Cut = (&'static str, usize);
 
 /// The lines of the wall's function that carry a tie: where its refs are made, the link that
 /// calls the script, and the elements the script is handed: the grid with the loop that fills
-/// it, and each tile's ref and key past its classes.
+/// it, and each tile's ref with its reading past its classes.
 const MARKUP_CUTS: [Cut; 5] =
-    [("#[component(css, js)]", 3), ("<a\n", 8), ("<output ref={readout}", 1), ("<div ref={grid}", 3), ("ref={tiles}", 2)];
+    [("#[component(css, js)]", 3), ("<a\n", 8), ("<output ref={readout}", 1), ("<div ref={grid}", 3), ("ref={tiles", 1)];
 
 /// The function that link calls, with the JSDoc its arguments are checked against.
 const SCRIPT_CUTS: [Cut; 1] = [("/**\n * @param {MouseEvent} event", 13)];
@@ -360,9 +360,8 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
                                     Mark::Number => <span class={Number}>{piece.text}</span>,
                                     Mark::Gap => <span class={Gap}>{piece.passed} " lines not shown"</span>,
                                     tied => <span
-                                        ref={link}
+                                        ref={link.with(piece.seam.as_str())}
                                         class={(Tied, kind(tied))}
-                                        data-seam={piece.seam.as_str()}
                                         data-lit={(piece.seam == LIT).then_some("")}
                                     >
                                         {piece.text}
@@ -392,7 +391,7 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
             <details ref={whole} class={Whole}>
                 <summary class={All}>"Read the Wall function and its two files in full: " {all} " lines"</summary>
                 <p class={Rest}>
-                    "Every name the files share is marked here, the twelve heat classes too. No file reads a name back as text: each tile's reading is its key, and the script is handed the tiles by key."
+                    "Every name the files share is marked here, the twelve heat classes too. No file reads a name back as text: each tile gives its ref its reading, and the script is handed the tiles with their readings."
                 </p>
                 <div class={Files}>
                     for file in FILES.iter() {
@@ -413,9 +412,8 @@ pub fn Apart<'a>(here: Here<'a>) -> impl Render {
                                             Mark::Number => <span class={Number}>{piece.text}</span>,
                                             Mark::Gap => <span class={Gap}>{piece.passed} " lines not shown"</span>,
                                             tied => <span
-                                                ref={link}
+                                                ref={link.with(piece.seam.as_str())}
                                                 class={(Tied, kind(tied))}
-                                                data-seam={piece.seam.as_str()}
                                                 data-lit={(piece.seam == LIT).then_some("")}
                                             >
                                                 {piece.text}
