@@ -14408,6 +14408,55 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 1);
     }
 
+    /// The app's middleware, answering `/early` with a page of its own made with `Req`, before the
+    /// route (a sign-in page in the route's place).
+    struct AnswersEarly;
+
+    impl crate::Middleware for AnswersEarly {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.uri().path() != "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, _) = req.into_parts();
+            let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            refused(&req, "early").into_response()
+        }
+    }
+
+    /// A page the app's middleware makes with `Req` before a write's route draws the layout's
+    /// values, from the head the middleware had (the viewer it added), with JavaScript as without
+    /// (#1370); a patch in the same app starts no read.
+    #[tokio::test]
+    async fn a_page_middleware_makes_for_a_write_draws_its_layout_reads() {
+        let count = CartCount::default();
+        let routes =
+            Table::new().route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") })).route(
+                "/patch",
+                crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), AnswersEarly))
+            .router();
+        for (n, mode) in [None, Some("action")].into_iter().enumerate() {
+            let (status, headers, body) = call_with(router.clone(), "POST", "/early", mode, None).await;
+            assert_eq!(status, StatusCode::OK, "{mode:?} {body}");
+            assert!(!headers.contains_key("corten-page"), "{mode:?} {headers:?}");
+            assert!(body.contains("<main><p>early</p></main>"), "{mode:?} {body}");
+            assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{mode:?} {body}");
+            assert!(
+                body.contains(r#"<footer><span class="count">3</span></footer>"#) && !body.contains("corten-later"),
+                "{mode:?} {body}"
+            );
+            assert_eq!(count.started.load(Ordering::SeqCst), n + 1, "{mode:?}");
+        }
+        let (_, headers, body) = call_with(router, "POST", "/patch", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
+    }
+
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
         // A route of Corten's own takes `Req`, which starts the reads before its answer is known.

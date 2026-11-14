@@ -3784,13 +3784,23 @@ async function run(browser) {
   // the layout the write's own page brought, or reads the next page whole.
   /**
    * A page of its own at /smoke/written, with the stand-in in front: `edit` changes each whole
-   * page from the write's answer on (`written`), `before` each one until then. Each request's
-   * mode for a path is recorded in `asked`.
-   * @param {(body: string) => string} edit @param {(body: string) => string} [before]
+   * page from the write's answer on (`written`), `before` each one until then, each given the count
+   * of writes sent by then (`writes`), its own included. Each request's mode for a path is recorded
+   * in `asked`, and the writes answered are counted in `answers`; a write's answer waits for what
+   * `hold` gives for its number.
+   * @param {(body: string, writes: number) => string} edit @param {(body: string) => string} [before]
    */
   const writtenPage = async (edit, before = (body) => body) => {
     const own = await (await browser.newContext()).newPage();
-    const seen = { written: false, /** @type {string[]} */ asked: [], /** @type {Record<string, string>} */ answered: {} };
+    const seen = {
+      written: false,
+      writes: 0,
+      answers: 0,
+      /** @type {string[]} */ asked: [],
+      /** @type {Record<string, string>} */ answered: {},
+      /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
+      hold: (/** @type {number} */ _writes) => /** @type {Promise<unknown> | undefined} */ (undefined),
+    };
     await own.route(
       (url) => url.origin === new URL(base).origin && !url.pathname.startsWith("/assets/"),
       async (route) => {
@@ -3799,6 +3809,9 @@ async function run(browser) {
         const write = req.method() === "POST" && new URL(req.url()).pathname === "/smoke/written";
         if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
         seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
+        // Counted as the write is sent, so the writes are numbered in the order the page sent them.
+        if (write) seen.writes += 1;
+        const writes = seen.writes;
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -3807,9 +3820,11 @@ async function run(browser) {
         delete headers["content-length"];
         const text = await res.text();
         // A navigation's <main> is passed on as it is: it has no layout to change.
-        const body = mode === "nav" ? text : write || seen.written ? edit(text) : before(text);
+        const body = mode === "nav" ? text : write || seen.written ? edit(text, writes) : before(text);
         seen.written ||= write;
+        if (write) await seen.hold(writes);
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+        if (write) seen.answers += 1;
       },
     );
     await own.goto(`${base}/smoke/written`);
@@ -3892,6 +3907,67 @@ async function run(browser) {
       leftName,
       stalled && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ stalled, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // Two writes from two forms, both done on the server, whose own pages are on their way. The
+  // second's page comes first and waits for a module; then the first's comes and draws (made before
+  // the second write was done, its count is 1), and the user leaves by a link. The first page's
+  // layout does not draw what the second write changed, so the next page is still read whole and
+  // shows the count the server has, 2.
+  const bothName = "a write's own page drawn first leaves another write's change to the layout for the next page to draw";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(bothName, "without the Navigation API a link is a full load");
+  else {
+    // The first write's page draws no component, so it needs no module; the second's does.
+    const counted = (/** @type {string} */ body, /** @type {number} */ writes) => {
+      const counts = body.replace(">Watchlist</span>", `>Count ${writes}</span>`);
+      return writes === 1 ? counts.replaceAll("data-on='connect:quoted", "data-held='connect:quoted") : counts;
+    };
+    const { own, seen } = await writtenPage(counted);
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    /** @type {() => void} */
+    let answerFirst = () => {};
+    const first = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
+    seen.hold = (writes) => (writes === 1 ? first : undefined);
+    /** @type {() => void} */
+    let asked = () => {};
+    const waiting = new Promise((resolve) => (asked = () => resolve(true)));
+    await own.route("**/scripts/quoted.js", async (route) => {
+      asked();
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    await own.evaluate(() =>
+      document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
+    );
+    await own.click("main form button");
+    await own.click("#second-go");
+    // The second write's page has come and waits for the module; then the first's comes and draws.
+    const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    answerFirst();
+    const drewFirst = await own
+      .waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    await own.click('main a[href="/smoke/quoted"]');
+    release();
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    check(
+      bothName,
+      stalled && drewFirst && seen.answers === 2 && arrived && shown.brand === "Count 2" && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ stalled, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }

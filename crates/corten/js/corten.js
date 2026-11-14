@@ -1669,9 +1669,11 @@ let frame = { parts: new Set(frameOf(document)), sent: null };
  * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
  * shows the notice the page drew is replaced even when its markup is the same, since the last one
  * a script hid (a toast) is drawn again by the same text.
- * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => void } | null}
+ * Drawing it draws what the writes `covers` names changed ({@link drew}).
+ * @param {Document} doc @param {Notice} notice @param {Covers} covers
+ * @returns {{ fresh: Element[], apply: () => void } | null}
  */
-function layoutChanges(doc, notice) {
+function layoutChanges(doc, notice, covers) {
   const said = notice?.has("d") ? notice.get("m") || null : null;
   const parts = frameOf(doc);
   const sent = parts.join("\n");
@@ -1705,7 +1707,7 @@ function layoutChanges(doc, notice) {
       // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
       // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
       frame = { parts: frame.parts, sent };
-      stale = false;
+      drew(covers);
       for (const [old, el, was] of changed) {
         // One a patch replaced, or changed inside, while the page was on its way is newer than the
         // page: it stays.
@@ -1815,14 +1817,15 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * @param {string} html @param {AbortSignal} signal @param {Notice} notice @param {boolean} [again]
  * @param {boolean} [stay] keep the user's place ({@link swapPage})
  * @param {boolean} [own] the write's own answer, not a page at an address
+ * @param {Covers} [covers] the writes whose change to the layout the page draws
  * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice, again = false, stay = again, own = false) {
+async function swapDocument(html, signal, notice, again = false, stay = again, own = false, covers = { through: 0 }) {
   const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
   const main = doc.querySelector("main");
-  const layout = main && layoutChanges(doc, again ? null : notice);
+  const layout = main && layoutChanges(doc, again ? null : notice, covers);
   if (!main || (!layout && !own)) {
     reload(notice);
     return false;
@@ -1857,9 +1860,9 @@ async function swapDocument(html, signal, notice, again = false, stay = again, o
   const content = document.createDocumentFragment();
   content.append(...head, ...parts, ...Array.from(main.childNodes));
   const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
-  // The layout not drawn: the next navigation reads it whole, as after a write that redirected.
-  if (swappedIn && !layout) stale = true;
-  else if (swappedIn) swappedWhole = whole;
+  // The layout not drawn, the write's own page among the writes it has not drawn: the next
+  // navigation reads the page whole, as after a write that redirected.
+  if (swappedIn && layout) swappedWhole = whole;
   return swappedIn;
 }
 
@@ -2223,6 +2226,8 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
   const whole = !!written || (!!again && swappedWhole !== "");
+  // The writes answered before the page is asked for, which its layout draws.
+  const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
@@ -2297,6 +2302,7 @@ async function visit(url, signal, redirected, again, place, source, written, pre
     // then navigate again to where it came from, in place of this entry, with the page in hand.
     if (res.redirected && !redirected && !took) {
       const page = new Response(await res.text(), { headers: res.headers });
+      askedAfter.set(page, through);
       signal.throwIfAborted();
       go(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
@@ -2312,7 +2318,7 @@ async function visit(url, signal, redirected, again, place, source, written, pre
     // A page loaded in full instead announces the notice once it has loaded. A read again's is the
     // one the page drew already.
     const stay = again || place !== undefined;
-    const swappedIn = whole ? await swapDocument(html, signal, notice, again, stay) : await swapPage(html, signal, stay, notice);
+    const swappedIn = whole ? await swapDocument(html, signal, notice, again, stay, false, { through }) : await swapPage(html, signal, stay, notice);
     if (swappedIn && !again) announce(notice);
   } finally {
     signal.removeEventListener("abort", idle);
@@ -2438,11 +2444,29 @@ const SOURCE = Symbol("corten.source");
  */
 const WRITTEN = Symbol("corten.written");
 /**
- * A write redirected, or answered with its own page, and no whole page's layout has been drawn
- * since (the user went elsewhere before it came, or its frame differed): every navigation reads
- * the whole page until one is, so what the write changed in the layout is drawn.
+ * The writes whose answers have come and that change what the layout draws (one that redirected,
+ * or answered with its own page whole), numbered in the order they came.
  */
-let stale = false;
+let writesIn = 0;
+/**
+ * Those whose change no whole page's layout has drawn yet: the user went elsewhere before its page
+ * came, its frame differed, or another write's page, made before it, was drawn first. While any is,
+ * every navigation reads the whole page, so what each write changed in the layout is drawn.
+ * @type {Set<number>}
+ */
+const undrawn = new Set();
+/**
+ * What a whole page's layout draws: every write answered before it was asked for (`through`, the
+ * count of them then), and the write it answers, for a write's own page (`write`). A write
+ * answered while it was on its way may not be in it, and stays undrawn.
+ * @typedef {{ through: number, write?: number }} Covers
+ */
+/** A whole page's layout is drawn: the writes it `covers` are. @param {Covers} covers */
+function drew({ through, write }) {
+  for (const n of undrawn) if (n <= through || n === write) undrawn.delete(n);
+}
+/** The count of writes answered when each page a redirect handed on was asked for. @type {WeakMap<Response, number>} */
+const askedAfter = new WeakMap();
 
 /**
  * Whether the first document has fired `load`. Before it, a navigation is the browser's own (a
@@ -2522,7 +2546,7 @@ navigation?.addEventListener("navigate", (event) => {
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
-  const written = !!event.info?.[WRITTEN] || stale;
+  const written = !!event.info?.[WRITTEN] || undrawn.size > 0;
   // The same page read again, or a form or link marked `data-keep-place` (filters applied as they
   // change): the page changes under the user, who stays where they were reading, on the control
   // they used. Kept across a redirect the server answers with.
@@ -2530,7 +2554,7 @@ navigation?.addEventListener("navigate", (event) => {
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
-      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, stale) });
+      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, undrawn.size > 0) });
       return;
     }
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
@@ -2961,6 +2985,8 @@ async function send(form, submitter, sends) {
     prefetched.clear();
   };
   forget();
+  // The writes answered before this one is sent, which its own page, if it answers with one, draws.
+  const through = writesIn;
   try {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
@@ -2987,7 +3013,7 @@ async function send(form, submitter, sends) {
       renew();
       submits.delete(form);
       if (navigation) {
-        stale ||= method !== "GET";
+        if (method !== "GET") undrawn.add(++writesIn);
         // The page it sends the browser to keeps the marks until it is drawn.
         go(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET", [SOURCE]: submitter ?? form } });
       } else {
@@ -3004,7 +3030,8 @@ async function send(form, submitter, sends) {
       // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
       // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
       // every navigation reads the whole page, as after a write that redirects.
-      if (!res.headers.has("corten-patch") && !res.headers.has("corten-page")) stale ||= method !== "GET";
+      const write = !res.headers.has("corten-patch") && !res.headers.has("corten-page") && method !== "GET" ? ++writesIn : undefined;
+      if (write) undrawn.add(write);
       const body = await res.text();
       renew();
       signal.throwIfAborted();
@@ -3017,7 +3044,7 @@ async function send(form, submitter, sends) {
         if (res.headers.has("corten-page")) {
           await swapPage(body, signal, false, notice);
           announce(notice);
-        } else if (await swapDocument(body, signal, notice, false, false, true)) announce(notice);
+        } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
       }
       signal.throwIfAborted();
       if (res.status === 422) focusInvalid(form);

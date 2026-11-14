@@ -528,6 +528,27 @@ mod tests {
         assert_eq!(drawn.cookie("visitor").map(str::len), Some(32), "the watchlist's page names the browser");
     }
 
+    /// What a real write costs in process: a visitor's watch sent by the runtime (`corten: action`),
+    /// answered with its patch (the prices and the form), `WRITE_REQUESTS` (200) times, one at a
+    /// time. Counting it under callgrind at two numbers of requests gives the instructions per
+    /// request, the write the cost a write pays in an app with layout reads is set against (#1370,
+    /// design Choice 49). Run in release:
+    /// `WRITE_REQUESTS=200 cargo test --release -p watchlist -- --ignored what_a_watch_costs`
+    #[test]
+    #[ignore]
+    fn what_a_watch_costs() {
+        let requests: usize = std::env::var("WRITE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let app = client();
+            for _ in 0..requests {
+                let res =
+                    app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "SOLR").await;
+                assert!(res.status() == StatusCode::OK && res.text().contains("Watching Sunreach Solar"), "{}", res.text());
+            }
+        });
+    }
+
     #[tokio::test]
     async fn two_removals_sent_at_once_both_land() {
         let app = client();

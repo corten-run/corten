@@ -987,6 +987,10 @@ pub struct Req {
     /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
     /// app with some. Otherwise they are removed as the page is rendered.
     fills: bool,
+    /// For a write the runtime sent whose own page is filled after it answers, taken before its
+    /// route (by the app's or an area's middleware): the request's head as it was then, which a
+    /// page this makes carries, so its reads start from it (`layout::fill_made_early`).
+    early: Option<Arc<Parts>>,
     shared: Arc<Shared>,
     signal: crate::Signal,
 }
@@ -1159,7 +1163,14 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         }
         // A HEAD request (a link checker, a preview) gets no body, so it leaves the notice for the
         // page's GET.
-        Ok(Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD))
+        let mut req =
+            Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
+        // Taken by middleware before a write's route, whose own page is filled after it answers:
+        // a page made with it is filled from this head, as the route's is from its own (#1370).
+        if req.fills && req.signal.late_write() == Some(false) {
+            req.early = Some(Arc::new(parts.clone()));
+        }
+        Ok(req)
     }
 }
 
@@ -1192,7 +1203,8 @@ impl Req {
             write,
             fetched,
             fills: !shared.layout_reads.is_empty()
-                && (signal.head_kept() || extensions.get::<crate::layout::StartHere>().is_some()),
+                && (signal.late_write().is_some() || extensions.get::<crate::layout::StartHere>().is_some()),
+            early: None,
             shared,
             signal,
         }
@@ -1462,6 +1474,9 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
+            if let Some(head) = &self.early {
+                res.extensions_mut().insert(crate::layout::EarlyHead(head.clone()));
+            }
         }
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
@@ -2704,8 +2719,18 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // its page route keeps the request's head, and only a page it answers with starts the reads
     // that page draws and is filled (`layout::kept_for_its_page`). A patch or a redirect starts none, and
     // its error page is a swap of `<main>`, which draws none.
+    // A page the app's or an area's middleware made with `Req` before the route is filled here,
+    // after the middleware, as the plain write's is below; the route's own page was filled as the
+    // route answered. Anything else passes with one look at its extensions.
     if action_write {
-        return page_or_error(shared, req, next.late(until), deadline, signal, (mode, fetched)).await;
+        signal.mark_late();
+        let res = page_or_error(shared, req, next.late(until), deadline, signal, (mode, fetched)).await;
+        if res.extensions().get::<crate::layout::Pending>().is_none() {
+            return res;
+        }
+        let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> =
+            Box::pin(crate::layout::fill_made_early(shared.clone(), until, res));
+        return filled.await;
     }
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());

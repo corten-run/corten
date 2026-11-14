@@ -147,11 +147,18 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
-    /// A write the runtime sent, in an app with layout reads, whose page route kept its head for
-    /// a page it may answer with, so that page's places are written, here for the same reason
-    /// ([`crate::layout::kept_for_its_page`]). A byte, in the padding beside the others.
-    head_kept: AtomicBool,
+    /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
+    /// answers (#1370), here for the same reason: 0 for any other request, [`LATE`] until its
+    /// route is reached, [`HEAD_KEPT`] once its route has kept the request's head for a page it may
+    /// answer with ([`crate::layout::kept_for_its_page`]). A byte, in the padding beside the others.
+    late: AtomicU8,
 }
+
+/// [`Inner::late`]: a write whose own page is filled after it answers, its route not reached yet,
+/// so a page the app's or an area's middleware makes with `Req` carries the head it was made with.
+const LATE: u8 = 1;
+/// [`Inner::late`]: its route kept the head.
+const HEAD_KEPT: u8 = 2;
 
 impl Signal {
     /// A request's signal in an app.
@@ -231,15 +238,26 @@ impl Signal {
         self.0.shared.as_ref()
     }
 
-    /// A write the runtime sent, in an app with layout reads: its route keeps the head for a page
-    /// it may answer with, so that page writes its places ([`crate::layout::kept_for_its_page`]).
-    pub(crate) fn keep_head(&self) {
-        self.0.head_kept.store(true, Ordering::Relaxed);
+    /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
+    /// answers (`page::render_errors`), so a page made with `Req` writes its places.
+    pub(crate) fn mark_late(&self) {
+        self.0.late.store(LATE, Ordering::Relaxed);
     }
 
-    /// Its route kept the head for its page ([`Signal::keep_head`]).
-    pub(crate) fn head_kept(&self) -> bool {
-        self.0.head_kept.load(Ordering::Relaxed)
+    /// Its route keeps the head for a page it may answer with ([`crate::layout::kept_for_its_page`]),
+    /// or the head a page was made with is kept to fill it: a `Req` taken after this keeps none.
+    pub(crate) fn keep_head(&self) {
+        self.0.late.store(HEAD_KEPT, Ordering::Relaxed);
+    }
+
+    /// A write whose own page is filled after it answers ([`Signal::mark_late`]): `Some(true)`
+    /// once the head is kept ([`Signal::keep_head`]), `Some(false)` before, `None` for any other
+    /// request.
+    pub(crate) fn late_write(&self) -> Option<bool> {
+        match self.0.late.load(Ordering::Relaxed) {
+            0 => None,
+            late => Some(late == HEAD_KEPT),
+        }
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

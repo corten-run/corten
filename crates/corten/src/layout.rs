@@ -540,6 +540,34 @@ pub(crate) async fn fill_after(
     here.fill(res).await
 }
 
+/// On a page with places made with a `Req` the app's or an area's middleware took before a write's
+/// route, for a write whose own page is filled after it answers: the request's head as it was then
+/// ([`fill_made_early`]).
+#[derive(Clone)]
+pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
+
+/// A page with places that the route did not fill, for a write the runtime sent in an app with
+/// layout reads: one the app's or an area's middleware made with `Req` before the route (a sign-in
+/// page in its place, a refusal drawn as a page). Its reads start now, from the head that `Req`
+/// was taken with ([`EarlyHead`]), as a plain write's page made there starts them from the head
+/// its `Req` kept ([`StartHere::extracted`]).
+pub(crate) async fn fill_made_early(
+    shared: Arc<crate::page::Shared>,
+    until: Option<tokio::time::Instant>,
+    mut res: Response,
+) -> Response {
+    let here = StartHere::new(shared, until);
+    if let Some(EarlyHead(head)) = res.extensions_mut().remove::<EarlyHead>() {
+        let parts = Arc::unwrap_or_clone(head);
+        // A read that takes `Req` itself keeps no head of its own.
+        if let Some(signal) = parts.extensions.get::<crate::Signal>() {
+            signal.keep_head();
+        }
+        here.lock().kept = Some(parts);
+    }
+    here.fill(res).await
+}
+
 /// On a page with places whose route's answer type says it is not a page (`Answer::PAGE`): no
 /// read is started for it, as none is for such a route's `GET` ([`fill_after`]).
 #[derive(Clone, Copy)]
