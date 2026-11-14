@@ -1296,13 +1296,12 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it. So does `root` itself when the user asked for it from outside it (a
- * form's trigger beside a dialog): the press is newer than what they did to it before, so a dialog
- * they closed and ask for again opens. Outside is where the control was when it was pressed
- * (`within`), so one removed, or a dialog redrawn, while the answer was on its way does not turn a
- * press inside into one outside. An open dialog the markup closes is closed as the browser closes
- * one, before it is replaced: its `close` event fires and focus goes back to what opened it. A
- * popover has no markup that shows it, so it stays as the user left it.
+ * sending it open closes it. `root` itself, closed by the user and drawn open in answer to a
+ * press outside it (a form's trigger beside a dialog), opens: the press is newer than their
+ * close, so a dialog they closed and ask for again opens. One they opened stays open whatever the
+ * answer draws. Outside is where the control was when it was pressed (`within`), so one removed,
+ * or a dialog redrawn, while the answer was on its way does not turn a press inside into one
+ * outside. A popover has no markup that shows it, so it stays as the user left it.
  * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
  * @param {Set<string>} [within] the ids of the dialogs and details the control that asked for the
  *   patch was in when it was pressed ({@link asking})
@@ -1317,10 +1316,9 @@ function opened(root, fresh, ids, within) {
     const popover = hasAttr(el, "popover");
     const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
-    // Left as the server sent it, and not a shown popover or an open dialog the fresh markup may
-    // close: the fresh markup says, so its counterpart is not looked up (a lookup is a query of
-    // `fresh`; most patches open nothing).
-    if (!shown && (!toggles || (served.has(el) && served.get(el) === now && !(dialog && now)))) continue;
+    // Left as the server sent it, and not a shown popover: the fresh markup says, so its
+    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
@@ -1329,16 +1327,8 @@ function opened(root, fresh, ids, within) {
     const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
-    // Asked for from outside it, and drawn otherwise than the user left it: the answer's.
-    if (now === (served.has(el) ? served.get(el) : drawnOpen) || (el === root && within && now !== drawnOpen && !within.has(attrOf(root, "id") ?? ""))) {
-      // An open dialog the markup closes: closed by the browser, so it says so and gives focus back.
-      if (dialog && now && !drawnOpen) {
-        try {
-          /** @type {HTMLDialogElement} */ (el).close();
-        } catch {}
-      }
-      continue;
-    }
+    // Closed by the user and drawn open in answer to a press outside it: the answer's.
+    if (now === (served.has(el) ? served.get(el) : drawnOpen) || (el === root && within && !now && drawnOpen && !within.has(attrOf(root, "id") ?? ""))) continue;
     if (!dialog) /** @type {HTMLDetailsElement} */ (to).open = now;
     else if (!now) to.removeAttribute("open");
     else {

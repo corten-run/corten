@@ -834,18 +834,17 @@ are still there to send again; only a successful answer to the form that sent th
 while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
-the server sent open and now sends closed closes. So does the element a `data-patch` answer
-replaces when the form that asked for it, or the button that sent it, is outside that element:
-pressing it is newer than what the user did before, so a dialog drawn `open` in answer to a
-Preview button beside it opens again after the user closed it, and a `<details>` drawn `open`
-unfolds. Outside is where the button was when it was pressed, so removing it, redrawing the
-dialog or replacing its form earlier in the same answer while the answer is on its way does not
-make a press inside one outside. A submit from inside the element (a form in the dialog, sent
-before the user pressed Escape), an element inside the one replaced, a `<corten-live>` fragment, a
-`ReadAgain` read and a script's `patch()` keep what the user left. An open dialog the new markup
-closes is closed as `close()` closes it, before it is replaced: its `close` event fires once and
-focus goes back to the element that opened it. A popover stays as the user left it, since no
-markup shows one. A dialog the server draws `open` is open but not
+the server sent open and now sends closed closes (replaced closed: no `close` event fires, and
+focus does not go back to what opened it). A dialog or `<details>` the user closed opens again
+when a `data-patch` answer replaces it drawn `open` and the form that asked for it, or the button
+that sent it, is outside it: pressing it is newer than the user's close, so a Preview button
+beside a dialog opens it on every press, not only the first. It only opens: one the user opened
+stays open even when such an answer draws it closed. Outside is where the button was when it was
+pressed, so removing it, redrawing the dialog or replacing its form earlier in the same answer
+while the answer is on its way does not make a press inside one outside. A submit from inside
+the element (a form in the dialog, sent before the user pressed Escape), an element inside the
+one replaced, a `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()` keep what
+the user left. A popover stays as the user left it, since no markup shows one. A dialog the server draws `open` is open but not
 modal; give it `on:connect={corten_ui::dialog::modal(target)}` ([headless components](ui.md)). Everything else is the server's.
 
 Each top-level element of a patch replaces the element with its `id`, and the browser drops one

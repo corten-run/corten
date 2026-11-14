@@ -4384,39 +4384,21 @@ async function run(browser) {
       first.replaced && first.open && first.modal && shut && again.replaced && again.open && again.modal,
       JSON.stringify({ first, shut, again }),
     );
-    // Markup that draws the open modal closed closes it as close() does: one close event, and
-    // focus back on the button that opened it. Opened from the keyboard, as WebKit does not focus a
-    // button it clicks.
+    // A dialog the server drew closed and the user opened, which the answer to a press outside it
+    // draws closed, stays open: the press asks for what the answer draws open, and never closes
+    // what the user opened (#84). Opened non-modal, so the page behind it takes the press.
+    const sheetAnswer = (/** @type {URL} */ url) => url.pathname === "/smoke/sheet/open";
+    await sheet.route(sheetAnswer, (route) =>
+      route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: '<dialog id="smoke-sheet"><p>Drawn closed</p></dialog>' }),
+    );
     await sheet.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).close());
-    const opener = sheet.getByRole("button", { name: "Preview", exact: true });
-    await answered(async () => {
-      await opener.focus();
-      await sheet.keyboard.press("Enter");
-    });
-    await sheet.route(
-      (url) => url.pathname === "/smoke/live/sheet-closed",
-      (route) => route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: patch\ndata: <dialog id="smoke-sheet"><p>Closed</p></dialog>\n\nevent: end\ndata: end\n\n' }),
-    );
-    const shutByMarkup = await answered(() =>
-      sheet.evaluate(() => {
-        const w = /** @type {any} */ (window);
-        w.__closes = 0;
-        document.getElementById("smoke-sheet")?.addEventListener("close", () => w.__closes++);
-        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="sheet-closed-live" src="/smoke/live/sheet-closed"></corten-live>'));
-      }),
-    );
-    await sheet.waitForFunction(() => /** @type {any} */ (window).__closes > 0, undefined, { timeout: 2000 }).catch(() => {});
-    await sheet.waitForTimeout(200);
-    const markupClose = await sheet.evaluate(() => ({
-      closes: /** @type {any} */ (window).__closes,
-      focus: document.activeElement?.textContent ?? document.activeElement?.localName,
-    }));
-    check(
-      "markup that draws an open modal dialog closed closes it as close() does: one close event, focus back on its opener",
-      shutByMarkup.replaced && shutByMarkup.text === "Closed" && !shutByMarkup.open && markupClose.closes === 1 && markupClose.focus === "Preview",
-      JSON.stringify({ ...shutByMarkup, ...markupClose }),
-    );
-    // The app's sheet again, with its form, open.
+    await answered(preview);
+    await sheet.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).show());
+    const keptOpen = await answered(preview);
+    await sheet.unroute(sheetAnswer);
+    check("a data-patch answer to a form outside a dialog the user opened keeps it open when it draws it closed", keptOpen.replaced && keptOpen.text === "Drawn closed" && keptOpen.open, JSON.stringify(keptOpen));
+    // The app's sheet again, with its form: closed first, so the page behind it takes the press.
+    await sheet.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).close());
     await answered(preview);
     // Pressed inside the dialog, closed (Escape) while the answer is on its way: it stays closed.
     // Opened as a button would (`command="show-modal"`) when the press above left it closed.
@@ -4426,7 +4408,6 @@ async function run(browser) {
     });
     /** @type {() => void} */
     let release = () => {};
-    const sheetAnswer = (/** @type {URL} */ url) => url.pathname === "/smoke/sheet/open";
     await sheet.route(sheetAnswer, async (route) => {
       await new Promise((resolve) => (release = () => resolve(undefined)));
       await route.continue();
