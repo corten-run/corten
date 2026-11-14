@@ -594,6 +594,20 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         }",
         &[lets, markup.into(), used],
     );
+    // A component's own string (`to_html`, which a patch is rendered with) starts at the size this
+    // component last rendered to, as an `html!` call site's does: one allocation, not a buffer
+    // grown from empty. Never below 256 bytes, as `html!`'s.
+    let mut render = render;
+    render.extend(q(
+        "fn to_html(&self) -> ::std::string::String {
+            static SIZE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+            let mut out = ::std::string::String::with_capacity(SIZE.load(::std::sync::atomic::Ordering::Relaxed).max(256));
+            ::corten::view::Render::render(self, &mut out);
+            SIZE.store(out.len() + out.len() / 8, ::std::sync::atomic::Ordering::Relaxed);
+            out
+        }",
+        &[],
+    ));
     out.extend(q(
         "#[automatically_derived] impl __A0 ::corten::view::Render for __A1 __A2 __A3",
         &[
