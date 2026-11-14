@@ -2,6 +2,7 @@
 import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan } from "./contract.mjs";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { k6Provenance } from "../load-tool.mjs";
+import { recordAttemptSchema } from "../catalog/record-attempt.mjs";
 
 export function observations(profile, records) {
   const p = payloads[profile.payload], ids = Object.keys(records), first = ids[0], events = [];
@@ -37,6 +38,10 @@ export function k6Summary(count, seconds) {
 }
 export function runtimeInfo(expected, context, role = "app") {
   const p = payloads[expected.payload], budget = expected.cpus[role === "app" ? "app" : role === "upstream" ? "api" : "load"];
+  const execution = role === "app" ? context.appExecutions[expected.app] : context.toolExecutions[role === "load" ? "k6" : "node"];
+  const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
+    : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] : execution.Cmd;
+  const argv = [...(execution.Entrypoint ?? []), ...(command ?? [])];
   const mount = (Source, Destination) => ({ Type: "bind", Source, Destination, RW: false });
   const names = { app: "app", upstream: `${p.path}-api`, load: "k6", probe: "app-probe" };
   return { Id: ({ app: "e", upstream: "f", load: "1", probe: "2" })[role].repeat(64), Name: `/${context.runId}-${names[role]}`,
@@ -45,8 +50,7 @@ export function runtimeInfo(expected, context, role = "app") {
       `${p.path.toUpperCase()}_FIXTURE_PATH=/fixtures/${p.path}.json`, `API_BASE=${context.apiBase}`, "PROFILE="]
       : role === "load" ? [`BASE=http://${context.runId}-app:8080`, `PAYLOAD=${expected.payload}`, `DURATION=${context.load.seconds}s`,
         `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`] : [],
-      Cmd: role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
-        : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] : [] },
+      Entrypoint: execution.Entrypoint, Cmd: command }, Path: argv[0], Args: argv.slice(1),
     NetworkSettings: { Networks: { [context.network]: {} } },
     HostConfig: { Memory: role === "app" ? 2 ** 30 : role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
       NanoCpus: budget.quota * 1e9, CpusetCpus: budget.cpuset ?? "" },
@@ -64,6 +68,7 @@ export function result() {
     measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...phases] },
     runId: "json-api-j1-0123456789", host: { checkout: "/synthetic/checkout" },
+    toolExecutions: { node: { Entrypoint: ["docker-entrypoint.sh"], Cmd: ["node"] }, k6: { Entrypoint: ["k6"], Cmd: null } },
     tools: { node: { image: nodeImage, imageId: `sha256:${"c".repeat(64)}` },
       k6: k6Provenance({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
         "k6 v2.4.0 (synthetic test executable, not a native measurement)") }, fixtures: {}, apps: {} };
@@ -72,7 +77,8 @@ export function result() {
   for (const payload of group.payloads) s.fixtures[payload] = put(records[payload]);
   for (const app of group.apps) {
     const entry = s.apps[app] = { images: {}, checks: {}, runs: {}, aggregates: {} };
-    for (const payload of group.payloads) entry.images[payload] = { imageId: `sha256:${sha256(app + payload)}`, labels: imageLabels(s.commit, false, app, payload) };
+    for (const payload of group.payloads) entry.images[payload] = { imageId: `sha256:${sha256(app + payload)}`,
+      execution: { Entrypoint: null, Cmd: ["/synthetic/app", app, payload] }, labels: imageLabels(s.commit, false, app, payload) };
     for (const profile of group.cases) {
       const prefix = app === "corten" ? `bench/${payloads[profile.payload].path}/corten` : `bench/fullstack/apps/${app}`;
       const expected = identity(s, app, profile), context = runtimeContext(s, profile), files = { [`${prefix}/source.test`]: "synthetic audited test source" };
@@ -104,4 +110,29 @@ export function result() {
     }
   }
   return { summary: s, artifacts, load, put };
+}
+
+// Deliberately synthetic negative raw capture for verifier mutation tests.
+// It is not a native measurement or an independent source audit.
+export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0]) {
+  const f = result(), s = f.summary, checked = s.apps[app].checks[profile.key];
+  const records = payloads[profile.payload].records(), ids = Object.keys(records).slice(0, 8), start = Date.parse(s.startedAt);
+  const requests = ids.map((id, index) => ({ id, index, path: route(profile, id), startedOrder: index, finishedOrder: index + ids.length,
+    startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
+  const attempt = { schema: recordAttemptSchema, recordsSha256: sha256(JSON.stringify(records)), requests };
+  const raw = f.load(checked.raw), path = `/__${payloads[profile.payload].path}/control`;
+  raw.liveness = Object.fromEntries(["app", "upstream"].map((role) => [role, { containerId: role === "app" ? raw.runtime.containerId : raw.participants.upstream.containerId,
+    startedAt: s.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
+    restarting: false, restartCount: 0, exitCode: 0, error: "" }]));
+  const reset = { kind: "control", method: "POST", path, value: {}, status: 200, body: "{}" };
+  raw.events = [reset, ...requests.map((r) => ({ kind: "application", method: "GET", path: r.path, ...r.response })),
+    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {} }) },
+    ...(profile.source === "api" ? [reset] : [])];
+  checked.raw = f.put(raw);
+  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 2 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
+  delete checked.functional;
+  for (const entry of Object.values(s.apps)) for (const p of s.group.cases) { entry.runs[p.key] = []; entry.aggregates[p.key] = {}; }
+  s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";
+  s.cleanup = f.put({ runId: s.runId, containers: [], networks: [] });
+  return f;
 }

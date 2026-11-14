@@ -13,6 +13,7 @@ defmodule ItemPage.Application do
     :ok = ItemPage.Marketplace.load_fixture()
 
     children = [
+      ItemPage.MarketplaceAlerts,
       ItemPageWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:item_page, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ItemPage.PubSub},

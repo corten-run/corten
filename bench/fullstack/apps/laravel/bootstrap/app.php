@@ -14,7 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Catalog and marketplace prefixes are literal text, including whitespace and "".
-        $catalog = fn (Request $request) => $request->is('catalog/*', 'marketplace/*');
+        $catalog = fn (Request $request) => $request->is('catalog/*', 'marketplace/*', 'livewire-*/*');
         $middleware->trimStrings(except: [$catalog]);
         $middleware->convertEmptyStringsToNull(except: [$catalog]);
         // The live benchmark's publisher is another service, not a browser form.

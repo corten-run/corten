@@ -4,8 +4,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libz
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/bench/catalog/corten/target,sharing=locked \
+ENV CARGO_HOME=/var/cache/cargo
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id=bench-catalog-corten.target,target=/src/bench/catalog/corten/target,sharing=locked \
     find crates bench/catalog/corten -name target -prune -o -type f -exec touch {} + \
     && cargo build --manifest-path bench/catalog/corten/Cargo.toml --release --locked \
     && cp bench/catalog/corten/target/release/catalog-corten /server

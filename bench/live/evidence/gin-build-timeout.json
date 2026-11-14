@@ -1,0 +1,4 @@
+{
+  "app": "gin",
+  "error": "docker build --label agent.owner=codex --label agent.task=bench-parity-live --label bench.live.source-sha256=663f6a25c50ff16bd2c340325b39faf4109f6374960e047997e2b07b0f490d72 -t cb-parity-live-gin D:\\Users\\ToddS\\Source\\Repos\\corten-bench-parity-live\\bench\\live\\apps\\gin: spawnSync docker ETIMEDOUT\n\nnull !== 0\n"
+}

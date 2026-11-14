@@ -1,6 +1,6 @@
 # Laravel Octane on FrankenPHP: the app boots once per worker and stays in memory.
 # The toolchain alone (tools) is what bench/fullstack/build.mjs builds the app with.
-FROM dunglas/frankenphp:1-php8.4-bookworm AS tools
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:667c5fffd348d9c3c260803d75956f1d9aace7e4b7331d8893de6f101d7e0e57 AS tools
 # uv: Reverb's event loop on libuv, which is not limited to 1,024 sockets as stream_select is.
 RUN install-php-extensions pcntl intl zip opcache uv >/dev/null \
   && cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"

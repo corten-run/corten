@@ -1,0 +1,344 @@
+import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
+import { randomUUID } from "node:crypto";
+import { settings, alertsFromReadback, nativeFailures, sha256 } from "./contract.mjs";
+import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM, observedContext, closeObservedContext } from "./observe.mjs";
+import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
+import { reconcileRequests } from "./ledger.mjs";
+import { comparePage } from "../marketplace/check.mjs";
+import { labels } from "../marketplace/records.mjs";
+import { navigationDestination, writeDestination } from "./navigation.mjs";
+import { mutationProbes } from "./probes.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
+import { BindingLinkObserver } from "./binding-links.mjs";
+import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
+import { retainPublicJSON } from "./native-responses.mjs";
+
+// A semantic DOM observation, not an application-provided "hydrated" mark.
+export function semanticSignature() {
+  return JSON.stringify([document.querySelector("article.marketplace h1")?.textContent,
+    [...document.querySelectorAll("[data-listing-id]")].map((v) => v.getAttribute("data-listing-id")),
+    [...document.querySelectorAll("[data-offer-id]")].map((v) => v.getAttribute("data-offer-id")),
+    document.querySelector(".marketplace__message")?.textContent,
+    document.querySelector("article.marketplace") === null ? document.body?.textContent : null]);
+}
+export async function waitForSemanticChange(page, before, transitions = [], deadline = performance.now() + settings.actionTimeoutMs) {
+  // Playwright waitForFunction calls window.eval, which a native CSP may forbid.
+  // Poll the observer from the host instead; never relax CSP or redispatch an action.
+  while (performance.now() < deadline) {
+    try {
+      if (await page.evaluate(semanticSignature) !== before) return;
+    } catch (e) {
+      // Native document navigation can replace the context while it is sampled.
+      // Keep that event, as waitForFunction did, and sample the replacement document.
+      if (!e.message.includes("Execution context was destroyed")) throw e;
+      transitions.push({ kind: "execution-context-replaced", error: e.message });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Native semantic DOM change not observed within ${settings.actionTimeoutMs} ms`);
+}
+function message(step, locale, record) {
+  if (step.kind === "invalid-email") return labels[locale].invalid_email;
+  if (step.kind === "invalid-price") return labels[locale].invalid_price;
+  if (step.kind !== "accepted-write") return "";
+  const values = { email: step.input.email, title: record.title,
+    price: new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1.25) };
+  return labels[locale].alert_set.replace(/\{(email|title|price)\}/g, (_, key) => values[key]);
+}
+export async function readStore(base, specification, request, observation = null, phase = null) {
+  if (!specification) return { outcome: "unsupported", reason: "No independent native alert-store readback configured", alerts: null };
+  assert.ok(request?.get, "readback requires the browser context's API cookie jar");
+  const observed = { observer: randomUUID(), outcome: "failed", via: "independent-read", path: specification.path, status: null, alerts: null };
+  if (observation) Object.assign(observed, { requestId: randomUUID(), context: observation.byRequest.get(request)?.id ?? null,
+    app: observation.app, case: observation.case, round: observation.round, source: observation.source, phase, startedAt: Date.now(), finishedAt: null, responseEvidence: null });
+  try {
+    const response = await request.get(base + specification.path, { maxRedirects: 0, headers: { accept: "application/json", "cache-control": "no-cache" }, timeout: 5000 });
+    observed.status = response.status();
+    assert.equal(observed.status, 200, "independent native store readback failed");
+    assert.match(response.headers()["content-type"] ?? "", /^application\/json\b/);
+    const body = observation ? await response.body() : null;
+    observed.alerts = alertsFromReadback(observation ? JSON.parse(body.toString("utf8")) : await response.json());
+    if (observation) {
+      observed.responseSha256 = sha256(body);
+      try { observed.responseEvidence = retainPublicJSON(observation.store, body, "state",
+        { requestId: observed.requestId, responseSha256: observed.responseSha256, path: observed.path, status: observed.status }); }
+      catch { observed.captureFailure = "public-readback-unproved"; }
+      observed.finishedAt = Date.now();
+    }
+    return { ...observed, outcome: "read" };
+  } catch (e) { e.readback = { ...observed, reason: e.message }; throw e; }
+}
+export async function dispatch(page, step) {
+  if (["initial", "reset", "missing", "return"].includes(step.kind)) return page.goto(new URL(step.path, page.url()).href, { waitUntil: "load" });
+  if (step.kind === "navigate") return page.locator(`.marketplace__contents a[href="${step.path}"]`).first().click();
+  if (step.kind === "show-all") return page.locator(".marketplace__more").click();
+  if (["filter", "sort"].includes(step.kind)) {
+    const form = page.locator(".marketplace__listings form");
+    await form.locator('[name="seller"]').fill(step.query.seller);
+    await form.locator('[name="sort"]').selectOption(step.query.sort ?? "asc");
+    return form.locator('[type="submit"]').click();
+  }
+  const form = page.locator(".marketplace__alert form");
+  await form.locator('[name="email"]').fill(step.input.email);
+  await form.locator('[name="target_price"]').fill(step.input.target_price);
+  // Only bypass HTML validation for the server-invalid test. Native submit,
+  // CSRF/session controls and framework enhancement are otherwise untouched.
+  if (step.kind === "invalid-email") await form.evaluate((f) => { f.noValidate = true; });
+  return form.locator('[type="submit"]').click();
+}
+
+export async function runJourney({ browser, app, base, profile, records, readback, counters, bindingArtifact = null, observation = null }) {
+  const environment = structuredClone(settings.profiles[profile.device]);
+  const result = { case: profile.key, outcome: "failed", qualificationPassed: false, evidence: {
+    environment: { ...environment, js: profile.js }, architecture: null, steps: [], failures: [], gaps: [], cleanup: null,
+    readiness: { definition: "Native controls visible and enabled after load; no synthetic hydration mark. Actions themselves test usability.", actionableObservedMs: null },
+    timingScope: "Host-observed elapsed time including Playwright dispatch/polling. Visible-change is an upper bound, not a hydration or comparative speed claim.",
+  } };
+  const evidence = result.evidence;
+  evidence.bindingInstance = randomUUID();
+  const context = await observedContext(browser, { javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" }, observation, "application");
+  if (observation) evidence.context = observation.byContext.get(context).id;
+  await context.addInitScript(installResourceObserver);
+  context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
+  let network, lifecycle, bindings;
+  const runtimeErrors = [];
+  const started = performance.now();
+  evidence.clock = { origin: "node.performance.now", startedAt: started, ...(observation ? { timeOrigin: performance.timeOrigin } : {}) };
+  const upstream = new UpstreamAudit(counters);
+  evidence.upstreamLedger = upstream.ledger;
+  try {
+    await upstream.start();
+    await context.route("**/*", (route) => new URL(route.request().url()).origin === base ? route.continue() : route.abort("blockedbyclient"));
+    const page = await context.newPage();
+    page.on("pageerror", (e) => runtimeErrors.push(e.message));
+    network = observeNetwork(page);
+    const cdp = await context.newCDPSession(page);
+    if (app === "nextjs" && profile.js) {
+      bindings = new BindingLinkObserver(cdp, bindingArtifact); await bindings.enable();
+      evidence.bindingArtifact = bindingArtifact ? { sha256: bindingArtifact.sha256, imageId: bindingArtifact.imageId, sourceCommit: bindingArtifact.sourceCommit } : null;
+    }
+    lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
+    network.attachCDP(cdp, lifecycle);
+    const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
+    await lifecycle.enableDomains(); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: environment.cpu });
+    await lifecycle.startObservation();
+    // No native 404/error page is used as a start document: its late subresource
+    // events would contaminate the next action's ledger. This is a diagnostic
+    // about:blank arrival, not the historical cross-site timing profile.
+    await page.goto("about:blank");
+    evidence.resourceBaseline = await resources.checkpoint();
+    await network.drain(); network.rows.length = 0; network.failures.length = 0; runtimeErrors.length = 0;
+    lifecycle.markApplicationStart();
+    const initialStore = await upstream.begin("initial-store");
+    try {
+      evidence.storeBefore = await readStore(base, readback, context.request, observation, "initial-store");
+      if (evidence.storeBefore.outcome === "read") assert.deepEqual(evidence.storeBefore.alerts, [], "fresh case must start with an empty independent alert store");
+      else evidence.gaps.push(evidence.storeBefore.reason);
+    } catch (e) {
+      evidence.storeBefore = e.readback ?? { outcome: "failed", alerts: null, reason: e.message };
+      evidence.failures.push(`initial independent store read: ${e.message}`);
+    }
+    await upstream.end(initialStore);
+    let previousResources = null;
+    for (const step of profile.steps) {
+      const row = { action: step, at: performance.now() - started, requests: [], dom: null, document: null, readback: null, upstream: null, formBefore: null, componentsBefore: [], domPassed: false,
+        timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [], lifecycleFailures: [] };
+      evidence.steps.push(row);
+      const upstreamPhase = await upstream.begin(step.id);
+      const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
+      const before = await page.evaluate(semanticSignature);
+      const nativeBefore = await page.evaluate(nativeDOM);
+      if (app === "nextjs" && profile.js && step.input) row.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources,
+        { instance: evidence.bindingInstance, case: profile.key, action: step.id });
+      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input), row.bindingWindow); row.componentsBefore = nativeBefore.components;
+      if (row.bindingWindow) await finishBindingWindow(lifecycle, row.bindingWindow, row.formBefore?.enhancement);
+      network.bindForm(row.formBefore);
+      const at = performance.now();
+      row.dispatchStartedAt = at;
+      const deadline = at + settings.actionTimeoutMs;
+      const observeDOM = async () => {
+        if (!observation) return visibleDOM(page);
+        const sample = row.resourcesAtDOM ?? await resources.checkpoint();
+        return visibleDOM(page, observation, { context: evidence.context, case: profile.key, action: step.id, scope: sample.scope,
+          originatingResponse: network.originatingDocument(lifecycle.realms.get(sample.realm)) });
+      };
+      try {
+        const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
+        if (response?.status) row.navigationResponse = { status: response.status(), path: new URL(response.url()).pathname };
+        row.timing.dispatchMs = performance.now() - at;
+        if (step.kind !== "initial") await waitForSemanticChange(page, before, row.observerTransitions, deadline);
+        row.timing.visibleChangeObservedMs = performance.now() - at;
+        await page.waitForLoadState("load");
+        await page.evaluate(() => globalThis.navigation?.transition?.finished);
+        await page.waitForLoadState("networkidle");
+        await network.settle(offset, deadline, Boolean(step.input));
+        if (profile.js) await observedFrame(page, deadline);
+        await network.settle(offset, deadline, Boolean(step.input));
+        row.timing.settledObservedMs = performance.now() - at;
+        row.resourcesAtDOM = await resources.checkpoint();
+        row.dom = await observeDOM();
+        await nativeForm(page, row.dom.native, app, profile.js, cdp);
+        assert.equal(row.dom.url.path, step.path, "visible logical route differs from action");
+        if (step.kind === "initial") {
+          assert.ok(response, "initial document response missing");
+          const button = page.locator('.marketplace__alert [type="submit"]');
+          assert.ok(await button.isVisible() && await button.isEnabled(), "native action not usable");
+          evidence.readiness.actionableObservedMs = performance.now() - at;
+          row.document = await responseDocument(browser, response, base + step.path, observation, observation ? network.takeDocumentResponse(row.dom.originatingResponse) : null, step.id);
+          evidence.architecture = architecture(app, row.dom.native);
+          if (evidence.architecture.startsWith("unverified-")) evidence.architecture = architecture(app, row.document.native);
+          if (evidence.architecture.startsWith("unverified-")) evidence.gaps.push("Native architecture unverified in observed DOM and independent SSR markers");
+          evidence.navigationTiming = await page.evaluate(() => performance.getEntriesByType("navigation")[0]?.toJSON() ?? null);
+        }
+        // Offline comparisons consume captured DOM. They never supply render data.
+        if (step.kind === "missing") {
+          assert.equal(row.dom.page, null, "missing item rendered a marketplace record"); assert.ok(row.dom.error, "missing visible error");
+        } else {
+          const options = { ...step.query, message: message(step, profile.locale, records[step.itemId]) };
+          comparePage(row.dom.page, records[step.itemId], profile.locale, options);
+          if (row.document) comparePage(row.document.page, records[step.itemId], profile.locale, options);
+        }
+        row.domPassed = true;
+      } catch (e) {
+        row.failures.push(e.message);
+        // A timeout must retain the page that actually failed, not only the
+        // planned action. Extraction may itself fail; retain that reason too.
+        if (!row.dom) try { row.dom = await observeDOM(); } catch { row.failures.push("failure DOM extraction unavailable"); }
+        if (!row.dom) try {
+          row.failurePage = observation ? { captureFailure: "native-dom-extraction-unavailable" }
+            : { native: sanitizeNative(await page.evaluate(nativeDOM)), text: (await page.locator("body").innerText()).slice(0, 4096) };
+        } catch (error) { row.failurePage = { error: error.message }; }
+      }
+      if (observation && (row.dom?.extractionComplete !== true || row.document && row.document.extractionComplete !== true))
+        evidence.gaps.push(`${step.id}: typed native DOM extraction incomplete`);
+      if (step.input) {
+        try {
+          row.readback = await readStore(base, readback, context.request, observation, step.id);
+          if (row.readback.outcome === "read") assert.deepEqual(row.readback.alerts, [{ item_id: step.itemId, email: profile.steps.find((s) => s.kind === "accepted-write").input.email, target_minor: 125 }], "write/rejected-write state differs, duplicate or false success");
+          else row.failures.push(row.readback.reason);
+        } catch (e) { row.readback = e.readback ?? { outcome: "failed", reason: e.message, alerts: null }; row.failures.push(e.message); }
+      }
+      row.resources = await resources.checkpoint();
+      lifecycle.recordDocument(row.dom, row.resources);
+      row.retired = resources.retired(previousResources, row.resources);
+      if (previousResources && previousResources.realm !== row.resources.realm) {
+        row.platformRetirement = { realm: previousResources.realm, retiredAt: at };
+        row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
+      }
+      if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
+      if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
+      if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
+      if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
+      previousResources = row.resources;
+      try { await network.settle(offset, deadline, Boolean(step.input)); }
+      catch (error) { if (!row.failures.includes(error.message)) row.failures.push(error.message); }
+      await network.drain();
+      network.annotate();
+      row.requests = structuredClone(network.rows.slice(offset));
+      classifyDisabledPreloads(row.requests, row.dom, profile.js);
+      row.errors = [...runtimeErrors.slice(errorsAt), ...network.failures.slice(networkErrorsAt)];
+      row.upstream = await upstream.end(upstreamPhase);
+      if (row.errors.length) row.failures.push("Browser/runtime/network-observer errors recorded");
+      const posts = row.requests.filter((r) => r.method === "POST");
+      if (step.input) {
+        if (posts.length !== 1 || JSON.stringify(posts[0]?.input) !== JSON.stringify(step.input)) row.failures.push("Native write missing, duplicate, or input not independently observable");
+        const enhancement = profile.js ? row.formBefore?.enhancement : null;
+        const endpoint = profile.js && posts[0]?.transport === "livewire" ? row.formBefore?.updatePath : enhancement?.path ?? row.formBefore?.action;
+        if (!endpoint || !posts[0] || writeDestination(posts[0], { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) !== endpoint) row.failures.push("Write did not use the independently discovered native form/update endpoint");
+        if (enhancement && posts[0]?.transport !== enhancement.transport) row.failures.push("Native write transport differs from its mounted enhancement");
+        const allowed = step.kind === "accepted-write" ? [200, 201, 202, 204, 302, 303] : [200, 302, 303, 400, 422];
+        if (!allowed.includes(posts[0]?.status)) row.failures.push("Native write returned unexpected status");
+      } else if (posts.length) row.failures.push("Unexpected write");
+      if (row.requests.some((r) => (r.failure || r.status === null || !r.completed) && !r.intentionallyDisabledPreload)) row.failures.push("Failed or unfinished browser requests recorded");
+      if (["initial", "missing", "reset", "return"].includes(step.kind) && !row.requests.some((r) => r.path === step.path && r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200))) row.failures.push("Missing native document/error request");
+      if (!step.input && (step.kind === "navigate" || !profile.js) && !row.requests.some((r) => r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200)
+        && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
+      if (profile.source === "fixture" && row.upstream.started !== 0) row.failures.push("Fixture source unexpectedly fetched upstream");
+      if (row.upstream.pending || row.upstream.completed + row.upstream.cancelled !== row.upstream.started) row.failures.push("Upstream work still pending/unaccounted");
+      row.failures.push(...upstreamReadFailures(profile.source, step, row.requests, row.upstream));
+    }
+    evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
+    evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
+    const probePhase = await upstream.begin("mutation-probes");
+    evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback, observation });
+    evidence.mutationProbes.upstream = await upstream.end(probePhase);
+    evidence.failures.push(...evidence.mutationProbes.failures);
+    evidence.functionalChecksPassed = evidence.steps.length === profile.steps.length && !evidence.failures.length;
+    evidence.failures.push(...evidence.steps.flatMap((s) => s.lifecycleFailures.map((f) => `${s.action.kind}: ${f}`)));
+    const cleanupPhase = await upstream.begin("cleanup");
+    evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
+    evidence.nativeCleanup.upstream = await upstream.end(cleanupPhase);
+    if (evidence.nativeCleanup.after) try {
+      const terminalResources = await resources.checkpoint();
+      lifecycle.recordDocument({ observer: randomUUID(), scope: terminalResources.scope, url: { path: new URL(page.url()).pathname },
+        native: await page.evaluate(nativeDOM) }, terminalResources);
+    } catch (error) { evidence.gaps.push(`Terminal parser observation unavailable: ${error.message}`); }
+    if (evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
+    if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
+  } catch (e) { evidence.failures.push(e.message); }
+  finally {
+    if (lifecycle) try { await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] }); }
+    catch (error) { evidence.failures.push(`Platform terminal observation: ${error.message}`); }
+    evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
+    if (app === "nextjs" && profile.js) for (const row of evidence.steps.filter((r) => r.action.input)) {
+      if (!replayActionBinding(row.formBefore?.enhancement, bindingArtifact, evidence, row, profile.key)) {
+        evidence.functionalChecksPassed = false;
+        row.failures.push("Next binding proof lacks its native pre-dispatch observation window");
+        evidence.failures.push(`${row.action.id}: Next binding observation cannot replay`);
+      }
+    }
+    if (evidence.platformLifecycle) {
+      evidence.platformRetirementProofs = evidence.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id,
+        proof: validatePlatformRetirement(evidence.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));
+      if (evidence.nativeCleanup?.before?.realm !== evidence.nativeCleanup?.after?.realm && evidence.nativeCleanup?.navigation)
+        evidence.platformCleanupProof = validatePlatformRetirement(evidence.platformLifecycle, { realm: evidence.nativeCleanup.before.realm,
+          retiredAt: evidence.nativeCleanup.navigation.at, observationMs: settings.observationMs });
+      if (!profile.js) evidence.noJSRequestProof = classifyNoJSRequests(evidence.platformLifecycle);
+    }
+    if (network) {
+      try { await network.settle(0, performance.now() + settings.maxCleanupMs); }
+      catch (error) { evidence.gaps.push(`Final native network observation: ${error.message}`); }
+    }
+    await upstream.finish();
+    evidence.upstreamReconciliation = reconcileUpstream(evidence.upstreamLedger, { source: profile.source,
+      actions: profile.steps.map((s) => s.id), steps: evidence.steps, observationMs: settings.observationMs });
+    if (evidence.upstreamReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.upstreamReconciliation.reasons);
+    if (network) {
+      await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows);
+      evidence.networkFailures = structuredClone(network.failures); evidence.runtimeErrors = structuredClone(runtimeErrors);
+      evidence.requestLedgerEndedAt = performance.now();
+    }
+    evidence.requestReconciliation = reconcileRequests(evidence);
+    if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
+    const beforeClose = performance.now();
+    if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
+    try {
+      await closeObservedContext(browser, context, observation);
+      evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,
+        nativePageScope: evidence.nativeCleanup ?? null };
+    } catch (e) { evidence.cleanup = { contextClosed: false, error: e.message, nativePageScope: null }; evidence.failures.push("Browser context cleanup failed"); }
+    if (network) { await network.drain(); network.annotate(); evidence.harnessClosedRequestLedger = structuredClone(network.rows); }
+    evidence.harnessClosedLifecycle = lifecycle?.snapshot() ?? null;
+    if (lifecycle) try { await lifecycle.close(); } catch (error) { evidence.failures.push(`Platform observer detach: ${error.message}`); }
+  }
+  evidence.gaps = [...new Set(evidence.gaps)];
+  result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length && evidence.nativeCleanup?.outcome === "observed";
+  result.outcome = evidence.failures.length ? "failed" : result.qualificationPassed ? "captured" : "unsupported";
+  evidence.domChecksPassed = evidence.steps.length === profile.steps.length && evidence.steps.every((s) => s.domPassed);
+  result.reason = evidence.failures[0] ?? evidence.gaps[0];
+  return result;
+}
+
+export async function observedFrame(page, deadline) {
+  let timer;
+  try {
+    await Promise.race([
+      page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve()))),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Native render frame not observed within the action deadline")), Math.max(0, deadline - performance.now())); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
