@@ -5,6 +5,25 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
+  GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
+  follow the documented manual check before installing the binary.
+
+- Retry entire host-lifetime snapshots for comm-only bookend changes within the
+  existing three-attempt budget. Every accepted identity must still match in full;
+  PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
+  This repairs a demonstrated local native churn race, not an established r21 cause.
+
+- Retain bounded first/last host-lifetime observer failures with fixed operation and
+  allowlisted error codes, without saving raw errors or weakening identity, retry,
+  continuity or cleanup proof. This adds diagnostics; it does not establish or repair
+  the historical r21 failure's cause.
+
+- Make generated catalog fixtures and Gin's public static assets readable by native
+  non-root image users under a private job umask. Preserve original catalog checker
+  errors when negative-response receipts are missing or invalid, without accepting
+  failed checks or starting timing; add private-umask native Gin CI coverage.
+
 - Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
   grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
   raw responses or credentials, or changing provider validation and recovery rules.
@@ -467,7 +486,7 @@ Corten is pre-1.0, so any minor version may change the API.
   then answer the mode it wrote, are not checked). Before, any route compiled, and one whose handler answered its page left
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
-  the call or at the handler's name ([design Choice 49](docs/design.md#choice-patch-routes)). A
+  the call or at the handler's name ([design Choice 50](docs/design.md#choice-patch-routes)). A
   route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
   by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
   `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and
