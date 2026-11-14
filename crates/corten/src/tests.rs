@@ -2633,8 +2633,8 @@ async fn opaque(
 
 /// `patch_or`, `invalid` and `invalid_with` answer `req.mode` as the handler leaves it, so a
 /// handler that sets it to `Mode::Document` answers the runtime's read of a route that says
-/// `patches` with the other side, here a redirect, and no patch: the escape Choice 49 names
-/// (`docs/design.md#choice-patch-routes`). Writing `req.mode` is the app's own override, as it
+/// `patches` with the other side, here a redirect, and no patch: an escape
+/// `docs/design.md#choice-patch-routes` names. Writing `req.mode` is the app's own override, as it
 /// is for any `HtmlResult` handler.
 #[tokio::test]
 async fn a_handler_that_sets_req_mode_answers_the_runtimes_read_as_it_set_it() {
