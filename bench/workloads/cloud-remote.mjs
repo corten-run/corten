@@ -1,5 +1,6 @@
 import { remoteFiles as contractFiles, validateState } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
+import { archiveLimit } from "./cloud-local.mjs";
 
 export const sourceUrl = "https://github.com/corten-run/corten.git";
 export function remoteFiles(state) {
@@ -35,13 +36,16 @@ cd '/bench'
 for file in 'run.log' 'host.txt' 'exit-code'; do test -f "$file" && test ! -L "$file"; done
 if test -e 'results.tgz' || test -L 'results.tgz'; then
   test -f 'results.tgz' && test ! -L 'results.tgz'
+  test "$(stat -c '%s' -- 'results.tgz')" -le ${archiveLimit}
   exit 0
 fi
+node --input-type=module -e 'import { checkPackage } from "/bench/repo/bench/workloads/cloud-local.mjs"; checkPackage("/bench");'
 stage=$(mktemp '/bench/cloud-pack.XXXXXXXX')
 trap 'rm -f -- "$stage"' EXIT
 files=('run.log' 'host.txt' 'exit-code')
 test ! -e 'campaign' || files+=('campaign')
 tar --format=gnu -czf "$stage" -- "\${files[@]}"
+test "$(stat -c '%s' -- "$stage")" -le ${archiveLimit}
 ln -- "$stage" 'results.tgz'
 rm -- "$stage"
 trap - EXIT

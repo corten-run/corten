@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ownedDroplet, reservation, tags, terminalUnit } from "./cloud-contract.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
-import { archiveMembers, digest, durable, extractArchive, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
+import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerState, full, providerAccount, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -97,7 +97,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
   }
   const verifyArchive = () => {
-    const bytes = regular(archive); assert.equal(digest(bytes), state.archiveSha256, "archive changed; preserve host"); return bytes;
+    assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
   async function validateEvidence() {
     state.fullGroupQualified = false;
@@ -194,16 +194,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const hash = hashLine.slice(0, 64), download = `${archive}.download`;
           // Reserve the destination before SCP, so a crash cannot make it look retryable.
           durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
-          const bytes = regular(download); assert.equal(digest(bytes), hash, "download hash differs");
           // Re-write through a synced exclusive file; never replace unexplained evidence.
-          durable(`${archive}.synced`, bytes); renameSync(`${archive}.synced`, archive); syncDirectory(local);
+          durableCopy(download, `${archive}.synced`, hash); renameSync(`${archive}.synced`, archive); syncDirectory(local);
           state.archiveSha256 = hash; save();
         }
-        const bytes = verifyArchive(); archiveMembers(bytes);
+        verifyArchive(); await archiveMembers(archive, state.archiveSha256); check();
         if (!state.evidence) {
           const extracted = mkdtempSync(join(local, "evidence-"));
           (state.extractionAttempts ??= []).push(basename(extracted)); save();
-          const hash = extractArchive(bytes, extracted);
+          const hash = await extractArchive(archive, extracted, state.archiveSha256); check();
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
         await validateEvidence(); state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();

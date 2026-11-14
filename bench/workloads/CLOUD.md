@@ -329,13 +329,87 @@ Raw exit-marker bytes must be ASCII before decoding, then match the exact decima
 exit-code/newline grammar. Node's high-bit-clearing ASCII decoder is not evidence
 validation. Malformed terminal markers preserve the archive and host.
 
-Bounds are 256 MiB compressed, 512 MiB expanded/tree file bytes, 100,000 total
-physical nodes including the extraction root and every implicit parent directory,
-64 path components, 255-byte components and 4,096-byte names/absolute extraction
-paths. The entire tree, including shared parents counted only once, is preflighted
-before any filesystem write. The post-extraction tree hash checks the same node
-and depth limits again. Decompression is in memory, not streaming;
-larger honest native campaigns remain preserved/blocked, not silently truncated.
+### Collection Envelope
+
+The explicit local `benchmark-cloud-evidence-envelope/v1` policy (not a new wire
+or saved-state schema) gives the collector and terminal packer independent hard ceilings: **16 GiB regular
+file content, 17 GiB expanded tar, 18 GiB compressed archive and 1,100,000 physical
+nodes**, including the extraction root and implicit directories. Limits remain
+64 path components, 255-byte components and 4,096-byte member/absolute extraction
+paths. No evidence is truncated or omitted to fit. Crossing any limit blocks
+collection and preserves the host; it cannot authorize deletion or qualification.
+
+These are operational budgets, not measured campaign sizes or native verifier
+changes. Their derivation against the ten retained phases in the nine-group
+campaign is:
+
+| Phase | Current saved-verifier bound | Content allowance |
+|---|---|---:|
+| catalog-page | 2 GiB total, 64 MiB/file, 30,000 entries (`catalog/verify.mjs`) | 2 GiB |
+| json-api prepare | No whole-tree byte/count ceiling in the saved reader (`json-api/artifacts.mjs`) | 2 GiB |
+| json-api timing | Same reader; a separate retained phase | 2 GiB |
+| localized-marketplace | 512 MiB cumulative reads, 32 MiB/read, 25,000 physical entries; not a whole-tree byte ceiling (`marketplace/saved-files.mjs`) | 0.5 GiB |
+| mixed-production | 1 GiB total, 256 MiB/file, 100,000 entries (`mixed-production/verify.mjs`) | 1 GiB |
+| fullstack-browser | 1 GiB total, 256 MiB/file, 50,100 nodes (`fullstack-browser/verify.mjs`) | 1 GiB |
+| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, one admitted browser blob up to 512 MiB, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
+| live-delivery | No whole-tree byte/count ceiling; individual gzip replay limits are not whole-tree limits (`isolated/adapters/live-delivery.mjs`) | 1 GiB |
+| recoverable-live | Uses the same live saved reader | 1 GiB |
+| hardening | 1 GiB total, 256 MiB/file, 100,000 entries (`isolated/adapters/hardening.mjs`) | 1 GiB |
+
+The allowances sum to 13.5 GiB. Another 2.5 GiB allows control files, native manifests,
+journals, command logs, OS observations and source/build-context snapshots: 16 GiB
+in total. They explain the aggregate budget, not per-phase quotas. For counts,
+ten 100,000-node phase allowances plus 100,000 control/context nodes give 1,100,000.
+The finite native count limits above all fit a phase allowance; readers without a
+whole-tree bound cannot imply an unlimited transport contract. The old 100,000
+campaign-wide limit did not even leave room for the client's 80,000-entry closure
+and the other groups' independently allowed inventories.
+
+The extra 1 GiB for tar and then 1 GiB for gzip are **independent framing ceilings**,
+not a claim that every simultaneous content/count/path extreme fits. The packer
+counts actual regular bytes and nodes, computes GNU headers, long-name bodies,
+512-byte payload padding and the final 10,240-byte record rounding before tar runs,
+then checks the compressed file before exclusive publication. The collector checks
+the actual expanded byte count, headers, every body/padding byte and zero trailer.
+All native proof remains required. An otherwise valid native tree outside this
+explicit transport envelope stays preserved/blocked, never silently reduced.
+
+Gzip streams through 64 KiB buffers into one exclusively created private disk spool.
+Its full compressed-byte SHA256 must match the remote receipt. The same open spool
+FD is fully preflighted, including late gzip corruption and tar trailer failures,
+before any extraction entry is written. A full tar SHA256 and physical FD/path
+snapshots bind preflight and extraction to the decoded bytes. Files are copied and
+hashed in 64 KiB chunks, with exclusive creation and fsync; small controller JSON
+and markers retain a separate 16 MiB maximum whole-buffer API. The canonical tree
+hash format is unchanged. No whole archive, native file body or array of all tar
+members is allocated. The legacy Buffer argument is limited to 16 MiB local
+fixtures; production archive collection always supplies a physical path.
+
+Index storage is bounded separately: 12 bytes per node, a fixed 16 MiB hash-slot
+table, and a 32 MiB segment-name arena (including one byte per stored segment).
+At the maximum node count these three buffers total 63,531,648 bytes, under 61 MiB.
+The trie stores parent IDs and segments rather than copied 4 KiB full paths or JS
+maps per prefix. Separate 64 MiB counters bound cumulative tar member names and
+all unique physical path names, including implicit directories and their trailing
+slashes. Both are admitted before extraction, matching the tree hash's metadata
+budget. Temporary strings are limited to one path/segment; JS/zlib
+and stream overhead is additional, not part of that buffer count. Tree hashing
+uses a compact 32 MiB name arena and 4,400,000-byte offset table, with bounded
+`opendir` admission before sorting rather than an unbounded `readdir` allocation.
+Index/name-budget exhaustion fails closed even below the byte/node ceilings. Limits
+may only be lowered through local test APIs, never raised by evidence or CLI input.
+
+Provision **69 GiB of local disk per fresh collection attempt** as a conservative
+allowance: retained download 18 + synced archive 18 + tar spool 17 + extracted
+content 16 GiB. Filesystem allocation/metadata overhead needs additional space.
+Only the invocation's own exclusive spool directory is removed after success or
+failure. Downloads, unexplained synced files and partial extraction attempts remain
+preserved; retries can therefore require more space. A crash can leave a private
+`.cloud-spool-*` directory for operator inspection, never automatic adoption.
+The exact loaded controller/approval closure already contains `cloud-local.mjs`,
+`cloud-contract.mjs`, `droplet.mjs` and `cloud-remote.mjs`. The provider worker's
+existing source snapshot contains `cloud-contract.mjs`; no new module, provider
+dependency, state schema, approval schema, bootstrap or job behavior is introduced.
 SCP has a time bound, but its temporary download's size is checked after transfer,
 not enforced as an in-flight disk quota. The private same-user state directory and
 owned root host are trust boundaries, not protection against a hostile same-UID
