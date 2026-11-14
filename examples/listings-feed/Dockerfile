@@ -3,11 +3,15 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY . .
-# Every build on this machine shares the target cache: one at a time (`locked`), and with the
-# sources touched first, since cargo goes by file times and a checkout older than the last build
-# would get that build's crates.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target,sharing=locked \
+# The workspace's target directory is one cache for the examples (`id`; without one, every image
+# built on this machine with a /src/target would share it): they take turns (`locked`), each
+# building on the crates the last one compiled, and other apps build alongside. The sources are
+# touched first, since cargo goes by file times and a checkout older than the last build would get
+# that build's crates. Downloaded crates are a cache of the examples' own too: cargo's lock on them
+# is in its home, not in `registry`, so two builds sharing one `registry` could unpack the same
+# crate at once, and the examples take turns on theirs as on the target.
+RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=corten-examples.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && cargo build --release -p listings-feed \
     && mkdir -p /out && cp target/release/listings-feed /out/server

@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime
+  images, reqwest 0.13.5 throughout the assigned HTTP clients, cargo-leptos 0.3.12
+  and native Topcoat 0.12.1. Preserve native rendering, exact alert readback and
+  historical results; the new toolchain and dependency graph are new-round inputs.
 - The marketplace browser gate observes native LiveView WebSocket and long-poll
   saves with exact form and reply correlation, waits for readiness before editing,
   and retains bounded case diagnostics on transport failure. Livewire saves must
@@ -261,6 +265,19 @@ Corten is pre-1.0, so any minor version may change the API.
   workflow applies nothing until the repository names a bucket for the state. The site's
   service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
   from the metadata address.
+- `examples/corten-site`'s machine slows one address that asks as fast as it can, where
+  before one address asking for the page left another reader with none. One reader (an IPv4
+  address or an IPv6 network of 64 bits) may ask nginx for 100 things at once and 20 a second
+  after, have 100 answers on their way, and ask 100 times on a connection, and the machine's
+  firewall lets it hold 256 connections and open 19 in a second; over the first two the
+  answer is 429, and a connection over the last is let in when its sender tries again, a
+  second later at the soonest. A request refused for asking too fast is written to neither
+  of nginx's logs, nor are the redirects of port 80 and of other names. After an apply the
+  `Site machine` workflow asks the machine for 300 requests and for 40 connections at once
+  and for 250 requests one after another, and fails where it refuses, delays or ends too
+  few. No limit keeps a request under it waiting, and one request in a hundred opens a
+  connection; readers who share an address share its limits, and someone with many addresses
+  is not slowed by them. The deploy guide has what was measured (What one address can do).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
@@ -414,6 +431,23 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- The Dockerfile `corten new` writes gives the app's target cache an `id` of its own
+  (`<app>-target`), so a build waits only for another build of the same app, where every app on a
+  Docker host built from the template shared one locked `/src/target` cache and waited for every
+  other app's build. Downloaded crates are cached as cargo's whole home
+  (`CARGO_HOME=/var/cache/cargo`) instead of its `registry` directory, since cargo's lock on them
+  is in the home: two builds that run at once wait for each other's download, where with
+  `registry` alone one of them could fail to unpack a crate the other was unpacking. Apps no longer
+  share compiled dependencies, so two apps with the same ones compile them once each. The examples'
+  Dockerfiles take one `id` for the workspace they share (`corten-examples.target`), so each example
+  still builds on the crates the last one compiled, and one for their `registry` cache
+  (`corten-examples.registry`): without it that cache was every image's
+  `/usr/local/cargo/registry`, which an app from the earlier template or another Rust image could
+  be unpacking into at the same time, with no lock the two builds both see. The examples write
+  theirs one build at a time, in the step that holds their locked target. An app made before keeps
+  its Dockerfile; one that takes the change starts its next build with empty caches, and the old
+  ones stay on the builder until `docker builder prune`
+  ([#1345 The Dockerfile template's target cache has no id, so every app's build on a host waits for every other's](https://github.com/corten-run/corten/issues/1345)).
 - A WebSocket handshake of a version other than 13, or of none, is answered 426 with
   `Sec-WebSocket-Version: 13`, `Upgrade: websocket` and `Connection: upgrade` (RFC 6455, 4.2.2;
   RFC 9110, 15.5.22), kept on the app's error page, Problem Details and an `Api::errors` shape,

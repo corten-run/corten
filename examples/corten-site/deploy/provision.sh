@@ -101,7 +101,43 @@ grep -q '^worker_rlimit_nofile' /etc/nginx/nginx.conf || sed -i '1i worker_rlimi
 ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp
-ufw --force enable
+# nginx counts what a reader asks for (nginx.conf), and a connection is not counted there
+# until it asks: one address could hold thousands that ask for nothing, each some of nginx's
+# memory, or open one after another and ask its hundred requests on each. So one reader (an
+# IPv4 address or an IPv6 network, as in nginx.conf) holds 256 connections to nginx at a
+# time, where the next is reset, and opens 19 in any one second, where the next is left
+# unanswered and its sender's TCP tries again: a second later, and after that every second
+# or twice as long each time, as that sender does. Only a connection let in is counted (the
+# line that drops looks, and the line after it writes), so an address that keeps trying is
+# let in 19 in each second it tries in. The second count is `recent`'s, which
+# remembers the last 100 addresses and forgets the oldest, so with more than 100 addresses
+# opening connections in a second it counts none of them for long. It is ufw's own for
+# `ufw limit`, and a table that refuses a new address when it is full (`hashlimit`'s) could
+# be filled for everyone by connections with made-up addresses. The lines are taken out and
+# written again, so a second run leaves one copy.
+limit_connections() {
+    sed -i '/corten-site/d' "$1"
+    sed -i "/^COMMIT\$/i \\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m connlimit --connlimit-above 256 --connlimit-mask $3 -m comment --comment corten-site -j REJECT --reject-with tcp-reset\\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m recent --name $4 --mask $5 --rcheck --seconds 1 --hitcount 19 -m comment --comment corten-site -j DROP\\
+-A $2 -p tcp -m multiport --dports 80,443 --syn -m recent --name $4 --mask $5 --set -m comment --comment corten-site" "$1"
+}
+limit_connections /etc/ufw/before.rules ufw-before-input 32 corten-site 255.255.255.255
+limit_connections /etc/ufw/before6.rules ufw6-before-input 64 corten-site6 ffff:ffff:ffff:ffff::
+# ufw reads these files when it starts, so one that is on is turned off first (connections
+# already made go on, and nothing but nginx and SSH listens outside the machine). A kernel
+# without what a line needs refuses the whole file, and ufw leaves what it had loaded by
+# then: packets dropped unless a rule lets them in, and none of that file's rules, so nginx
+# cannot reach the app. The lines are then taken out and the firewall started again, and
+# the machine serves without the two counts, which the workflow's check after an apply says
+# (site-machine.yml).
+ufw disable
+if ! ufw --force enable; then
+    echo "The firewall refused the lines that count one address's connections: going on without them." >&2
+    sed -i '/corten-site/d' /etc/ufw/before.rules /etc/ufw/before6.rules
+    ufw disable
+    ufw --force enable
+fi
 
 # The certificate first, answered by nginx as it is installed, then the site's own configuration,
 # which names it. certbot's timer renews it; nginx takes the new one on reload. One certificate
