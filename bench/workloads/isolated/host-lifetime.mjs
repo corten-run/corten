@@ -12,6 +12,14 @@ const serial = (v) => `${JSON.stringify(v)}\n`;
 const fields = ["cgroup.procs", "cgroup.events", "cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.max", "memory.events"];
 const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
+const observationOperations = new WeakMap();
+function observing(operation, action) {
+  try { return action(); }
+  catch (error) {
+    if (error && typeof error === "object" && !observationOperations.has(error)) observationOperations.set(error, operation);
+    throw error;
+  }
+}
 export function processIdentity(stat) {
   const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
   assert.ok(match); const rest = match[4].split(" ");
@@ -50,29 +58,35 @@ function effectiveControls(files) {
   return cpu !== null && cpus !== null && memory !== null;
 }
 function executableHash(at, executables) {
-  const executable = readlinkSync(`${at}/exe`), inode = statSync(`${at}/exe`);
+  const executable = observing("executable-link", () => readlinkSync(`${at}/exe`));
+  const inode = observing("executable-stat", () => statSync(`${at}/exe`));
   const key = `${executable}:${inode.dev}:${inode.ino}:${inode.size}:${inode.mtimeMs}:${inode.ctimeMs}`;
   let hash = executables.get(key);
-  if (!hash) { hash = sha(readFileSync(`${at}/exe`)); executables.set(key, hash); }
+  if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
   return hash;
 }
 function snapshot(path, executables, pending) {
   const groups = [], processes = [];
   function walk(current) {
-    const group = readGroup(current); groups.push(group);
+    const group = observing("cgroup-read", () => readGroup(current)); groups.push(group);
     for (const pid of group.files["cgroup.procs"].trim().split("\n").filter(Boolean)) {
       assert.match(pid, /^[1-9]\d*$/);
       // A racing exit is an observation gap, never silently omitted membership.
-      const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
-      const executable = pending ? pending.capture(identity.pid) : { executableSha256: executableHash(at, executables) };
-      const cgroup = readFileSync(`${at}/cgroup`, "utf8"); assert.equal(groupPath(cgroup), current);
-      const type = readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null;
-      assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
-      pending?.recheck(identity.pid, executable);
+      const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
+      const identity = observing("process-identity", () => processIdentity(stat));
+      const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
+      const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
+      observing("process-membership", () => assert.equal(groupPath(cgroup), current));
+      const type = observing("process-cmdline", () => readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null);
+      const rechecked = observing("process-stat-recheck", () => processIdentity(readFileSync(`${at}/stat`, "utf8")));
+      const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
+        : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
+      observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+      if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
-    for (const entry of readdirSync(join(root, current), { withFileTypes: true })) {
-      assert.ok(!entry.isSymbolicLink());
+    for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
+      observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
       if (entry.isDirectory()) walk(posix.join(current, entry.name));
     }
   }
@@ -172,7 +186,18 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
   }
   const executables = new Map(), records = new Set(), pending = browser ? participantExecutables() : null;
   let bytes = 0, samples = 0, closed = false, timer, observerError = null, attached = false;
+  const observerFailures = { count: 0, first: null, last: null };
+  let sampleOperation, lastSampleAt = null;
+  function failure(phase, error) {
+    // Retain fixed public codes only, never messages, stacks, paths or arbitrary
+    // error properties. First/last plus a count bound disk and memory on failure.
+    const code = ["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown";
+    const entry = { phase, operation: observationOperations.get(error) ?? sampleOperation, code,
+      at: Date.now(), samples, lastSampleAt };
+    observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
+  }
   function sample() {
+    sampleOperation = "snapshot";
     let observed;
     for (let attempt = 0; ; attempt++) {
       try { observed = snapshot(path, executables, pending); break; }
@@ -181,6 +206,7 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
+    sampleOperation = "process-record";
     observed.processes = observed.processes.map((p) => {
       const key = processRecordKey(p);
       if (!records.has(key)) {
@@ -190,12 +216,14 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
       }
       return key;
     });
+    sampleOperation = "docker-inventory";
     if (browser) observed.docker = browserDocker(excluded, executables, pending);
+    sampleOperation = "sample-write";
     const value = serial(observed); bytes += Buffer.byteLength(value);
     assert.ok(bytes <= 256 * 2 ** 20, "host observation byte bound exceeded");
     const data = Buffer.from(value); let offset = 0;
     while (offset < data.length) { const n = writeSync(fd, data, offset); assert.ok(n > 0); offset += n; }
-    samples++;
+    samples++; lastSampleAt = observed.at;
   }
   // The fresh bootstrap still waits for IPC outside this empty command scope.
   // Hash its actual executable before sampling starts, not across the empty-to-
@@ -209,20 +237,21 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
       if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
       // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
       writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
-      timer = setInterval(() => { try { sample(); } catch { observerError = "host-observation-gap"; } }, sampleIntervalMs);
+      timer = setInterval(() => { try { sample(); } catch (error) { observerError = "host-observation-gap"; failure("interval", error); } }, sampleIntervalMs);
     },
     finish(result) {
       assert.equal(closed, false); closed = true; clearInterval(timer);
       let empty = false;
-      try { sample(); empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
-      catch { observerError = "host-observation-gap"; }
+      try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
+      catch (error) { observerError = "host-observation-gap"; failure("finish", error); }
       if (pending) {
+        sampleOperation = "executable-proof";
         try { durable(join(directory, "executables.json"), serial(pending.finish())); }
-        catch { observerError = "host-executable-proof-incomplete"; }
+        catch (error) { observerError = "host-executable-proof-incomplete"; failure("executables", error); }
       }
       try { fsyncSync(fd); } finally { closeSync(fd); }
       const terminal = result.terminal && empty;
-      durable(join(directory, "terminal.json"), `${JSON.stringify({ terminal, attached, empty, samples, observerError,
+      durable(join(directory, "terminal.json"), `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
         command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent) }, null, 2)}\n`);
       if (empty) rmdirSync(join(root, path)); // Own empty child only; never recursive cleanup.
       return tree(directory);
@@ -332,7 +361,8 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   const empty = (sample) => sample.processes.length === 0 && sample.groups.every((g) =>
     g.files["cgroup.procs"].trim() === "" && (g.files["cgroup.events"] ?? "").split("\n").filter((s) => s.startsWith("populated ")).join("\n") === "populated 0");
   const checks = { accounting: controlsComplete, terminal: terminal.terminal === true && terminal.command.terminal === true,
-    empty: terminal.empty === true && empty(samples[0]) && empty(samples.at(-1)), observer: terminal.observerError === null,
+    empty: terminal.empty === true && empty(samples[0]) && empty(samples.at(-1)),
+    observer: terminal.observerError === null && (terminal.observerFailures === undefined || terminal.observerFailures.count === 0),
     unforced: !terminal.command.cancelled && !terminal.command.forced,
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
