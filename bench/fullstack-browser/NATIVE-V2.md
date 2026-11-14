@@ -120,7 +120,8 @@ Exact executable bytes are observations, not independent distribution approval.
 
 ## Public responses
 
-All response APIs bind `{requestId,responseSha256,path,status}`. Paths are public
+Byte-response and existing mixed projection APIs bind
+`{requestId,responseSha256,path,status}`. Paths are public
 paths only, without query/fragment/credentials. Request ID comes from the actual
 native network observer. Owner must additionally bind context/case/endpoint and
 independent readback source, never infer them from this leaf's success alone.
@@ -144,6 +145,264 @@ fallback, persist its secret-bearing source, or permit arbitrary snapshot code.
 `{type,value,extractionComplete:true}` for JSON, or
 `{type,sha256,extractionComplete:true}` for assets. A replayed DOM extraction failure
 has extractionComplete:false, not an accepted failed target.
+
+### Fixed browser DOM observations
+
+`native-browser-dom.mjs` adds a browser-only collector/replayer alongside the
+unchanged mixed API. It always uses the installed strict
+`marketplace/check.mjs::snapshotPage` for ordinary pages, not `snapshotMixedPage`.
+Neither capture nor replay accepts caller/saved source, functions, selectors or
+snapshot modes. The ordered typed read recorder follows the existing mixed
+pattern; it is not a general DOM evaluator.
+
+```js
+const observation = await collectBrowserDOM(page, {
+  context, case: caseKey, action: actionId, scope,
+  originatingResponse: { requestId, sha256 }
+});
+const expected = {
+  observer, context, case: caseKey, action: actionId, scope,
+  originatingResponse: { requestId, sha256 },
+  readInterval: { startedAt, finishedAt }, url: { path, query }
+};
+const result = replayBrowserDOM(observation, expected);
+const receipt = retainBrowserDOMProjection(store, observation, expected);
+// Additive replayResponse branch, with expected LIVE identity, not byte binding:
+const stored = replayResponse(reader, receipt, expected);
+```
+
+`collectBrowserDOM` generates a fresh observer UUID and brackets the native read
+with actual host Unix-ms timestamps, within the existing 15-second action budget.
+Context/case/action/originatingResponse are caller-owned actual identities. Case
+and action must be fixed browser registry keys/step IDs; context/scope/requestId
+are bounded safe IDs. Scope is read from the actual existing resource observer
+checkpoint before/after; URL is observed before/after too. Both must remain equal
+to expected values. Collector errors/unsupported access produce only a fixed
+failure code and unknown result with no partial reads or diagnostic text. Invalid
+caller identity, secret/unknown current URL, or exceeded bounds throw instead.
+
+Exact observation fields:
+
+```js
+{
+  schema: "native-browser-dom-observation/v1",
+  ...expected,
+  snapshotSha256, // installed snapshot/collector/native-boundary/URL policy digest
+  roots: { document: 0, location: 1, global: 2 },
+  events: [{ target, kind, key, args, result }],
+  result, failure: null | "credential-filter-blocked" |
+    "public-error-unavailable" | "native-scope-mismatch" |
+    "native-dom-snapshot-failed",
+  scopeObservation: { before: scope, after: scope },
+  urlObservation: { before: {path,query}, after: {path,query} },
+  boundaryObservation: { /* typed native boundary below */ }
+}
+```
+
+On failure events are empty, scopeObservation/urlObservation/boundaryObservation are null and result
+is `{kind:null,page:null,error:null,articleCount:null,extractionComplete:false}`.
+This is proof-missing, not an observed semantic target failure or qualification.
+On successful ordinary-page replay result is
+`{kind:'page',page:<strict snapshot>,error:null,articleCount:1,extractionComplete:true}`.
+The fixed missing route instead reads absence of `article.marketplace` and bounded
+visible `h1,h2,p,[role="alert"]` elements (tags h1/h2/p/div/section/span only).
+Native visibility includes hidden ancestors. Only exact whitespace-normalized
+phrases `Not found`, `Not Found`, `Page not found`, `Item not found`, `Record not
+found`, `404`, `404 Not Found`, `404: Not Found`, `This page could not be found.`
+may be retained. Result is `{kind:'missing-item',page:null,error:{code:'not-found',
+text,tag},articleCount:0,extractionComplete:true}`. Unknown text is never saved and
+cannot be treated as a target failure. No raw body innerText/HTML is collected.
+Error reads expose only `publicMissingTag` (allowlisted tag or null) and
+`publicMissingText` (native-visible allowlisted phrase or null), not raw custom
+tag names, ARIA attributes or arbitrary computed style values. Unknown neighboring
+error elements cannot leak text/metadata into an otherwise successful capture.
+Every descendant must also pass native visibility (including CSS display,
+visibility and opacity). Computed content-visibility must be `visible` on the
+candidate, every descendant and their ancestors, each ancestor walk bounded by
+the existing 10,000-member limit. `hidden` and `auto` are unsupported, including
+non-atomic inline elements where a browser might still paint the text; native
+checkVisibility alone does not check an element's own skipped contents. A
+candidate with a hidden or unsupported descendant is refused rather than
+assembling a phrase from its hidden textContent. Visible inline spans remain
+supported; no raw innerText/HTML fallback is used.
+
+Public page routes are fixed marketplace locales and item_1 through item_500 or
+item_missing. Canonically encoded queries allow only seller ''/Alice, sort
+asc/desc, offers all; missing-item has no query. Duplicate/unknown/secret query,
+credentials and fragments reject. Attribute URLs are validated before reads.
+All meta elements, including itemprop/content-only metadata, are inventoried
+transiently. The inventory also visits native HTMLTemplateElement.content
+fragments iteratively, including nested templates. Templates, fields and private
+select options share the existing aggregate 10,000-member limit; unsupported
+template objects fail closed. All inert template input/textarea/select values
+are private, regardless of their own computed style. No template content or
+source names are retained. Native input/textarea/select controls are private when hidden,
+password-bearing, ARIA-hidden or not natively visible (including ancestors and
+CSS opacity/visibility/display). Their actual live values, value attributes,
+default values and private select option values are filtered, never serialized.
+The inventory precedes every retained read, is bounded by the existing list,
+scalar and JSON limits, and fails closed on unsupported private metadata children
+or populated file controls. It is not a parser for arbitrary scripts, framework
+state or a claim about secrets outside these fixed native field sources.
+One native hidden public control is recognized: the sole direct `offers=all`
+input of the sole marketplace listings GET form, only while the canonical page
+query also has offers=all. Its live/default/attribute value must all equal `all`,
+its only attributes must be name/type/value, and its same-origin action must be
+the current public path without query. Otherwise it stays in the private
+inventory. This is a fixed public form contract, not a substring exception:
+another private field with value `all` still filters colliding public reads.
+Noncanonical aria-hidden guard strings are refused, not normalized into a
+semantic false and retained. Public text/guard reads containing private values or
+hidden/script/style/template/meta descendants fail closed. Existing fixed bounds
+are 30,000 typed reads, 10,000 list members, 131,072-character scalars and 32 MiB
+observation; no runtime budget knobs are added.
+
+Typed values are exactly one of `{scalar}`, `{undefined:true}`, `{object:id}` or
+`{list:[typedValue]}`. Replay executes only installed fixed functions, verifies
+their digest, every ordered operation/argument and all consumed reads/results;
+extra/missing operations, operation/argument/result contradictions or source
+substitution throw. The retained blob digest and sealed manifest also reject
+altered read bytes that would leave the semantic result unchanged; standalone
+transcript replay is not independent observation authenticity.
+The policy digest includes the installed collector, so projections collected
+under an older private-value/visibility policy require fresh capture, not replay
+under the new policy with a saved digest or saved source substitute.
+It does not execute saved code or reconstruct secret-bearing original HTML. Read
+transcript and actual identity still need the owner's source/execution/native
+observer binding.
+
+`retainBrowserDOMProjection` is exported by `native-responses.mjs`; exact receipt:
+`{schema:'native-browser-response/v2',type:'public-browser-dom-observation',
+identity:expected,body:ref,result}`. `replayResponse` returns `{type,...result}`.
+Every expected field must independently match caller ledgers, including actual
+context/case/action/scope, unique observer, read interval and originating native
+response ID/digest. Caller must bound the interval to actual context/action life,
+and bind the URL/origin/request to the intended document. The originating response
+may precede later live mutations: this receipt is explicitly a live semantic
+observation, NEVER original response bytes or byte equivalence to that response.
+Caller retains unchanged strict comparePage, native form, status, request,
+resource and qualification gates. Neither a missing article nor safe error text
+alone proves an HTTP 404. Existing mixed/JSON/asset APIs remain unchanged.
+
+### Native unsupported-structure boundary
+
+The fixed leaf refuses author shadow roots (open/closed, declarative/imperative,
+including hosts in recursively reachable ordinary template fragments), even a
+correctly slotted visible error. Native content documents, frame owners and
+frame/iframe/object/embed elements are unsupported. No shadow/slot/CSS semantics
+are interpreted. Native `user-agent` roots remain supported without traversing
+their browser-owned internals. An HTML document element's native main frame ID
+is distinguished from a subdocument owner using actual Page.getFrameTree.
+
+`boundaryObservation` is opaque to callers and required for successful replay:
+
+```js
+{
+  schema: 'native-browser-dom-boundary/v1', observer,
+  document: {nodeId, backendNodeId, frameId},
+  commands: [
+    {method:'DOM.enable'},
+    {method:'Page.getFrameTree',frameId,childFrames:[]},
+    {method:'DOM.getDocument',role:'observer-document',backendNodeId,frameId},
+    {method:'Page.createIsolatedWorld',frameId,executionContextId},
+    {method:'Runtime.callFunctionOn',role:'mutation-start',executionContextId,
+      result:{observer,roots}},
+    {method:'DOM.getDocument',root:nodeId,nodes:[nodeRecord]},
+    // Zero or more actual incremental population receipts:
+    {method:'DOM.requestChildNodes',nodeId,children:[nodeId],nodes:[nodeRecord]},
+    {method:'DOM.resolveNode',role:'semantic-read',...document},
+    {method:'Runtime.callFunctionOn',role:'semantic-read',...document,observer},
+    {method:'DOM.describeNode',...document},
+    {method:'DOM.resolveNode',role:'mutation-check',...document,executionContextId},
+    {method:'Runtime.callFunctionOn',role:'mutation-check',...document,
+      executionContextId,result:{observer,roots,mutations:[]}},
+    {method:'Runtime.callFunctionOn',role:'mutation-cleanup',...document,
+      executionContextId,observer,result:{observer}},
+    {method:'Runtime.releaseObjectGroup'}, {method:'DOM.disable'}
+  ]
+}
+// nodeRecord contains ONLY:
+{nodeId,backendNodeId,nodeType,kind:'ordinary'|'template'|'document-element',
+ childNodeCount,children:null|[nodeId],templateContent:null|nodeId,
+ shadowRoots:[{nodeId,backendNodeId,type:'user-agent'}]}
+```
+
+The observer-document receipt projects only the original depth-0 native document's
+backend identity and main frame, obtained before observer installation. Its backend
+must match the subsequently populated document. Initial and incremental population
+receipts are the actual depth-1, pierce-false native
+responses, projected immediately. Null children means not yet populated; every
+positive child count must acquire its exact child list. Template fragments need
+explicit population even when a whole-document CDP query claims deep traversal.
+Replay consumes each command and typed member, checks per-response reachability
+and order, globally unique node/backend IDs, complete acyclic document/template
+population, all native child counts, allowed UA roots, native document/frame and
+isolated-context/read/check bindings. Extra, missing or contradictory members
+reject. Raw CDP attributes, text, node names, URLs, remote object IDs and mutation
+contents are never saved. The final sealed blob binds all structural reads too.
+
+CDP DOM events cover frontend-known nodes, not every unvisited subtree. Before
+incremental population, one fixed native MutationObserver is therefore installed
+synchronously in a CDP-created isolated world on the current document and every
+reachable ordinary template fragment. Its initial roots must exactly match the
+native template population plus document. It covers native child/attribute/text
+changes in as-yet-unpopulated ordinary and inert subtrees. Pending records are
+checked as well as delivered callbacks; no mutation contents leave that world.
+This does not inspect arbitrary scripts or interpret shadow content. CDP provides
+native closed-root classification and remains subscribed through the read and
+barrier; any native structure/root/document change invalidates the attempt.
+
+DOM.resolveNode supplies the exact inventoried document object for the installed
+synchronous semantic read. It must equal that world's current top-level document.
+The same ordered native session checks the document again after the read, resolves
+it into the observer world, and checks that exact receiver against the observer's
+original document with no pending/delivered mutations. Normal cleanup uses that
+same exact isolated document receiver and must return its owned observer UUID;
+remote groups are released and the native session detached.
+Missing replies, document replacement or lost session return unknown with no
+partial reads. A clean final tree or a saved coverage flag is not accepted instead.
+
+Failure cleanup first attempts the original native session. If that cannot
+complete, at most one fresh session may recover this capture's owned observer.
+It checks the current main frame and native
+document backend against the pre-install identity, reopens the same isolated
+execution context, and resolves only that original document backend. The fixed
+cleanup function refuses unless its receiver is both the current document and the
+observer's original document, and the observer UUID is this capture's exact UUID.
+It never deletes a foreign observer, cleans a replacement document, reinstalls an
+observer, reruns semantic reads, or qualifies the failed capture. Missing/uncertain
+cleanup stays unknown; apparatus cleanup remains a separate integrating obligation.
+After successful recovery, a later independent same-document capture can start
+normally, without an application action or production retry inside this leaf.
+
+Semantic preparation/read/check retains the original 15-second deadline. Timeout
+is sticky failure, never an extended semantic interval or a clamped/fabricated
+observation. An exceeded observation interval still rejects instead of qualifying.
+Failure teardown may settle already-started native apparatus until 15 seconds
+after the later of that original deadline and actual teardown entry. Thus an
+on-time stop normally has an overall awaited bound of read-start plus 30 seconds;
+this disposal allowance cannot authorize another semantic read. It reuses the
+fixed 15-second limit, with no caller setting or CLI/measurement budget change.
+
+Acquisition ownership is attached before any raced await. A late original session
+is disposal-only; a late recovery session retains its guarded cleanup/finally
+continuation even after the collector's bounded wait has stopped. Arrival after
+the teardown wait permits at most 15 seconds of per-resource disposal, not a new
+semantic capture or recovery acquisition. Detach is invoked even with no wait
+remaining, and its actual acknowledgement promise remains consumed. Other native
+replies that outlive a timed await cannot resume semantic work; late cleanup still
+requires the exact original document and observer. If native ownership checks or
+disposal cannot settle, cleanup is uncertain and never qualifies; the integrating
+context/target owner remains responsible for that outer apparatus lifetime. This
+does not claim synchronous disposal of a permanently unresponsive renderer.
+
+Native ordinary/template/UA-root identities share the 10,000-node cap;
+transient native payloads and the final observation each obey 32 MiB. Unstable or
+over-bound pages remain proof-missing, not semantic failures. The installed digest
+includes every fixed native helper and the receiver-binding collector wrapper.
+These bounded observations do not establish independent execution/source/store
+authority, certify detached arbitrary JavaScript state, or cover other documents;
+the integrating owner still supplies those independent identities and strict gates.
 
 ## Execution and terminal ledger
 
@@ -275,6 +534,8 @@ these leaves do not modify isolated code or assert exclusive-host authority.
 ## Checks and limits
 
 Run `node --test --test-concurrency=1 bench/fullstack-browser/native-*.test.mjs`.
+The fixed DOM controls live in `native-responses.test.mjs`, already explicitly
+included by the evidence-contract CI command; no wildcard CI change is needed.
 Pure controls reject corrupt/extra/missing/linked evidence, mismatched canonical
 Git/source/archive/tool/response binding, incomplete terminal inventories,
 worker/peer gaps and false qualification-exit claims. Native controls use installed
