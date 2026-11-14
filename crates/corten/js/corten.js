@@ -1803,40 +1803,47 @@ function drawLayout(old, fresh, before, said, inside = false) {
 }
 
 /**
- * Swaps in the whole page a write sent the browser to: `<main>` and the page's head tags as a
- * navigation's answer has them ({@link swapPage}), and each element around `<main>` the server
- * now draws otherwise, so what the write changed there (a count in the header) is current, as it is
- * after the full load a browser without JavaScript makes. A page whose frame or layout differs in
- * shape loads in full. The page reading itself again (`again`) is left as it is when neither the
- * page nor the layout changed, and the notice it sent back ({@link shown}) is not taken for a new
- * one. False when it loaded in full or was left as it is.
+ * Swaps in the whole page a write sent the browser to, or answered with (`own`): `<main>` and the
+ * page's head tags as a navigation's answer has them ({@link swapPage}), and each element around
+ * `<main>` the server now draws otherwise, so what the write changed there (a count in the header)
+ * is current, as it is after the full load a browser without JavaScript makes. A page whose frame or
+ * layout differs in shape loads in full; a write's own page, which a load of its address would not
+ * draw, swaps in `<main>` alone instead, and the next navigation reads the whole page. The page
+ * reading itself again (`again`) is left as it is when neither the page nor the layout changed, and
+ * the notice it sent back ({@link shown}) is not taken for a new one. False when it loaded in full
+ * or was left as it is.
  * @param {string} html @param {AbortSignal} signal @param {Notice} notice @param {boolean} [again]
  * @param {boolean} [stay] keep the user's place ({@link swapPage})
+ * @param {boolean} [own] the write's own answer, not a page at an address
  * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice, again = false, stay = again) {
+async function swapDocument(html, signal, notice, again = false, stay = again, own = false) {
   const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
   const main = doc.querySelector("main");
   const layout = main && layoutChanges(doc, again ? null : notice);
-  if (!main || !layout) {
+  if (!main || (!layout && !own)) {
     reload(notice);
     return false;
   }
   preload(doc.head);
-  await Promise.all(layout.fresh.map(modulesOf));
+  await Promise.all((layout?.fresh ?? []).map(modulesOf));
   signal.throwIfAborted();
   // What a navigation's answer holds: the title, the page's head tags, the section stylesheets and
   // the page.
   const head = [doc.querySelector("title"), ...Array.from(doc.head.querySelectorAll("[data-corten-head], link[data-corten-style]"))].filter(
     (el) => el !== null,
   );
-  const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
+  // A write's own page whose frame differs swaps in what a navigation's answer holds, the layout's
+  // elements that are the page's (`page` in `html!`, a section's nav) included ({@link swapPage}).
+  // With the layout drawn, they are drawn with it.
+  const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => !el.parentElement?.closest("[data-corten-page]"));
+  const text = head.map((el) => el.outerHTML).join("") + parts.map((el) => el.outerHTML).join("") + main.innerHTML;
   const whole = comparableText(text);
   // Read again with nothing new in the page: it stays as it is, with what the user typed and its
   // live streams, and only what changed around it (a count the layout reads) is drawn.
-  if (again && whole === swappedWhole) {
+  if (again && layout && whole === swappedWhole) {
     if (layout.fresh.length === 0) {
       readAgainLater();
       return false;
@@ -1848,9 +1855,11 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
   }
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
-  content.append(...head, ...Array.from(main.childNodes));
+  content.append(...head, ...parts, ...Array.from(main.childNodes));
   const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
-  if (swappedIn) swappedWhole = whole;
+  // The layout not drawn: the next navigation reads it whole, as after a write that redirected.
+  if (swappedIn && !layout) stale = true;
+  else if (swappedIn) swappedWhole = whole;
   return swappedIn;
 }
 
@@ -2429,9 +2438,9 @@ const SOURCE = Symbol("corten.source");
  */
 const WRITTEN = Symbol("corten.written");
 /**
- * A write redirected and no whole page has been swapped in since (the user went elsewhere before
- * it came): every navigation reads the whole page until one is, so what the write changed in the
- * layout is drawn.
+ * A write redirected, or answered with its own page, and no whole page's layout has been drawn
+ * since (the user went elsewhere before it came, or its frame differed): every navigation reads
+ * the whole page until one is, so what the write changed in the layout is drawn.
  */
 let stale = false;
 
@@ -2988,18 +2997,27 @@ async function send(form, submitter, sends) {
         location.assign(to);
         if (same) reload();
       }
-    } else if (fromHere(res.url) && res.headers.has("corten-page") && shellChanged(res)) {
+    } else if (fromHere(res.url) && res.headers.has("corten-shell") && shellChanged(res)) {
       renew();
       reload(noticeOf(res));
-    } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-page"))) {
+    } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-shell"))) {
+      // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
+      // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
+      // every navigation reads the whole page, as after a write that redirects.
+      if (!res.headers.has("corten-patch") && !res.headers.has("corten-page")) stale ||= method !== "GET";
       const body = await res.text();
       renew();
       signal.throwIfAborted();
       if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok);
       else {
         const notice = noticeOf(res);
-        await swapPage(body, signal, false, notice);
-        announce(notice);
+        // A page: a `GET` form's is `<main>` alone (`corten-page`), as a navigation's is. A write's
+        // own page is whole, as the page a write redirects to is, so what the write changed around
+        // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
+        if (res.headers.has("corten-page")) {
+          await swapPage(body, signal, false, notice);
+          announce(notice);
+        } else if (await swapDocument(body, signal, notice, false, false, true)) announce(notice);
       }
       signal.throwIfAborted();
       if (res.status === 422) focusInvalid(form);

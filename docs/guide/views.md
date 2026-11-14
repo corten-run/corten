@@ -215,10 +215,11 @@ is dropped unused. A `Public` answer draws no read's value however it was starte
 page, Corten draws the read's `view` where the layout put `later`, before the app's middleware sees
 the page; one read fills every place that names it. A place goes in the `<body>` around `<main>`:
 `<head>` and its `<title>` are sent with each navigation, which does not start the read, so a debug
-build refuses a page that draws one there. A write that draws a page rather than redirect (a refused
-form without JavaScript) starts the reads its page draws once it has answered, so it waits for them.
-A navigation or a `data-patch` action keeps the header the full load drew, so the read is not
-started for it, nor for an API or a data client. A `Public` page is the same for everyone, so it
+build refuses a page that draws one there. A write that draws its own page rather than redirect (a
+refused form, a partial result), with JavaScript or without, starts the reads its page draws once it
+has answered, so it waits for them (below). A navigation, a `GET` form the runtime sends and a patch
+keep the header the full load drew, so the read is not started for them, nor for an API or a data
+client. A `Public` page is the same for everyone, so it
 draws nothing there, and a `Public` page route never starts the read. An answer that draws no layout
 (a redirect) drops a read still running, which stops it; one already in stays for an error page the
 app's middleware makes of the answer. So do the values a page drew, for an error page the
@@ -280,7 +281,10 @@ a prop the handler passes. A read the handler itself needs and wants started ear
 `corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
 reads the request's mode before the handler has its `Req`. `Ahead` is `tokio::spawn` with the two
 things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
-after the client left), and its panic fails the request.
+after the client left), and its panic fails the request. It starts before the handler, so on a
+write it may not see what the write did: a value that depends on the write (the count after an item
+is added) is read or given by the handler after the write, or is a layout read, which a write's own
+page starts once the handler has answered.
 
 A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
 runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
@@ -339,11 +343,29 @@ replaced whole, live region and all, so a script adds its own markup beside the 
 fetched as a document, so when it redirects again, `fetch` follows that redirect itself: a
 `#id` on the second one is not kept, and one to another site loads in full.
 
-A write that answers in place, with a patch rather than a redirect, draws what it changed itself.
-The badge is a component the layout renders and a patch can carry (an `#[derive(Id)]` on it), and
-the write reads the value directly, not through the extractor above (which skips the read for its
-`Mode::Action` answer), and only for the patch: without JavaScript the redirect's next page is a
-full load that reads it.
+A write that answers with its own page rather than a redirect (a form drawn again with what it
+refused, a bulk add whose failed lines the page lists) needs nothing more either. `req.page(..)` for
+a write is the whole document in every mode, with JavaScript (`Mode::Action`) as without: the layout
+reads it draws start once the handler has answered with it, so they see what the write did (nothing
+runs beside the handler of such a write, and one that answers a patch or a redirect starts none), a
+value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
+it as it draws that page, swapping in `<main>` and each element around it that changed, in the same
+document and at the same address; until it is in, a navigation reads the whole page, so one that
+leaves it on its way still shows what the write changed. Only a `GET` form's page (a search) is
+`<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer
+costs the layout's markup and its reads; a page that differs from the one on screen in more than
+such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
+the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
+navigation reads the whole page.
+
+A patch is not a page: it carries elements by id and fills no layout read's place, and a read's
+`view` drawn at two places has no id to carry. So a write whose answer must change a layout read
+answers its page, not a patch: `req.page(..)`, with the read's value given or read again. A patch
+changes the layout only through an element the layout draws with an id, from a value the handler
+passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
+can carry (an `#[derive(Id)]` on it), and the write reads the value directly, not through the
+extractor above, and only for the patch: without JavaScript the redirect's next page is a full
+load that reads it.
 
 ```rust,ignore
 #[component]
@@ -361,9 +383,8 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 }
 ```
 
-Corten has no layout slot that fills itself: the layout is the app's component ([design Choice 10](../design.md#choice-app-owns-document)),
-so the value reaches it as a prop, and the read stays where the handler can see it, its failure
-included.
+Either way there is one answer that brings a layout read up to date after a write, a page: the page
+the write redirects to, or its own ([design Choice 49](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link

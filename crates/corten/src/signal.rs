@@ -147,6 +147,10 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
+    /// A write the runtime sent, in an app with layout reads, whose page route kept its head for
+    /// a page it may answer with, so that page's places are written, here for the same reason
+    /// ([`crate::layout::kept_for_its_page`]). A byte, in the padding beside the others.
+    head_kept: AtomicBool,
 }
 
 impl Signal {
@@ -225,6 +229,17 @@ impl Signal {
     /// The app's shared state, for a request an app serves.
     pub(crate) fn shared(&self) -> Option<&Arc<crate::page::Shared>> {
         self.0.shared.as_ref()
+    }
+
+    /// A write the runtime sent, in an app with layout reads: its route keeps the head for a page
+    /// it may answer with, so that page writes its places ([`crate::layout::kept_for_its_page`]).
+    pub(crate) fn keep_head(&self) {
+        self.0.head_kept.store(true, Ordering::Relaxed);
+    }
+
+    /// Its route kept the head for its page ([`Signal::keep_head`]).
+    pub(crate) fn head_kept(&self) -> bool {
+        self.0.head_kept.load(Ordering::Relaxed)
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

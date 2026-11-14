@@ -29,12 +29,13 @@ use crate::view::Render;
 /// load, a reload, the page a write redirects to), after the app's and the area's middleware, so it
 /// runs beside the handler's own reads, and draws its [`LayoutRead::view`] where the layout put
 /// [`later`] once the handler has answered, before the app's middleware sees the page. A client
-/// navigation or a form the runtime submits keeps the layout the page has, so the read is not
-/// started for it; neither is it for a `HEAD`, an API, a data client, a route that answers
-/// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
-/// page is the same for everyone, so it draws no one's value. A write that draws a page rather
-/// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered. The error page for a failure Corten finds the request at fault for (an unknown
+/// navigation, a `GET` form the runtime submits and a patch keep the layout the page has, so the
+/// read is not started for them; neither is it for a `HEAD`, an API, a data client, a route that
+/// answers something other than a page (a file, text, JSON) or Corten's own paths. A
+/// [`crate::Public`] page is the same for everyone, so it draws no one's value. A write that draws
+/// its own page rather than redirect (a refused form, a partial result), with JavaScript or without,
+/// answers it whole and starts the reads its page draws once it has answered, so the runtime draws
+/// what the write changed around `<main>`. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, the router's `501` for a method no route in the app has, a refusal
 /// other than a 429 by an extractor or by the handler's own `Refused` (a 429 slows a client
 /// down), a request that does not parse) starts the reads not started yet and waits for them as a
@@ -514,6 +515,57 @@ struct Here {
     gives: &'static [fn() -> TypeId],
     /// The values a filled page gave itself, kept for an error page made of it.
     given: Vec<Gift>,
+}
+
+/// A page route's answer to a write the runtime sent ([`kept_for_its_page`]), filled when it is a
+/// page with places: the reads it draws start now, after the handler, from the request's head
+/// `kept` as the route was called, and are waited for as a whole document's are. Anything else (a
+/// patch, a redirect, an error) is returned as it is.
+pub(crate) async fn fill_after(
+    (shared, until, kept): (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts),
+    answer: impl Future<Output = Response>,
+) -> Response {
+    let res = answer.await;
+    if res.extensions().get::<Pending>().is_none() {
+        return res;
+    }
+    let here = StartHere::new(shared, until);
+    {
+        let mut here = here.lock();
+        here.kept = Some(kept);
+        if res.extensions().get::<NotAPageAnswer>().is_some() {
+            here.state = State::NotAPage;
+        }
+    }
+    here.fill(res).await
+}
+
+/// On a page with places whose route's answer type says it is not a page (`Answer::PAGE`): no
+/// read is started for it, as none is for such a route's `GET` ([`fill_after`]).
+#[derive(Clone, Copy)]
+pub(crate) struct NotAPageAnswer;
+
+/// On a write the runtime sent (`Mode::Action`) in an app with layout reads, whose own page is
+/// whole (#1370), as its route is called: the request's head, kept for the page the handler may
+/// answer with, and the app and deadline its reads need. Nothing runs beside the handler, whose
+/// reads must see what it wrote, and nothing is started for a patch, a redirect or an error, which
+/// answer with no page; the route keeps the head only because `HtmlResult` does not say which it
+/// answers. A `Public` answer, or a page from a route whose answer type is not one, starts no read
+/// ([`NotAPageAnswer`]). No other
+/// request comes here (`page::render_errors` says which do, as the route's `Next`); the mark the
+/// route reads is the request's `Signal`, so its extensions stay within their first allocation.
+#[inline(never)]
+pub(crate) fn kept_for_its_page(
+    req: &mut crate::http::Request,
+    until: Option<tokio::time::Instant>,
+) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
+    let signal = req.extensions().get::<crate::Signal>()?;
+    let shared = signal.shared()?.clone();
+    signal.keep_head();
+    let (parts, body) = std::mem::take(req).into_parts();
+    let kept = parts.clone();
+    *req = crate::http::Request::from_parts(parts, body);
+    Some((shared, until, kept))
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`

@@ -458,6 +458,27 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A `data-patch` write that answers with its own page (`req.page` for a method other than `GET`
+  or `HEAD`, a form drawn again with what it refused, a partial result) gets the whole document
+  with JavaScript too, its layout reads started and `give` honored, and the runtime draws it as the
+  page a write redirects to: `<main>` and each element around it that changed, in the same
+  document. A layout value the write changed (a cart count) is now current with JavaScript as
+  without; before, only `<main>` was swapped and the count kept its value from before the write. A
+  `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
+  answer must change one answers its page
+  ([design Choice 49](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  has answered with the page, so they see what the write did, and a write that answers anything
+  else starts none. Measured against `main` with callgrind: such a write takes 57,202 instructions
+  where its `<main>` swap took 23,042 (two layout reads), 25,173 where it took 22,794 without
+  reads; a patch in an app with layout reads takes 26,562 where it took 21,556 (its route keeps a
+  copy of the request's head for a page it may answer with), and one in an app without them
+  21,487 where it took 21,382. The runtime is 93 bytes larger with gzip. A read an `Ahead` starts
+  before the handler may not see the write. **Breaking:** an app that skips a layout value of its own when
+  `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
+  page, which the runtime then shows; skip it only for a `GET`
+  (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does
+  ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+
 - A `#[component]`'s own string (`to_html`, which a patch, a refused form's patch and a live
   fragment are rendered with when the view is a component) now starts at the size that component
   last rendered to, an eighth more and never below 256 bytes, as an `html!` call site's does,

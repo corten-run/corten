@@ -216,25 +216,28 @@ pub(crate) type Stack = Arc<[Arc<dyn Erased>]>;
 pub(crate) struct Rest<'a> {
     pub(crate) stack: &'a [Arc<dyn Erased>],
     pub(crate) route: Option<crate::router::Route>,
+    /// A write the runtime sent, in an app with layout reads (`crate::layout::kept_for_its_page`).
+    pub(crate) late: crate::app::Late,
 }
 
 impl Next for Rest<'_> {
     #[inline]
     fn run(self, req: Request) -> impl Future<Output = Response> + Send {
         match self.stack.split_first() {
-            Some((first, stack)) => Either::Left(first.call_boxed(req, Rest { stack, route: self.route })),
-            None => Either::Right(handle(self.route, req)),
+            Some((first, stack)) => Either::Left(first.call_boxed(req, Rest { stack, ..self })),
+            None => Either::Right(handle(self.route, req, self.late)),
         }
     }
 }
 
 /// The route alone, after the app's middleware, for a request in no area or API with middleware.
-pub(crate) struct Handle(pub(crate) Option<crate::router::Route>);
+/// `late`: a write the runtime sent, in an app with layout reads.
+pub(crate) struct Handle(pub(crate) Option<crate::router::Route>, pub(crate) crate::app::Late);
 
 impl Next for Handle {
     #[inline]
     fn run(self, req: Request) -> impl Future<Output = Response> + Send {
-        handle(self.0, req)
+        handle(self.0, req, self.1)
     }
 }
 
@@ -242,22 +245,31 @@ impl Next for Handle {
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
 /// the API writes as its own.
 #[inline]
-fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
+fn handle(
+    route: Option<crate::router::Route>,
+    mut req: Request,
+    late: crate::app::Late,
+) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
-    // middleware sees it.
-    let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    // middleware sees it. A write the runtime sent (`late`, so no other request looks) keeps the
+    // head for its own page instead, whose reads start after the handler
+    // (`layout::kept_for_its_page`); it has no `StartHere`.
+    let (here, late) = if let Some(until) = late {
+        (None, crate::layout::kept_for_its_page(&mut req, until))
+    } else {
+        (req.extensions().get::<crate::layout::StartHere>().cloned(), None)
+    };
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
         None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
     };
-    match here {
-        None => Either::Left(answer),
-        // Boxed, so a request in an app without layout reads carries none of the fill's state.
-        Some(here) => {
-            Either::Right(Box::pin(async move { here.fill(answer.await).await })
-                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
-        }
-    }
+    // Boxed, so a request in an app without layout reads carries none of the fill's state.
+    let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> = match (here, late) {
+        (None, None) => return Either::Left(answer),
+        (Some(here), _) => Box::pin(async move { here.fill(answer.await).await }),
+        (None, Some(late)) => Box::pin(crate::layout::fill_after(late, answer)),
+    };
+    Either::Right(filled)
 }
 
 refs!(A);

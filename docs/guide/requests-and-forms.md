@@ -66,6 +66,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
+| `POST` with `corten: action`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript | swaps the page and draws its layout again |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
@@ -77,7 +78,10 @@ both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the
 JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch
 never loads what only the page shows. A patch that needs data of its own, which the page does not,
 or a status or headers of its own, checks `req.mode == Mode::Action` itself; a refusal whose
-form needs a read is `req.invalid_with` (below). A route with no screen goes under
+form needs a read is `req.invalid_with` (below). A write that answers with its own page instead,
+in any mode, sends it whole, and the runtime draws what changed around `<main>` as after a
+redirect, so a layout read (a cart's count) is current; a patch fills no layout read, so a write
+whose answer must change one answers its page ([layout reads](views.md#the-document)). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads only ([the document](views.md#the-document)); every page carries a key hashed from the
 caller its handler read (if any; by value, so a rule that holds only another caller keys as that

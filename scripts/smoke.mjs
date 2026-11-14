@@ -3776,6 +3776,142 @@ async function run(browser) {
     check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
     await whole.context().close();
   }
+  // A write that answers with its own page (a form drawn again with what it refused) gets it whole,
+  // as the page a write redirects to is, so what the write changed around <main> is drawn, in the
+  // same document and at the same address (#1370). The stand-in plays a server whose layout shows
+  // the write: every whole page it sends once the write is answered has the brand changed, and only
+  // those (a navigation's <main> holds no brand), so the brand changes only if the runtime draws
+  // the layout the write's own page brought, or reads the next page whole.
+  /**
+   * A page of its own at /smoke/written, with the stand-in in front: `edit` changes each whole
+   * page from the write's answer on (`written`), `before` each one until then. Each request's
+   * mode for a path is recorded in `asked`.
+   * @param {(body: string) => string} edit @param {(body: string) => string} [before]
+   */
+  const writtenPage = async (edit, before = (body) => body) => {
+    const own = await (await browser.newContext()).newPage();
+    const seen = { written: false, /** @type {string[]} */ asked: [], /** @type {Record<string, string>} */ answered: {} };
+    await own.route(
+      (url) => url.origin === new URL(base).origin && !url.pathname.startsWith("/assets/"),
+      async (route) => {
+        const req = route.request();
+        const mode = req.headers().corten;
+        const write = req.method() === "POST" && new URL(req.url()).pathname === "/smoke/written";
+        if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
+        seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        if (write) seen.answered = { ...headers };
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        const text = await res.text();
+        // A navigation's <main> is passed on as it is: it has no layout to change.
+        const body = mode === "nav" ? text : write || seen.written ? edit(text) : before(text);
+        seen.written ||= write;
+        await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+      },
+    );
+    await own.goto(`${base}/smoke/written`);
+    await own.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
+    return { own, seen };
+  };
+  const brand = (/** @type {string} */ body) => body.replace(">Watchlist</span>", ">Watchlist, written</span>");
+  /** What the page shows of the layout. @param {import("@playwright/test").Page} own */
+  const shownOf = (own) =>
+    own.evaluate(() => ({
+      brand: document.querySelector("header span")?.textContent,
+      section: document.getElementById("sector-nav")?.textContent ?? null,
+      same: (/** @type {any} */ (window)).__marker === 1,
+      path: location.pathname,
+      title: document.title,
+    }));
+  const writtenIn = (/** @type {import("@playwright/test").Page} */ own) =>
+    own
+      .waitForFunction(() => document.querySelector("main")?.textContent?.includes("Written by the form's own page.") && !document.querySelector("[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+  {
+    const { own, seen } = await writtenPage(brand);
+    const first = await shownOf(own);
+    await own.click("main form button");
+    const drawn = await writtenIn(own);
+    const shown = await shownOf(own);
+    check(
+      "a write's own page is whole, and what the write changed around <main> is drawn in the same document",
+      first.brand === "Watchlist" &&
+        drawn &&
+        seen.asked.at(-1) === "POST /smoke/written action" &&
+        !("corten-page" in seen.answered) &&
+        "corten-shell" in seen.answered &&
+        shown.brand === "Watchlist, written" &&
+        shown.same &&
+        shown.path === "/smoke/written" &&
+        shown.title === "Written | Watchlist",
+      JSON.stringify({ first: first.brand, drawn, asked: seen.asked, page: seen.answered["corten-page"] ?? null, shown }),
+    );
+    await own.context().close();
+  }
+  // Left while the write's own page is on its way (its modules still loading), by a link to a page
+  // in the same area and layout, which a navigation swaps in: the write is done, so that page is
+  // read whole and shows what the write changed, as after a write that redirects.
+  const leftName = "a navigation that leaves a write's own page on its way reads the next page whole, with what the write changed";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(leftName, "without the Navigation API a link is a full load");
+  else {
+    const { own, seen } = await writtenPage(brand);
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    /** @type {() => void} */
+    let asked = () => {};
+    const waiting = new Promise((resolve) => (asked = () => resolve(true)));
+    // Held only while the write's page waits for it: the page the user goes to may need it too.
+    await own.route("**/scripts/quoted.js", async (route) => {
+      asked();
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    await own.click("main form button");
+    const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    await own.click('main a[href="/smoke/quoted"]');
+    release();
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    check(
+      leftName,
+      stalled && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ stalled, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write's own page whose frame differs from the page's draws <main> alone, and the layout's
+  // elements that are the page's (the sector links, `page` in `html!`) with it, as a navigation
+  // does: the write's page has other sector links than the form's.
+  {
+    const section = (/** @type {string} */ name) => (/** @type {string} */ body) => body.replace(/(<nav\b[^>]*\bid="sector-nav"[^>]*>)/, `$1<a href="/news">${name} section</a>`);
+    const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
+    const first = await shownOf(own);
+    await own.click("main form button");
+    const drawn = await writtenIn(own);
+    const shown = await shownOf(own);
+    check(
+      "a write's own page in another frame draws <main> and the page's parts of the layout",
+      first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
+      JSON.stringify({ first: first.section, drawn, shown }),
+    );
+    await own.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();

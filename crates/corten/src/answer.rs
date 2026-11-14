@@ -1868,6 +1868,12 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
     }
+    // A page with places from a route whose answer type says it is not one: a write's own page,
+    // filled after its handler, starts no read for it, as such a route's `GET` does not
+    // (`crate::layout::fill_after`). Also a constant for a page route.
+    if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
+        res.extensions_mut().insert(crate::layout::NotAPageAnswer);
+    }
     res
 }
 

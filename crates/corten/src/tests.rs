@@ -14348,14 +14348,80 @@ mod layout_reads {
         assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
     }
 
+    /// A write the runtime sent (`corten: action`) that answers its own page answers it whole, with
+    /// the layout reads its page draws and the value it gives, as it does without JavaScript, so the
+    /// runtime can draw what the write changed around `<main>` (#1370). A `GET` form's page, a
+    /// patch, a redirect and a refused write's error page are as they were, and start no read.
+    #[tokio::test]
+    async fn a_writes_own_page_in_an_action_is_whole_with_its_layout_reads() {
+        let count = CartCount::default();
+        let routes = Table::new()
+            .route(
+                "/form",
+                crate::router::post(|req: Req| async move { refused(&req, "too short") })
+                    .put(|req: Req| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"given"</p> } })
+                            .map(|page| page.give::<CartCount>(9))
+                    })
+                    .get(|req: Req| async move { refused(&req, "searched") }),
+            )
+            .route(
+                "/patch",
+                crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }),
+            )
+            .route("/away", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Done) }))
+            .route("/refused", crate::router::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }));
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        // The page, whole: the layout with the count in both its places, and no swap's header.
+        let (status, headers, body) = call_with(router.clone(), "POST", "/form", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+        assert!(body.starts_with("<!DOCTYPE html>") && body.contains("<main><p>too short</p></main>"), "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A value the page gives is drawn, and its read is not started.
+        let (_, _, body) = call_with(router.clone(), "PUT", "/form", Some("action"), None).await;
+        assert!(body.contains(r#"<footer><span class="count">9</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A `GET` form's page is a swap, as a navigation's is: a `GET` changes nothing the layout shows.
+        let (_, headers, body) = call_with(router.clone(), "GET", "/form", Some("action"), None).await;
+        assert!(headers.contains_key("corten-page") && !body.contains("<header>") && body.contains("<p>searched</p>"), "{body}");
+        // A patch, a redirect and a refused write's error page.
+        let (_, headers, _) = call_with(router.clone(), "POST", "/patch", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch"), "{headers:?}");
+        let (status, headers, _) = call_with(router.clone(), "POST", "/away", Some("action"), None).await;
+        assert!(status == StatusCode::NO_CONTENT && headers.contains_key("corten-location"), "{status} {headers:?}");
+        let (status, headers, body) = call_with(router, "POST", "/refused", Some("action"), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(headers.contains_key("corten-page") && body.contains("<p>403</p>") && !body.contains("count"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+    }
+
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
         // A route of Corten's own takes `Req`, which starts the reads before its answer is known.
-        let routes = Table::new().route("/", get(for_all));
-        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
-        let (status, headers, body) = call(router, "GET", None).await;
+        let routes = Table::new().route("/", get(for_all).post(for_all));
+        let count = CartCount::default();
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).layout_read(SignedIn).router();
+        let (status, headers, body) = call(router.clone(), "GET", None).await;
         assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
         assert!(headers[http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+        // A write's own page in an action, whose reads would start after the handler (#1370).
+        let (status, _, body) = call_with(router, "POST", "/", Some("action"), None).await;
+        assert!(status.is_success() && body.contains("<header>") && !body.contains("count"), "{body}");
+        assert!(!body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "only the GET's route of Corten's own started it");
     }
 
     /// A count whose view panics.
@@ -14801,23 +14867,26 @@ mod layout_reads {
 
     #[crate::routes]
     mod wrapped_url {
-        #[route("/wrapped", get = wrapped)]
+        #[route("/wrapped", get = wrapped, post = wrapped)]
         pub struct Wrapped;
     }
 
     /// A page from an answer type that does not say it is one starts no read: a debug build says
-    /// why rather than draw the layout without its values.
+    /// why rather than draw the layout without its values. So does a write's own page from it, in
+    /// an action too, whose reads start after the handler (#1370).
     // A debug build's check.
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
         let count = CartCount::default();
         let router = App::new(wrapped_url::router()).layout_read(count.clone()).layout_read(SignedIn).dev(false).router();
-        let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        // Named where a router test, with no logger and outside `corten dev`, sees it.
-        assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
-        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        for (method, mode) in [("GET", None), ("POST", None), ("POST", Some("action"))] {
+            let (status, _, body) = call_with(router.clone(), method, "/wrapped", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {mode:?}: {body}");
+            // Named where a router test, with no logger and outside `corten dev`, sees it.
+            assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 0, "{method} {mode:?}");
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -14996,6 +15065,39 @@ mod layout_reads {
             for _ in 0..pages {
                 let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
                 assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
+            }
+        });
+    }
+
+    /// What a write the runtime sent (`corten: action`) costs, answered with its own page (a form drawn
+    /// again) or, with `WRITE_ANSWER=patch`, a patch: `WRITE_REQUESTS` (200) requests in process, one
+    /// at a time, in an app with two layout reads or, with `WRITE_READS=0`, none. Counting it under
+    /// callgrind at two numbers of requests gives the instructions per request (#1370). Run in release:
+    /// `WRITE_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_write_answering_in_an_action_costs`
+    #[test]
+    #[ignore]
+    fn what_a_write_answering_in_an_action_costs() {
+        let requests: usize = std::env::var("WRITE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let patch = std::env::var("WRITE_ANSWER").is_ok_and(|v| v == "patch");
+        let reads = !std::env::var("WRITE_READS").is_ok_and(|v| v == "0");
+        let routes = Table::new().route(
+            "/form",
+            crate::router::post(move |req: Req| async move {
+                if patch {
+                    req.patch::<ForOne>(html! { <p id={MsgId}>"too short"</p> })
+                } else {
+                    refused(&req, "too short")
+                }
+            }),
+        );
+        let app = App::new(Routes::from(routes));
+        let app = if reads { app.layout_read(CartCount::default()).layout_read(SignedIn) } else { app };
+        let router = app.middleware(AsViewer(Some("ada"))).router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let (status, _, body) = call_with(router.clone(), "POST", "/form", Some("action"), None).await;
+                assert!(status == StatusCode::OK && body.contains("too short"), "{status} {body}");
             }
         });
     }

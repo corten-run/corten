@@ -70,7 +70,9 @@ pub enum Mode {
     Document,
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
-    /// The runtime submitted a `<form data-patch>` and expects fragments back.
+    /// The runtime submitted a `<form data-patch>`: it applies a patch's fragments by id, follows a
+    /// redirect, and draws a page, a `GET` form's into `<main>` and a write's own whole, its layout
+    /// included, as a full load draws it.
     Action,
     /// A client that renders by itself (a native screen, an agent) asked for
     /// `Accept: application/json`. [`Req::screen`] answers with the page's data; [`Req::page`]
@@ -79,21 +81,24 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// The runtime swaps this answer into the page it has ([`Mode::Navigation`], [`Mode::Action`]):
-    /// a page renders only its title, head tags and `<main>`, and the layout around `<main>` (the
-    /// header, a cart's count in it) stays as the full load drew it. The page a write redirects to
-    /// is fetched as a [`Mode::Document`], so the layout is drawn again after a write. A value only
-    /// the layout shows need not be read then:
+    /// The runtime keeps the page it has for this answer ([`Mode::Navigation`], [`Mode::Action`]):
+    /// a navigation's page renders only its title, head tags and `<main>`, a `GET` form's too, and
+    /// a patch replaces elements by id, so the layout around `<main>` (the header, a cart's count in
+    /// it) stays as the full load drew it. What a write changed there is drawn by the two answers to
+    /// a write that are pages: the page it redirects to, which the runtime fetches as a
+    /// [`Mode::Document`], and its own page ([`Req::page`] for an action that is not a `GET`), which
+    /// is whole in every mode. A value only the layout shows is a [`crate::LayoutRead`], which Corten
+    /// starts for those answers and no others; code that reads such a value itself before the
+    /// handler (an [`crate::Ahead`] in an extractor) skips it only for a swap that is no write:
     ///
     /// ```
-    /// use corten::prelude::*;
+    /// use corten::{http::{request::Parts, Method}, prelude::*};
     ///
-    /// async fn cart_count(req: &Req) -> Option<u32> {
-    ///     if req.mode.swaps() {
-    ///         return None;
-    ///     }
-    ///     Some(3) // the app's read: carts.count(viewer).await
+    /// /// Whether the answer to this request can draw the layout: a write's may be its own page.
+    /// fn may_draw_the_layout(parts: &Parts) -> bool {
+    ///     !Mode::of(&parts.headers).swaps() || parts.method != Method::GET
     /// }
+    /// # let _ = may_draw_the_layout;
     /// ```
     #[inline]
     pub const fn swaps(self) -> bool {
@@ -1186,7 +1191,8 @@ impl Req {
             plain_write: write && !shared.https_only && plain_origin(headers),
             write,
             fetched,
-            fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
+            fills: !shared.layout_reads.is_empty()
+                && (signal.head_kept() || extensions.get::<crate::layout::StartHere>().is_some()),
             shared,
             signal,
         }
@@ -1358,8 +1364,11 @@ impl Req {
 
     /// A page: `doc` is the whole document, the app's layout with the page in it
     /// (`html! { <Layout req={req} title="About">..</Layout> }`). A browser gets all of it; a
-    /// client navigation gets the title, the page's head tags and `<main>`'s children, and the rest
-    /// of the layout does not run.
+    /// client navigation (and a `GET` form the runtime sends) gets the title, the page's head tags
+    /// and `<main>`'s children, and the rest of the layout does not run. A write's own page is whole
+    /// in every mode, with JavaScript as without, so what the write changed in the layout is drawn
+    /// (the runtime draws what differs around `<main>`, as for the page a write redirects to), its
+    /// [`crate::LayoutRead`]s included.
     pub fn page<For>(&self, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
         self.page_with_status(StatusCode::OK, doc)
     }
@@ -1369,7 +1378,9 @@ impl Req {
         // The last size of each part, so the buffer is allocated once.
         static FULL: AtomicUsize = AtomicUsize::new(16 * 1024);
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
-        let swap = self.mode.swaps();
+        // A write's own page is whole, as without JavaScript and as the page a write redirects to,
+        // so what the write changed around `<main>` is drawn (#1370).
+        let swap = self.mode.swaps() && !(self.write && self.mode == Mode::Action);
         let (part, size) = if swap { (Part::Swap, &SWAP) } else { (Part::Full, &FULL) };
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
@@ -2676,7 +2687,9 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
-    if shared.layout_reads.is_empty() || mode.swaps() {
+    // A write the runtime sent may answer its own page, which is whole (#1370).
+    let action_write = mode == Mode::Action && !matches!(*req.method(), http::Method::GET | http::Method::HEAD);
+    if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
@@ -2687,6 +2700,13 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
+    // A write the runtime sent runs no read beside its handler, whose reads must see what it wrote:
+    // its page route keeps the request's head, and only a page it answers with starts the reads
+    // that page draws and is filled (`layout::kept_for_its_page`). A patch or a redirect starts none, and
+    // its error page is a swap of `<main>`, which draws none.
+    if action_write {
+        return page_or_error(shared, req, next.late(until), deadline, signal, (mode, fetched)).await;
+    }
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
