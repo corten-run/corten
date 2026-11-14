@@ -692,12 +692,14 @@ fn debug_builds_stop_on_keys_a_browser_reads_as_one_after_its_line_breaks() {
 }
 
 /// The key, or a panic when `fails` is set.
+#[cfg(debug_assertions)]
 fn failing_key(key: &str, fails: bool) -> &str {
     assert!(!fails, "a key that fails");
     key
 }
 
 /// A keyed cell in a `<template>`'s content whose key's expression may panic.
+#[cfg(debug_assertions)]
 #[component]
 fn FailingKeys(fails: bool) -> impl Render {
     let cell = refs();
