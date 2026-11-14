@@ -829,6 +829,20 @@ says a machine was made for a first apply, a replacement, and the run after a re
 failed, where the plan makes none and moves the address, and not for a plan that changes
 neither.
 
+A second review found that a release's name, which the deploy user chooses, reached root's
+tar unchecked: it ran `give` for a release named `etc`, whose files were then merged into
+certbot's directory on the machine that took them, and for names tar reads as options, one
+of which removed the certificates and one of which ran a command as root. At `712be1e57`,
+in the same rig, `give` refused a served release named `etc`, `--remove-files`, `-x`,
+`.hidden`, one with a space in it, one inside another, and `current` pointing at certbot's
+directory: each time nothing was sent, nothing was run and the certificate was still there,
+and the release as a deploy names it was sent whole. A whole replacement again ended 108
+seconds after the new machine was made, with none of 145 requests unanswered and the new
+machine as above. Run again for that machine with its first question whether the machine
+serves made to fail, the relay was refused by `take`, found that the machine served, and
+ended well; with the old machine serving a release named `etc`, it ended in failure with an
+error for the workflow, and the address stayed.
+
 What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
 the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
 signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
