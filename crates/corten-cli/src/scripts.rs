@@ -101,10 +101,7 @@ pub fn run(plan: Option<Plan>) -> Result<(), String> {
         return Ok(());
     };
     let mut failed = Vec::new();
-    let version = tsc_command(&tsc)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("could not run {}: {e}", tsc.display()))?;
+    let version = tsc_command(&tsc).arg("--version").output().map_err(|e| format!("could not run {}: {e}", tsc.display()))?;
     if !version.status.success() {
         return Err(format!("{} --version failed", tsc.display()));
     }
