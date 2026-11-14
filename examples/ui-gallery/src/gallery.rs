@@ -353,7 +353,7 @@ pub fn Gallery<'a>(
             <section class={Card { size: CardSize::Md }}>
                 <header class={CardHeader {}}><h2>"List for sale"</h2></header>
                 <div class={CardContent {}}>
-                    <form class={Order} method="post" action={url::Sell} data-patch>
+                    <form class={Order} method="post" action={DRAFT} data-patch>
                         <div class={Row}>
                             <Field id={QtyId} label="Quantity" hint="" error="">
                                 <Stepper><NumberField field={&qty} /></Stepper>

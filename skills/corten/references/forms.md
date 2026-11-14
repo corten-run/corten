@@ -10,7 +10,7 @@ fn home_page(req: &Req, name: &str) -> impl Document {
     let f = GreetForm::FIELDS;
     html! {
         <Layout req={req} title="Home">
-            <form method="post" action={url::Greet} data-patch>
+            <form method="post" action={url::Home} data-patch>
                 <input name={f.name} required>
                 <button>"Greet me"</button>
             </form>
@@ -27,12 +27,19 @@ fn Greeting(name: &str) -> impl Patch {
     html! { <p id={GreetingId} aria-live="polite">if !name.is_empty() { "Hello, "{name}"!" }</p> }
 }
 
+// The page and its form share one route: `#[route("/", get = home, post = greet)] struct Home;`
 async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
-    // With JavaScript the runtime swaps #greeting; without, the whole page. The page closure
-    // runs only then, so a patch never loads the page's data.
+    // With JavaScript the runtime swaps #greeting; without, the whole page, at the page's own
+    // address. The page closure runs only then, so a patch never loads the page's data.
     req.patch_or(Greeting { name: &form.name }, || async { req.page(home_page(&req, &form.name)) }).await
 }
 ```
+
+A form that belongs to one page posts to that page's route (`get = home, post = greet`), so the
+page drawn without JavaScript is at an address that answers a `GET`. A write with a path of its
+own (one of a page's several writes, or one several pages use) answers `req.redirect` or
+`req.redirect_with_notice` once done, and draws a page only to refuse (`req.invalid`); a debug
+build answers 500 to a successful page drawn at a path with no `GET`.
 
 A patch may hold several top-level elements; each replaces the element with the same `id`, so
 each needs one, a `#[derive(Id)]` type: `req.patch` and `req.invalid` take a `Patch`, and a view

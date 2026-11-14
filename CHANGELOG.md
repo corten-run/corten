@@ -395,6 +395,32 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- The app `corten new` writes posts its form to the page's own route
+  (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
+  with no `GET`, where a browser without JavaScript was left at an address that answers 405 when
+  it is reloaded from a bookmark. The README and the getting-started guide show the same, and the
+  requests-and-forms guide states the rule: a form that belongs to one page posts to that page's
+  route, and a write with a path of its own redirects once done and draws a page only to refuse.
+  ui-gallery lists a card on the draft's route and `/save` sends the browser back to the draft
+  with a notice; watchlist uploads a picture to `/account`, and `/watch` and `/unwatch` send a
+  browser without JavaScript back to the watchlist with a notice and refuse a stock the market
+  does not list with a 422 (the page without JavaScript, the form as a patch with it, and a
+  Problem Details document to a data client, which got a 200 with the watchlist before)
+  ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
+
+- A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500
+  that says what to do when a path whose `#[corten::routes]` route has no `GET` handler answers
+  it with a page and a success status, keeping the handler's cookies and `Clear-Site-Data`; a
+  release build compiles none of the check. **Breaking (debug builds only):** an app from an
+  earlier `corten new` (`/greet`, with no `GET`), or any post-only route that answers a
+  browser's plain post with a 200 page (a payment provider's return, a sign-in provider's
+  `form_post` callback, a refusal sent with 200), now gets a 500 in debug builds and in its
+  router tests. To move: post the form to the page's own route (`get = .., post = ..`), or
+  answer the write with `req.redirect` or `req.redirect_with_notice` once it is done and refuse
+  with `req.invalid`. A router built by hand, an `unstaged` route and an `any = ..` route are
+  not checked
+  ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
+
 - A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
   or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
   where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a

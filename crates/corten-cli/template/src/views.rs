@@ -87,7 +87,7 @@ pub fn home(req: &Req, name: &str) -> impl Document {
                 "This page is rendered on the server. Edit " <code>"src/views.rs"</code>
                 " and save: the page reloads."
             </p>
-            <form method="post" action={url::Greet} data-patch>
+            <form method="post" action={url::Home} data-patch>
                 <label>"Your name " <input name={f.name} value={name} required></label>
                 <button>"Greet me"</button>
             </form>

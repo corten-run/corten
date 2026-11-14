@@ -13,11 +13,10 @@ use corten::prelude::*;
 /// it, and a route without a handler does not compile.
 #[corten::routes]
 pub mod url {
-    #[route("/", get = home)]
+    /// The home page and its form, which posts back to it: one address for both, so the page a
+    /// browser without JavaScript gets after the post is at an address that answers a `GET`.
+    #[route("/", get = home, post = greet)]
     pub struct Home;
-
-    #[route("/greet", post = greet)]
-    pub struct Greet;
 }
 
 /// The routes, the static files, the error page and the components with scripts or styles.
@@ -40,7 +39,7 @@ struct GreetForm {
 }
 
 /// With JavaScript the runtime swaps in the greeting; without it the form posts and the whole
-/// page comes back. One handler serves both.
+/// page comes back, at the page's own address. One handler serves both.
 async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
     let name = form.name.trim();
     let page = || async { req.page(views::home(&req, name)) };
@@ -70,7 +69,7 @@ mod tests {
     async fn greeting_is_a_patch_for_the_runtime() {
         let greeting = app()
             .test()
-            .post(&url::Greet)
+            .post(&url::Home)
             .mode(Mode::Action)
             .field(GreetForm::FIELDS.name, "Ada")
             .await;
@@ -78,6 +77,24 @@ mod tests {
             greeting.text(),
             r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#
         );
+    }
+
+    #[tokio::test]
+    async fn without_javascript_the_greeting_is_the_page_at_its_own_address() {
+        let app = app().test();
+        let page = app
+            .post(&url::Home)
+            .field(GreetForm::FIELDS.name, "Ada")
+            .await;
+        assert_eq!(page.status(), 200);
+        let html = page.text();
+        assert!(
+            html.contains("Hello, Ada!") && html.contains("<header>"),
+            "{html}"
+        );
+        // The browser shows the address the form posted to, which answers a GET too, so it can
+        // be reloaded, bookmarked and shared.
+        assert_eq!(app.get(&url::Home).await.status(), 200);
     }
 
     #[tokio::test]
