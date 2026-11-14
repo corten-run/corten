@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { records, count, workload } from './fixtures.mjs';
+
+test('generated public fixtures remain readable under a private umask without opening other state', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'catalog-permissions-'));
+  const output = join(folder, 'fixtures', 'catalog.json');
+  try {
+    copyFileSync(new URL('./fixtures.mjs', import.meta.url), join(folder, 'fixtures.mjs'));
+    const privateState = join(folder, 'private.json');
+    writeFileSync(privateState, '{}', { mode: 0o600 });
+    // Exercise fresh creation and repair of a fixture from an earlier private run.
+    for (const existing of [false, true]) {
+      if (existing) { chmodSync(join(folder, 'fixtures'), 0o700); chmodSync(output, 0o600); }
+      const cli = spawnSync(process.execPath, ['--input-type=module', '-e', "process.umask(0o077); process.argv[1] = './fixtures.mjs'; await import('./fixtures.mjs')"], { cwd: folder, encoding: 'utf8', windowsHide: true });
+      assert.equal(cli.status, 0, cli.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), records());
+      if (process.platform !== 'win32') {
+        assert.equal(statSync(join(folder, 'fixtures')).mode & 0o777, 0o755);
+        assert.equal(statSync(output).mode & 0o777, 0o644);
+        assert.equal(statSync(privateState).mode & 0o777, 0o600);
+        assert.equal(statSync(folder).mode & 0o777, 0o700);
+      }
+    }
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});
 
 test('catalog-v1 is deterministic, strings-only and has valid related records', () => {
   const data = records();

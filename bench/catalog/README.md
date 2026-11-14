@@ -86,6 +86,11 @@ Application logs preserve both stdout and stderr directly in each raw `app.log`,
 output larger than the command's bounded in-memory diagnostic tail. Command deadlines and
 log-collection failures remain explicit failures; incomplete logs are not silently accepted.
 This does not disable native access logging or change measured application settings.
+Startup failures include the container's actual exit state and application log. A checker
+failure without a valid record-response failure receipt retains its original diagnostic
+(including browser/style assertions), rather than replacing it with a missing-file error.
+Such failures remain incomplete and block timing; they do not become replayable negative
+attempts or passing checks.
 
 Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
 `catalog-saved-evidence/v2` observations without running Docker, Git or a browser.
@@ -121,6 +126,12 @@ npm run check:catalog
 node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
+
+The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
+and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.
+Non-root native image users can read the read-only mount without opening checkout parents,
+results, campaign state or audit files. Gin's production image likewise makes only its
+public static assets readable and their directories traversable before switching to `nobody`.
 
 The default inventory is all twenty page apps in `fullstack/apps.mjs`, not its JSON-only
 ASP.NET AOT app. `--apps corten,axum-maud` selects a subset for development. Each app is built
@@ -242,6 +253,15 @@ container also removes detached browser processes after a timeout or interruptio
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
 bench/catalog/cleanup.test.mjs` in a shell that supports this environment-variable syntax (or
 set the variable separately in PowerShell). The ordinary harness tests do not require Docker.
+
+The opt-in native Gin permission regression builds the real Dockerfile from a Linux
+0700-directory/0600-file context and generates fixtures under umask 0077. It retains the
+runner's CPU quotas and optional `CATALOG_*_CPUS` placement, native non-root user and complete
+fixture/API page, JSON, style and browser checks, then removes its containers, image, volume and network:
+`CATALOG_GIN_DOCKER_TESTS=1 node --test bench/catalog/gin-permissions.test.mjs`
+(set the variable separately in PowerShell). CI enables it only in the Gin parity job,
+not the short harness job. It needs the installed root Playwright dependencies. This is
+correctness evidence, not timing or dedicated-host qualification.
 
 For the registry group, saved raw replay can also establish a complete negative attempt
 without establishing a baseline. The bounded failure is an observed initial JSON record
