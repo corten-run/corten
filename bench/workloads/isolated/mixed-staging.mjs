@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -75,14 +76,14 @@ export async function prepareMixedAudit(plan, repo, directory) {
 }
 export async function replayMixedSubject(plan, saved, repo, directory) {
   const binding = plan.bindings.find((b) => b.request.group === "mixed-production"), files = committed(repo, plan.commit);
-  assert.deepEqual(saved.sourcesManifest.files, files.map(({ path, bytes }) => ({ path, sha256: digest(bytes),
-    bytes: bytes.length, storedAs: `blobs/${digest(bytes)}` })));
+  assert.ok(isDeepStrictEqual(saved.sourcesManifest.files, files.map(({ path, bytes }) => ({ path, sha256: digest(bytes),
+    bytes: bytes.length, storedAs: `blobs/${digest(bytes)}` }))), "mixed source manifest differs");
   for (const file of saved.sourcesManifest.files) assert.equal(digest(readRegular(join(directory, file.storedAs))), file.sha256);
-  assert.deepEqual(saved.sourcesManifest.snapshot, tree(directory));
+  assert.ok(isDeepStrictEqual(saved.sourcesManifest.snapshot, tree(directory)), "mixed source snapshot differs");
   const { sha256, ...body } = saved.sourcesManifest; assert.equal(sha256, deploymentSha256(body));
   const rows = await contexts(binding, repo);
-  for (const c of rows) assert.deepEqual(readRegular(join(directory, c.storedAs)), c.bytes);
-  assert.deepEqual(saved, subject(plan, saved.sourcesManifest, rows)); return saved;
+  for (const c of rows) assert.ok(isDeepStrictEqual(readRegular(join(directory, c.storedAs)), c.bytes), "mixed context archive differs");
+  assert.ok(isDeepStrictEqual(saved, subject(plan, saved.sourcesManifest, rows)), "mixed audit subject differs"); return saved;
 }
 export function validateMixedDelivery(delivery, saved, directory) {
   const before = tree(directory);
@@ -95,8 +96,8 @@ export function validateMixedDelivery(delivery, saved, directory) {
   exact(delivery.bundle, ["schema", "receipts"]); assert.equal(delivery.bundle.schema, "mixed-native-source-audits/v1");
   assert.equal(delivery.bundle.receipts.length, saved.requests.length);
   for (const [index, request] of saved.requests.entries()) {
-    const receipt = delivery.bundle.receipts[index]; assert.deepEqual(receipt.identity, request.identity);
-    assert.deepEqual(receipt.sourceFiles, request.sourceFiles);
+    const receipt = delivery.bundle.receipts[index]; assert.ok(isDeepStrictEqual(receipt.identity, request.identity), "mixed audit identity differs");
+    assert.ok(isDeepStrictEqual(receipt.sourceFiles, request.sourceFiles), "mixed audit source files differ");
     assert.deepEqual(receipt.traceContext, { requestScoped: true, delayedWorkRetainsTrace: true, noAmbientCurrentOperation: true });
     const bodies = {};
     for (const file of request.sourceFiles) {
@@ -105,7 +106,7 @@ export function validateMixedDelivery(delivery, saved, directory) {
     }
     verifyNativeReceipt({ ...receipt, sourceFiles: receipt.sourceFiles.filter((f) => /^(bench|crates)\//.test(f.path)) }, request.identity, bodies);
   }
-  assert.deepEqual(tree(directory), before); return freeze(structuredClone(delivery));
+  assert.ok(isDeepStrictEqual(tree(directory), before), "mixed audit source tree mutated"); return freeze(structuredClone(delivery));
 }
 export function validateMixedRun(binding, directory, saved, bundle) {
   const before = tree(directory);
@@ -117,14 +118,15 @@ export function validateMixedRun(binding, directory, saved, bundle) {
     if (!reference) { complete = false; continue; }
     assert.equal(reference.path, `source-audits/${app}.json`);
     const bytes = readRegular(join(directory, reference.path)); assert.equal(digest(bytes), reference.sha256);
-    const retained = JSON.parse(bytes); assert.deepEqual(retained.receipt, bundle.receipts[index]);
-    assert.deepEqual(retained.identity, request.identity); assert.deepEqual(retained.sourceFiles, request.sourceFiles);
-    assert.deepEqual(entry.buildInputs, request.sourceFiles); assert.equal(entry.contextArchiveSha256, request.identity.contextArchiveSha256);
+    const retained = JSON.parse(bytes); assert.ok(isDeepStrictEqual(retained.receipt, bundle.receipts[index]), "retained mixed audit receipt differs");
+    assert.ok(isDeepStrictEqual(retained.identity, request.identity), "retained mixed audit identity differs");
+    assert.ok(isDeepStrictEqual(retained.sourceFiles, request.sourceFiles), "retained mixed audit source files differ");
+    assert.ok(isDeepStrictEqual(entry.buildInputs, request.sourceFiles), "mixed build inputs differ"); assert.equal(entry.contextArchiveSha256, request.identity.contextArchiveSha256);
     assert.equal(digest(readRegular(join(directory, `${app}-build-context.tar`))), request.identity.contextArchiveSha256);
     assert.equal(entry.image.buildCommit, request.identity.commit); assert.equal(entry.image.buildDirty, "false");
     assert.equal(entry.image.profile, request.identity.nativeProfile); assert.equal(entry.image.contextArchiveSha256, request.identity.contextArchiveSha256);
     assert.match(entry.image.id, /^sha256:[a-f0-9]{64}$/); assert.equal(retained.imageId, entry.image.id);
     assert.equal(retained.receiptSha256, digest(JSON.stringify(bundle.receipts[index])));
   }
-  assert.deepEqual(tree(directory), before); return complete;
+  assert.ok(isDeepStrictEqual(tree(directory), before), "mixed run evidence mutated"); return complete;
 }
