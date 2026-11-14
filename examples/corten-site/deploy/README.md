@@ -895,6 +895,14 @@ answer without end. A whole replacement in the rig at that commit ended with non
 requests unanswered, the relay done 107 seconds after the new machine was made, and a
 deploy to the new machine served.
 
+A fifth review found the relay's test passing with either of the relay's two waits cut to
+one ask, since no case had a new machine that answers late, as every droplet just made
+does; and passing with four more of the relay's lines changed. At `daee4a89d` the tests
+have those cases (56, 21 and 62 lines pass), and the eleven changes that review named or
+implied each fail one of them. The relay says what ssh said for a new machine that did not
+take the key, as for the old one. A whole replacement in the rig at that commit ended with
+none of 189 requests unanswered, the relay done 161 seconds after the new machine was made.
+
 What that leaves untried is everything DigitalOcean and GitHub do in it: a droplet letting
 the `handover` user in by its key (it is made as `deploy` is, whose key the Site workflow
 signs in with; a droplet that does not is one that hands nothing over, or takes nothing, and
