@@ -6,7 +6,7 @@
 /** @import { Message } from "corten" */
 
 /**
- * @param {HTMLOutputElement} status @param {HTMLElement[]} values each header's value, named by its data-header
+ * @param {HTMLOutputElement} status @param {Map<HTMLElement, string>} values where each header's value goes, with the header's name
  * @param {HTMLPreElement} json @param {HTMLParagraphElement} said what a screen reader is told
  * @param {HTMLParagraphElement} failed @param {string} page the page's address
  * @param {string} absent what to write for a header the response lacks @param {string} read
@@ -23,7 +23,7 @@ async function ask(status, values, json, said, failed, page, absent, read, answe
     /** @type {unknown} */
     const sheet = await data.json();
     status.value = answered({ status: got.status });
-    for (const value of values) value.textContent = got.headers.get(value.dataset.header ?? "") ?? absent;
+    for (const [value, header] of values) value.textContent = got.headers.get(header) ?? absent;
     json.textContent = JSON.stringify(sheet, null, 2);
     said.textContent = read;
   } catch {
@@ -33,7 +33,7 @@ async function ask(status, values, json, said, failed, page, absent, read, answe
 
 /**
  * Waits until the reader is near, so a page nobody scrolls costs no second request.
- * @param {HTMLElement} answer @param {HTMLOutputElement} status @param {HTMLElement[]} values
+ * @param {HTMLElement} answer @param {HTMLOutputElement} status @param {Map<HTMLElement, string>} values
  * @param {HTMLPreElement} json @param {HTMLParagraphElement} said @param {HTMLParagraphElement} failed
  * @param {string} page @param {string} absent @param {string} read
  * @param {Message<"status">} answered @param {AbortSignal} signal

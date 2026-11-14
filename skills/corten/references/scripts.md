@@ -106,14 +106,23 @@ division: end statements with `;` and keep a division on the line it continues.
    script becomes `js::Selection { rows: row, count }`; build it once, pass it as one argument.
 3. Rows a feed updates by id: `key={item.id}` on the cells, a `Map<string, HTMLTableCellElement>`
    parameter, `cells.get(row.id)`. Do not read `data-*` attributes for this.
-4. A value borrowed from one the view owns: compute it inside `html!` with `let`. A view lent
+4. Rows a script only reorders or filters by a value the server knows (a price in cents, a
+   stock count): `ref={row.with(sort_cents(l))}` on each row and a
+   `Map<HTMLTableRowElement, number>` parameter (`string` for text, `boolean` for a `bool`), read
+   as `Array.from(rows).sort(([, a], [, b]) => a - b)`. Rows may share a value and keep their
+   key. Never write a `data-*` attribute for a script to read through `dataset` (text on both
+   sides, checked by nothing); `data-*` is for CSS and the runtime. The one exception is an
+   attribute a corten-ui handler that predates ref values documents (`rows::sort`'s `data-sort`,
+   below). A child component that puts the parent's ref on its row takes it as
+   `Ref<el::HTMLTableRowElement, NoRows, ts::Number>`.
+5. A value borrowed from one the view owns: compute it inside `html!` with `let`. A view lent
    to a prop or a call (`action={&html! { .. }}`, `{keep_query(&at, &html! { .. })}`) borrows what it uses, so read the same local in it and
    in the rest of the markup; do not rebind it with `as_ref()` first.
-5. Rows a write removes: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
+6. Rows a write removes: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
    (`corten::view::Remove`), with `#[derive(Id)] struct RowId<'a>(&'a str);` and
    `<tr id={RowId(&item.id)}>` on the row. Rows Load more adds: `view::Append(RowsId, rows)`,
    only the new page, never the whole list again.
-6. Filters applied on change: a GET form with `data-keep-place` and a handler that calls
+7. Filters applied on change: a GET form with `data-keep-place` and a handler that calls
    `form.requestSubmit()`; the runtime keeps the scroll position, a
    scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Never save and
    restore them yourself. `on:change` on the form applies every control (a text field and a
@@ -299,8 +308,9 @@ the link as the `close` ref, so a close request (Escape) goes to its address. A 
 has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
 has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
 `SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
-cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
-it), and the header's `ascending` and `descending` the pages the server sorts each way and `first`
+cents, a date; the attribute `rows::sort` documents, the exception to never writing `data-*` for a
+script) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in it), and
+the header's `ascending` and `descending` the pages the server sorts each way and `first`
 the way a first click sorts (`Sort::Descending` for a column read newest first; the script puts
 the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a
 part around the table read again by `ReadAgain::from`, whose route reads the sort from one
