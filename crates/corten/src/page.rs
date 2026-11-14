@@ -967,6 +967,11 @@ pub struct DrawnPatch(String);
 /// that build each kind of response. Every handler that returns HTML takes one.
 pub struct Req {
     pub mode: Mode,
+    /// The mode the client asked in, which `mode` starts as. The answers that may be
+    /// `HtmlResult<Patches>` ([`Req::patch_or`], [`Req::invalid`], [`Req::invalid_with`]) read
+    /// this one, so a handler that changes `mode` cannot make one a page for the runtime's read
+    /// (`docs/design.md#choice-patch-routes`).
+    asked_in: Mode,
     nonce: Option<NonceSlot>,
     uri: Uri,
     accept_language: Option<HeaderValue>,
@@ -1175,6 +1180,7 @@ impl Req {
         let (mode, fetched) = Mode::asked(headers);
         Req {
             mode,
+            asked_in: mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
@@ -2027,12 +2033,17 @@ impl Req {
     /// the page that has the id of one of `view`'s top-level elements. One without an id would
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
     /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
-    pub fn patch<For>(&self, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
+    /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
+    pub fn patch<For, Kind>(&self, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For, Kind>> {
         self.patch_with_status(StatusCode::OK, view)
     }
 
     /// Same as [`Req::patch`] with another status.
-    pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
+    pub fn patch_with_status<For, Kind>(
+        &self,
+        status: StatusCode,
+        view: impl crate::view::Patch,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         let mut body = String::new();
         crate::form::DREW_KEY.set(false);
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
@@ -2071,6 +2082,10 @@ impl Req {
     /// a read); a patch that needs data, a status or headers of its own checks
     /// `req.mode == Mode::Action` itself.
     ///
+    /// Its answer is a patch whenever the runtime asked, so it is the `HtmlResult<Patches>` of a
+    /// route that says `patches` ([`crate::Patches`]) as well as any `HtmlResult`; `page()` is a
+    /// plain `HtmlResult`, a page or a redirect.
+    ///
     /// ```
     /// use corten::prelude::*;
     ///
@@ -2094,22 +2109,22 @@ impl Req {
     /// }
     /// # let _ = App::new(url::router()).router();
     /// ```
-    pub fn patch_or<For, F, Fut>(
+    pub fn patch_or<For, Kind, F, Fut>(
         &self,
         view: impl crate::view::Patch,
         page: F,
-    ) -> impl Future<Output = crate::Result<HtmlResponse<For>>>
+    ) -> impl Future<Output = crate::Result<HtmlResponse<For, Kind>>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
         // The patch is rendered before the future is made, so the future holds the answer and not
         // `view`: a view of non-`Send` references would make the handler's future not `Send`.
-        let patch = (self.mode == Mode::Action).then(|| self.patch(view));
+        let patch = (self.asked_in == Mode::Action).then(|| self.patch(view));
         async move {
             match patch {
                 Some(patch) => patch,
-                None => page().await,
+                None => page().await.map(HtmlResponse::of),
             }
         }
     }
@@ -2131,18 +2146,20 @@ impl Req {
     ///
     /// The runtime moves focus to the first invalid field only for a 422; a refusal's message is a
     /// `role="alert"` that is announced where it lands.
-    pub async fn invalid<For, F, Fut>(
+    ///
+    /// As [`Req::patch_or`], its answer may be an `HtmlResult<Patches>` ([`crate::Patches`]).
+    pub async fn invalid<For, Kind, F, Fut>(
         &self,
         errors: &crate::Errors,
         form: impl crate::view::Patch,
         page: F,
-    ) -> crate::Result<HtmlResponse<For>>
+    ) -> crate::Result<HtmlResponse<For, Kind>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
         let status = errors.refusal().status();
-        match self.mode {
+        match self.asked_in {
             Mode::Action => self.patch_with_status(status, form),
             #[cfg(feature = "json")]
             Mode::Data => Ok(HtmlResponse::new(errors.response())),
@@ -2151,7 +2168,7 @@ impl Req {
                 if res.status().is_success() {
                     *res.status_mut() = status;
                 }
-                Ok(res)
+                Ok(res.of())
             }
         }
     }
@@ -2211,12 +2228,12 @@ impl Req {
     ///     req.invalid_with(&errors, |_form| async { req.redirect(&corten::Local::parse("/").unwrap()) }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
     /// }
     /// ```
-    pub async fn invalid_with<'r, For, F, FormFut, P, PageFut>(
+    pub async fn invalid_with<'r, For, Kind, F, FormFut, P, PageFut>(
         &'r self,
         errors: &crate::Errors,
         form: F,
         page: P,
-    ) -> crate::Result<HtmlResponse<For>>
+    ) -> crate::Result<HtmlResponse<For, Kind>>
     where
         F: FnOnce(FormPatch<'r>) -> FormFut,
         FormFut: Future<Output = crate::Result<DrawnPatch>>,
@@ -2224,7 +2241,7 @@ impl Req {
         PageFut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
         let status = errors.refusal().status();
-        match self.mode {
+        match self.asked_in {
             Mode::Action => {
                 let DrawnPatch(body) = form(FormPatch(self)).await?;
                 Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
@@ -2236,7 +2253,7 @@ impl Req {
                 if res.status().is_success() {
                     *res.status_mut() = status;
                 }
-                Ok(res)
+                Ok(res.of())
             }
         }
     }
@@ -3076,9 +3093,11 @@ impl ReadAgain {
     /// In a patch (a `data-patch` form's answer, [`Req::patch`]) whose part shows a read still
     /// catching up with the write: after `after`, the runtime fetches `route` as a GET
     /// `data-patch` form would (`corten: action`) and applies the patch it answers, which asks
-    /// again while it is behind. The route's handler answers with [`Req::patch_or`] (the part,
-    /// or the page without JavaScript), and its URL carries what the read waits for (the write's receipt),
-    /// since the page's own address does not.
+    /// again while it is behind. The route says `patches` and its `get` handler returns
+    /// `HtmlResult<Patches>` ([`crate::Patches`]), answering with [`Req::patch_or`] (the part,
+    /// or the page without JavaScript), so the handler's answer to the read is a patch (what
+    /// answers before the handler, a stage or an extractor, is not checked); its URL carries what
+    /// the read waits for (the write's receipt), since the page's own address does not.
     ///
     /// The read waits while the tab is hidden or a form's answer is on its way, keeps what the
     /// user typed, opened and focused as any patch does, and stops once an element the patch put
@@ -3096,12 +3115,12 @@ impl ReadAgain {
     ///
     /// #[corten::routes]
     /// mod url {
-    ///     #[route("/alerts", get = alerts)]
+    ///     #[route("/alerts", get = alerts, patches)]
     ///     pub struct Alerts<'a> {
     ///         pub after: Option<&'a str>,
     ///     }
     /// }
-    /// # async fn alerts(req: Req) -> HtmlResult { req.patch(html! {}) }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
     ///
     /// #[derive(Id)]
     /// struct AlertsId;
@@ -3123,9 +3142,13 @@ impl ReadAgain {
     /// ```
     /// # use std::time::Duration;
     /// # use corten::prelude::*;
-    /// # #[derive(Route)]
-    /// # #[route("/alerts")]
-    /// # struct Alerts<'a> { after: Option<&'a str> }
+    /// # #[corten::routes]
+    /// # mod url {
+    /// #     #[route("/alerts", get = alerts, patches)]
+    /// #     pub struct Alerts<'a> { pub after: Option<&'a str> }
+    /// # }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # use url::Alerts;
     /// #[derive(Id)]
     /// struct ListId;
     ///
@@ -3144,7 +3167,42 @@ impl ReadAgain {
     ///
     /// let _ = ReadAgain { after: Duration::from_secs(2) }.from("/alerts?after=r7");
     /// ```
-    pub fn from<R: crate::route::Route>(self, route: R) -> ReadAgainFrom<R> {
+    ///
+    /// Nor does a route whose handler may answer its page: the runtime's read would get no patch,
+    /// and the part would stay as it is. A route says `patches` for that, which holds its `get`
+    /// handler to `HtmlResult<Patches>`:
+    ///
+    /// ```compile_fail,E0277
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/alerts", get = alerts)]
+    ///     pub struct Alerts;
+    /// }
+    ///
+    /// async fn alerts(req: Req) -> HtmlResult {
+    ///     req.page(html! { <html><head><title>"Alerts"</title><Corten /></head><body><main>"Alerts"</main></body></html> })
+    /// }
+    ///
+    /// let _ = ReadAgain { after: Duration::from_secs(2) }.from(url::Alerts);
+    /// ```
+    ///
+    /// and nor does a route given by hand, a `#[derive(Route)]` struct, whose handler the compiler
+    /// cannot see:
+    ///
+    /// ```compile_fail,E0277
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Route)]
+    /// #[route("/alerts")]
+    /// struct Alerts;
+    ///
+    /// let _ = ReadAgain { after: Duration::from_secs(2) }.from(Alerts);
+    /// ```
+    pub fn from<R: crate::route::PatchRoute>(self, route: R) -> ReadAgainFrom<R> {
         ReadAgainFrom { again: self, route }
     }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::answer::ForOne;
+use crate::answer::{AnyAnswer, ForOne};
 use crate::body::Body;
 use crate::cache::Cache;
 use crate::http::{self, Request};
@@ -423,7 +423,7 @@ fn routes() -> Table {
             req.page::<ForOne>(Shell { req: &req, title: "A & B", head, children: demo("<script>") })
         })
         .post(|req: Req| async move {
-            req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.redirect::<ForOne>(&Done) }).await
+            req.patch_or::<ForOne, AnyAnswer, _, _>(html! { <p id={MsgId}>"saved"</p> }, || async { req.redirect(&Done) }).await
         }),
     )
 }
@@ -739,7 +739,7 @@ async fn patch_or_builds_the_page_only_without_javascript() {
                     PAGES.fetch_add(1, Ordering::Relaxed);
                     req.redirect::<ForOne>(&Done)
                 };
-                req.patch_or(html! { <p id={MsgId}>"saved"</p> }, page).await
+                req.patch_or::<ForOne, AnyAnswer, _, _>(html! { <p id={MsgId}>"saved"</p> }, page).await
             }),
         )
     };
@@ -761,7 +761,8 @@ async fn patch_or_keeps_a_handler_send_with_a_view_of_cells() {
         crate::router::post(|req: Req| async move {
             let count = std::cell::Cell::new(1);
             let count = &count;
-            req.patch_or(html! { <p id={MsgId}>{count.get()}</p> }, || async { req.redirect::<ForOne>(&Done) }).await
+            req.patch_or::<ForOne, AnyAnswer, _, _>(html! { <p id={MsgId}>{count.get()}</p> }, || async { req.redirect(&Done) })
+                .await
         }),
     );
     let (_, _, body) = call(app(routes, None), "POST", Some("action")).await;
@@ -2315,7 +2316,7 @@ fn invalid_routes() -> Table {
             let mut errors = Errors::new();
             errors.add(SignUp::FIELDS.email, "Enter an email address.");
             let page = || async { req.test_page("Alert", html! { <p>"page with errors"</p> }) };
-            req.invalid(&errors, alert_form(&errors), page).await
+            req.invalid::<ForOne, AnyAnswer, _, _>(&errors, alert_form(&errors), page).await
         }),
     )
 }
@@ -2335,7 +2336,7 @@ fn refused_by(why: crate::Refusal, message: &'static str) -> Table {
             let mut errors = Errors::new();
             errors.refuse(why, message);
             let page = || async { req.test_page("Sheet", html! { <p>"page with the refusal"</p> }) };
-            req.invalid(&errors, sheet_form(&errors), page).await
+            req.invalid::<ForOne, AnyAnswer, _, _>(&errors, sheet_form(&errors), page).await
         }),
     )
 }
@@ -2409,7 +2410,7 @@ fn lazily_refused_routes(
             };
             // Written in the call, as an app does: the closure's type comes from `invalid_with`.
             let shown = &errors;
-            req.invalid_with(
+            req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(
                 &errors,
                 |form| async {
                     reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2538,6 +2539,183 @@ fn read_again_is_whole_seconds_and_works_without_javascript() {
     );
     assert!(tag(Duration::from_millis(1500)).contains(r#"read-again="2""#), "rounded up");
     assert!(tag(Duration::ZERO).contains(r#"read-again="1""#), "never sooner than a second");
+}
+
+/// A route `ReadAgain::from` reads says `patches`, so its `get` handler returns
+/// `HtmlResult<Patches>` (#1342).
+#[crate::routes]
+mod url_patches {
+    #[route("/saved", get = saved_part, patches)]
+    pub struct Saved {
+        pub after: Option<u32>,
+    }
+}
+
+async fn saved_part(req: Req, crate::Params(at): crate::Params<url_patches::Saved>) -> HtmlResult<crate::Patches> {
+    use std::time::Duration;
+    let from = url_patches::Saved { after: at.after };
+    let again = at.after.map(|_| ReadAgain { after: Duration::from_secs(1) }.from(&from));
+    let part = html! {
+        <p id={MsgId}>"Saving"</p>
+        {again}
+    };
+    req.patch_or(part, || async { req.redirect(&url_patches::Saved { after: None }) }).await
+}
+
+/// The runtime's read of such a route (`corten: action`) gets the patch, which may ask again; a
+/// browser without JavaScript gets the other side of `patch_or`.
+#[tokio::test]
+async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
+    let app = App::new(url_patches::router()).test();
+    let read = app.get(&url_patches::Saved { after: Some(7) }).mode(crate::Mode::Action).await;
+    assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+    assert_eq!(
+        read.text(),
+        r#"<p id="msg">Saving</p><template data-corten-read-again="1" data-from="/saved?after=7"></template>"#
+    );
+    let page = app.get(&url_patches::Saved { after: Some(7) }).mode(crate::Mode::Document).await;
+    assert_eq!((page.status(), page.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/saved"));
+}
+
+/// A route that says `patches` mounted by hand (`Area::route`) with a `get` handler that answers
+/// one, as its routes module would: the runtime's read of it still gets the patch. One that may
+/// answer the page does not compile (`Methods`'s doctest).
+#[tokio::test]
+async fn a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_a_patch() {
+    #[derive(crate::Route)]
+    #[route("/saved")]
+    struct SavedArea;
+    async fn again(req: Req) -> HtmlResult<crate::Patches> {
+        req.patch_or(html! { <p id={MsgId}>"Saved again"</p> }, || async { req.redirect(&url_patches::Saved { after: None }) })
+            .await
+    }
+    let app = App::new(Routes::new()).area::<SavedArea>(|area| area.route::<url_patches::Saved>(crate::route::get(again))).test();
+    let read = app.get(&url_patches::Saved { after: None }).mode(crate::Mode::Action).await;
+    assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+    assert_eq!(read.text(), r#"<p id="msg">Saved again</p>"#);
+}
+
+/// The routes module's check and a mount's agree on a handler whose answer is opaque: an
+/// `impl Answer<.., Kind = Patches>` is the `get` of a route that says `patches` both in its
+/// routes module and mounted by hand, and the runtime's read gets the patch either way. An answer
+/// of the app's own cannot say `Patches` (`PatchRoute`'s and `Answer::Kind`'s doctests).
+#[tokio::test]
+async fn an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand() {
+    #[derive(crate::Route)]
+    #[route("/opaque")]
+    struct OpaqueArea;
+    let module = App::new(url_opaque::router()).test();
+    let by_hand =
+        App::new(Routes::new()).area::<OpaqueArea>(|area| area.route::<url_opaque::Opaque>(crate::route::get(opaque))).test();
+    for app in [module, by_hand] {
+        let read = app.get(&url_opaque::Opaque).mode(crate::Mode::Action).await;
+        assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+        assert_eq!(read.text(), r#"<p id="msg">Opaque</p>"#);
+    }
+}
+
+#[crate::routes]
+mod url_opaque {
+    #[route("/opaque", get = opaque, patches)]
+    pub struct Opaque;
+}
+
+// rustc warns that the `impl` does not prove `Kind`'s bound (`KindOf<Self>`, which only the
+// hidden type's own impl proves), though the routes module and a mount take it alike.
+#[allow(opaque_hidden_inferred_bound)]
+async fn opaque(
+    req: Req,
+) -> impl crate::Answer<Inputs = crate::answer::AnyInputs, Rows = crate::answer::NotAFeed, Kind = crate::Patches> {
+    let part: HtmlResult<crate::Patches> =
+        req.patch_or(html! { <p id={MsgId}>"Opaque"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await;
+    part
+}
+
+/// `patch_or`, `invalid` and `invalid_with` answer the mode the client asked in, not `req.mode`
+/// as the handler left it: a handler that sets `req.mode` to `Mode::Document` still answers the
+/// runtime's read of a route that says `patches` with a patch.
+#[tokio::test]
+async fn a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set() {
+    let app = App::new(url_moded::router()).test();
+    for read in [
+        app.get(&url_moded::Or).mode(crate::Mode::Action).await,
+        app.get(&url_moded::Invalid).mode(crate::Mode::Action).await,
+        app.get(&url_moded::InvalidWith).mode(crate::Mode::Action).await,
+    ] {
+        assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+        assert_eq!(read.text(), r#"<p id="msg">Moded</p>"#);
+    }
+    let page = app.get(&url_moded::Or).await;
+    assert_eq!(page.status(), StatusCode::SEE_OTHER, "a browser without JavaScript gets the other side");
+}
+
+#[crate::routes]
+mod url_moded {
+    #[route("/or", get = moded_or, patches)]
+    pub struct Or;
+    #[route("/invalid", get = moded_invalid, patches)]
+    pub struct Invalid;
+    #[route("/invalid-with", get = moded_invalid_with, patches)]
+    pub struct InvalidWith;
+}
+
+async fn moded_or(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    req.patch_or(html! { <p id={MsgId}>"Moded"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await
+}
+
+async fn moded_invalid(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    let mut errors = crate::Errors::new();
+    errors.refuse(crate::Refusal::Conflict, "moved on");
+    req.invalid(&errors, html! { <p id={MsgId}>"Moded"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await
+}
+
+async fn moded_invalid_with(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    let mut errors = crate::Errors::new();
+    errors.refuse(crate::Refusal::Conflict, "moved on");
+    req.invalid_with(
+        &errors,
+        |form| async move { form.draw(html! { <p id={MsgId}>"Moded"</p> }) },
+        || async { req.redirect(&crate::Local::parse("/").unwrap()) },
+    )
+    .await
+}
+
+/// What a request through `req.patch_or` costs: `PATCH_REQUESTS` (200) requests in process, one
+/// at a time, read by the runtime (`corten: action`, the patch) or, with `PATCH_MODE=document`, by
+/// a browser without JavaScript (the page), to a handler that returns `HtmlResult` or, with
+/// `PATCH_KIND=patches`, `HtmlResult<Patches>` (`docs/design.md#choice-patch-routes`). Counting it under callgrind at
+/// two numbers of requests gives the instructions per request. A build from before `Patches`
+/// counts the `HtmlResult` handler with this function less `cost_patches`. The test binary has no
+/// global allocator, so preload the one to count with. Run in release: `cargo test --release -p corten-run --all-features --lib --no-run`,
+/// then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_or_request_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_or_request_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let page = std::env::var("PATCH_MODE").is_ok_and(|m| m == "document");
+    let patches = std::env::var("PATCH_KIND").is_ok_and(|k| k == "patches");
+    async fn cost_part(req: Req) -> HtmlResult {
+        let part = html! { <p id={MsgId}>"Saved " {42u32}</p> };
+        req.patch_or(part, || async { req.test_page("Part", html! { <p>"part"</p> }) }).await
+    }
+    async fn cost_patches(req: Req) -> HtmlResult<crate::Patches> {
+        let part = html! { <p id={MsgId}>"Saved " {42u32}</p> };
+        req.patch_or(part, || async { req.test_page("Part", html! { <p>"part"</p> }) }).await
+    }
+    let handler = if patches { get(cost_patches) } else { get(cost_part) };
+    let router = App::new(Routes::from(Table::new().route("/part", handler))).router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, headers, _) = call_with(router.clone(), "GET", "/part", (!page).then_some("action"), None).await;
+            assert!(status == StatusCode::OK && headers.contains_key("corten-patch") != page, "{status} {headers:?}");
+        }
+    });
 }
 
 /// Browsers keep a full load's `Refresh` after the runtime navigates away, then load it again.
@@ -14793,6 +14971,7 @@ mod layout_reads {
         const FORMAT: crate::answer::Format = crate::answer::Format::Html;
         type Inputs = crate::answer::AnyInputs;
         type Rows = crate::answer::NotAFeed;
+        type Kind = crate::AnyAnswer;
     }
 
     async fn wrapped(req: Req) -> Wrapped {
@@ -14844,23 +15023,24 @@ mod layout_reads {
     #[cfg(debug_assertions)]
     #[tokio::test(start_paused = true)]
     async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
-        let routes = Table::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne>(PatchBadge {}) })).route(
-            "/dropped",
-            get(|req: Req| async move {
-                req.page::<ForOne>(html! {
-                    <html>
-                        <head>
-                            <title>"Shop"</title>
-                            <Corten />
-                        </head>
-                        <body>
-                            <header><DroppedBadge /></header>
-                            <main></main>
-                        </body>
-                    </html>
-                })
-            }),
-        );
+        let routes =
+            Table::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(PatchBadge {}) })).route(
+                "/dropped",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(html! {
+                        <html>
+                            <head>
+                                <title>"Shop"</title>
+                                <Corten />
+                            </head>
+                            <body>
+                                <header><DroppedBadge /></header>
+                                <main></main>
+                            </body>
+                        </html>
+                    })
+                }),
+            );
         let count = CartCount { delay: Duration::from_millis(400), ..CartCount::default() };
         let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
         let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;

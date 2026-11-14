@@ -303,6 +303,7 @@ impl crate::Answer for Switch {
     const FORMAT: crate::answer::Format = crate::answer::Format::Html;
     type Inputs = crate::answer::AnyInputs;
     type Rows = crate::answer::NotAFeed;
+    type Kind = crate::AnyAnswer;
 }
 
 /// What a route that takes `Option<Upgrade>` answers: the [`Switch`] a request asked for, or the
@@ -350,6 +351,8 @@ impl<A: crate::Answer> crate::Answer for SwitchOr<A> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    // It may answer the switch instead.
+    type Kind = crate::AnyAnswer;
 }
 
 /// The connection once switched: bytes both ways (`tokio::io::AsyncRead` and `AsyncWrite`).

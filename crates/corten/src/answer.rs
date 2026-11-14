@@ -86,7 +86,7 @@ pub enum Format {
     label = "the handler returns this",
     note = "return `HtmlResult` (a page, a patch, a redirect), `JsonResult<T>`, or `Public<..>` of one; `Response` and `impl IntoResponse` hide what the route answers"
 )]
-pub trait Answer: IntoResponse {
+pub trait Answer: IntoResponse + Sized {
     /// How the route's failures are answered.
     const FORMAT: Format;
     /// What the handler may read: [`AnyInputs`], or [`AnonymousInputs`] for an answer that is
@@ -102,6 +102,129 @@ pub trait Answer: IntoResponse {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
+    /// What a request from the runtime ([`crate::Mode::Action`]) can get: [`Patches`] for
+    /// `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch whenever the
+    /// runtime asked, and [`AnyAnswer`] for any other answer. A [`crate::Methods`] carries its
+    /// `get` handler's, so a route that says `patches` mounted by hand ([`crate::Area::route`],
+    /// [`crate::Api::route`]) takes only a `get` that answers one. Only those answers of Corten's
+    /// can be `Patches` ([`KindOf`]): an answer type of the app's own says
+    /// `type Kind = AnyAnswer;`, even one that holds a patch, since nothing holds it to answering
+    /// one.
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, HtmlResult, Patches};
+    ///
+    /// struct Mine(HtmlResult<Patches>);
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = Patches;
+    /// }
+    /// ```
+    ///
+    /// Nor can one forward the kind of the answer it holds:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::Format, http::{IntoResponse, Response}, Answer};
+    ///
+    /// struct Logged<A>(A);
+    ///
+    /// impl<A: IntoResponse> IntoResponse for Logged<A> {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl<A: Answer> Answer for Logged<A> {
+    ///     const FORMAT: Format = A::FORMAT;
+    ///     const PAGE: bool = A::PAGE;
+    ///     type Inputs = A::Inputs;
+    ///     type Rows = A::Rows;
+    ///     type Kind = A::Kind;
+    /// }
+    /// ```
+    ///
+    /// It says `AnyAnswer`, which a route that says `patches` does not take:
+    ///
+    /// ```
+    /// use corten::{answer::Format, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Logged<A>(A);
+    ///
+    /// impl<A: IntoResponse> IntoResponse for Logged<A> {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl<A: Answer> Answer for Logged<A> {
+    ///     const FORMAT: Format = A::FORMAT;
+    ///     const PAGE: bool = A::PAGE;
+    ///     type Inputs = A::Inputs;
+    ///     type Rows = A::Rows;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    type Kind: KindOf<Self>;
+}
+
+/// The two kinds of answer ([`Answer::Kind`]): [`AnyAnswer`] and [`Patches`].
+pub trait AnswerKind: sealed::Kind {
+    /// Whether the answer is a patch whenever the runtime asked.
+    #[doc(hidden)]
+    const PATCHES: bool;
+}
+
+impl AnswerKind for AnyAnswer {
+    const PATCHES: bool = false;
+}
+
+impl AnswerKind for Patches {
+    const PATCHES: bool = true;
+}
+
+/// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer, and
+/// [`Patches`] only for `HtmlResult<Patches>` and `Public<..>` or `NoStore<..>` of it, the
+/// answers only the `Req` methods that answer a patch make. Sealed, so a route that says
+/// `patches` can trust its `get` handler's kind.
+pub trait KindOf<A>: AnswerKind + sealed::KindOf<A> {
+    /// The kind of `corten::Result<A>`.
+    #[doc(hidden)]
+    type InResult: KindOf<Result<A, Error>>;
+    /// The kind of `Public<A>`.
+    #[doc(hidden)]
+    type InPublic: KindOf<Public<A>>
+    where
+        A: Shareable;
+    /// The kind of `NoStore<A>`.
+    #[doc(hidden)]
+    type InNoStore: KindOf<NoStore<A>>;
+}
+
+impl<A> KindOf<A> for AnyAnswer {
+    type InResult = AnyAnswer;
+    type InPublic
+        = AnyAnswer
+    where
+        A: Shareable;
+    type InNoStore = AnyAnswer;
+}
+
+impl<A: sealed::PatchAnswer> KindOf<A> for Patches {
+    type InResult = Patches;
+    type InPublic
+        = Patches
+    where
+        A: Shareable;
+    type InNoStore = Patches;
 }
 
 /// The rows ([`Answer::Rows`]) of an answer that is not a feed.
@@ -115,7 +238,12 @@ pub enum NotAFeed {}
 /// `For` is who the answer is for, read from where it goes: [`ForOne`], the visitor who asked
 /// (an [`HtmlResult`]), or [`ForAll`], inside a [`Public`]. The `Req` methods that make one
 /// take it from there, so a handler never names it.
-pub struct HtmlResponse<For = ForOne>(pub(crate) Response, PhantomData<For>);
+///
+/// `Kind` is what a request from the runtime ([`crate::Mode::Action`]) can get: [`AnyAnswer`], a
+/// page, a patch or a redirect, or [`Patches`], a patch and nothing else, which only the `Req`
+/// methods that answer one make. A handler names it in its return type, `HtmlResult<Patches>`,
+/// for a route that says `patches` ([`crate::routes`]).
+pub struct HtmlResponse<For = ForOne, Kind = AnyAnswer>(pub(crate) Response, PhantomData<(For, Kind)>);
 
 /// An answer for the visitor who asked: it may set a cookie. What [`HtmlResult`] holds.
 pub struct ForOne;
@@ -123,6 +251,134 @@ pub struct ForOne;
 /// An answer for everyone, inside a [`Public`]: a cache gives it to anyone, so it sets no
 /// cookie, and [`HtmlResponse::with_cookie`] there does not compile.
 pub struct ForAll;
+
+/// An answer that may be a page, a patch or a redirect, whatever the request: what
+/// [`HtmlResult`] is, and what [`Req::page`](crate::Req::page) and
+/// [`Req::redirect`](crate::Req::redirect) make.
+///
+/// A handler's return type says which a patch-making method's answer is. One that hides it,
+/// `Result<impl Answer<Inputs = AnyInputs>>`, does not (both kinds are such an answer), so a patch
+/// made there names it after `For`:
+///
+/// ```
+/// use corten::{answer::AnyInputs, prelude::*, Answer, AnyAnswer, ForOne};
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[derive(Route)]
+/// #[route("/admin/part")]
+/// struct Part;
+///
+/// #[derive(Route)]
+/// #[route("/admin/either")]
+/// struct Either;
+///
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn part(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
+///     req.patch::<ForOne, AnyAnswer>(html! { <p id={PartId}>"Saved"</p> })
+/// }
+///
+/// async fn either(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
+///     let part = html! { <p id={PartId}>"Saved"</p> };
+///     req.patch_or::<ForOne, AnyAnswer, _, _>(part, || async {
+///         req.page(html! { <html><head><title>"Saved"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+///     })
+///     .await
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Part>(get(part)).route::<Either>(get(either)));
+/// # let _ = app.router();
+/// ```
+///
+/// Nor does its `Kind`, so a `get` of it named as [`crate::Methods`] (which is
+/// `Methods<(), AnyAnswer>`) says the kind in the `impl`, `Kind = AnyAnswer`:
+///
+/// ```
+/// use corten::{answer::AnyInputs, prelude::*, Answer, AnyAnswer, Methods};
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[derive(Route)]
+/// #[route("/admin/page")]
+/// struct Page;
+///
+/// async fn page(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>> {
+///     req.page(html! { <html><head><title>"Admin"</title><Corten /></head><body><main>"Admin"</main></body></html> })
+/// }
+///
+/// fn handlers() -> Methods {
+///     get(page)
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Page>(handlers()));
+/// # let _ = app.router();
+/// ```
+pub struct AnyAnswer;
+
+/// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
+/// or a redirect only without JavaScript: `HtmlResult<Patches>`, which only
+/// [`Req::patch`](crate::Req::patch), [`Req::patch_with_status`](crate::Req::patch_with_status),
+/// [`Req::patch_or`](crate::Req::patch_or), [`Req::invalid`](crate::Req::invalid) and
+/// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
+/// route that says `patches` returns, so the handler's answer to the runtime's read of a part of
+/// a page ([`crate::ReadAgain::from`]) is a patch. What answers before the handler (a stage, an
+/// extractor such as a `Caller` that refuses someone signed out) and a response the handler
+/// replaces through `DerefMut` are not checked:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// #[derive(Id)]
+/// struct StatusId;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     let part = html! { <p id={StatusId}>"Saved"</p> };
+///     req.patch_or(part, || async {
+///         req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+///     })
+///     .await
+/// }
+/// # let _ = App::new(url::router()).router();
+/// ```
+///
+/// A page or a redirect would answer the runtime's read with something it cannot apply, so
+/// either alone does not compile there: without JavaScript, it is `patch_or`'s other side.
+///
+/// ```compile_fail,E0308
+/// use corten::prelude::*;
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
+/// }
+/// ```
+///
+/// ```compile_fail,E0308
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/status", get = status, patches)]
+///     pub struct Status;
+/// }
+///
+/// async fn status(req: Req) -> HtmlResult<Patches> {
+///     req.redirect(&url::Status)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+pub struct Patches;
 
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
@@ -134,18 +390,59 @@ pub trait SetsCookies: sealed::Sealed {}
 
 impl SetsCookies for ForOne {}
 
-mod sealed {
+pub(crate) mod sealed {
+    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Shareable};
+
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
+
+    pub trait Kind {}
+    impl Kind for AnyAnswer {}
+    impl Kind for Patches {}
+
+    pub trait KindOf<A> {}
+    impl<A> KindOf<A> for AnyAnswer {}
+    impl<A: PatchAnswer> KindOf<A> for Patches {}
+
+    /// An answer that is a patch whenever the runtime asked: the answers whose
+    /// [`super::Answer::Kind`] can be [`Patches`] ([`super::KindOf`]). Only Corten's.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot say `Kind = Patches`: only Corten's patch answers can",
+        label = "this answer says `Kind = Patches`",
+        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
+    )]
+    pub trait PatchAnswer {}
+    impl<For> PatchAnswer for HtmlResponse<For, Patches> {}
+    impl<A: PatchAnswer> PatchAnswer for Result<A, Error> {}
+    impl<A: PatchAnswer + Shareable> PatchAnswer for Public<A> {}
+    impl<A: PatchAnswer> PatchAnswer for NoStore<A> {}
+
+    /// The kind of an answer that is a patch whenever the runtime asked: [`Patches`], which
+    /// only a [`PatchAnswer`] can say. What the `get` handler of a route that says `patches`
+    /// returns, checked by its routes module on its [`super::Answer::Kind`], the same kind a
+    /// mount reads, so an `impl Answer<.., Kind = Patches>` passes both.
+    #[diagnostic::on_unimplemented(
+        message = "the route says `patches`, and its get handler's answer may answer the runtime's read with a page or a redirect (its kind is `{Self}`, not `Patches`)",
+        label = "this handler",
+        note = "return `HtmlResult<Patches>` (or an `impl Answer<.., Kind = Patches>` that is one), which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+    )]
+    pub trait PatchKind {}
+    impl PatchKind for Patches {}
 
     pub trait Immutable {}
     impl Immutable for super::Media {}
     impl Immutable for Result<super::Media, super::Error> {}
 }
 
-impl<For> HtmlResponse<For> {
+impl<For, Kind> HtmlResponse<For, Kind> {
     pub(crate) fn new(res: Response) -> Self {
         HtmlResponse(res, PhantomData)
+    }
+
+    /// The same answer, said to be of another kind: for the `Req` methods whose answer is a patch
+    /// in [`crate::Mode::Action`] and the page their caller drew otherwise.
+    pub(crate) fn of<K>(self) -> HtmlResponse<For, K> {
+        HtmlResponse(self.0, PhantomData)
     }
 
     /// The page's own value for a [`crate::LayoutRead`] its layout draws, drawn in place of the
@@ -174,7 +471,7 @@ impl<For> HtmlResponse<For> {
     }
 }
 
-impl<For: SetsCookies> HtmlResponse<For> {
+impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
     /// The answer with a `Set-Cookie` header, built by [`SetCookie`](crate::security::cookie::SetCookie)
     /// so its safe flags are the default: `Ok(req.redirect(&url::Home)?.with_cookie(SetCookie::new("session", &token)))`.
     /// Each call adds one; an answer that sets a cookie is never stored by a shared cache. This is
@@ -226,13 +523,13 @@ impl<For: SetsCookies> HtmlResponse<For> {
     }
 }
 
-impl<For> IntoResponse for HtmlResponse<For> {
+impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
     fn into_response(self) -> Response {
         self.0
     }
 }
 
-impl<For> Deref for HtmlResponse<For> {
+impl<For, Kind> Deref for HtmlResponse<For, Kind> {
     type Target = Response;
 
     fn deref(&self) -> &Response {
@@ -240,17 +537,28 @@ impl<For> Deref for HtmlResponse<For> {
     }
 }
 
-impl<For> DerefMut for HtmlResponse<For> {
+impl<For, Kind> DerefMut for HtmlResponse<For, Kind> {
     fn deref_mut(&mut self) -> &mut Response {
         &mut self.0
     }
 }
 
-impl Answer for HtmlResponse {
+impl Answer for HtmlResponse<ForOne, AnyAnswer> {
     const FORMAT: Format = Format::Html;
     const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
+}
+
+/// Without JavaScript it is still the page (`patch_or`'s other side), so the route starts the
+/// layout's reads as any page route does.
+impl Answer for HtmlResponse<ForOne, Patches> {
+    const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
+    type Inputs = AnyInputs;
+    type Rows = NotAFeed;
+    type Kind = Patches;
 }
 
 /// An answer that can be [`Public`], and what it is there: the same answer, made for everyone.
@@ -284,8 +592,14 @@ pub trait ForEveryone: IntoResponse {
     fn for_all(self) -> <Self::Named as Shareable>::ForAll;
 }
 
-impl ForEveryone for HtmlResponse<ForAll> {
-    type Named = HtmlResponse;
+// One impl for every `Kind`, so `Public::new(age, req.patch(..))` finds its `For` and `Kind` from
+// the handler's `Public<HtmlResult>` (or `Public<HtmlResult<Patches>>`): with one impl per kind,
+// `For` stays open and the call needs a turbofish.
+impl<Kind> ForEveryone for HtmlResponse<ForAll, Kind>
+where
+    HtmlResponse<ForOne, Kind>: Shareable<ForAll = Self>,
+{
+    type Named = HtmlResponse<ForOne, Kind>;
 
     fn for_all(self) -> Self {
         self
@@ -341,8 +655,12 @@ impl<T> Shareable for corten_feed::FeedResponse<T> {
     type ForAll = Self;
 }
 
-impl Shareable for HtmlResponse {
-    type ForAll = HtmlResponse<ForAll>;
+impl Shareable for HtmlResponse<ForOne, AnyAnswer> {
+    type ForAll = HtmlResponse<ForAll, AnyAnswer>;
+}
+
+impl Shareable for HtmlResponse<ForOne, Patches> {
+    type ForAll = HtmlResponse<ForAll, Patches>;
 }
 
 impl<A: Shareable> Shareable for Result<A, Error> {
@@ -375,8 +693,10 @@ where
 }
 
 /// What a page handler returns: `async fn item(req: Req) -> HtmlResult`. A failure is the app's
-/// error page for a browser.
-pub type HtmlResult = crate::Result<HtmlResponse>;
+/// error page for a browser. `HtmlResult<Patches>` is one made only by the `Req` methods that
+/// answer a patch when the runtime asks ([`Patches`]), for the `get` of a route that says
+/// `patches`.
+pub type HtmlResult<Kind = AnyAnswer> = crate::Result<HtmlResponse<ForOne, Kind>>;
 
 /// What a JSON handler returns: `async fn price(..) -> JsonResult<Quote>`. Every failure of the
 /// route, a path or body that does not parse included, is JSON. Its error is a [`JsonError`], so
@@ -569,6 +889,7 @@ impl Answer for JsonResponse {
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A JSON handler's error: an [`Error`] (`?` on any error, as in a page handler), the
@@ -692,6 +1013,7 @@ impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "json")]
@@ -702,6 +1024,7 @@ where
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl<A: Answer> Answer for Result<A, Error> {
@@ -709,18 +1032,21 @@ impl<A: Answer> Answer for Result<A, Error> {
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = <A::Kind as KindOf<A>>::InResult;
 }
 
 impl Answer for &'static str {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl Answer for String {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A status and no body: `StatusCode::NO_CONTENT` for a write that has nothing to say. An error
@@ -736,6 +1062,7 @@ impl Answer for StatusCode {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// Another server's answer, passed on as it came, for a route that relays an upstream (a gateway,
@@ -811,6 +1138,7 @@ impl Answer for Relay {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
@@ -1086,6 +1414,7 @@ impl Answer for Media {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A file or a page: what a route that sends a file ([`Media`], a [`Relay`] of another service's)
@@ -1216,6 +1545,7 @@ impl<A: FileAnswer> Answer for PageOr<A> {
     const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 impl<A: FileAnswer + ForEveryone<Named = A> + Shareable<ForAll = A>> Shareable for PageOr<A> {
@@ -1250,6 +1580,7 @@ impl Answer for LiveResponse {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
+    type Kind = AnyAnswer;
 }
 
 /// A feed's snapshot or live stream, read by the runtime.
@@ -1258,6 +1589,7 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
     const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = T;
+    type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "feed")]
@@ -1324,6 +1656,50 @@ impl<A: Shareable> Public<A> {
     ///     Public::new(Duration::from_secs(60), home_page(&req))
     /// }
     /// # let _: Methods = get(home);
+    /// ```
+    ///
+    /// A public answer may be a patch, and `Public::new` finds its type around `req.patch` and
+    /// `req.patch_or` as around `req.page`, with no turbofish, for a `Public<HtmlResult>` and for
+    /// the `Public<HtmlResult<Patches>>` of a route that says `patches`
+    /// ([`Patches`](crate::Patches)):
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/price", get = price)]
+    ///     pub struct Price;
+    ///
+    ///     #[route("/quote", get = quote)]
+    ///     pub struct Quote;
+    ///
+    ///     #[route("/status", get = status, patches)]
+    ///     pub struct Status;
+    /// }
+    ///
+    /// #[derive(Id)]
+    /// struct PriceId;
+    ///
+    /// fn page(req: &Req) -> corten::Result<corten::HtmlResponse<corten::ForAll>> {
+    ///     req.page(html! { <html><head><title>"Price"</title><Corten /></head><body><main>"$12"</main></body></html> })
+    /// }
+    ///
+    /// async fn price(req: Req) -> Public<HtmlResult> {
+    ///     Public::new(Duration::from_secs(60), req.patch(html! { <p id={PriceId}>"$12"</p> }))
+    /// }
+    ///
+    /// async fn quote(req: Req) -> Public<HtmlResult> {
+    ///     let part = html! { <p id={PriceId}>"$12"</p> };
+    ///     Public::new(Duration::from_secs(60), req.patch_or(part, || async { page(&req) }).await)
+    /// }
+    ///
+    /// async fn status(req: Req) -> Public<HtmlResult<Patches>> {
+    ///     let part = html! { <p id={PriceId}>"$12"</p> };
+    ///     Public::new(Duration::from_secs(60), req.patch_or(part, || async { page(&req) }).await)
+    /// }
+    /// # let _ = App::new(url::router()).router();
     /// ```
     pub fn new<T: ForEveryone<Named = A>>(max_age: Duration, answer: T) -> Self {
         Public { cache: Cache::public(max_age), answer: answer.for_all(), headers: None }
@@ -1589,6 +1965,7 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     const PAGE: bool = A::PAGE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
+    type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
 /// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
@@ -1661,6 +2038,7 @@ where
     const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
+    type Kind = <A::Kind as KindOf<A>>::InNoStore;
 }
 
 /// Bytes a URL can name, which [`Public::immutable`] takes: [`Media`], or `corten::Result<Media>`.

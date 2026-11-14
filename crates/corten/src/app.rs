@@ -140,7 +140,8 @@ impl<P: Prefix> Area<P> {
     /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
-    pub fn route<R: TypedRoute>(mut self, methods: Methods) -> Self {
+    pub fn route<R: TypedRoute>(mut self, methods: Methods<(), impl crate::answer::AnswerKind>) -> Self {
+        crate::route::mounted_with::<R, _, _>(&methods);
         self.place::<R>(methods.1);
         if let Some(companion) = methods.2 {
             self.companions.push((companion.0)(R::PATH));

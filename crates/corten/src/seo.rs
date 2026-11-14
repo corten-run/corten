@@ -54,6 +54,7 @@ impl Answer for File {
     const FORMAT: Format = Format::Html;
     type Inputs = AnyInputs;
     type Rows = crate::answer::NotAFeed;
+    type Kind = crate::AnyAnswer;
 }
 
 impl crate::answer::Shareable for File {

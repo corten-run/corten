@@ -36,6 +36,8 @@ struct Routed {
     gives: Vec<TokenStream>,
     /// `unstaged`: served outside the stages, where it is written.
     unstaged: Option<Span>,
+    /// `patches`: its `get` handler answers a patch whenever the runtime asks, where it is written.
+    patches: Option<Span>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -80,6 +82,8 @@ struct Serves {
     gives_at: Option<Span>,
     /// `unstaged`: no stage runs for it; where it is written.
     unstaged: Option<Span>,
+    /// `patches`: its `get` answers `HtmlResult<Patches>`; where it is written.
+    patches: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -281,6 +285,9 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         None => q("()", &[]),
     };
     let mut calls = TokenStream::new();
+    // `patches`: each such route's `get` handler checked to answer `HtmlResult<Patches>`, at its
+    // name, by a `const` that runs nothing.
+    let mut checks = TokenStream::new();
     for route in routed.iter().filter(|r| !r.handlers.is_empty()) {
         // A route with a parameter in its path: each handler takes its `Params`.
         let params = match &route.args {
@@ -375,6 +382,20 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             let mut call = call;
             call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
+            if route.patches.is_some() && method.to_string() == "get" {
+                let mut check = respan(
+                    q("const _: () = ::corten::route::__private::patches::<_, _, __A0>", std::slice::from_ref(&state_ty)),
+                    at,
+                );
+                // The argument at the handler's name too, so an error about it points there.
+                let mut argument = respan(q("&", &[]), at);
+                argument.extend(handler.clone());
+                let mut argument = Group::new(Delimiter::Parenthesis, argument);
+                argument.set_span(at);
+                check.extend([TokenTree::Group(argument)]);
+                check.extend(respan(q(";", &[]), at));
+                checks.extend(check);
+            }
             if i > 0 {
                 methods.extend([
                     TokenTree::Punct(Punct::new('.', Spacing::Alone)),
@@ -394,6 +415,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
+        // `patches`: its `get` checked above, the methods say so, as `get` of such a handler does.
+        if route.patches.is_some() {
+            methods = q("::corten::Methods::__patches(__A0)", &[methods]);
+        }
         // An unstaged route is added apart from the others, in an area's or API's module too: the
         // app serves it outside the stages, its host check aside.
         let template = if route.unstaged.is_some() {
@@ -411,6 +436,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // A feed's route says what its rows are, where its handlers are named (and the rows' type
     // with them), for a script's `FeedUrl<Level>` parameter.
     let mut feeds = TokenStream::new();
+    feeds.extend(checks);
     for route in &routed {
         if let Some(prefetch) = &route.prefetch {
             let Some(args) = &route.args else {
@@ -450,6 +476,16 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 "#[automatically_derived]
                 impl ::corten::route::__private::FeedRows<__A1> for __A0 {}",
                 &[ty, rows.clone()],
+            ));
+        }
+        // A route that says `patches`, its `get` handler checked above: what `ReadAgain::from`
+        // takes.
+        if let (Some(_), Some(args)) = (&route.patches, &route.args) {
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            feeds.extend(q(
+                "#[automatically_derived]
+                impl ::corten::route::__private::AnswersPatch for __A0 {}",
+                &[ty],
             ));
         }
     }
@@ -821,6 +857,14 @@ fn scan(
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
+                    if let Some(at) = serves.patches {
+                        if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
+                            return err(
+                                at,
+                                format!("patches says what {name}'s get answers when the runtime reads it, and it has no get: #[route(\"{path}\", get = .., patches)]"),
+                            );
+                        }
+                    }
                     if let Some(at) = serves.unstaged {
                         if serves.handlers.is_empty() {
                             return err(at, format!("unstaged says how {name}'s handlers are served, and it has none: #[route(\"{path}\", get = .., unstaged)]"));
@@ -864,6 +908,9 @@ fn scan(
                                 ""
                             };
                             return err(at, format!("unstaged sends {name}'s answer as its handler made it, with no stage to apply {said}: say unstaged or {said}, not both{hint}"));
+                        }
+                        if let Some(patches) = serves.patches {
+                            return err(patches, format!("unstaged serves {name} with a handler that takes no Req, so it cannot answer a patch: say unstaged or patches, not both"));
                         }
                     }
                     if serves.handlers.is_empty()
@@ -918,6 +965,7 @@ fn scan(
                             doc: std::mem::take(&mut docs),
                             gives: Vec::new(),
                             unstaged: None,
+                            patches: None,
                         });
                         start = None;
                         docs.clear();
@@ -931,6 +979,14 @@ fn scan(
                     let derive: Vec<TokenTree> = q("#[derive(::corten::Route)]", &[]).into_iter().collect();
                     out.splice(at..at, derive);
                     let args = lifetime_args(tokens.get(i + 2..).unwrap_or_default());
+                    if let Some(at) = serves.patches {
+                        if args.is_none() {
+                            return err(
+                                at,
+                                format!("{name} has a type parameter, so it cannot say patches: give its fields concrete types"),
+                            );
+                        }
+                    }
                     if let Some(rows) = &serves.rows {
                         let at = rows.clone().into_iter().last().map_or(span, |t| t.span());
                         if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
@@ -960,6 +1016,7 @@ fn scan(
                         doc: std::mem::take(&mut docs),
                         gives: serves.gives,
                         unstaged: serves.unstaged,
+                        patches: serves.patches,
                     });
                 }
             }
@@ -1097,6 +1154,16 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.unstaged = Some(key.span());
             }
+            // `patches`: the route's `get` answers a patch whenever the runtime asks.
+            [TokenTree::Ident(key), ..] if key.to_string() == "patches" => {
+                if part.len() > 1 {
+                    return err(part[1].span(), format!("patches takes no value: #[route(\"{path}\", get = show, patches)]"));
+                }
+                if serves.patches.is_some() {
+                    return err(key.span(), "patches is named twice");
+                }
+                serves.patches = Some(key.span());
+            }
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "gives" => {
                 return err(
                     key.span(),
@@ -1172,7 +1239,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount) or unstaged",
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount), unstaged or patches",
                 )
             }
         }
@@ -1197,6 +1264,13 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             );
         }
         keep.extend(q(", prefetch = false", &[]));
+    }
+    // `patches`, right after the path, for `#[derive(Route)]`: the route's `Route::PATCHES`, which
+    // `Area::route` and `Api::route` hold the `get` they are given to.
+    if serves.patches.is_some() {
+        let mut marked: Vec<TokenTree> = q(", __patches", &[]).into_iter().collect();
+        marked.append(&mut keep);
+        keep = marked;
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
     cut_args.set_span(attr.span());

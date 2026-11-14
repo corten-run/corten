@@ -14,7 +14,7 @@ not remove that requirement.
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
-| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
+| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)); `HtmlResult<Patches>` for the `get` of a route that says `patches`, one a part of a page is read again from ([Requests and forms](requests-and-forms.md#a-read-that-has-not-caught-up-yet)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
 | A part of the app | none | `.area(admin::area)` for a `#[corten::routes(area = Admin)]` module: its routes under the prefix (a route outside it does not compile), with `.components(&[..])` for a stylesheet only its pages load and `caller = Staff` for who may use it ([below](#areas)) |
@@ -1072,7 +1072,8 @@ the stages. What the compiler can check, it does:
    routes too (`/feeds/{id}.json` beside an unstaged `/feeds/{n}.xml` is the same path to the
    router), where the methods it lacks would answer with no stage.
 4. `no_store`, `rows` and `gives(..)` are applied by stages, so an unstaged route does not say
-   them; an unstaged handler that must not be kept returns `NoStore<..>` itself.
+   them; an unstaged handler that must not be kept returns `NoStore<..>` itself. Nor does it say
+   `patches`: its handler takes no `Req`, so it cannot answer a patch.
 5. It is not a page: `Req::serves` does not send a visitor there after sign-in, and a link to it
    is never prefetched (it does not say `prefetch = ..`). A link a visitor follows to it takes
    `download` or `data-reload`, as one to a `Media` does: without them the runtime fetches it as a
@@ -2410,7 +2411,12 @@ fn app(pages: Routes) -> App {
    `.area(shop_admin::area)`. `Area::route::<R>(get(h))` adds a route by hand; Corten's `get`
    checks the handler as a routes module does, and `R`'s path must have the shape
    `#[derive(Route)]` writes (plain text, and parameters that are whole segments or followed by
-   text in theirs, `/feeds/{name}.atom`), or the app does not compile.
+   text in theirs, `/feeds/{name}.atom`), or the app does not compile. A route that says
+   `patches` in its routes module takes only a `get` handler that returns `HtmlResult<Patches>`
+   there too (with no `get`, or another, it does not compile). Both checks are made when the
+   code that mounts the route is compiled: `cargo build`, and `cargo test` when a test or the
+   library reaches it, but not `cargo check`, nor `cargo test` when only a binary's `main`
+   mounts it ([design Limit 11](../design.md#limit-caller-types)).
 6. Areas nest (`/admin` and `/admin/billing`, each with its own routes and stylesheet).
 
 How the common cases look:

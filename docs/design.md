@@ -3454,6 +3454,191 @@ rules something out.
     0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
     `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
 
+49. <a id="choice-patch-routes"></a>**A route a part is read again from says `patches`, and its `get` handler's type says
+    it answers a patch: `HtmlResult<Patches>`.** `ReadAgain::from` has the runtime fetch a route
+    with `corten: action` and apply the patch it answers; a page or a redirect there gives it
+    nothing to apply, so the part stops updating with an error in the console and no build or test
+    failing. A handler's result now carries what the runtime's read can get, as a second parameter
+    of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
+    patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
+    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (each a
+    patch in `Mode::Action` and its caller's page or redirect otherwise), since `HtmlResponse`'s
+    constructor is the crate's own. A route says `patches` in its routes module; the module checks
+    its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
+    at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
+    `ReadAgain::from` takes. So a refactor that drops a `patch_or` fails the build. It is one
+    handler model: the same `Req` methods, `?` on any `corten::Error`, and a handler that both
+    redirects and patches (a write's) stays an `HtmlResult`; only the handler a part is read from
+    names `Patches`, and there a redirect or page goes on `patch_or`'s other side, for a browser
+    without JavaScript. The macro cannot read a handler's return type (it sees the handler's
+    name), and stable Rust cannot name that type where the macro writes the route's impl, so no
+    trait the route implements can follow its handler; a `const` there can, but only as a value,
+    which only an assertion after monomorphization can refuse (Not chosen, below). So the route
+    says `patches` and the macro checks it, as `rows = Level` is said and checked against
+    `FeedResponse<Level>`. The trait the macro implements for such a route,
+    `route::__private::AnswersPatch`, is public only because that impl is written in the app's
+    crate and must name it; it is hidden and not an API. A route given by
+    hand, a `#[derive(Route)]` struct, is never a `PatchRoute`: nothing ties its type to its
+    handler, so `ReadAgain::from` refuses it rather than trusting it. A `PatchRoute` mounted by
+    hand is held to its word as well, since `Area::route` and `Api::route` take a route type and
+    any handlers: each answer type says its kind (`Answer::Kind`, `AnyAnswer` or `Patches`, as
+    each says its `Rows`), `get(h)` carries `h`'s on the `Methods` it makes (`Methods<S, Patches>`;
+    every other method's, and handlers with no `get`, are `AnyAnswer`, the default), and the
+    routes macro tells `#[derive(Route)]` the route said `patches` (a hidden `Route::PATCHES`,
+    true), so those two, and the routes macro's own `Routes::__route`, refuse such a route with
+    any other `get`, or none. The kind is sealed, so an answer cannot claim it: `Answer::Kind` is
+    bounded by `KindOf<Self>`, which `AnyAnswer` is for every answer and `Patches` only for the
+    answers of a sealed trait, `PatchAnswer`, that holds `HtmlResponse<_, Patches>` and
+    `corten::Result`, `Public` and `NoStore` of one; those three forward their answer's kind
+    through `KindOf`'s hidden associated types, so the forwarding is proved for any answer they
+    hold, an `impl Answer` among them, and an app's own type that says `Patches`, or forwards
+    another answer's kind with `A::Kind`, does not compile (`compile_fail` doctests on
+    `Answer::Kind`). The routes module's check of its own `get` reads the same `Answer::Kind`
+    the mount reads, as a bound only `Patches` meets (a hidden `PatchKind`) with its wording at
+    the handler's name, so the two checks cannot disagree on what answers a patch: a handler
+    returning `impl Answer<.., Kind = Patches>` passes both, as `HtmlResult<Patches>` does (a
+    test in `tests.rs`; rustc warns there, `opaque_hidden_inferred_bound`, that the `impl` does
+    not prove `Kind`'s bound, which only the hidden type's impl can). The mount's side of that can only be a `const`: stable Rust has no bound for
+    "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
+    path-shape assertions the same functions already make
+    ([Limit 11](#limit-caller-types)), which the compiler evaluates only when it generates the
+    code that mounts the route: `cargo build`, and `cargo test` (or `cargo test --lib`) when
+    something it generates reaches the mount, a test, a doctest or a library's own public code,
+    with its message; not `cargo check`, clippy or rust-analyzer, which generate no code, nor a
+    `cargo test` that generates nothing reaching the mount: `cargo test --lib` when no unit
+    test reaches it, and `cargo test` when only a binary's `main` mounts the route (its test
+    build never generates `main`'s callees). Its error points into
+    Corten's `mounted_with`, naming the route there (`mounted_with::<url::Status, AnyAnswer>`),
+    not at the app's call: the note for a generic call names the call that instantiated the
+    function holding the `const`, and `Area::route` cannot hold it itself, since its `Methods` is
+    an `impl` argument it cannot name (an explicit type parameter would end `route::<R>(..)`);
+    `#[track_caller]` changes nothing at compile time. That costs every
+    answer type one associated type (an app's own says `type Kind = AnyAnswer;`), and `Methods`
+    a defaulted second parameter, which a `get` of a `Patches` handler, or of one that hides its
+    kind (`corten::Result<impl Answer<Inputs = AnyInputs>>`, which names it,
+    `Kind = AnyAnswer`, where a `Methods` is named), changes.
+
+    What still steps around it, each on purpose and none by mistake: implementing the hidden
+    `route::__private::AnswersPatch` for a route, which makes it a `PatchRoute` whose handler
+    nothing checked; calling the hidden `Methods::__patches`, which says any handlers answer a
+    patch; and a second route at the same path, a `#[derive(Route)]` struct or a `Route` written
+    by hand, mounted with a `get` that answers its page where the `patches` route's own module is
+    not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
+    answers it. The derive's hidden `__patches` word is not one: it only adds the mount check.
+
+    The cost to every app is that the
+    patch-making methods have one more type parameter, which a handler's return type fixes; a
+    closure handler whose result nothing fixes, or a call that names `For` with a turbofish,
+    names it too (`req.patch::<ForOne, AnyAnswer>`). A `data-patch` form takes any route, as
+    before: one whose handler answers its page gets that page swapped in, a working form that
+    sends and draws the whole page, and the [requests guide](guide/requests-and-forms.md#request-modes)
+    says so. Not chosen: a debug build answering 500, or `dev.js` saying so on the page, when a
+    `ReadAgain::from` read gets a page, which finds the mistake only on a page someone opens under
+    `corten dev` and only while the read happens; a `patches` word with no type behind it, which
+    a refactor could leave standing on a handler that no longer patches; returning `Patches` from
+    every patch-making method, which every handler that redirects on one path and patches on
+    another would have to convert; requiring `patches` of a `data-patch` form's route, which
+    would refuse forms that work; and a `const PATCHES: bool = false` on `Answer` beside `PAGE`,
+    true for `HtmlResponse<ForOne, Patches>`, which the routes macro could copy onto every route
+    from its `get` handler with no word (a `const` in the route's impl calling a generic
+    `const fn` with `&handler`, as the `patches` check does) and `ReadAgain::from` could refuse
+    with an inline `const { assert!(R::PATCHES, ..) }`. That works on stable, but the assertion
+    fails only when the call is monomorphized: `cargo check` and rust-analyzer show nothing, only
+    `cargo build` (or a test) fails, and its message is the assertion's, with no
+    `on_unimplemented` wording at the route or the handler, where a trait bound fails where it is
+    written, in the editor. For a route mounted by hand the same assertion is taken, because no
+    bound can say it there; `ReadAgain::from`, where one can, keeps the bound. Also not chosen
+    for that mount: refusing a `PatchRoute` in `Area::route` and `Api::route` outright, which
+    leaves no way to mount one by hand with a handler that does answer a patch; a flag on
+    `Methods` checked when the app starts, a panic at run time where the assertion stops the
+    build; and `Methods` naming its `get` handler's whole answer type, which would change the
+    type of every `get(..)` an app names as `Methods` (`Answer::Kind` changes only a
+    `Patches` handler's and a hidden one's). And not chosen for the seal: `KindOf<Self>` without
+    the hidden associated types, each wrapper saying `type Kind = A::Kind` where
+    `A::Kind: KindOf<Self>`, which no bound proves for an `impl Answer` it holds, so
+    `corten::Result<impl Answer<Inputs = AnyInputs>>` would stop being an answer at all; and
+    leaving `Kind` open, which an app's own answer type could set to `Patches` and serve the
+    runtime's read a page.
+
+    Stands on: platform (a procedural macro gets the tokens of `#[route(..)]`, so `get = alerts`
+    and not `alerts`'s signature, and stable Rust has no way to name a function's return type in
+    an impl, `type_alias_impl_trait` being unstable, so no trait the route implements can follow
+    its handler without a word on the route; a `const` in the impl can follow it as a value, and
+    a `const { assert!(..) }` that reads it fails only after monomorphization, under
+    `cargo build` and not `cargo check`, with no `on_unimplemented` wording; stable Rust has
+    no negative bounds or specialization, so `Area::route` cannot refuse a `PatchRoute` with a
+    `Methods<_, AnyAnswer>` by a bound, and associated type defaults are unstable, so `Route`
+    cannot gain a type every `Route` written by hand would not have to name; the route's side of
+    that check is the hidden `const PATCHES`, which has a default); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
+    `Patches` answer but through the methods that answer a patch to the runtime; those of them
+    that may answer a page instead, `patch_or`, `invalid` and `invalid_with`, decide by the mode
+    the client asked in, a private field of `Req` beside the writable `req.mode`, so a handler
+    that sets `req.mode` cannot make one a page for the runtime's read; and `Patches` is
+    a `KindOf` only of an answer of the sealed `PatchAnswer`, so no answer type of the app's own
+    can say it; the marker types
+    are zero-sized `PhantomData`, so the response and every method's work are what they were, and
+    the check is a `const` with nothing to run); measured (callgrind, release, instructions per
+    request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
+    `#[ignore]` test `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, three
+    alternate runs of each build, the median and the range, on `0ff569c69` (before) and on
+    `811324247` (after, a handler returning `HtmlResult` and one returning
+    `HtmlResult<Patches>`): the patch (`Mode::Action`) 17,971.83 before (17,971.80 to
+    17,971.84), 17,972.76 after with `HtmlResult` (17,972.75 to 17,972.83) and 17,972.76 with
+    `HtmlResult<Patches>` (17,972.76 to 17,972.90), one more; the page (`Mode::Document`)
+    18,404.68 before (18,404.65 to 18,406.15), 18,389.72 after with `HtmlResult` (18,389.65 to
+    18,389.74) and 18,389.60 with `HtmlResult<Patches>` (18,388.02 to 18,389.69), 15 fewer; both
+    differences are in how the generic methods were inlined, not work added or removed, and the
+    two kinds cost the same; and for the mode `patch_or`, `invalid` and `invalid_with` read, one
+    more field of `Req` set as it is made, the same way, three runs of each, on `74b8bef51`
+    (before; the binary built at `6bcccbca0`, the same Rust) and `89e355062` (after): the patch
+    17,967.70 before (17,967.67 to 17,967.72) and 17,963.83 after (17,963.68 to 17,965.37) with
+    `HtmlResult`, 17,967.68 and 17,963.73 with `HtmlResult<Patches>`, the page 18,385.65 and
+    18,381.58 with either, 4 fewer, again in how the code was laid out, not work removed); bet (the routes a part is read from are few and
+    declared in a routes module, so the one word and the one return type cost an app little, and
+    no app reads a part again from a route given by hand); value (mistakes fail at compile time,
+    Values 4).
+
+    Revisit when: Rust can name a function's return type where the macro writes the route's impl
+    (`type_alias_impl_trait` or return-type notation for functions stable), so the marker could
+    follow the handler without `patches`; or `cargo check` and rust-analyzer report an inline
+    `const` assertion that fails after monomorphization, and it can carry a diagnostic of the
+    crate's own, which would make the word-free `const PATCHES` as early and as clear as a bound,
+    and the mount check as early; or stable Rust gains negative bounds or specialization, so
+    `Area::route` and `Api::route` could refuse a `PatchRoute` with an `AnyAnswer` `get` by a
+    bound;
+    or an app needs `ReadAgain::from` on a route given by
+    hand; or a `data-patch` form whose handler lost its patch is reported as sending whole pages
+    unnoticed, which would make the form's route worth checking too.
+
+    Last checked: 2026-11-14, rustc 1.99.1 and 1.88 (`rust-version`), `type_alias_impl_trait`
+    still unstable, and the `compile_fail` doctests on `ReadAgain::from`, `Patches`,
+    `Public::new` and `corten::routes` with the messages `tests/handler_message.rs` holds, on
+    `811324247` (merged with main at `0ff569c69`), first written on `d1cb28f9`; 2026-11-14, a
+    `patches` route mounted by hand (`Area::route`) with a `get` that answers its page refused
+    when the app builds (the `compile_fail,E0080` doctest on `Methods`) and with one that answers
+    `HtmlResult<Patches>` serving the patch
+    (`a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_a_patch`), and a
+    handler returning `corten::Result<impl Answer<Inputs = AnyInputs>>` building once its patch
+    names `::<ForOne, AnyAnswer>` (the doctest on `AnyAnswer`; `Kind = AnyAnswer` on the `impl`
+    still leaves it E0283), on `a2351ef92` merged with main at `de46e974`; 2026-11-14, an answer
+    type of an app's own that says `type Kind = Patches;`, or forwards `A::Kind`, refused (the
+    `compile_fail,E0277` doctests on `Answer::Kind`), `HtmlResult<Patches>` and `Public` and
+    `NoStore` of it still `Patches` (the `Public::new` and `Methods` doctests), a `get` of
+    `corten::Result<impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>>` named as `Methods` (the
+    doctest on `AnyAnswer`), a post-only mount refused with the mount's message
+    (`tests/handler_message.rs`), and, in a scratch crate with the same assertion, a mount only
+    `main` reaches passing `cargo test` and failing `cargo build --bins`, on `75d031c24`;
+    2026-11-14, a handler returning `impl Answer<.., Kind = Patches>` taken by its routes module
+    and by a mount, and its patch served
+    (`an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand`),
+    an app's own answer that holds a patch refused as such a route's `get` (the
+    `compile_fail,E0277` doctest on `PatchRoute`), the routes module's message still at the
+    handler's name (`tests/handler_message.rs`), and a handler that sets
+    `req.mode = Mode::Document` still answering the runtime's read with a patch through
+    `patch_or`, `invalid` and `invalid_with`
+    (`a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set`), on
+    `89e355062`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -3614,8 +3799,20 @@ by design; where it is known, a limit says what would lift it or why it is so.
     checked when a routes module that holds the prefix's struct expands, `cargo check` included;
     a route given to `Area::route` or `Api::route` by hand, or by a routes module whose prefix's
     struct is in another module, is checked by a `const` assertion in a generic method, which
-    the compiler evaluates only when it generates code: when it builds the app (`cargo build`,
-    `cargo test`, `corten check`), not under `cargo check` alone. `Refused::sign_in`'s 401 to a
+    the compiler evaluates only when it generates the code that calls that method. So is a route
+    that says `patches`, mounted by hand or by its routes module, against the kind of the `get`
+    handler it is given ([Choice 49](#choice-patch-routes)), and so is the shape of a hand-written
+    `Route`'s path. Those assertions fail any build that generates the code that mounts the route:
+    `cargo build`, and `cargo test` (so `corten check`) when something it builds reaches the
+    mount, a test, a doctest or a library's own public non-generic code, which it builds for the
+    doctests and the binaries, as the template's `app()` in its library is. `cargo test --lib`
+    builds only the library's test binary, which generates what its unit tests reach, so it fails
+    when a unit test reaches the mount and not otherwise. They do not fail `cargo check`, clippy
+    or rust-analyzer, which generate no code, nor `cargo test` in a crate whose only mount is in a
+    binary's `main`, since a binary's test build never generates `main`'s callees; `corten check` passes such a
+    crate, and `cargo build` then refuses it
+    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)
+    proposes that `corten check` build the binaries too). `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
     has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
     wrong one with `unauthorized`, which carries one.
