@@ -2117,13 +2117,7 @@ impl<M: Middleware> Steps for Plain<M> {
     fn scope<'a>(&'a self, _: &'a Scope) {}
 
     #[inline]
-    fn run<'a>(
-        &'a self,
-        req: Request,
-        route: Option<Route>,
-        (): (),
-        late: Late,
-    ) -> impl Future<Output = Response> + Send + 'a {
+    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): (), late: Late) -> impl Future<Output = Response> + Send + 'a {
         self.0.call(req, crate::middleware::Handle(route, late))
     }
 }
