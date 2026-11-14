@@ -35,7 +35,7 @@ test("native caller v2 replays actual failed-start cleanup and rejects missing b
   const { exportBrowserCaptures } = await import("./capture.mjs");
   const commit = await command("git", ["rev-parse", "HEAD"]), source = captureSources(commit);
   const folder = mkdtempSync(join(tmpdir(), "browser-native-caller-")), task = `browser-${randomUUID().slice(0, 12)}`;
-  const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() }), owned = new OwnedDocker(task, ledger);
+  const startedAt = Date.now(), store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt }), owned = new OwnedDocker(task, ledger);
   let browser, cleaned = false;
   try {
     const app = "nextjs", profile = plan.cases[0], fixture = records(), image = JSON.parse(await command("docker", ["image", "inspect", process.env.NATIVE_CALLER_IMAGE]))[0];
@@ -43,7 +43,7 @@ test("native caller v2 replays actual failed-start cleanup and rejects missing b
     const native = { schema: "native-browser-run/v2", source: store.record("source", captureSource(store, commit)), sourceBinding: store.record("source-binding", source),
       inputsBefore: store.record("inputs-before", captureLiveInputs(store, source)), inputsAfter: null, toolsBefore: null, toolsAfter: null,
       execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
-    const summary = { schema, group: "fullstack-browser", startedAt: new Date().toISOString(), task, effectivePlan: plan, settings,
+    const summary = { schema, group: "fullstack-browser", startedAt: new Date(startedAt).toISOString(), task, effectivePlan: plan, settings,
       code: { commit, dirty: false, status: "", runnerFiles: Object.fromEntries((await import("node:fs")).readdirSync(new URL("./", import.meta.url)).filter((p) => p.endsWith(".mjs")).sort()
         .map((p) => [p, sha256(readFileSync(new URL(p, import.meta.url)))])), runnerDiffSha256: sha256("") },
       fixtureSha256: sha256(JSON.stringify(fixture)), targetsSha256: sha256(JSON.stringify(targets)),
