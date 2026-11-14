@@ -15,9 +15,14 @@ Corten is pre-1.0, so any minor version may change the API.
 - Add a versioned workload-group registry with the approved popular and performance-oriented
   challengers, separate functional-parity and measurement coverage, and explicit retained
   benchmark families. The localized-marketplace selection reuses existing strict gates;
-  other native group integrations remain pending, not measured results.
+  native qualification and complete group measurements remain separate from source registration.
 
 ### Added
+
+- Stream grouped cloud evidence through bounded physical-file hashing, durable copying
+  and complete archive preflight before extraction. Explicit byte, node and path budgets
+  cover the campaign phases without loading the complete archive into memory; oversized
+  or invalid evidence remains preserved rather than truncated or promoted to a result.
 
 - Run grouped benchmark evidence, isolated adapters and browser proof controls in
   dedicated serial CI suites, plus required real Linux process and Docker-participant
