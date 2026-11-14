@@ -37,7 +37,9 @@ function missingSnapshot() {
 const errorTexts = ["Not found", "Not Found", "Page not found", "Item not found", "Record not found", "404", "404 Not Found", "404: Not Found", "This page could not be found."];
 const methods = ["querySelector", "querySelectorAll", "matches", "getAttribute", "contains", "cloneNode", "remove"];
 const properties = ["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"];
-const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), recordBrowserDOM.toString(), errorTexts]));
+const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), recordBrowserDOM.toString(),
+  nativeNodeRecords.toString(), startNativeMutations.toString(), finishNativeMutations.toString(), clearNativeMutations.toString(),
+  readNativeBoundary.toString(), replayNativeBoundary.toString(), collectBrowserDOM.toString(), errorTexts]));
 const cases = definition("fullstack-browser").cases.map((c) => c.key);
 function identityFields(value) {
   for (const key of ["context", "scope"]) assert.match(value[key], /^[a-zA-Z0-9_.:-]{1,128}$/);
@@ -87,6 +89,16 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
       if (typeof value !== "string" || value.length > 131072 || (privateBytes += value.length * 2) > 32 * 1024 ** 2) throw Error("credential-filter-blocked");
       secrets.add(value);
     };
+    const publicOffersField = (el) => {
+      if (!(el instanceof HTMLInputElement) || el.type !== "hidden" || el.name !== "offers" || urlBefore.query.offers !== "all"
+        || el.value !== "all" || el.defaultValue !== "all" || el.getAttribute("value") !== "all"
+        || el.getAttributeNames().sort().join(",") !== "name,type,value") return false;
+      const forms = document.querySelectorAll("main article.marketplace .marketplace__listings form"), form = el.form;
+      if (forms.length !== 1 || form !== forms[0] || el.parentElement !== form || form.method !== "get"
+        || form.querySelectorAll('[name="offers"]').length !== 1) return false;
+      const action = publicURL(form.action, location.href, true);
+      return new URL(form.action).origin === location.origin && action.path === urlBefore.path && Object.keys(action.query).length === 0;
+    };
     // Inventory actual private native fields before recording anything. Never
     // return these values, source names, or a diagnostic containing them.
     const privateRoots = [document]; let privateMembers = 0;
@@ -102,6 +114,7 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
           privateValue(el.getAttribute("value")); privateValue(el.content);
         } else {
           if (el.localName === "input" && el.type === "file" && el.files?.length) throw Error("credential-filter-blocked");
+          if (root === 0 && publicOffersField(el)) continue;
           // Inert template controls are private even if their own style appears visible.
           if (root === 0 && el.type !== "hidden" && el.type !== "password" && visible(el)) continue;
           privateValue(el.getAttribute("value")); privateValue(el.value); privateValue(el.defaultValue);
@@ -176,17 +189,231 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
   } catch (error) { return fail(["credential-filter-blocked", "public-error-unavailable", "native-scope-mismatch"].includes(error.message) ? error.message : "native-dom-snapshot-failed"); }
 }
 
+// Native descriptors alone classify closed/UA roots and template fragments.
+// Raw protocol attributes, names, text and URLs never enter these records.
+function nativeNodeRecords(raw, frameId) {
+  const queue = [...raw], records = [];
+  for (let at = 0; at < queue.length; at++) {
+    assert.ok(queue.length <= 10000);
+    const n = queue[at];
+    assert.ok(!n.contentDocument && (!n.frameId || n.frameId === frameId && (n.nodeType === 9 || n.nodeType === 1 && n.localName === "html")) && !n.importedDocument
+      && !["frame", "iframe", "object", "embed"].includes(n.localName));
+    const shadowRoots = (n.shadowRoots ?? []).map((r) => {
+      assert.equal(r.shadowRootType, "user-agent");
+      return { nodeId: r.nodeId, backendNodeId: r.backendNodeId, type: r.shadowRootType };
+    });
+    records.push({ nodeId: n.nodeId, backendNodeId: n.backendNodeId, nodeType: n.nodeType,
+      kind: n.templateContent ? "template" : n.frameId && n.nodeType === 1 ? "document-element" : "ordinary", childNodeCount: n.childNodeCount ?? 0,
+      children: n.children ? n.children.map((c) => c.nodeId) : n.childNodeCount ? null : [],
+      templateContent: n.templateContent?.nodeId ?? null, shadowRoots });
+    queue.push(...n.children ?? []); if (n.templateContent) queue.push(n.templateContent);
+  }
+  return records;
+}
+
+function startNativeMutations(observer) {
+  if (globalThis.__cortenNativeDOMBoundary) throw Error("native-dom-snapshot-failed");
+  const roots = [document], state = { observer, document, roots, changed: false };
+  state.watch = new MutationObserver(() => { state.changed = true; });
+  globalThis.__cortenNativeDOMBoundary = state;
+  for (let i = 0; i < roots.length; i++) {
+    if (roots.length > 10000) throw Error("native-dom-snapshot-failed");
+    state.watch.observe(roots[i], { subtree: true, childList: true, attributes: true, characterData: true });
+    for (const t of roots[i].querySelectorAll("template")) {
+      if (!(t instanceof HTMLTemplateElement)) throw Error("native-dom-snapshot-failed");
+      roots.push(t.content);
+    }
+  }
+  return { observer, roots: roots.length };
+}
+
+function finishNativeMutations(observer) {
+  const state = globalThis.__cortenNativeDOMBoundary;
+  if (!state || state.observer !== observer || this !== document || this !== state.document
+    || state.changed || state.watch.takeRecords().length) throw Error("native-dom-snapshot-failed");
+  return { observer, roots: state.roots.length, mutations: [] };
+}
+
+function clearNativeMutations(observer) {
+  const state = globalThis.__cortenNativeDOMBoundary;
+  if (state?.observer === observer) { state.watch.disconnect(); delete globalThis.__cortenNativeDOMBoundary; }
+}
+
+async function readNativeBoundary(page, identity, collect, observer, startedAt) {
+  const failed = () => ({ roots: { document: 0, location: 1, global: 2 }, events: [], result: unknown(),
+    failure: "native-dom-snapshot-failed", scopeObservation: null, urlObservation: null, boundaryObservation: null });
+  let session, candidate = failed(), changed = false, pending = null, bytes = 0, frameId, world, watching = false;
+  const commands = [], nodes = new Map(), ids = new Set(), backends = new Set();
+  const budget = async (operation) => {
+    const remaining = 15000 - (Date.now() - startedAt); assert.ok(remaining > 0);
+    let timer;
+    try { return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(Error("native-dom-snapshot-failed")), remaining); })]); }
+    finally { clearTimeout(timer); }
+  };
+  const check = () => { assert.equal(changed, false); assert.ok(Date.now() - startedAt <= 15000); };
+  const consume = (raw) => {
+    // This transient size check is never written to evidence or diagnostics.
+    assert.ok((bytes += Buffer.byteLength(JSON.stringify(raw))) <= 32 * 1024 ** 2);
+    const records = nativeNodeRecords(raw, frameId);
+    for (const n of records) {
+      for (const member of [n, ...n.shadowRoots]) {
+        assert.ok(Number.isSafeInteger(member.nodeId) && member.nodeId > 0 && !ids.has(member.nodeId)); ids.add(member.nodeId);
+        assert.ok(Number.isSafeInteger(member.backendNodeId) && member.backendNodeId > 0 && !backends.has(member.backendNodeId)); backends.add(member.backendNodeId);
+      }
+      assert.ok(ids.size <= 10000); nodes.set(n.nodeId, structuredClone(n));
+    }
+    return records;
+  };
+  try {
+    session = await page.context().newCDPSession(page); check();
+    const send = (method, params = {}) => budget(() => session.send(method, params));
+    await send("DOM.enable"); commands.push({ method: "DOM.enable" });
+    const invalidate = () => { changed = true; };
+    for (const event of ["attributeModified", "attributeRemoved", "characterDataModified", "childNodeCountUpdated", "childNodeInserted", "childNodeRemoved",
+      "documentUpdated", "shadowRootPushed", "shadowRootPopped", "distributedNodesUpdated", "pseudoElementAdded", "pseudoElementRemoved"]) session.on(`DOM.${event}`, invalidate);
+    session.on("DOM.setChildNodes", ({ parentId, nodes: raw }) => {
+      try {
+        assert.ok(pending && pending.nodeId === parentId && pending.reply === null);
+        const parent = nodes.get(parentId); assert.equal(parent.children, null); assert.equal(raw.length, parent.childNodeCount);
+        const records = consume(raw); parent.children = raw.map((n) => n.nodeId);
+        pending.reply = { method: "DOM.requestChildNodes", nodeId: parentId, children: [...parent.children], nodes: records };
+      } catch { changed = true; }
+    });
+    const { frameTree } = await send("Page.getFrameTree"); check(); assert.ok(!frameTree.childFrames?.length); frameId = frameTree.frame.id;
+    commands.push({ method: "Page.getFrameTree", frameId, childFrames: [] });
+    const isolated = await send("Page.createIsolatedWorld", { frameId, worldName: "corten-native-dom-boundary" }); check(); world = isolated.executionContextId;
+    commands.push({ method: "Page.createIsolatedWorld", frameId, executionContextId: world });
+    watching = true;
+    const started = await send("Runtime.callFunctionOn", { executionContextId: world, functionDeclaration: startNativeMutations.toString(),
+      arguments: [{ value: observer }], returnByValue: true, awaitPromise: false }); check();
+    assert.ok(!started.exceptionDetails && started.result.value);
+    commands.push({ method: "Runtime.callFunctionOn", role: "mutation-start", executionContextId: world, result: started.result.value });
+    const { root } = await send("DOM.getDocument", { depth: 1, pierce: false }); check();
+    const document = { nodeId: root.nodeId, backendNodeId: root.backendNodeId, frameId };
+    commands.push({ method: "DOM.getDocument", root: root.nodeId, nodes: consume([root]) });
+    for (const n of nodes.values()) if (n.children === null) {
+      check(); pending = { nodeId: n.nodeId, reply: null };
+      await send("DOM.requestChildNodes", { nodeId: n.nodeId, depth: 1, pierce: false }); check();
+      assert.ok(pending.reply); commands.push(pending.reply); pending = null;
+    }
+    const resolved = await send("DOM.resolveNode", { nodeId: root.nodeId, objectGroup: observer }); check();
+    assert.equal(resolved.object.type, "object"); assert.equal(typeof resolved.object.objectId, "string");
+    commands.push({ method: "DOM.resolveNode", role: "semantic-read", ...document });
+    const read = await send("Runtime.callFunctionOn", { objectId: resolved.object.objectId, functionDeclaration: collect.toString(),
+      arguments: [{ value: identity }], returnByValue: true, awaitPromise: false }); check();
+    assert.ok(!read.exceptionDetails && read.result.value);
+    commands.push({ method: "Runtime.callFunctionOn", role: "semantic-read", ...document, observer });
+    const barrier = await send("DOM.describeNode", { nodeId: root.nodeId, depth: 0, pierce: false }); check();
+    assert.equal(barrier.node.nodeId, root.nodeId); assert.equal(barrier.node.backendNodeId, root.backendNodeId);
+    commands.push({ method: "DOM.describeNode", ...document });
+    const isolatedDocument = await send("DOM.resolveNode", { nodeId: root.nodeId, executionContextId: world, objectGroup: observer }); check();
+    assert.equal(typeof isolatedDocument.object.objectId, "string");
+    commands.push({ method: "DOM.resolveNode", role: "mutation-check", ...document, executionContextId: world });
+    const unchanged = await send("Runtime.callFunctionOn", { objectId: isolatedDocument.object.objectId, functionDeclaration: finishNativeMutations.toString(),
+      arguments: [{ value: observer }], returnByValue: true, awaitPromise: false }); check();
+    assert.ok(!unchanged.exceptionDetails && unchanged.result.value);
+    commands.push({ method: "Runtime.callFunctionOn", role: "mutation-check", ...document, executionContextId: world, result: unchanged.result.value });
+    const cleared = await send("Runtime.callFunctionOn", { executionContextId: world, functionDeclaration: clearNativeMutations.toString(), arguments: [{ value: observer }], returnByValue: true }); check();
+    assert.ok(!cleared.exceptionDetails); watching = false;
+    commands.push({ method: "Runtime.callFunctionOn", role: "mutation-cleanup", executionContextId: world, observer });
+    await send("Runtime.releaseObjectGroup", { objectGroup: observer }); check(); commands.push({ method: "Runtime.releaseObjectGroup" });
+    await send("DOM.disable"); check(); commands.push({ method: "DOM.disable" });
+    const boundaryObservation = { schema: "native-browser-dom-boundary/v1", observer, document, commands };
+    replayNativeBoundary(boundaryObservation, observer);
+    candidate = { ...read.result.value, boundaryObservation: read.result.value.failure === null ? boundaryObservation : null };
+  } catch { candidate = failed(); }
+  finally {
+    if (session) {
+      try {
+        if (world && watching) {
+          const cleared = await budget(() => session.send("Runtime.callFunctionOn", { executionContextId: world, functionDeclaration: clearNativeMutations.toString(), arguments: [{ value: observer }], returnByValue: true }));
+          assert.ok(!cleared.exceptionDetails);
+        }
+      } catch { candidate = failed(); }
+      try { await session.detach(); } catch { candidate = failed(); }
+    }
+  }
+  return candidate;
+}
+
+function replayNativeBoundary(boundary, observer) {
+  exact(boundary, ["schema", "observer", "document", "commands"]);
+  assert.equal(boundary.schema, "native-browser-dom-boundary/v1"); assert.equal(boundary.observer, observer);
+  exact(boundary.document, ["nodeId", "backendNodeId", "frameId"]); assert.match(boundary.document.frameId, /^[a-zA-Z0-9_.:-]{1,128}$/);
+  const nodes = new Map(), ids = new Set(), backends = new Set(); let at = 0;
+  const take = (method) => { const command = boundary.commands[at++]; assert.ok(command); assert.equal(command.method, method); return command; };
+  const add = (records, roots) => {
+    assert.ok(Array.isArray(records) && records.length <= 10000);
+    for (const n of records) {
+      exact(n, ["nodeId", "backendNodeId", "nodeType", "kind", "childNodeCount", "children", "templateContent", "shadowRoots"]);
+      assert.ok(Number.isInteger(n.nodeType) && n.nodeType >= 1 && n.nodeType <= 12);
+      assert.ok(["ordinary", "template", "document-element"].includes(n.kind));
+      assert.ok(Number.isSafeInteger(n.childNodeCount) && n.childNodeCount >= 0 && n.childNodeCount <= 10000);
+      assert.ok(n.children === null ? n.childNodeCount > 0 : Array.isArray(n.children) && n.children.length === n.childNodeCount);
+      assert.equal(n.kind === "template", n.templateContent !== null);
+      assert.ok(Array.isArray(n.shadowRoots) && (n.nodeType === 1 || n.shadowRoots.length === 0));
+      for (const r of n.shadowRoots) { exact(r, ["nodeId", "backendNodeId", "type"]); assert.equal(r.type, "user-agent"); }
+      for (const member of [n, ...n.shadowRoots]) {
+        assert.ok(Number.isSafeInteger(member.nodeId) && member.nodeId > 0 && !ids.has(member.nodeId)); ids.add(member.nodeId);
+        assert.ok(Number.isSafeInteger(member.backendNodeId) && member.backendNodeId > 0 && !backends.has(member.backendNodeId)); backends.add(member.backendNodeId);
+      }
+      assert.ok(ids.size <= 10000); nodes.set(n.nodeId, structuredClone(n));
+    }
+    const batch = new Map(records.map((n) => [n.nodeId, n])), seen = new Set(), queue = [...roots];
+    for (let i = 0; i < queue.length; i++) {
+      const n = batch.get(queue[i]); assert.ok(n && !seen.has(n.nodeId)); seen.add(n.nodeId);
+      queue.push(...n.children ?? []); if (n.templateContent !== null) queue.push(n.templateContent); assert.ok(queue.length <= 10000);
+    }
+    assert.deepEqual([...seen], records.map((n) => n.nodeId));
+  };
+  assert.ok(Array.isArray(boundary.commands) && boundary.commands.length <= 10013);
+  exact(take("DOM.enable"), ["method"]);
+  assert.deepEqual(take("Page.getFrameTree"), { method: "Page.getFrameTree", frameId: boundary.document.frameId, childFrames: [] });
+  const isolated = take("Page.createIsolatedWorld"); exact(isolated, ["method", "frameId", "executionContextId"]);
+  assert.equal(isolated.frameId, boundary.document.frameId); const world = isolated.executionContextId; assert.ok(Number.isSafeInteger(world) && world > 0);
+  const start = take("Runtime.callFunctionOn"); exact(start, ["method", "role", "executionContextId", "result"]);
+  assert.equal(start.role, "mutation-start"); assert.equal(start.executionContextId, world); exact(start.result, ["observer", "roots"]);
+  assert.equal(start.result.observer, observer); assert.ok(Number.isSafeInteger(start.result.roots) && start.result.roots > 0 && start.result.roots <= 10000);
+  const initial = take("DOM.getDocument"); exact(initial, ["method", "root", "nodes"]); assert.equal(initial.root, boundary.document.nodeId); add(initial.nodes, [initial.root]);
+  for (const n of nodes.values()) if (n.children === null) {
+    const c = take("DOM.requestChildNodes"); exact(c, ["method", "nodeId", "children", "nodes"]);
+    assert.equal(c.nodeId, n.nodeId); assert.ok(Array.isArray(c.children) && c.children.length === n.childNodeCount);
+    n.children = c.children; add(c.nodes, c.children);
+  }
+  const root = nodes.get(initial.root); assert.ok(root); assert.equal(root.nodeType, 9); assert.equal(root.backendNodeId, boundary.document.backendNodeId);
+  const visited = new Set(), queue = [initial.root];
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i], n = nodes.get(id); assert.ok(n && !visited.has(id)); visited.add(id);
+    assert.ok(id === initial.root || n.nodeType !== 9); assert.ok(Array.isArray(n.children)); queue.push(...n.children);
+    if (n.templateContent !== null) { assert.equal(n.nodeType, 1); assert.equal(nodes.get(n.templateContent)?.nodeType, 11); queue.push(n.templateContent); }
+    assert.ok(queue.length <= 10000);
+  }
+  assert.equal(visited.size, nodes.size);
+  const elements = [...nodes.values()].filter((n) => n.kind === "document-element");
+  assert.equal(elements.length, 1); assert.equal(elements[0].nodeType, 1); assert.ok(root.children.includes(elements[0].nodeId));
+  assert.equal(start.result.roots, 1 + [...nodes.values()].filter((n) => n.kind === "template").length);
+  assert.deepEqual(take("DOM.resolveNode"), { method: "DOM.resolveNode", role: "semantic-read", ...boundary.document });
+  assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "semantic-read", ...boundary.document, observer });
+  assert.deepEqual(take("DOM.describeNode"), { method: "DOM.describeNode", ...boundary.document });
+  assert.deepEqual(take("DOM.resolveNode"), { method: "DOM.resolveNode", role: "mutation-check", ...boundary.document, executionContextId: world });
+  assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "mutation-check", ...boundary.document, executionContextId: world,
+    result: { observer, roots: start.result.roots, mutations: [] } });
+  assert.deepEqual(take("Runtime.callFunctionOn"), { method: "Runtime.callFunctionOn", role: "mutation-cleanup", executionContextId: world, observer });
+  exact(take("Runtime.releaseObjectGroup"), ["method"]); exact(take("DOM.disable"), ["method"]); assert.equal(at, boundary.commands.length);
+}
+
 /** No caller-selected code: this function composes only installed fixed sources. */
 export async function collectBrowserDOM(page, identity) {
   exact(identity, ["context", "case", "action", "scope", "originatingResponse"]); identityFields(identity);
   const observer = randomUUID(), startedAt = Date.now();
   // Reject secret/unknown current URL without returning that URL in a receipt.
   const url = publicBrowserURL(page.url(), page.url(), true);
-  const collect = new Function("identity", `return (${recordBrowserDOM.toString()})(identity,
+  const collect = new Function("identity", `if(this !== document || globalThis !== globalThis.top) throw Error("native-dom-snapshot-failed");
+    return (${recordBrowserDOM.toString()})(identity,
     (document,location,globalThis,getComputedStyle,URL)=>(${snapshotPage.toString()}),
     (document,getComputedStyle)=>(${missingSnapshot.toString()}),
     ${publicBrowserURL.toString()},${JSON.stringify(errorTexts)});`);
-  const transcript = await page.evaluate(collect, { ...identity, url });
+  const transcript = await readNativeBoundary(page, { ...identity, url }, collect, observer, startedAt);
   const observation = { schema: "native-browser-dom-observation/v1", observer, ...identity,
     readInterval: { startedAt, finishedAt: Date.now() }, url, snapshotSha256, ...transcript };
   assert.ok(encoded(observation).length <= 32 * 1024 ** 2);
@@ -196,7 +423,7 @@ export async function collectBrowserDOM(page, identity) {
 
 export function replayBrowserDOM(observation, expectedIdentity) {
   expectedShape(expectedIdentity);
-  exact(observation, ["schema", ...Object.keys(expectedIdentity), "snapshotSha256", "roots", "events", "result", "failure", "scopeObservation", "urlObservation"]);
+  exact(observation, ["schema", ...Object.keys(expectedIdentity), "snapshotSha256", "roots", "events", "result", "failure", "scopeObservation", "urlObservation", "boundaryObservation"]);
   assert.equal(observation.schema, "native-browser-dom-observation/v1"); assert.equal(observation.snapshotSha256, snapshotSha256);
   for (const key of Object.keys(expectedIdentity)) assert.deepEqual(observation[key], expectedIdentity[key]);
   assert.ok(encoded(observation).length <= 32 * 1024 ** 2);
@@ -205,8 +432,9 @@ export function replayBrowserDOM(observation, expectedIdentity) {
   if (observation.failure !== null) {
     assert.ok(["credential-filter-blocked", "public-error-unavailable", "native-scope-mismatch", "native-dom-snapshot-failed"].includes(observation.failure));
     assert.deepEqual(observation.events, []); assert.deepEqual(observation.result, unknown());
-    assert.equal(observation.scopeObservation, null); assert.equal(observation.urlObservation, null); return unknown();
+    assert.equal(observation.scopeObservation, null); assert.equal(observation.urlObservation, null); assert.equal(observation.boundaryObservation, null); return unknown();
   }
+  replayNativeBoundary(observation.boundaryObservation, observation.observer);
   assert.deepEqual(observation.scopeObservation, { before: observation.scope, after: observation.scope });
   assert.deepEqual(observation.urlObservation, { before: observation.url, after: observation.url });
   const refs = new Map(); let at = 0;

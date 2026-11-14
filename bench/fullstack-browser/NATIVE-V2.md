@@ -173,18 +173,19 @@ Exact observation fields:
 {
   schema: "native-browser-dom-observation/v1",
   ...expected,
-  snapshotSha256, // installed snapshot/missing-observer/collector/URL policy digest
+  snapshotSha256, // installed snapshot/collector/native-boundary/URL policy digest
   roots: { document: 0, location: 1, global: 2 },
   events: [{ target, kind, key, args, result }],
   result, failure: null | "credential-filter-blocked" |
     "public-error-unavailable" | "native-scope-mismatch" |
     "native-dom-snapshot-failed",
   scopeObservation: { before: scope, after: scope },
-  urlObservation: { before: {path,query}, after: {path,query} }
+  urlObservation: { before: {path,query}, after: {path,query} },
+  boundaryObservation: { /* typed native boundary below */ }
 }
 ```
 
-On failure events are empty, scopeObservation/urlObservation are null and result
+On failure events are empty, scopeObservation/urlObservation/boundaryObservation are null and result
 is `{kind:null,page:null,error:null,articleCount:null,extractionComplete:false}`.
 This is proof-missing, not an observed semantic target failure or qualification.
 On successful ordinary-page replay result is
@@ -229,6 +230,13 @@ The inventory precedes every retained read, is bounded by the existing list,
 scalar and JSON limits, and fails closed on unsupported private metadata children
 or populated file controls. It is not a parser for arbitrary scripts, framework
 state or a claim about secrets outside these fixed native field sources.
+One native hidden public control is recognized: the sole direct `offers=all`
+input of the sole marketplace listings GET form, only while the canonical page
+query also has offers=all. Its live/default/attribute value must all equal `all`,
+its only attributes must be name/type/value, and its same-origin action must be
+the current public path without query. Otherwise it stays in the private
+inventory. This is a fixed public form contract, not a substring exception:
+another private field with value `all` still filters colliding public reads.
 Noncanonical aria-hidden guard strings are refused, not normalized into a
 semantic false and retained. Public text/guard reads containing private values or
 hidden/script/style/template/meta descendants fail closed. Existing fixed bounds
@@ -261,6 +269,87 @@ observation, NEVER original response bytes or byte equivalence to that response.
 Caller retains unchanged strict comparePage, native form, status, request,
 resource and qualification gates. Neither a missing article nor safe error text
 alone proves an HTTP 404. Existing mixed/JSON/asset APIs remain unchanged.
+
+### Native unsupported-structure boundary
+
+The fixed leaf refuses author shadow roots (open/closed, declarative/imperative,
+including hosts in recursively reachable ordinary template fragments), even a
+correctly slotted visible error. Native content documents, frame owners and
+frame/iframe/object/embed elements are unsupported. No shadow/slot/CSS semantics
+are interpreted. Native `user-agent` roots remain supported without traversing
+their browser-owned internals. An HTML document element's native main frame ID
+is distinguished from a subdocument owner using actual Page.getFrameTree.
+
+`boundaryObservation` is opaque to callers and required for successful replay:
+
+```js
+{
+  schema: 'native-browser-dom-boundary/v1', observer,
+  document: {nodeId, backendNodeId, frameId},
+  commands: [
+    {method:'DOM.enable'},
+    {method:'Page.getFrameTree',frameId,childFrames:[]},
+    {method:'Page.createIsolatedWorld',frameId,executionContextId},
+    {method:'Runtime.callFunctionOn',role:'mutation-start',executionContextId,
+      result:{observer,roots}},
+    {method:'DOM.getDocument',root:nodeId,nodes:[nodeRecord]},
+    // Zero or more actual incremental population receipts:
+    {method:'DOM.requestChildNodes',nodeId,children:[nodeId],nodes:[nodeRecord]},
+    {method:'DOM.resolveNode',role:'semantic-read',...document},
+    {method:'Runtime.callFunctionOn',role:'semantic-read',...document,observer},
+    {method:'DOM.describeNode',...document},
+    {method:'DOM.resolveNode',role:'mutation-check',...document,executionContextId},
+    {method:'Runtime.callFunctionOn',role:'mutation-check',...document,
+      executionContextId,result:{observer,roots,mutations:[]}},
+    {method:'Runtime.callFunctionOn',role:'mutation-cleanup',executionContextId,observer},
+    {method:'Runtime.releaseObjectGroup'}, {method:'DOM.disable'}
+  ]
+}
+// nodeRecord contains ONLY:
+{nodeId,backendNodeId,nodeType,kind:'ordinary'|'template'|'document-element',
+ childNodeCount,children:null|[nodeId],templateContent:null|nodeId,
+ shadowRoots:[{nodeId,backendNodeId,type:'user-agent'}]}
+```
+
+Initial and incremental receipts are the actual depth-1, pierce-false native
+responses, projected immediately. Null children means not yet populated; every
+positive child count must acquire its exact child list. Template fragments need
+explicit population even when a whole-document CDP query claims deep traversal.
+Replay consumes each command and typed member, checks per-response reachability
+and order, globally unique node/backend IDs, complete acyclic document/template
+population, all native child counts, allowed UA roots, native document/frame and
+isolated-context/read/check bindings. Extra, missing or contradictory members
+reject. Raw CDP attributes, text, node names, URLs, remote object IDs and mutation
+contents are never saved. The final sealed blob binds all structural reads too.
+
+CDP DOM events cover frontend-known nodes, not every unvisited subtree. Before
+incremental population, one fixed native MutationObserver is therefore installed
+synchronously in a CDP-created isolated world on the current document and every
+reachable ordinary template fragment. Its initial roots must exactly match the
+native template population plus document. It covers native child/attribute/text
+changes in as-yet-unpopulated ordinary and inert subtrees. Pending records are
+checked as well as delivered callbacks; no mutation contents leave that world.
+This does not inspect arbitrary scripts or interpret shadow content. CDP provides
+native closed-root classification and remains subscribed through the read and
+barrier; any native structure/root/document change invalidates the attempt.
+
+DOM.resolveNode supplies the exact inventoried document object for the installed
+synchronous semantic read. It must equal that world's current top-level document.
+The same ordered native session checks the document again after the read, resolves
+it into the observer world, and checks that exact receiver against the observer's
+original document with no pending/delivered mutations. Observers are disconnected,
+remote groups released and the native session detached, including on failure.
+Missing replies, document replacement or lost session return unknown with no
+partial reads. A clean final tree or a saved coverage flag is not accepted instead.
+
+All preparation/read/check/cleanup remains inside the existing 15-second read
+budget. Native ordinary/template/UA-root identities share the 10,000-node cap;
+transient native payloads and the final observation each obey 32 MiB. Unstable or
+over-bound pages remain proof-missing, not semantic failures. The installed digest
+includes every fixed native helper and the receiver-binding collector wrapper.
+These bounded observations do not establish independent execution/source/store
+authority, certify detached arbitrary JavaScript state, or cover other documents;
+the integrating owner still supplies those independent identities and strict gates.
 
 ## Execution and terminal ledger
 

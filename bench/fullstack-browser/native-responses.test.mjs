@@ -30,7 +30,7 @@ async function browserDOMFixture(t) {
   let body = referenceHtml(records().item_2, "en-US");
   const server = createServer((req, res) => {
     res.writeHead(req.url.endsWith("/item_missing") ? 404 : 200, { "content-type": "text/html" });
-    res.end(body.replaceAll("http://localhost", `http://127.0.0.1:${server.address().port}`));
+    res.end(req.url === "/native-frame-public" ? "<p>Public subdocument</p>" : body.replaceAll("http://localhost", `http://127.0.0.1:${server.address().port}`));
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   let browser;
@@ -297,6 +297,191 @@ test("ordered reads, fixed source, original response and unique observation iden
   assert.notEqual(live.observer, observation.observer); assert.equal(live.originatingResponse.sha256, observation.originatingResponse.sha256);
   assert.equal(replayBrowserDOM(live, expectation(live)).page.title, "Public later title");
 });
+function sealedBrowserDOM(t, observation) {
+  const { root, store } = fixture(t), expected = expectation(observation);
+  const ref = store.record("dom", retainBrowserDOMProjection(store, observation, expected)); store.seal();
+  const reader = openEvidence(root), result = replayResponse(reader, reader.json(ref), expected); reader.finish(); return result;
+}
+
+function interceptDOMSession(page, hook) {
+  const context = page.context(), original = context.newCDPSession;
+  context.newCDPSession = async function (target) {
+    const session = await original.call(this, target), send = session.send.bind(session);
+    session.send = async (method, params) => { await hook(method, params, session); return send(method, params); };
+    return session;
+  };
+  return () => { context.newCDPSession = original; };
+}
+
+test("fixed public offers field is not a private substring exception outside its exact native contract", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const variant of ["public", "wrong-name", "outside-form", "extra-attribute", "live-private", "duplicate", "other-private-all", "missing-query", "wrong-action"]) await t.test(variant, async () => {
+    const { identity } = await f.read(`/marketplace/en-US/item_2${variant === "missing-query" ? "" : "?offers=all"}`);
+    await f.page.evaluate((variant) => {
+      const form = document.querySelector(".marketplace__listings form"), field = document.createElement("input");
+      field.type = "hidden"; field.name = "offers"; field.value = "all"; form.append(field);
+      if (variant === "wrong-name") field.name = "csrf";
+      if (variant === "outside-form") document.body.append(field);
+      if (variant === "extra-attribute") field.setAttribute("data-private", "offers-private-canary");
+      if (variant === "live-private") { field.value = "offers-private-canary"; document.querySelector("article label").htmlFor = field.value; }
+      if (variant === "duplicate") form.append(field.cloneNode());
+      if (variant === "other-private-all") { const other = field.cloneNode(); other.name = "csrf"; document.body.append(other); }
+      if (variant === "wrong-action") form.action = "/marketplace/en-US/item_3";
+    }, variant);
+    const observation = await collectBrowserDOM(f.page, identity), result = sealedBrowserDOM(t, observation);
+    if (variant === "public") { assert.equal(observation.failure, null); assert.equal(result.extractionComplete, true); comparePage(result.page, records().item_2, "en-US"); }
+    else { assert.equal(result.extractionComplete, false); assert.deepEqual(observation.events, []); assert.doesNotMatch(JSON.stringify(observation), /offers-private-canary/); }
+  });
+});
+
+test("native boundary refuses declarative and imperative author roots without private guard retention", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const mode of ["open", "closed"]) for (const [kind, source] of [
+    ["input", '<input type="hidden" value="TOKEN">'], ["meta", '<meta content="TOKEN">'],
+    ["textarea", '<textarea hidden>TOKEN</textarea>'], ["nested-template", '<template><input type="hidden" value="TOKEN"></template>'],
+  ]) await t.test(`declarative-${mode}/${kind}`, async () => {
+    const token = `native-shadow-${mode}-${kind}-canary`;
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>",
+      `<div><template shadowrootmode="${mode}">${source.replaceAll("TOKEN", token)}</template></div></body>`));
+    const { identity } = await f.read();
+    await f.page.evaluate((token) => { document.querySelector("article label").htmlFor = token; }, token);
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    const observation = await collectBrowserDOM(f.page, identity), result = sealedBrowserDOM(t, observation);
+    assert.equal(result.extractionComplete, false); assert.deepEqual(observation.events, []);
+    assert.ok(!JSON.stringify(observation).includes(token));
+  });
+  for (const mode of ["open", "closed"]) for (const inert of [false, true]) await t.test(`imperative-${mode}/inert-${inert}`, async () => {
+    const token = `native-imperative-${mode}-canary`;
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>",
+      inert ? '<template id="private-template"><template><div></div></template></template></body>' : '<div id="private-host"></div></body>'));
+    const { identity } = await f.read();
+    await f.page.evaluate(({ mode, inert, token }) => {
+      const host = inert ? document.querySelector("#private-template").content.querySelector("template").content.querySelector("div") : document.querySelector("#private-host");
+      const root = host.attachShadow({ mode }), field = document.createElement("input"); field.type = "hidden"; field.value = token; root.append(field);
+      document.querySelector("article label").htmlFor = token;
+      if (mode === "closed" && host.shadowRoot !== null) throw Error("closed root control");
+    }, { mode, inert, token });
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    const observation = await collectBrowserDOM(f.page, identity);
+    assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+    assert.ok(!JSON.stringify(observation).includes(token));
+  });
+});
+
+test("native boundary retains complete typed population and UA roots but rejects substituted native receipts", async (t) => {
+  const f = await browserDOMFixture(t);
+  f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", '<input type="date"><input type="range"><template><template><input type="password" value="ua-private-canary"></template></template></body>'));
+  const { observation } = await f.read(), expected = expectation(observation), b = observation.boundaryObservation;
+  assert.equal(observation.failure, null); comparePage(sealedBrowserDOM(t, observation).page, records().item_2, "en-US");
+  const members = b.commands.flatMap((c) => c.nodes ?? []);
+  assert.ok(members.some((n) => n.shadowRoots.some((r) => r.type === "user-agent")));
+  assert.equal(members.filter((n) => n.kind === "template").length, 2);
+  assert.doesNotMatch(JSON.stringify(observation), /ua-private-canary|"nodeValue"|"attributes"|"documentURL"/);
+  for (const mutate of [
+    (o) => { delete o.boundaryObservation; }, (o) => { o.boundaryObservation = null; },
+    (o) => { o.boundaryObservation.observer = randomUUID(); },
+    (o) => { o.boundaryObservation.document.backendNodeId++; },
+    (o) => { o.boundaryObservation.document.frameId = "other-frame"; },
+    (o) => { o.boundaryObservation.commands.splice(5, 1); },
+    (o) => { o.boundaryObservation.commands.push({ method: "DOM.disable" }); },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-start").result.roots++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-check" && c.result).result.mutations.push("changed"); },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "semantic-read" && c.observer).observer = randomUUID(); },
+    (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-check").executionContextId++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.method === "DOM.requestChildNodes").nodeId++; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.nodes?.length).nodes[0].attributes = []; },
+    (o) => { o.boundaryObservation.commands.find((c) => c.nodes?.length).nodes[0].childNodeCount++; },
+    (o) => { const c = o.boundaryObservation.commands.find((c) => c.nodes?.some((n) => n.shadowRoots.length)); c.nodes.find((n) => n.shadowRoots.length).shadowRoots[0].type = "closed"; },
+    (o) => { const c = o.boundaryObservation.commands.find((c) => c.nodes?.some((n) => n.templateContent)); c.nodes.find((n) => n.templateContent).templateContent = 999999; },
+    (o) => { o.snapshotSha256 = "220e441a44d3fdd628383d1cd891b347e2f2d56d3c393652fcb2e1a86d735696"; },
+  ]) { const changed = structuredClone(observation); mutate(changed); assert.throws(() => replayBrowserDOM(changed, expected)); }
+  const changed = structuredClone(observation), native = changed.boundaryObservation.commands.flatMap((c) => c.nodes ?? []).find((n) => n.nodeType === 3);
+  native.backendNodeId += 1000000;
+  assert.deepEqual(replayBrowserDOM(changed, expected), replayBrowserDOM(observation, expected));
+  const { root, store } = fixture(t), receipt = retainBrowserDOMProjection(store, observation, expected); store.record("dom", receipt); store.seal();
+  writeFileSync(join(root, receipt.body.path), encoded(changed)); assert.throws(() => openEvidence(root));
+});
+
+test("native boundary refuses incomplete population observer loss and over-bound native nodes", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const variant of ["missing-child-reply", "detached-session", "node-bound"]) await t.test(variant, async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US")); const { identity } = await f.read(); let acted = false;
+    const restore = interceptDOMSession(f.page, async (method, _params, session) => {
+      if (acted) return;
+      if (variant === "detached-session" && method === "DOM.resolveNode") { acted = true; await session.detach(); }
+      if (variant === "node-bound" && method === "DOM.getDocument") {
+        acted = true; await f.page.evaluate(() => { for (let i = 0; i < 10000; i++) document.body.append(document.createElement("span")); });
+      }
+      if (variant === "missing-child-reply" && method === "DOM.getDocument") { acted = true; session.removeAllListeners("DOM.setChildNodes"); }
+    });
+    let observation; try { observation = await collectBrowserDOM(f.page, identity); } finally { restore(); }
+    assert.equal(acted, true); assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+  });
+});
+
+test("native boundary refuses shadow-mediated missing text even when correctly slotted", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const mode of ["open", "closed"]) for (const shadow of ["", "<span>Other page</span>", "<slot></slot>"]) await t.test(`${mode}/${shadow || "empty"}`, async () => {
+    f.setBody(`<body><div role="alert">Not found<template shadowrootmode="${mode}">${shadow}</template></div></body>`);
+    const { observation, response } = await f.read("/marketplace/en-US/item_missing"); assert.equal(response.status(), 404);
+    assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+  });
+});
+
+test("native boundary refuses frame owners including inert same and cross origin subdocuments", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const source of ['<iframe srcdoc="<h1>Other page</h1>"></iframe>', '<iframe src="http://localhost/native-frame-public"></iframe>',
+    '<iframe src="http://localhost:9/cross-origin"></iframe>', '<template><template><iframe></iframe></template></template>',
+    '<object data="about:blank"></object>', '<embed src="about:blank">']) await t.test(source.split(" ")[0], async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", `${source}</body>`));
+    const { observation } = await f.read(); comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+  });
+});
+
+test("native boundary covers transient changes before incremental child population", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const depth of [0, 1, 2]) await t.test(`unpopulated-depth-${depth}`, async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", '<template id="native-template"><div></div><template><div></div></template></template></body>'));
+    const { identity } = await f.read(); let injected = false;
+    const restore = interceptDOMSession(f.page, async (method) => {
+      if (method !== "DOM.requestChildNodes" || injected) return; injected = true;
+      await f.page.evaluate((depth) => {
+        let parent = depth ? document.querySelector("#native-template").content : document.body;
+        if (depth === 2) parent = parent.querySelector("template").content;
+        const host = parent.appendChild(document.createElement("div")), root = host.attachShadow({ mode: "closed" });
+        const field = document.createElement("input"); field.type = "hidden"; field.value = "unpopulated-private-canary"; root.append(field);
+        document.querySelector("article label").htmlFor = field.value; host.remove();
+      }, depth);
+    });
+    let observation; try { observation = await collectBrowserDOM(f.page, identity); } finally { restore(); }
+    comparePage(await f.page.evaluate(snapshotPage), records().item_2, "en-US");
+    assert.equal(injected, true); assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false); assert.deepEqual(observation.events, []);
+    assert.doesNotMatch(JSON.stringify(observation), /unpopulated-private-canary/);
+  });
+});
+
+test("native boundary rejects transient roots and replacement across the actual subscribed read window", async (t) => {
+  const f = await browserDOMFixture(t);
+  for (const phase of ["DOM.resolveNode", "Runtime.callFunctionOn", "DOM.describeNode"]) for (const change of ["append-remove", "existing-closed", "inert-append-remove", "inert-existing-closed", "replace-document"]) await t.test(`${phase}/${change}`, async () => {
+    f.setBody(referenceHtml(records().item_2, "en-US").replace("</body>", '<div id="native-host"></div><template id="native-template"><div></div></template></body>'));
+    const { identity } = await f.read(); let injected = false;
+    const restore = interceptDOMSession(f.page, async (method, params) => {
+      if (method !== phase || injected || method === "Runtime.callFunctionOn" && !params.objectId) return; injected = true;
+      await f.page.evaluate((change) => {
+        if (change === "replace-document") { document.open(); document.write("<body><h1>Not found</h1></body>"); document.close(); return; }
+        const inert = change.startsWith("inert-"), parent = inert ? document.querySelector("#native-template").content : document.body;
+        const host = change.endsWith("append-remove") ? parent.appendChild(document.createElement("div")) : inert ? parent.querySelector("div") : document.querySelector("#native-host");
+        host.attachShadow({ mode: "closed" }); if (change.endsWith("append-remove")) host.remove();
+      }, change);
+    });
+    let observation;
+    try { observation = await collectBrowserDOM(f.page, identity); } finally { restore(); }
+    assert.equal(injected, true); assert.equal(sealedBrowserDOM(t, observation).extractionComplete, false);
+    assert.deepEqual(observation.events, []);
+  });
+});
+
 test("public JSON and asset bytes replay exact original bytes with independent binding", (t) => {
   const { root, store } = fixture(t), body = Buffer.from('[ {"email":"native@example.test","item_id":"item_1","target_minor":125} ]');
   const json = retainPublicJSON(store, body, "state", bind(body)), js = Buffer.from('export const value = 1;\n'), assetBinding = bind(js, "/assets/native.js");
