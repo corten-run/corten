@@ -106,7 +106,8 @@ Exact executable bytes are observations, not independent distribution approval.
 
 ## Public responses
 
-All response APIs bind `{requestId,responseSha256,path,status}`. Paths are public
+Byte-response and existing mixed projection APIs bind
+`{requestId,responseSha256,path,status}`. Paths are public
 paths only, without query/fragment/credentials. Request ID comes from the actual
 native network observer. Owner must additionally bind context/case/endpoint and
 independent readback source, never infer them from this leaf's success alone.
@@ -130,6 +131,126 @@ fallback, persist its secret-bearing source, or permit arbitrary snapshot code.
 `{type,value,extractionComplete:true}` for JSON, or
 `{type,sha256,extractionComplete:true}` for assets. A replayed DOM extraction failure
 has extractionComplete:false, not an accepted failed target.
+
+### Fixed browser DOM observations
+
+`native-browser-dom.mjs` adds a browser-only collector/replayer alongside the
+unchanged mixed API. It always uses the installed strict
+`marketplace/check.mjs::snapshotPage` for ordinary pages, not `snapshotMixedPage`.
+Neither capture nor replay accepts caller/saved source, functions, selectors or
+snapshot modes. The ordered typed read recorder follows the existing mixed
+pattern; it is not a general DOM evaluator.
+
+```js
+const observation = await collectBrowserDOM(page, {
+  context, case: caseKey, action: actionId, scope,
+  originatingResponse: { requestId, sha256 }
+});
+const expected = {
+  observer, context, case: caseKey, action: actionId, scope,
+  originatingResponse: { requestId, sha256 },
+  readInterval: { startedAt, finishedAt }, url: { path, query }
+};
+const result = replayBrowserDOM(observation, expected);
+const receipt = retainBrowserDOMProjection(store, observation, expected);
+// Additive replayResponse branch, with expected LIVE identity, not byte binding:
+const stored = replayResponse(reader, receipt, expected);
+```
+
+`collectBrowserDOM` generates a fresh observer UUID and brackets the native read
+with actual host Unix-ms timestamps, within the existing 15-second action budget.
+Context/case/action/originatingResponse are caller-owned actual identities. Case
+and action must be fixed browser registry keys/step IDs; context/scope/requestId
+are bounded safe IDs. Scope is read from the actual existing resource observer
+checkpoint before/after; URL is observed before/after too. Both must remain equal
+to expected values. Collector errors/unsupported access produce only a fixed
+failure code and unknown result with no partial reads or diagnostic text. Invalid
+caller identity, secret/unknown current URL, or exceeded bounds throw instead.
+
+Exact observation fields:
+
+```js
+{
+  schema: "native-browser-dom-observation/v1",
+  ...expected,
+  snapshotSha256, // installed snapshot/missing-observer/collector/URL policy digest
+  roots: { document: 0, location: 1, global: 2 },
+  events: [{ target, kind, key, args, result }],
+  result, failure: null | "credential-filter-blocked" |
+    "public-error-unavailable" | "native-scope-mismatch" |
+    "native-dom-snapshot-failed",
+  scopeObservation: { before: scope, after: scope },
+  urlObservation: { before: {path,query}, after: {path,query} }
+}
+```
+
+On failure events are empty, scopeObservation/urlObservation are null and result
+is `{kind:null,page:null,error:null,articleCount:null,extractionComplete:false}`.
+This is proof-missing, not an observed semantic target failure or qualification.
+On successful ordinary-page replay result is
+`{kind:'page',page:<strict snapshot>,error:null,articleCount:1,extractionComplete:true}`.
+The fixed missing route instead reads absence of `article.marketplace` and bounded
+visible `h1,h2,p,[role="alert"]` elements (tags h1/h2/p/div/section/span only).
+Native visibility includes hidden ancestors. Only exact whitespace-normalized
+phrases `Not found`, `Not Found`, `Page not found`, `Item not found`, `Record not
+found`, `404`, `404 Not Found`, `404: Not Found`, `This page could not be found.`
+may be retained. Result is `{kind:'missing-item',page:null,error:{code:'not-found',
+text,tag},articleCount:0,extractionComplete:true}`. Unknown text is never saved and
+cannot be treated as a target failure. No raw body innerText/HTML is collected.
+Error reads expose only `publicMissingTag` (allowlisted tag or null) and
+`publicMissingText` (native-visible allowlisted phrase or null), not raw custom
+tag names, ARIA attributes or arbitrary computed style values. Unknown neighboring
+error elements cannot leak text/metadata into an otherwise successful capture.
+Every descendant must also pass native visibility (including CSS display,
+visibility, opacity and content-visibility). A candidate with a hidden descendant
+is unsupported rather than assembling a phrase from its hidden textContent.
+Visible inline spans remain supported; no raw innerText/HTML fallback is used.
+
+Public page routes are fixed marketplace locales and item_1 through item_500 or
+item_missing. Canonically encoded queries allow only seller ''/Alice, sort
+asc/desc, offers all; missing-item has no query. Duplicate/unknown/secret query,
+credentials and fragments reject. Attribute URLs are validated before reads.
+All meta elements, including itemprop/content-only metadata, are inventoried
+transiently. Native input/textarea/select controls are private when hidden,
+password-bearing, ARIA-hidden or not natively visible (including ancestors and
+CSS opacity/visibility/display). Their actual live values, value attributes,
+default values and private select option values are filtered, never serialized.
+The inventory precedes every retained read, is bounded by the existing list,
+scalar and JSON limits, and fails closed on unsupported private metadata children
+or populated file controls. It is not a parser for arbitrary scripts, framework
+state or a claim about secrets outside these fixed native field sources.
+Noncanonical aria-hidden guard strings are refused, not normalized into a
+semantic false and retained. Public text/guard reads containing private values or
+hidden/script/style/template/meta descendants fail closed. Existing fixed bounds
+are 30,000 typed reads, 10,000 list members, 131,072-character scalars and 32 MiB
+observation; no runtime budget knobs are added.
+
+Typed values are exactly one of `{scalar}`, `{undefined:true}`, `{object:id}` or
+`{list:[typedValue]}`. Replay executes only installed fixed functions, verifies
+their digest, every ordered operation/argument and all consumed reads/results;
+extra/missing operations, operation/argument/result contradictions or source
+substitution throw. The retained blob digest and sealed manifest also reject
+altered read bytes that would leave the semantic result unchanged; standalone
+transcript replay is not independent observation authenticity.
+The policy digest includes the installed collector, so projections collected
+under an older private-value/visibility policy require fresh capture, not replay
+under the new policy with a saved digest or saved source substitute.
+It does not execute saved code or reconstruct secret-bearing original HTML. Read
+transcript and actual identity still need the owner's source/execution/native
+observer binding.
+
+`retainBrowserDOMProjection` is exported by `native-responses.mjs`; exact receipt:
+`{schema:'native-browser-response/v2',type:'public-browser-dom-observation',
+identity:expected,body:ref,result}`. `replayResponse` returns `{type,...result}`.
+Every expected field must independently match caller ledgers, including actual
+context/case/action/scope, unique observer, read interval and originating native
+response ID/digest. Caller must bound the interval to actual context/action life,
+and bind the URL/origin/request to the intended document. The originating response
+may precede later live mutations: this receipt is explicitly a live semantic
+observation, NEVER original response bytes or byte equivalence to that response.
+Caller retains unchanged strict comparePage, native form, status, request,
+resource and qualification gates. Neither a missing article nor safe error text
+alone proves an HTTP 404. Existing mixed/JSON/asset APIs remain unchanged.
 
 ## Execution and terminal ledger
 
@@ -261,6 +382,8 @@ these leaves do not modify isolated code or assert exclusive-host authority.
 ## Checks and limits
 
 Run `node --test --test-concurrency=1 bench/fullstack-browser/native-*.test.mjs`.
+The fixed DOM controls live in `native-responses.test.mjs`, already explicitly
+included by the evidence-contract CI command; no wildcard CI change is needed.
 Pure controls reject corrupt/extra/missing/linked evidence, mismatched canonical
 Git/source/archive/tool/response binding, incomplete terminal inventories,
 worker/peer gaps and false qualification-exit claims. Native controls use installed
