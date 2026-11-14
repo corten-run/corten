@@ -237,7 +237,8 @@ place by the `deploy` user, whose directory it goes into, so what a deploy left 
 gains nothing by being carried; and a release is carried only under a name of letters,
 digits, `.`, `_` and `-` that starts with a letter or a digit and is not `etc`, since the
 deploy user names it and root's tar reads the name. A replacement fails, with the address
-where it was, while the release served has another. The deploy key cannot run the command, and nothing on the
+where it was, while the release served has another. The deploy key cannot run the command,
+and nothing on the
 machine holds the private half. A new handover key (the secret and the variable removed, and
 `bootstrap.sh` run again) replaces the droplet on the next apply, and the droplet serving
 then does not know it: that one replacement moves the address first.
