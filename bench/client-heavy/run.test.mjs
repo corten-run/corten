@@ -6,6 +6,9 @@ import { options, qualifyAndMeasure, finishRun, serve } from "./run.mjs";
 import { here } from "./build.mjs";
 import { selectedApps } from "../workloads/registry.mjs";
 
+// Unit gate fixture only, never native closure evidence.
+const lifecycle = () => ({ close: { returned: true, observed: true }, deadline: { firedAt: null } });
+
 test("explicit bounded round/fixture inputs and no contender filter", () => {
   const o = options(["bounded", "--rows", "14", "--large", "194", "--append", "3", "--cards", "8"]);
   assert.equal(o.workload.largeRowCount, 194);
@@ -26,10 +29,23 @@ test("unqualified native journey is never measured", async () => {
 test("measurement happens only after qualification and must pass its own oracle", async () => {
   for (const measuredPass of [false, true]) {
     const calls = [];
-    const result = await qualifyAndMeasure(async (phase) => { calls.push(phase); return { oracle: { functionalPassed: phase === "qualification" || measuredPass } }; });
+    const result = await qualifyAndMeasure(async (phase) => { calls.push(phase); return { oracle: { functionalPassed: phase === "qualification" || measuredPass }, lifecycle: lifecycle() }; });
     assert.deepEqual(calls, ["qualification", "measurement"]);
     assert.equal(result.readyForMeasurement, measuredPass);
   }
+});
+
+test("an oracle pass without positive context closure cannot start or qualify measurement", async () => {
+  for (const bad of [undefined, { close: { returned: true, observed: null }, deadline: { firedAt: null } },
+    { close: { returned: false, observed: true }, deadline: { firedAt: null } },
+    { close: { returned: true, observed: true }, deadline: { firedAt: 1 } }]) {
+    const calls = [];
+    const result = await qualifyAndMeasure(async (phase) => { calls.push(phase); return { oracle: { functionalPassed: true }, lifecycle: bad }; });
+    assert.deepEqual(calls, ["qualification"]); assert.equal(result.readyForMeasurement, false);
+    assert.equal(result.measurement, null);
+  }
+  const result = await qualifyAndMeasure(async (phase) => ({ oracle: { functionalPassed: true }, lifecycle: phase === "qualification" ? lifecycle() : undefined }));
+  assert.equal(result.readyForMeasurement, false);
 });
 
 test("external build receipts and source-unbound generator binaries cannot qualify apps", () => {

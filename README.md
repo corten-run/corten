@@ -69,19 +69,17 @@ through it.
 ## Example
 
 A page with a form. With JavaScript, submitting it swaps in the greeting; without JavaScript it
-posts and the whole page comes back. One handler serves both.
+posts and the whole page comes back, at the page's own address. One handler serves both.
 
 ```rust,no_run,edition2024
 use corten::prelude::*;
 
-// Every URL, typed, with the handler that serves it. A route without one does not compile.
+// Every URL, typed, with the handler for each method. A route without one does not compile.
+// The form posts back to its page, so the page and its form share one address.
 #[corten::routes]
 mod url {
-    #[route("/", get = home)]
+    #[route("/", get = home, post = greet)]
     pub struct Home;
-
-    #[route("/greet", post = greet)]
-    pub struct Greet;
 }
 
 #[tokio::main]
@@ -111,7 +109,7 @@ fn home_page(req: &Req, name: &str) -> impl Document {
     html! {
         <Layout req={req} title="Welcome">
             <h1>"Welcome"</h1>
-            <form method="post" action={url::Greet} data-patch>
+            <form method="post" action={url::Home} data-patch>
                 <input name={f.name} required>
                 <button>"Greet me"</button>
             </form>

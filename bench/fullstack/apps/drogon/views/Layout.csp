@@ -10,7 +10,7 @@
 <script src="/htmx.min.js" defer></script>
 <script src="/item.js" defer></script>
 </head>
-<body hx-boost="true">
+<body hx-boost:inherited="true">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main>[[]]</main>
 </body>

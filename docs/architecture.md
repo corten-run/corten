@@ -150,7 +150,7 @@ runs (the call throws when it is not; the type says it is always there), the val
 handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to
 that), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
 served by the API or area that should serve it (the app's tests cover that), that every component a page renders is listed in
-`App::components`, or in an area (`Area::components`) the page is under (checked at run time in debug builds,
+`App::components`, or in an area (`Area::components`) the page, or a patch's handler, is under (checked at run time in debug builds,
 a router test or `cargo run` as well as `corten dev`: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
 back silently), a feed row's flattened field's members, its id type's own `Serialize` and `Deserialize`, or a row's that are not
 serde's derive (`#[derive(Row)]` reads the row's serde attributes, so any of them can put other text under the id's key), and logic a script repeats from Rust (the listing

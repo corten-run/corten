@@ -1,0 +1,1 @@
+<% if action == "append" %><%= turbo_stream.append "rows", partial: "row", locals: { row: event.fetch("row") } %><% else %><%= turbo_stream.replace event.fetch("key"), partial: "row", locals: { row: event.fetch("row") } %><% end %>

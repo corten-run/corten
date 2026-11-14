@@ -1,6 +1,6 @@
 # JSON adapter checks
 
-From this adapter's directory, with the .NET 10 SDK:
+From this adapter's directory, with the .NET 11 SDK:
 
 ```sh
 dotnet run --project tests/Records.Tests.csproj -c Release

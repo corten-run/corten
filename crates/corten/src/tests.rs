@@ -2564,6 +2564,174 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
     assert_eq!(call(app(api, None), "GET", None).await.0, StatusCode::OK, "only pages are checked");
 }
 
+/// A write that answers a page wherever it is posted, as a patch for the runtime, with a cookie,
+/// `Clear-Site-Data` and a header of the page's own.
+async fn post_page_drawn(req: Req) -> HtmlResult {
+    let mut res =
+        req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await?;
+    res.headers_mut().insert("clear-site-data", HeaderValue::from_static("\"cache\""));
+    res.headers_mut().insert("x-drawn", HeaderValue::from_static("saved"));
+    Ok(res.with_cookie(SetCookie::new("saved", "1")))
+}
+
+/// The same write at a path with a parameter.
+async fn post_item_drawn(req: Req, Params(_): Params<post_page_url::ItemSave>) -> HtmlResult {
+    post_page_drawn(req).await
+}
+
+/// The same write under any first segment, the API's prefix and Corten's own included.
+async fn post_section_drawn(req: Req, Params(_): Params<post_page_url::SectionSave>) -> HtmlResult {
+    post_page_drawn(req).await
+}
+
+/// A write refused for its input: the page again, with the refusal's status.
+async fn post_page_refused(req: Req) -> HtmlResult {
+    let mut res = req.test_page("Refused", html! { <p>"refused"</p> })?;
+    *res.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
+    Ok(res)
+}
+
+async fn post_page_redirected(req: Req) -> HtmlResult {
+    req.redirect(&post_page_url::Home)
+}
+
+/// An API's answer carrying a page's shell header, as the check reads a page, at a path the app's
+/// post-only `/{section}/save` also matches. A request under an API's prefix is answered as the
+/// API's before the page stages (`render_errors`), so the check never sees it.
+async fn post_api_saved() -> HtmlResult {
+    let res = crate::response::Response::builder().header(crate::page::SHELL_HEADER, "api").body(Body::from("saved"));
+    Ok(HtmlResponse::new(res.unwrap()))
+}
+
+#[crate::routes]
+mod post_page_url {
+    #[route("/", get = post_page_drawn, post = post_page_drawn)]
+    pub struct Home;
+
+    #[route("/save", post = post_page_drawn)]
+    pub struct Save;
+
+    #[route("/items/{id}/save", post = post_item_drawn)]
+    pub struct ItemSave {
+        pub id: u32,
+    }
+
+    #[route("/{section}/save", post = post_section_drawn)]
+    pub struct SectionSave {
+        pub section: String,
+    }
+
+    #[route("/refuse", post = post_page_refused)]
+    pub struct Refuse;
+
+    #[route("/done", post = post_page_redirected)]
+    pub struct Done;
+
+    #[route("/relay", any = post_page_drawn)]
+    pub struct Relay;
+}
+
+#[crate::routes(area = PostShop)]
+mod post_page_area {
+    #[route("/shop")]
+    pub struct PostShop;
+
+    #[route("/shop/save", post = post_page_drawn)]
+    pub struct ShopSave;
+}
+
+#[crate::routes(api = PostApi)]
+mod post_page_api {
+    #[route("/api")]
+    pub struct PostApi;
+
+    #[route("/api/save", post = post_api_saved)]
+    pub struct ApiSave;
+}
+
+/// An app with a page route, post-only routes that draw a page, refuse or redirect, one with a
+/// parameter, one in an area, an `any = ..` route and an API, and a POST to it with `headers`.
+fn post_page_router() -> crate::Router {
+    App::new(post_page_url::router()).area(post_page_area::area).api(post_page_api::api).error_page(test_error_page, ()).router()
+}
+
+async fn post_page_send(
+    router: &crate::Router,
+    path: &str,
+    headers: &[(&'static str, &'static str)],
+) -> (StatusCode, HeaderMap, String) {
+    let mut req = Request::builder().method("POST").uri(path);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (status, headers) = (res.status(), res.headers().clone());
+    let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, headers, String::from_utf8(body.to_vec()).unwrap())
+}
+
+const POST_PAGE_BROWSER: &[(&str, &str)] = &[("accept", "text/html")];
+
+/// A browser's post answered with a page at a path with no `GET` is an error in a debug build: the
+/// browser would show it at an address that answers 405 when it is opened again. The handler's
+/// cookies and `Clear-Site-Data` go out with it, and the page's other headers do not. A page's own
+/// route, a refusal, a redirect, the runtime's patch, a client that does not ask for HTML, an
+/// `any = ..` route (which answers `GET` too), an API's path (answered with a page's shell
+/// header; an API's requests never reach the check) and a path of Corten's own are not. The last
+/// two are paths the app's post-only `/{section}/save` matches, and at Corten's own only
+/// `NotPages`, read by the check itself, keeps the page from being taken for that route's.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_builds() {
+    let router = post_page_router();
+    let (status, headers, body) = post_page_send(&router, "/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains("post to /save, which has no GET handler"), "it names the route outside dev too: {body}");
+    let cookies: Vec<_> = headers.get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
+    assert!(cookies.iter().any(|c| c.starts_with("saved=1;")), "the handler's cookie is kept: {cookies:?}");
+    assert_eq!(headers.get("clear-site-data").map(|v| v.to_str().unwrap()), Some("\"cache\""), "and Clear-Site-Data");
+    assert!(headers.get("x-drawn").is_none(), "the page's own header is not: {headers:?}");
+    let (status, _, body) = post_page_send(&router, "/items/7/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a route with a parameter: {body}");
+    assert!(body.contains("post to /items/{id}/save, which has no GET handler"), "{body}");
+    let (status, _, body) = post_page_send(&router, "/shop/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "an area's route: {body}");
+    let (status, _, body) = post_page_send(&router, "/news/save", POST_PAGE_BROWSER).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "the route that also matches the API's path: {body}");
+    assert!(body.contains("post to /{section}/save, which has no GET handler"), "{body}");
+    assert_eq!(post_page_send(&router, "/", POST_PAGE_BROWSER).await.0, StatusCode::OK, "the page's own route");
+    assert_eq!(post_page_send(&router, "/refuse", POST_PAGE_BROWSER).await.0, StatusCode::UNPROCESSABLE_ENTITY, "a refusal");
+    assert_eq!(post_page_send(&router, "/done", POST_PAGE_BROWSER).await.0, StatusCode::SEE_OTHER, "a redirect");
+    assert_eq!(post_page_send(&router, "/relay", POST_PAGE_BROWSER).await.0, StatusCode::OK, "any = .. answers GET too");
+    let (status, headers, body) = post_page_send(&router, "/api/save", POST_PAGE_BROWSER).await;
+    assert_eq!(
+        (status, headers.get("corten-shell").is_some()),
+        (StatusCode::OK, true),
+        "an API's path, answered as the API's before the check: {body}"
+    );
+    let (status, headers, body) = post_page_send(&router, "/corten/save", POST_PAGE_BROWSER).await;
+    assert_eq!(
+        (status, headers.get("corten-shell").is_some()),
+        (StatusCode::OK, true),
+        "a path of Corten's own, which only NotPages keeps from the check: {body}"
+    );
+    let patch = post_page_send(&router, "/save", &[("accept", "text/html"), ("corten", "action")]).await;
+    assert_eq!(patch.0, StatusCode::OK, "the runtime's patch");
+    assert_eq!(post_page_send(&router, "/save", &[]).await.0, StatusCode::OK, "not a browser");
+}
+
+/// A release build compiles none of the check: the same post is the page it drew.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_page_answering_a_post_to_a_path_with_no_get_is_sent_in_release_builds() {
+    let router = post_page_router();
+    for path in ["/save", "/items/7/save", "/shop/save", "/news/save"] {
+        let (status, _, body) = post_page_send(&router, path, POST_PAGE_BROWSER).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        assert!(body.contains("<p>saved</p>"), "{path}: {body}");
+    }
+}
+
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in
 /// a debug build, as the browser stops it there; one the policy allows, a path, a page's own
 /// host and a `GET` are not, and an area's policy or the sending page's counts.
@@ -4342,6 +4510,196 @@ paths! {
 
 #[cfg(feature = "json")]
 paths! { ApiQuote = "/api/quote" }
+
+/// The small component the patches of [`what_a_patch_costs`] and
+/// [`what_a_patch_in_an_area_costs`] answer with.
+#[derive(crate::view::Id)]
+struct CostNoteId;
+
+#[crate::component]
+fn CostNote() -> impl crate::view::Patch {
+    html! { <p id={CostNoteId}>"Saved"</p> }
+}
+
+/// The list the large patches [`what_a_patch_costs`] answers with replace.
+#[derive(crate::view::Id)]
+struct CostListId;
+
+/// The large patch as a component: about 4 KiB.
+#[crate::component]
+fn CostList() -> impl crate::view::Patch {
+    html! {
+        <ul id={CostListId}>
+            for n in 0..100u32 {
+                <li>"Row "{n}" of the list a patch sends"</li>
+            }
+        </ul>
+    }
+}
+
+/// A component's string starts at the size the component last rendered to, as an `html!` call
+/// site's does, and never below 256 bytes: the second render allocates once, at the size it needs.
+#[test]
+fn a_component_renders_into_a_string_sized_by_its_last_render() {
+    let first = CostList {}.to_html();
+    let second = CostList {}.to_html();
+    assert_eq!(first, second);
+    assert!(first.len() > 4000, "{}", first.len());
+    assert_eq!(second.capacity(), first.len() + first.len() / 8);
+    assert_eq!(CostNote {}.to_html().capacity(), 256);
+}
+
+/// A component behind a reference, a `Box` or an `Option` keeps its own size: each forwards
+/// `to_html` to the view inside, where the trait's default would render into an empty string and
+/// grow it. Called through the wrapper's own impl (`<W as Render>::to_html`), which method syntax
+/// would skip by dereferencing to the component.
+#[test]
+fn a_wrapped_component_renders_into_a_string_sized_by_its_last_render() {
+    let sized = CostList {}.to_html();
+    let size = sized.len() + sized.len() / 8;
+    let large = [
+        ("&T", <&CostList as Render>::to_html(&&CostList {})),
+        ("Box<T>", <Box<CostList> as Render>::to_html(&Box::new(CostList {}))),
+        ("Some", <Option<CostList> as Render>::to_html(&Some(CostList {}))),
+    ];
+    // A small component's string is never below 256 bytes behind a wrapper either.
+    let small = [
+        ("&T", <&CostNote as Render>::to_html(&&CostNote {})),
+        ("Box<T>", <Box<CostNote> as Render>::to_html(&Box::new(CostNote {}))),
+        ("Some", <Option<CostNote> as Render>::to_html(&Some(CostNote {}))),
+    ];
+    for (wrapper, html) in &large {
+        assert_eq!(*html, sized, "{wrapper}");
+    }
+    let missed: Vec<_> = large
+        .iter()
+        .map(|(wrapper, html)| (*wrapper, html.capacity(), size))
+        .chain(small.iter().map(|(wrapper, html)| (*wrapper, html.capacity(), 256)))
+        .filter(|(_, capacity, wanted)| capacity != wanted)
+        .collect();
+    assert!(missed.is_empty(), "(wrapper, capacity, wanted): {missed:?}");
+    // None renders nothing and allocates nothing.
+    let none = <Option<CostList> as Render>::to_html(&None);
+    assert_eq!((none.as_str(), none.capacity()), ("", 0));
+}
+
+/// What a patch costs: `PATCH_REQUESTS` (200) action requests in process, one at a time, of the
+/// patch `PATCH_KIND` names: `component` (the default), a small `#[component]`; `html`, the
+/// same markup as a bare `html!`; `large`, a component of about 4 KiB; `mixed`, a bare
+/// `Remove` (45 bytes) and a bare `html!` of about 4 KiB in turn. Counting it under callgrind at
+/// two numbers of requests gives the instructions per request. The test binary has no global
+/// allocator, so preload the one to count with. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let kind = std::env::var("PATCH_KIND").unwrap_or_else(|_| "component".to_string());
+    async fn note(req: Req) -> HtmlResult {
+        req.patch(CostNote {})
+    }
+    async fn bare(req: Req) -> HtmlResult {
+        req.patch(html! { <p id={CostNoteId}>"Saved"</p> })
+    }
+    async fn list(req: Req) -> HtmlResult {
+        req.patch(CostList {})
+    }
+    async fn remove(req: Req) -> HtmlResult {
+        req.patch(crate::view::Remove(CostNoteId))
+    }
+    async fn bare_list(req: Req) -> HtmlResult {
+        req.patch(html! {
+            <ul id={CostListId}>
+                for n in 0..100u32 {
+                    <li>"Row "{n}" of the list a patch sends"</li>
+                }
+            </ul>
+        })
+    }
+    let router = App::new(Routes::from(
+        Table::new()
+            .route("/cost/note", get(note))
+            .route("/cost/bare", get(bare))
+            .route("/cost/list", get(list))
+            .route("/cost/remove", get(remove))
+            .route("/cost/bare-list", get(bare_list)),
+    ))
+    .router();
+    let paths: &[(&str, &str)] = match kind.as_str() {
+        "component" => &[("/cost/note", r#"<p id="cost-note">Saved</p>"#)],
+        "html" => &[("/cost/bare", r#"<p id="cost-note">Saved</p>"#)],
+        "large" => &[("/cost/list", r#"<ul id="cost-list"><li>Row 0 "#)],
+        "mixed" => &[
+            ("/cost/remove", r#"<template id="cost-note" data-remove></template>"#),
+            ("/cost/bare-list", r#"<ul id="cost-list"><li>Row 0 "#),
+        ],
+        other => panic!("PATCH_KIND {other}"),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for (path, starts) in paths.iter().cycle().take(requests) {
+            let (status, _, body) = call_with(router.clone(), "GET", path, Some("action"), None).await;
+            assert!(status == StatusCode::OK && body.starts_with(starts), "{path} {status}: {body}");
+        }
+    });
+}
+
+/// A component with a stylesheet, which the area lists, so the area has a section stylesheet.
+const COST_STYLED: crate::Component = crate::Component {
+    name: "CostStyled",
+    script: None,
+    style: Some(crate::style::Style {
+        name: "cost-styled",
+        file: "cost_styled.css",
+        css: ".cost-styled__a{color:red}",
+        classes: &["a"],
+        media: &[],
+        breakpoints: &[],
+    }),
+    event: None,
+    view: None,
+    anchor: &0,
+};
+
+/// What a patch costs where its handler is: `PATCH_REQUESTS` (200) action requests in process,
+/// one at a time. `PATCH_WHERE` is where: `styled`, a handler in an area that lists a styled
+/// component, so its patch links the area's stylesheet; `plain` (the default), the same handler
+/// at the same path in an app whose area lists none; `outside`, the same handler at an app route
+/// `/elsewhere/item`, outside the area, which lists the styled component as in `styled`.
+/// Counting it under callgrind at two numbers of requests gives the instructions per request. Run
+/// in release: `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_in_an_area_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_in_an_area_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let at = std::env::var("PATCH_WHERE").unwrap_or_else(|_| "plain".to_string());
+    async fn cost_patch(req: Req) -> HtmlResult {
+        req.patch(CostNote {})
+    }
+    // The styled component in the area, or in the app's one stylesheet, which no patch links.
+    let (shared, listed): (&'static [crate::Component], &'static [crate::Component]) =
+        if at == "plain" { (&[COST_STYLED], &[]) } else { (&[], &[COST_STYLED]) };
+    let outside = at == "outside";
+    // The app's own route only where the patch is outside the area: `styled` and `plain` are the
+    // app they were.
+    let routes = if outside { Routes::from(Table::new().route("/elsewhere/item", get(cost_patch))) } else { Routes::new() };
+    let router = App::new(routes)
+        .components(shared)
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(cost_patch))).components(listed))
+        .router();
+    let path = if outside { "/elsewhere/item" } else { "/shop/item" };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = call_with(router.clone(), "GET", path, Some("action"), None).await;
+            assert!(status == StatusCode::OK && body.starts_with(r#"<p id="cost-note">Saved</p>"#), "{status}: {body}");
+        }
+    });
+}
 
 /// A JSON answer for [`what_a_request_in_an_area_costs`].
 #[cfg(feature = "json")]

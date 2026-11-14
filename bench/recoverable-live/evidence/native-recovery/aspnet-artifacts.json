@@ -1,0 +1,30 @@
+{
+  "app": "aspnet",
+  "group": "recoverable-live",
+  "files": [
+    {
+      "file": "aspnet-normal.json.gz",
+      "sha256": "be60b1a3bede9b4dc97632ec9d93b1e3d1827fc33b0068b551a8e8cdafe9a434"
+    },
+    {
+      "file": "aspnet-disconnect.json.gz",
+      "sha256": "0a28070616fa2cff87caf36889ed5e97a6b750cc51aeb26281bdf434b8be3ac7"
+    },
+    {
+      "file": "aspnet-missed-updates.json.gz",
+      "sha256": "f5c39e3507d363b9558613ebb7fc541e261a9d395fc949c4a62872c0fbaab84d"
+    },
+    {
+      "file": "aspnet-expired-cursor.json.gz",
+      "sha256": "f152f86c89b0ef591ddb2dc4c5fca6f58d21ebcb3d24144e16fc2348ebd291ea"
+    },
+    {
+      "file": "aspnet-gap.json.gz",
+      "sha256": "44964cb517ec223b8c4e13c594d07c4ff546687e3340f250910545ed9ba2a3c4"
+    },
+    {
+      "file": "aspnet-slow-reader.json.gz",
+      "sha256": "0027f2acc8ae659bffaec67dbc52bf478ebfbdf1045a517305084722c952c1de"
+    }
+  ]
+}

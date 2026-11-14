@@ -1,7 +1,8 @@
 //! Which browser is asking: a random id in the `visitor` cookie, under which the server keeps the
-//! browser's watchlist and alerts. A browser gets one from the watchlist's page or its first save
-//! (even one refused), not before, so a page that only reads (News) makes nothing. A real app
-//! keys a signed-in user's things by their account; this one keys a browser's by this id.
+//! browser's watchlist and alerts. A browser gets one from the watchlist's page (drawn for a
+//! refused change too) or the first change it keeps, not before, so a page that only reads (News),
+//! or a refusal answered as a patch or a Problem Details document, makes nothing. A real app keys a
+//! signed-in user's things by their account; this one keys a browser's by this id.
 use std::convert::Infallible;
 
 use corten::{

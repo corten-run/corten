@@ -1,0 +1,99 @@
+// Pinned Topcoat 0.12.1 run envelopes and this component's canonical diagnostic slot.
+// Never synthesize an event from the workload, another frame field or a DOM observation.
+import assert from 'node:assert/strict';
+
+function messages(network) {
+  if (!network.some(r => r.kind === 'native-websocket-received')) return [];
+  const documents = new Set(network.filter(r => r.kind === 'request' && r.method === 'GET').flatMap(r => {
+    const url = new URL(r.url);
+    return ['http:', 'https:'].includes(url.protocol) && url.pathname === '/' && !url.search && !url.hash
+      && !url.username && !url.password ? [url.href] : [];
+  }));
+  const origins = new Set(network.filter(r => r.kind === 'response' && r.status === 200 && documents.has(r.url))
+    .map(r => new URL(r.url).origin));
+  assert.equal(origins.size, 1, 'native application document origin required');
+  const origin = [...origins][0], regions = new Map(), sockets = new Set();
+  return network.flatMap(record => {
+    if (record.kind === 'native-websocket-created') {
+      assert.ok(typeof record.requestId === 'string' && record.requestId.length > 0, 'native socket identity required');
+      assert.ok(!sockets.has(record.requestId), 'native socket identity repeated');
+      const url = new URL(record.url);
+      assert.ok(['ws:', 'wss:'].includes(url.protocol), 'native socket protocol required');
+      const http = new URL(url.href); http.protocol = url.protocol === 'ws:' ? 'http:' : 'https:';
+      assert.ok(http.origin === origin && url.pathname === '/' && !url.search && !url.hash
+        && !url.username && !url.password, 'native socket must belong to the application origin and route');
+      sockets.add(record.requestId);
+      return [];
+    }
+    if (record.kind !== 'native-websocket-received') return [];
+    assert.ok(typeof record.requestId === 'string' && sockets.has(record.requestId), 'native socket creation must precede delivery');
+    if (record.response?.opcode !== 1) return [];
+    const envelope = JSON.parse(record.response.payloadData), frame = envelope.frame;
+    assert.ok(frame && typeof frame.t === 'string', 'native Topcoat frame required');
+    if (!['snapshot', 'swap'].includes(frame.t)) return [];
+    assert.ok(Number.isSafeInteger(envelope.run) && envelope.run >= 0, 'native run required');
+    assert.equal(typeof frame.html, 'string');
+    // This is an exact app-local serialized element grammar, not arbitrary JSON search.
+    const slots = [...frame.html.matchAll(/<output id="native-message" data-message="([A-Za-z0-9+/]+={0,2})" hidden=""><\/output>/g)];
+    if (!slots.length) { assert.ok(!frame.html.includes('id="native-message"'), 'malformed native diagnostic slot'); return []; }
+    assert.equal(slots.length, 1, 'ambiguous native diagnostic slot');
+    const bytes = Buffer.from(slots[0][1], 'base64');
+    assert.equal(bytes.toString('base64'), slots[0][1], 'noncanonical diagnostic encoding');
+    const message = JSON.parse(bytes.toString('utf8'));
+    if (['idle', 'waiting'].includes(message.kind)) return [];
+    const screen = /<section id="native-screen" data-through="(\d+)" data-serial="(\d+)">/.exec(frame.html);
+    assert.ok(screen, 'native component screen required');
+    const through = Number(screen[1]); assert.ok(Number.isSafeInteger(through));
+    const run = `${record.requestId}/${envelope.run}`;
+    if (frame.t === 'snapshot') {
+      const start = /<!--::topcoat::region::start\(([0-9a-f]{32})\)-->/g;
+      const boundaries = [...frame.html.matchAll(start)];
+      assert.equal(boundaries.length, 1, 'native live region boundary required');
+      assert.ok(frame.html.endsWith(`<!--::topcoat::region::end(${boundaries[0][1]})-->`));
+      regions.set(run, boundaries[0][1]);
+    } else {
+      assert.match(frame.region, /^[0-9a-f]{32}$/);
+      assert.equal(frame.region, regions.get(run), 'swap does not belong to the native live region');
+    }
+    assert.ok(Number.isSafeInteger(message.serial) && message.serial > 0);
+    assert.equal(Number(screen[2]), message.serial, 'native screen/emission serial drift');
+    if (message.kind === 'event') {
+      const e = message.event;
+      assert.ok(Number.isSafeInteger(e.seq) && e.seq > 0 && typeof e.effectId === 'string' && e.effectId.length > 0);
+      assert.ok(typeof e.key === 'string' && e.key.length > 0 && ['upsert', 'remove'].includes(e.op));
+      if (e.op === 'upsert') assert.equal(e.row.id, e.key);
+      else assert.equal(e.row, undefined);
+      assert.ok(['applied', 'duplicate', 'gap'].includes(message.disposition));
+      if (message.disposition === 'applied') assert.equal(e.seq, through);
+      else assert.ok(message.disposition === 'duplicate' ? e.seq <= through : e.seq > through + 1, 'native sequence disposition drift');
+    } else if (message.kind === 'snapshot') {
+      const s = message.snapshot;
+      assert.ok(Number.isSafeInteger(s.through) && s.through >= 0 && Array.isArray(s.rows));
+      assert.equal(new Set(s.rows.map(row => row.id)).size, s.rows.length);
+      assert.deepEqual(s.work, { reads: 1, rows: s.rows.length });
+      assert.equal(s.through, through);
+    } else {
+      assert.ok(['ready', 'overflow'].includes(message.kind), 'unknown native diagnostic kind');
+      const resources = message.resources;
+      assert.ok(resources && typeof resources === 'object' && !Array.isArray(resources), 'native resource envelope missing');
+      for (const key of ['subscriptions', 'connections', 'pendingTasks', 'queueLimit', 'queueEvents', 'queuePeak',
+        'historyLimit', 'historyEvents', 'historyPeak']) {
+        assert.ok(Number.isSafeInteger(resources[key]) && resources[key] >= 0, `invalid native resource ${key}`);
+      }
+      if (message.kind === 'ready') {
+        assert.ok(Number.isSafeInteger(message.from) && message.from >= 0, 'native resume cursor required');
+        assert.ok(['accepted', 'expired'].includes(message.status), 'native resume status required');
+      } else {
+        assert.equal(message.outcome, 'resnapshot');
+        assert.ok(resources.queueEvents > 0, 'native overflow must retain queue saturation');
+      }
+    }
+    return [message];
+  });
+}
+export const wireEvents = network => messages(network).filter(m => m.kind === 'event').map(m => m.event);
+export const wireSnapshots = network => messages(network).filter(m => m.kind === 'snapshot').map(m => m.snapshot);
+export const wireResumes = network => messages(network).filter(m => m.kind === 'ready')
+  .map(({ from, status }) => ({ from, status }));
+export const wireResources = network => messages(network).filter(m => ['ready', 'overflow'].includes(m.kind))
+  .map(m => m.resources);

@@ -491,8 +491,11 @@ mod tests {
     async fn load_more_sends_only_the_next_stories() {
         let app = client();
         let filter = NewsQuery { sector: vec![Sector::Energy, Sector::Technology], shown: Some(3), ..NewsQuery::default() };
-        let patch = app.get(&url::News { filter }).mode(Mode::Action).await;
-        let patch = patch.text();
+        let answer = app.get(&url::News { filter }).mode(Mode::Action).await;
+        // The patch's elements, then the link to the news area's stylesheet, which a page outside
+        // the area would load before the stories go in.
+        let (patch, link) = answer.text().split_once("<link ").expect("the area's stylesheet is linked after the patch");
+        assert!(link.ends_with(r#"/sections/news.css" data-corten-style>"#), "{link}");
         assert!(patch.starts_with(r#"<template id="stories" data-append><li class="#), "{patch}");
         // Five stories are about energy or technology: the page had three, these are the last two.
         assert_eq!(
