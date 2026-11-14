@@ -2018,9 +2018,7 @@ impl Req {
 
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
-        // The last patch's size, so the buffer is allocated once, as a page's is.
-        static SIZE: AtomicUsize = AtomicUsize::new(256);
-        let mut body = String::with_capacity(SIZE.load(Ordering::Relaxed));
+        let mut body = String::new();
         crate::form::DREW_KEY.set(false);
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
         #[cfg(debug_assertions)]
@@ -2041,11 +2039,6 @@ impl Req {
         // A form's submit key is new on every render, so this body's tag would never match.
         if crate::form::DREW_KEY.take() {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
-        }
-        // Read from the body, which holds the patch whole, so it is the size that is sent.
-        if let Some(len) = http_body::Body::size_hint(res.body()).exact() {
-            let len = len as usize;
-            SIZE.store(len + len / 8, Ordering::Relaxed);
         }
         Ok(HtmlResponse::new(res))
     }

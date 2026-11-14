@@ -4343,6 +4343,106 @@ paths! {
 #[cfg(feature = "json")]
 paths! { ApiQuote = "/api/quote" }
 
+/// The small patch [`what_a_patch_costs`] answers with: a component.
+#[derive(crate::view::Id)]
+struct CostNoteId;
+
+#[crate::component]
+fn CostNote() -> impl crate::view::Patch {
+    html! { <p id={CostNoteId}>"Saved"</p> }
+}
+
+/// The list the large patches [`what_a_patch_costs`] answers with replace.
+#[derive(crate::view::Id)]
+struct CostListId;
+
+/// The large patch as a component: about 4 KiB.
+#[crate::component]
+fn CostList() -> impl crate::view::Patch {
+    html! {
+        <ul id={CostListId}>
+            for n in 0..100u32 {
+                <li>"Row "{n}" of the list a patch sends"</li>
+            }
+        </ul>
+    }
+}
+
+/// A component's string starts at the size the component last rendered to, as an `html!` call
+/// site's does, and never below 256 bytes: the second render allocates once, at the size it needs.
+#[test]
+fn a_component_renders_into_a_string_sized_by_its_last_render() {
+    let first = CostList {}.to_html();
+    let second = CostList {}.to_html();
+    assert_eq!(first, second);
+    assert!(first.len() > 4000, "{}", first.len());
+    assert_eq!(second.capacity(), first.len() + first.len() / 8);
+    assert_eq!(CostNote {}.to_html().capacity(), 256);
+}
+
+/// What a patch costs: `PATCH_REQUESTS` (200) action requests in process, one at a time, of the
+/// patch `PATCH_KIND` names: `component` (the default), a small `#[component]`; `html`, the
+/// same markup as a bare `html!`; `large`, a component of about 4 KiB; `mixed`, a bare
+/// `Remove` (45 bytes) and a bare `html!` of about 4 KiB in turn. Counting it under callgrind at
+/// two numbers of requests gives the instructions per request. The test binary has no global
+/// allocator, so preload the one to count with. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PATCH_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_patch_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_a_patch_costs() {
+    let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let kind = std::env::var("PATCH_KIND").unwrap_or_else(|_| "component".to_string());
+    async fn note(req: Req) -> HtmlResult {
+        req.patch(CostNote {})
+    }
+    async fn bare(req: Req) -> HtmlResult {
+        req.patch(html! { <p id={CostNoteId}>"Saved"</p> })
+    }
+    async fn list(req: Req) -> HtmlResult {
+        req.patch(CostList {})
+    }
+    async fn remove(req: Req) -> HtmlResult {
+        req.patch(crate::view::Remove(CostNoteId))
+    }
+    async fn bare_list(req: Req) -> HtmlResult {
+        req.patch(html! {
+            <ul id={CostListId}>
+                for n in 0..100u32 {
+                    <li>"Row "{n}" of the list a patch sends"</li>
+                }
+            </ul>
+        })
+    }
+    let router = App::new(Routes::from(
+        Table::new()
+            .route("/cost/note", get(note))
+            .route("/cost/bare", get(bare))
+            .route("/cost/list", get(list))
+            .route("/cost/remove", get(remove))
+            .route("/cost/bare-list", get(bare_list)),
+    ))
+    .router();
+    let paths: &[(&str, &str)] = match kind.as_str() {
+        "component" => &[("/cost/note", r#"<p id="cost-note">Saved</p>"#)],
+        "html" => &[("/cost/bare", r#"<p id="cost-note">Saved</p>"#)],
+        "large" => &[("/cost/list", r#"<ul id="cost-list"><li>Row 0 "#)],
+        "mixed" => &[
+            ("/cost/remove", r#"<template id="cost-note" data-remove></template>"#),
+            ("/cost/bare-list", r#"<ul id="cost-list"><li>Row 0 "#),
+        ],
+        other => panic!("PATCH_KIND {other}"),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for (path, starts) in paths.iter().cycle().take(requests) {
+            let (status, _, body) = call_with(router.clone(), "GET", path, Some("action"), None).await;
+            assert!(status == StatusCode::OK && body.starts_with(starts), "{path} {status}: {body}");
+        }
+    });
+}
+
 /// A JSON answer for [`what_a_request_in_an_area_costs`].
 #[cfg(feature = "json")]
 #[derive(crate::ToJson)]
