@@ -3469,7 +3469,14 @@ rules something out.
     (`a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_a_patch`), and a
     handler returning `corten::Result<impl Answer<Inputs = AnyInputs>>` building once its patch
     names `::<ForOne, AnyAnswer>` (the doctest on `AnyAnswer`; `Kind = AnyAnswer` on the `impl`
-    still leaves it E0283), on `a2351ef92` merged with main at `de46e974`.
+    still leaves it E0283), on `a2351ef92` merged with main at `de46e974`; 2026-11-14, an answer
+    type of an app's own that says `type Kind = Patches;`, or forwards `A::Kind`, refused (the
+    `compile_fail,E0277` doctests on `Answer::Kind`), `HtmlResult<Patches>` and `Public` and
+    `NoStore` of it still `Patches` (the `Public::new` and `Methods` doctests), a `get` of
+    `corten::Result<impl Answer<Inputs = AnyInputs, Kind = AnyAnswer>>` named as `Methods` (the
+    doctest on `AnyAnswer`), a post-only mount refused with the mount's message
+    (`tests/handler_message.rs`), and, in a scratch crate with the same assertion, a mount only
+    `main` reaches passing `cargo test` and failing `cargo build --bins`, on `75d031c24`.
 
 ## Rules
 
@@ -3639,7 +3646,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `app()` in its library does. They do not fail `cargo check`, clippy or rust-analyzer, nor
     `cargo test --lib`, nor `cargo test` in a crate whose only mount is in a binary's `main`,
     since a binary's test build never generates `main`'s callees; `corten check` passes such a
-    crate, and `cargo build` then refuses it. `Refused::sign_in`'s 401 to a
+    crate, and `cargo build` then refuses it
+    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)
+    proposes that `corten check` build the binaries too). `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
     has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
     wrong one with `unauthorized`, which carries one.
