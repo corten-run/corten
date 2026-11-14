@@ -4,6 +4,23 @@
 page. `GET /api/marketplace/{id}` uses Phoenix/Jason to serialize the numeric record.
 This API also accepts HTML clients, returning JSON or 404 without content negotiation errors.
 Locales are `en-US`, `fr-FR`, and `de-DE`; legacy LiveViews and channels are unchanged.
+The marketplace alert is an embedded native LiveView with a real `save` event;
+the same form's action and CSRF token keep ordinary no-JS POSTs working. The rest
+of the read-only controller/HEEx page and numeric JSON route remain unchanged.
+The LiveView retains submitted email/target values after accepted and rejected
+actions, so the next localized validation uses the actual native form state.
+The form has a stable ID and `phx-change` handler for native LiveView form
+recovery. LiveView 1.2.13 skips recovery on the first join. A native
+`dom.onBeforeElUpdated` callback therefore copies only dirty email/target values
+into that initial patch, including blurred edits. The form's native mounted hook
+then synchronizes those edits through the same non-writing `change` event.
+After mount, the callback no longer preserves values against server patches;
+rejoins use LiveView's ordinary form recovery. No subtree ignores, replacement
+form transport or changes to the normal 2,500 ms long-poll fallback are involved.
+Both LiveView transports use Phoenix's `check_origin: :conn`: the browser origin
+must match the request connection's scheme, host and port, rather than the
+endpoint URL's default `localhost` host. This permits same-origin loopback runs
+without allowing foreign origins or disabling native session/CSRF checks.
 
 `MARKETPLACE_SOURCE=fixture` loads `MARKETPLACE_FIXTURE_PATH` once at startup
 (default `/fixtures/marketplace.json`). Otherwise each request reads one record
@@ -12,8 +29,20 @@ from `${API_BASE}/marketplace/records/{id}`, with redirects/retries disabled and
 ex_cldr_numbers supplies currency/number formatting, target-price parsing, and
 CLDR plural selection, including French million `many`. Formatting is per request;
 only numeric fixture records and static labels are retained. The browser pipeline
-and form retain Phoenix's normal CSRF protection, and the normal LiveView runtime
-remains loaded alongside plain HTML GET/POST controls.
+and form retain Phoenix's normal CSRF protection. Origin and Fetch Metadata
+checks reject cross-site POSTs, including ones carrying valid CSRF tokens.
+
+An accepted submission appends exactly one `{item_id,email,target_minor}` record,
+using the same parsed decimal for validation, confirmation and half-up minor-unit
+conversion. `GET /api/alerts` uses Phoenix/Jason to return the current session's
+records in insertion order with `private, no-store`. It never clears or fabricates
+records. Rejected inputs and missing items do not append. Keep the native cookie
+jar for form submission and readback. A cryptographically random session identifier
+is authenticated in Plug's native HttpOnly, SameSite=Lax cookie. A supervised Agent
+serializes concurrent appends; this synthetic store lasts for the server process,
+not a durable production database or a cluster. Deployments provide a private,
+stable `SECRET_KEY_BASE` and normal HTTPS/secure-cookie configuration; standalone
+runs generate a fresh signing key at startup.
 
 ex_cldr_numbers 2.38.3's implicit negative pattern puts the minus after an English
 currency prefix. The adapter derives explicit standard negative subpatterns from
@@ -27,3 +56,39 @@ Labels and CSS are byte-identical copies of `bench/marketplace/labels.json` and
 mix deps.get
 mix test test/marketplace_test.exs
 ```
+
+The compiled production release also runs `test/native_alert_live.exs` with
+`bin/item_page eval 'Code.eval_file("/checks/native_alert_live.exs")'` when that
+file is mounted at `/checks/native_alert_live.exs` and the marketplace fixture is
+configured. This exercises consecutive accepted/rejected native component events,
+retained form state and independent store readback without browser transport.
+
+From the repository root, with Playwright installed and the native image running:
+
+```sh
+node bench/fullstack/apps/rails/test/native-alerts.mjs phoenix http://localhost:8080
+node bench/fullstack/apps/phoenix/test/native-preconnect.mjs http://localhost:8080
+node bench/fullstack/apps/phoenix/test/native-origins.mjs http://localhost:8080
+```
+
+This checks actual native LiveView events, independent HTTP readbacks with the
+browser's cookie jar, JS/no-JS, all locales, rejection, order, concurrent POSTs and
+two-client isolation. It is not a comparative throughput benchmark.
+Its independent HTTP probes explicitly close connections because Bandit may close
+native exception responses (CSRF rejection or missing item); Playwright must not
+pool that socket for the next request. No POST is retried, and browser forms and
+LiveView keep their ordinary native transports and security checks.
+
+The preconnection regression uses the same edge fixture as `native-alerts.mjs`.
+In EN/FR it compares ordinary no-JS forms, normally connected LiveViews and a
+real WebSocket with its join reply held while both inputs are filled and blurred.
+It checks retained values, no pre-submit mutation, real native save and independent
+readback. Delayed cases also disconnect/reconnect the native socket with blurred
+edits, reject an invalid recovered target, and accept a later valid edit without
+reloading or hiding subsequent server updates.
+
+The origin regression uses the canonical marketplace fixture. It checks real
+WebSocket and long-poll joins and correlated saves on both loopback hostnames,
+then rejects a different host, scheme or port on both transports with the
+browser's valid session and CSRF token. Long-poll is exercised by closing only
+the browser's WebSocket, leaving LiveView's normal fallback timing unchanged.

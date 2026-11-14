@@ -50,7 +50,7 @@ void load() {
   for (const auto &line : (*entry.second)[key])
    if (!fixture.count(line["item_id"].asString())) throw std::runtime_error("unknown marketplace item reference");
 }
-void get(const std::string &id, std::function<void(RecordPtr, bool)> done, bool completeDocument = false) {
+void get(const std::string &id, const trace_context::Context &trace, std::function<void(RecordPtr, bool)> done, bool completeDocument) {
  if (fromFixture) {
   auto found = fixture.find(id); done(found == fixture.end() ? nullptr : found->second, false); return;
  }
@@ -59,6 +59,7 @@ void get(const std::string &id, std::function<void(RecordPtr, bool)> done, bool 
  else { client = std::move(idleClients.back()); idleClients.pop_back(); }
  auto request = drogon::HttpRequest::newHttpRequest();
  request->setPath("/marketplace/records/" + drogon::utils::urlEncodeComponent(id));
+ trace.apply(request);
  client->sendRequest(request, [client, completeDocument, done = std::move(done)](drogon::ReqResult result, const drogon::HttpResponsePtr &response) {
   idleClients.push_back(client);
   if (result != drogon::ReqResult::Ok) { done(nullptr, true); return; }
@@ -109,7 +110,7 @@ void routes() {
       output->addHeader("Cache-Control", "no-store");
      } catch (const std::exception &) { output = record_http::problem(drogon::k502BadGateway); }
      callback(output);
-    });
+    }, trace_context::Context::capture(request));
   }, {drogon::HttpOptionsMiddleware::classTypeName()});
  drogon::app().registerHandler("/marketplace/{locale}/{id}",
   [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
@@ -123,7 +124,8 @@ void routes() {
     if (request->getHeader("content-type").find("application/x-www-form-urlencoded") != 0)
      return error(callback, drogon::k415UnsupportedMediaType);
    }
-   get(id, [request, locale, id, callback = std::move(callback)](RecordPtr record, bool failed) mutable {
+   const auto trace = trace_context::Context::capture(request);
+   get(id, trace, [request, locale, id, callback = std::move(callback)](RecordPtr record, bool failed) mutable {
     if (failed) return error(callback, drogon::k502BadGateway);
     if (!record) return error(callback, drogon::k404NotFound);
     if (request->method() == drogon::Post && (*record)["id"].asString() != id) return error(callback, drogon::k502BadGateway);

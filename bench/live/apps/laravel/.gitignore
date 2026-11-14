@@ -1,0 +1,6 @@
+/node_modules/
+/vendor/
+/.env
+/public/client.js
+/storage/
+/bootstrap/cache/*.php

@@ -5,6 +5,7 @@ require __DIR__.'/../vendor/autoload.php';
 
 use App\Support\MarketplaceFormat;
 use App\Support\MarketplaceSource;
+use App\Support\MarketplaceAlerts;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -43,8 +44,8 @@ check($source->get('missing') === null, 'Unknown fixture item');
 $app->instance(MarketplaceSource::class, $source);
 
 $cookies = [];
-$send = function (string $path, string $method = 'GET', array $params = []) use ($kernel, &$cookies) {
-    $request = Request::create($path, $method, $params, $cookies);
+$send = function (string $path, string $method = 'GET', array $params = [], array $headers = []) use ($kernel, &$cookies) {
+    $request = Request::create($path, $method, $params, $cookies, [], $headers);
     $response = $kernel->handle($request);
     $kernel->terminate($request, $response);
     foreach ($response->headers->getCookies() as $cookie) {
@@ -53,6 +54,9 @@ $send = function (string $path, string $method = 'GET', array $params = []) use 
 
     return $response;
 };
+
+check(json_decode($send('/api/alerts')->getContent(), true) === [], 'Fresh session is empty');
+$expectedAlerts = [];
 
 $expected = [
     'en-US' => ['$0.00', '$0.01', '$0.10', '$1.25', '$1,234.50', '$1,234,567.89', '-$1,234.50'],
@@ -81,15 +85,29 @@ foreach (MarketplaceFormat::LOCALES as $locale) {
     check(nodes($html, '//*[@class="marketplace__contents"]//a[@href="/marketplace/'.$locale.'/item_2"]')->length === 1, 'Localized relative navigation');
     $csrf = nodes($html, '//input[@name="_token"]')->item(0)->getAttribute('value');
     $target = $locale === 'en-US' ? '12.50' : '12,50';
+    check($format->alertResult('a@b', $locale === 'en-US' ? '0.105' : '0,105', 'Title')[1] === 11, 'Parsed target converted with half-up rounding');
     foreach ([['<a>@b', $target, null], ['invalid', $target, 'invalid_email'], ['a@b', '0', 'invalid_price'], ['a@b', '12bad', 'invalid_price'], ['a@b', 'NaN', 'invalid_price']] as [$email, $price, $key]) {
         $response = $send($route, 'POST', ['_token' => $csrf, 'email' => $email, 'target_price' => $price]);
         check($response->getStatusCode() === 200, 'POST status '.$locale.' '.$response->getStatusCode());
         $text = nodes($response->getContent(), '//*[@class="marketplace__message"]')->item(0)->textContent;
         check($text === ($key ? $format->labels[$key] : $format->alert($email, $price, $records['item_1']['title'])), 'POST message '.$locale);
         check(nodes($response->getContent(), '//article//script')->length === 0, 'Alert data escaped');
+        if ($key === null) {
+            $expectedAlerts[] = ['item_id' => 'item_1', 'email' => $email, 'target_minor' => 1250];
+        }
+        check(json_decode($send('/api/alerts')->getContent(), true) === $expectedAlerts, 'Independent ordered readback, including rejected writes');
     }
     check($send($route, 'POST', ['email' => 'a@b', 'target_price' => $target])->getStatusCode() === 419, 'CSRF remains enabled');
+    check($send($route, 'POST', ['_token' => $csrf, 'email' => 'a@b', 'target_price' => $target], ['HTTP_ORIGIN' => 'https://other.test'])->getStatusCode() === 403, 'Cross-origin write rejected');
+    check($send($route, 'POST', ['_token' => $csrf, 'email' => 'a@b', 'target_price' => $target], ['HTTP_SEC_FETCH_SITE' => 'cross-site'])->getStatusCode() === 403, 'Cross-site write rejected');
 }
+
+check(json_decode($send('/api/alerts?email=fake&target_minor=999')->getContent(), true) === $expectedAlerts, 'GET neither resets nor fabricates state');
+$firstCookies = $cookies;
+$cookies = [];
+check(json_decode($send('/api/alerts')->getContent(), true) === [], 'Independent client sees no alerts');
+$cookies = $firstCookies;
+check(json_decode($send('/api/alerts')->getContent(), true) === $expectedAlerts, 'Original client retains alerts');
 
 $html = $send('/marketplace/fr-FR/item_1?sort=desc&offers=all')->getContent();
 $ids = array_map(fn ($node) => $node->getAttribute('data-listing-id'), iterator_to_array(nodes($html, '//*[@data-listing-id]')));

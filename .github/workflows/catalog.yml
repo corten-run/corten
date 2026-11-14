@@ -120,7 +120,7 @@ jobs:
         run: >-
           docker run --rm
           -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
-          mcr.microsoft.com/dotnet/sdk:10.0
+          mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet test tests/Marketplace.Tests.csproj -c Release
       - name: Test native compiled alert forms and independent readback
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
@@ -169,7 +169,7 @@ jobs:
         run: >-
           docker run --rm
           -v "$PWD/bench/fullstack/apps/aspnet-aot:/src" -w /src
-          mcr.microsoft.com/dotnet/sdk:10.0
+          mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet run --project tests/Records.Tests.csproj -c Release
       - name: Publish the native AOT JSON adapter
         run: docker build -t catalog-json-aot bench/fullstack/apps/aspnet-aot

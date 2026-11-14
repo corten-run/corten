@@ -11,7 +11,7 @@
 <script src="~/htmx.min.js" asp-append-version="true" defer></script>
 <script src="~/item.js" asp-append-version="true" defer></script>
 </head>
-<body hx-boost="@(ViewData["Marketplace"] is true ? "false" : "true")">
+<body hx-boost:inherited="@(ViewData["Marketplace"] is true ? "false" : "true")">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main>@RenderBody()</main>
 </body>

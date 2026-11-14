@@ -9,6 +9,7 @@ mod items;
 mod marketplace;
 mod marketplace_view;
 mod model;
+mod trace;
 
 use std::{
     sync::{Arc, LazyLock},

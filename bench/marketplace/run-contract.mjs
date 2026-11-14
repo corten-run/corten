@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps } from "../fullstack/inventory.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { locales } from "./contract.mjs";
 import { groupApps } from "./groups.mjs";
