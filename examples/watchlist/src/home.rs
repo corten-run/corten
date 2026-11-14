@@ -687,4 +687,66 @@ mod tests {
         assert!(patch.contains(r#"<option value="GLBX">Globex (GLBX)</option>"#), "{patch}");
         assert!(patch.contains("Stopped watching Globex."), "{patch}");
     }
+
+    /// Markup with every call the key check puts in what `html!` writes: cells keyed by
+    /// `key={..}`, one keyed by a static `key=".."`, and a `<template>`'s and a `<noscript>`'s
+    /// content.
+    #[component]
+    fn KeyedMarkup<'a>(ids: &'a [String]) -> impl Render {
+        let (cell, total) = refs();
+        html! {
+            <div>
+                <table>
+                    <tbody>
+                        for id in ids {
+                            <tr><td ref={cell} key={id.as_str()}>"1"</td></tr>
+                        }
+                    </tbody>
+                    <tfoot><tr><td ref={total} key="total">"2"</td></tr></tfoot>
+                </table>
+                <template>
+                    <table><tbody><tr><td ref={cell} key="row">"0"</td></tr></tbody></table>
+                </template>
+                <noscript><p>"Prices follow the market with JavaScript on."</p></noscript>
+            </div>
+        }
+    }
+
+    #[inline(never)]
+    fn render_live_prices(stocks: &[Stock], rounds: usize) -> usize {
+        let t = Msg::default();
+        (0..rounds).map(|_| std::hint::black_box(LivePrices { stocks, t }.to_html()).len()).sum()
+    }
+
+    #[inline(never)]
+    fn render_keyed_markup(ids: &[String], rounds: usize) -> usize {
+        (0..rounds).map(|_| std::hint::black_box(KeyedMarkup { ids }.to_html()).len()).sum()
+    }
+
+    /// What the debug key check (design Choice 46) costs a release render, which should be
+    /// nothing: `LivePrices` with 50 rows, each with two keyed cells, and `KeyedMarkup`, rendered
+    /// 1,000 times each. Instructions, from the release test binary under callgrind:
+    /// `cargo test --release -p watchlist --no-run`, then
+    /// `valgrind --tool=callgrind <test binary> --ignored --exact home::tests::key_check_cost`
+    /// and `callgrind_annotate --inclusive=yes` for `render_live_prices` and `render_keyed_markup`.
+    #[test]
+    #[ignore]
+    fn key_check_cost() {
+        let stocks: Vec<Stock> = (0..50u32)
+            .map(|n| Stock {
+                id: format!("S{n:03}"),
+                name: format!("Stock {n}"),
+                price_cents: 10_000 + n,
+                open_cents: 10_000,
+                change_bp: n as i32,
+                price: format!("$100.{n:02}"),
+                change: format!("+0.{n:02}%"),
+            })
+            .collect();
+        let ids: Vec<String> = stocks.iter().map(|s| s.id.clone()).collect();
+        let rounds = 1_000;
+        let prices = render_live_prices(&stocks, rounds);
+        let keyed = render_keyed_markup(&ids, rounds);
+        println!("LivePrices: {} bytes a render, KeyedMarkup: {} bytes a render", prices / rounds, keyed / rounds);
+    }
 }
