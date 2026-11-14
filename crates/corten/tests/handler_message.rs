@@ -157,7 +157,7 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
     let (ok, stderr) = build_main("patches-message", &app(true, "HtmlResult"));
     assert!(!ok, "a patches route whose get handler returns HtmlResult compiled");
     assert!(
-        stderr.contains("the route says `patches`, and its get handler's `HtmlResponse` may answer"),
+        stderr.contains("the route says `patches`, and its get handler's answer may answer the runtime's read with a page or a redirect (its kind is `AnyAnswer`, not `Patches`)"),
         "Corten's message: {stderr}"
     );
     // `alerts` in `get = alerts` on line 6, at column 30.

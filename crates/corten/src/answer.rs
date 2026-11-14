@@ -404,19 +404,30 @@ pub(crate) mod sealed {
     impl<A> KindOf<A> for AnyAnswer {}
     impl<A: PatchAnswer> KindOf<A> for Patches {}
 
-    /// An answer that is a patch whenever the runtime asked ([`Patches`]): what the `get`
-    /// handler of a route that says `patches` returns, checked by its routes module, and the
-    /// answers whose [`super::Answer::Kind`] can be `Patches`. Only Corten's.
+    /// An answer that is a patch whenever the runtime asked: the answers whose
+    /// [`super::Answer::Kind`] can be [`Patches`] ([`super::KindOf`]). Only Corten's.
     #[diagnostic::on_unimplemented(
-        message = "the route says `patches`, and its get handler's `{Self}` may answer the runtime's read with a page or a redirect",
-        label = "this handler",
-        note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+        message = "`{Self}` cannot say `Kind = Patches`: only Corten's patch answers can",
+        label = "this answer says `Kind = Patches`",
+        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
     )]
     pub trait PatchAnswer {}
     impl<For> PatchAnswer for HtmlResponse<For, Patches> {}
     impl<A: PatchAnswer> PatchAnswer for Result<A, Error> {}
     impl<A: PatchAnswer + Shareable> PatchAnswer for Public<A> {}
     impl<A: PatchAnswer> PatchAnswer for NoStore<A> {}
+
+    /// The kind of an answer that is a patch whenever the runtime asked: [`Patches`], which
+    /// only a [`PatchAnswer`] can say. What the `get` handler of a route that says `patches`
+    /// returns, checked by its routes module on its [`super::Answer::Kind`], the same kind a
+    /// mount reads, so an `impl Answer<.., Kind = Patches>` passes both.
+    #[diagnostic::on_unimplemented(
+        message = "the route says `patches`, and its get handler's answer may answer the runtime's read with a page or a redirect (its kind is `{Self}`, not `Patches`)",
+        label = "this handler",
+        note = "return `HtmlResult<Patches>` (or an `impl Answer<.., Kind = Patches>` that is one), which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+    )]
+    pub trait PatchKind {}
+    impl PatchKind for Patches {}
 
     pub trait Immutable {}
     impl Immutable for super::Media {}

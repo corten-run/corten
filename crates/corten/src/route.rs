@@ -1651,6 +1651,47 @@ impl<R: Route + ?Sized> Route for &R {
 /// compiler cannot tie a route given by hand (a `#[derive(Route)]` struct) to the handler that
 /// serves it. Such a route mounted by hand (`Area::route`, `Api::route`) takes only a `get`
 /// handler that answers a patch too ([`Methods`]).
+///
+/// Both checks read the `get` handler's [`crate::Answer::Kind`], so they agree (a test in
+/// `tests.rs` holds a handler returning `impl Answer<.., Kind = Patches>` to both). Only
+/// Corten's patch answers can say `Patches`, so an answer of the app's own that holds one
+/// is not the `get` of such a route:
+///
+/// ```compile_fail,E0277
+/// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, prelude::*, Answer};
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/alerts", get = alerts, patches)]
+///     pub struct Alerts;
+/// }
+///
+/// #[derive(Id)]
+/// struct ListId;
+///
+/// struct Mine(HtmlResult<Patches>);
+///
+/// impl IntoResponse for Mine {
+///     fn into_response(self) -> Response {
+///         self.0.into_response()
+///     }
+/// }
+///
+/// impl Answer for Mine {
+///     const FORMAT: Format = Format::Html;
+///     type Inputs = AnyInputs;
+///     type Rows = NotAFeed;
+///     type Kind = Patches;
+/// }
+///
+/// async fn alerts(req: Req) -> Mine {
+///     Mine(req.patch(html! { <ul id={ListId}></ul> }))
+/// }
+///
+/// fn main() {
+///     let _ = App::new(url::router());
+/// }
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a route `ReadAgain::from` can read: nothing holds its get handler to answering a patch",
     label = "its route does not say `patches`",
@@ -4383,13 +4424,16 @@ pub mod __private {
 
     /// `patches`: the route's `get` handler answers a patch whenever the runtime asks
     /// ([`crate::Patches`]). A `const` with nothing to run: the bounds are the check, at the
-    /// handler's name in `#[route(..)]`.
+    /// handler's name in `#[route(..)]`. It reads the answer's [`crate::Answer::Kind`], as a
+    /// mount reads its [`crate::Methods`]'s, so the two agree: an `impl Answer<.., Kind = Patches>`
+    /// passes both, and only Corten's patch answers can say `Patches` ([`crate::answer::KindOf`]).
     #[inline]
     pub const fn patches<H, T, S>(_: &H)
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-        <H as crate::answer::Signature<T>>::Out: crate::answer::sealed::PatchAnswer,
+        <H as crate::answer::Signature<T>>::Out: crate::Answer,
+        <<H as crate::answer::Signature<T>>::Out as crate::Answer>::Kind: crate::answer::sealed::PatchKind,
     {
     }
 

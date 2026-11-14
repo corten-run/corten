@@ -3493,16 +3493,21 @@ rules something out.
     through `KindOf`'s hidden associated types, so the forwarding is proved for any answer they
     hold, an `impl Answer` among them, and an app's own type that says `Patches`, or forwards
     another answer's kind with `A::Kind`, does not compile (`compile_fail` doctests on
-    `Answer::Kind`). The routes module's check of its own `get` is the same trait, `PatchAnswer`,
-    as a bound with its wording at the handler's name, so the two checks cannot disagree on what
-    answers a patch. The mount's side of that can only be a `const`: stable Rust has no bound for
+    `Answer::Kind`). The routes module's check of its own `get` reads the same `Answer::Kind`
+    the mount reads, as a bound only `Patches` meets (a hidden `PatchKind`) with its wording at
+    the handler's name, so the two checks cannot disagree on what answers a patch: a handler
+    returning `impl Answer<.., Kind = Patches>` passes both, as `HtmlResult<Patches>` does (a
+    test in `tests.rs`; rustc warns there, `opaque_hidden_inferred_bound`, that the `impl` does
+    not prove `Kind`'s bound, which only the hidden type's impl can). The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
     path-shape assertions the same functions already make
     ([Limit 11](#limit-caller-types)), which the compiler evaluates only when it generates the
-    code that mounts the route: `cargo build`, and `cargo test` when a test, a doctest or a
-    library's own code reaches the mount, with its message; not `cargo check`, clippy or
-    rust-analyzer, not `cargo test --lib`, and not `cargo test` when only a binary's `main`
-    mounts the route (its test build never generates `main`'s callees). Its error points into
+    code that mounts the route: `cargo build`, and `cargo test` (or `cargo test --lib`) when
+    something it generates reaches the mount, a test, a doctest or a library's own public code,
+    with its message; not `cargo check`, clippy or rust-analyzer, which generate no code, nor a
+    `cargo test` that generates nothing reaching the mount: `cargo test --lib` when no unit
+    test reaches it, and `cargo test` when only a binary's `main` mounts the route (its test
+    build never generates `main`'s callees). Its error points into
     Corten's `mounted_with`, naming the route there (`mounted_with::<url::Status, AnyAnswer>`),
     not at the app's call: the note for a generic call names the call that instantiated the
     function holding the `const`, and `Area::route` cannot hold it itself, since its `Methods` is
@@ -3565,7 +3570,10 @@ rules something out.
     `Methods<_, AnyAnswer>` by a bound, and associated type defaults are unstable, so `Route`
     cannot gain a type every `Route` written by hand would not have to name; the route's side of
     that check is the hidden `const PATCHES`, which has a default); reasoned (`HtmlResponse::new` is `pub(crate)`, so an app cannot make a
-    `Patches` answer but through the methods that answer a patch to the runtime, and `Patches` is
+    `Patches` answer but through the methods that answer a patch to the runtime; those of them
+    that may answer a page instead, `patch_or`, `invalid` and `invalid_with`, decide by the mode
+    the client asked in, a private field of `Req` beside the writable `req.mode`, so a handler
+    that sets `req.mode` cannot make one a page for the runtime's read; and `Patches` is
     a `KindOf` only of an answer of the sealed `PatchAnswer`, so no answer type of the app's own
     can say it; the marker types
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
@@ -3779,11 +3787,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the compiler evaluates only when it generates the code that calls that method. So is a route
     that says `patches`, mounted by hand or by its routes module, against the kind of the `get`
     handler it is given ([Choice 49](#choice-patch-routes)), and so is the shape of a hand-written
-    `Route`'s path. Those assertions fail `cargo build`, and `cargo test` (so `corten check`)
-    when a test, a doctest or a library's own non-generic code reaches the mount, as the template's
-    `app()` in its library does. They do not fail `cargo check`, clippy or rust-analyzer, nor
-    `cargo test --lib`, nor `cargo test` in a crate whose only mount is in a binary's `main`,
-    since a binary's test build never generates `main`'s callees; `corten check` passes such a
+    `Route`'s path. Those assertions fail any build that generates the code that mounts the route:
+    `cargo build`, and `cargo test` (so `corten check`) when something it builds reaches the
+    mount, a test, a doctest or a library's own public non-generic code, which it builds for the
+    doctests and the binaries, as the template's `app()` in its library is. `cargo test --lib`
+    builds only the library's test binary, which generates what its unit tests reach, so it fails
+    when a unit test reaches the mount and not otherwise. They do not fail `cargo check`, clippy
+    or rust-analyzer, which generate no code, nor `cargo test` in a crate whose only mount is in a
+    binary's `main`, since a binary's test build never generates `main`'s callees; `corten check` passes such a
     crate, and `cargo build` then refuses it
     ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)
     proposes that `corten check` build the binaries too). `Refused::sign_in`'s 401 to a

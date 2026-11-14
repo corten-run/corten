@@ -967,6 +967,11 @@ pub struct DrawnPatch(String);
 /// that build each kind of response. Every handler that returns HTML takes one.
 pub struct Req {
     pub mode: Mode,
+    /// The mode the client asked in, which `mode` starts as. The answers that may be
+    /// `HtmlResult<Patches>` ([`Req::patch_or`], [`Req::invalid`], [`Req::invalid_with`]) read
+    /// this one, so a handler that changes `mode` cannot make one a page for the runtime's read
+    /// (`docs/design.md#choice-patch-routes`).
+    asked_in: Mode,
     nonce: Option<NonceSlot>,
     uri: Uri,
     accept_language: Option<HeaderValue>,
@@ -1175,6 +1180,7 @@ impl Req {
         let (mode, fetched) = Mode::asked(headers);
         Req {
             mode,
+            asked_in: mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
@@ -2114,7 +2120,7 @@ impl Req {
     {
         // The patch is rendered before the future is made, so the future holds the answer and not
         // `view`: a view of non-`Send` references would make the handler's future not `Send`.
-        let patch = (self.mode == Mode::Action).then(|| self.patch(view));
+        let patch = (self.asked_in == Mode::Action).then(|| self.patch(view));
         async move {
             match patch {
                 Some(patch) => patch,
@@ -2153,7 +2159,7 @@ impl Req {
         Fut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
         let status = errors.refusal().status();
-        match self.mode {
+        match self.asked_in {
             Mode::Action => self.patch_with_status(status, form),
             #[cfg(feature = "json")]
             Mode::Data => Ok(HtmlResponse::new(errors.response())),
@@ -2235,7 +2241,7 @@ impl Req {
         PageFut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
         let status = errors.refusal().status();
-        match self.mode {
+        match self.asked_in {
             Mode::Action => {
                 let DrawnPatch(body) = form(FormPatch(self)).await?;
                 Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))

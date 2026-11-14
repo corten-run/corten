@@ -2595,6 +2595,94 @@ async fn a_route_that_says_patches_mounted_by_hand_with_a_patch_handler_answers_
     assert_eq!(read.text(), r#"<p id="msg">Saved again</p>"#);
 }
 
+/// The routes module's check and a mount's agree on a handler whose answer is opaque: an
+/// `impl Answer<.., Kind = Patches>` is the `get` of a route that says `patches` both in its
+/// routes module and mounted by hand, and the runtime's read gets the patch either way. An answer
+/// of the app's own cannot say `Patches` (`PatchRoute`'s and `Answer::Kind`'s doctests).
+#[tokio::test]
+async fn an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand() {
+    #[derive(crate::Route)]
+    #[route("/opaque")]
+    struct OpaqueArea;
+    let module = App::new(url_opaque::router()).test();
+    let by_hand =
+        App::new(Routes::new()).area::<OpaqueArea>(|area| area.route::<url_opaque::Opaque>(crate::route::get(opaque))).test();
+    for app in [module, by_hand] {
+        let read = app.get(&url_opaque::Opaque).mode(crate::Mode::Action).await;
+        assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+        assert_eq!(read.text(), r#"<p id="msg">Opaque</p>"#);
+    }
+}
+
+#[crate::routes]
+mod url_opaque {
+    #[route("/opaque", get = opaque, patches)]
+    pub struct Opaque;
+}
+
+// rustc warns that the `impl` does not prove `Kind`'s bound (`KindOf<Self>`, which only the
+// hidden type's own impl proves), though the routes module and a mount take it alike.
+#[allow(opaque_hidden_inferred_bound)]
+async fn opaque(
+    req: Req,
+) -> impl crate::Answer<Inputs = crate::answer::AnyInputs, Rows = crate::answer::NotAFeed, Kind = crate::Patches> {
+    let part: HtmlResult<crate::Patches> =
+        req.patch_or(html! { <p id={MsgId}>"Opaque"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await;
+    part
+}
+
+/// `patch_or`, `invalid` and `invalid_with` answer the mode the client asked in, not `req.mode`
+/// as the handler left it: a handler that sets `req.mode` to `Mode::Document` still answers the
+/// runtime's read of a route that says `patches` with a patch.
+#[tokio::test]
+async fn a_patch_answer_reads_the_mode_the_client_asked_in_not_the_one_the_handler_set() {
+    let app = App::new(url_moded::router()).test();
+    for read in [
+        app.get(&url_moded::Or).mode(crate::Mode::Action).await,
+        app.get(&url_moded::Invalid).mode(crate::Mode::Action).await,
+        app.get(&url_moded::InvalidWith).mode(crate::Mode::Action).await,
+    ] {
+        assert!(read.headers().contains_key("corten-patch"), "a patch the runtime applies: {:?}", read.headers());
+        assert_eq!(read.text(), r#"<p id="msg">Moded</p>"#);
+    }
+    let page = app.get(&url_moded::Or).await;
+    assert_eq!(page.status(), StatusCode::SEE_OTHER, "a browser without JavaScript gets the other side");
+}
+
+#[crate::routes]
+mod url_moded {
+    #[route("/or", get = moded_or, patches)]
+    pub struct Or;
+    #[route("/invalid", get = moded_invalid, patches)]
+    pub struct Invalid;
+    #[route("/invalid-with", get = moded_invalid_with, patches)]
+    pub struct InvalidWith;
+}
+
+async fn moded_or(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    req.patch_or(html! { <p id={MsgId}>"Moded"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await
+}
+
+async fn moded_invalid(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    let mut errors = crate::Errors::new();
+    errors.refuse(crate::Refusal::Conflict, "moved on");
+    req.invalid(&errors, html! { <p id={MsgId}>"Moded"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await
+}
+
+async fn moded_invalid_with(mut req: Req) -> HtmlResult<crate::Patches> {
+    req.mode = crate::Mode::Document;
+    let mut errors = crate::Errors::new();
+    errors.refuse(crate::Refusal::Conflict, "moved on");
+    req.invalid_with(
+        &errors,
+        |form| async move { form.draw(html! { <p id={MsgId}>"Moded"</p> }) },
+        || async { req.redirect(&crate::Local::parse("/").unwrap()) },
+    )
+    .await
+}
+
 /// What a request through `req.patch_or` costs: `PATCH_REQUESTS` (200) requests in process, one
 /// at a time, read by the runtime (`corten: action`, the patch) or, with `PATCH_MODE=document`, by
 /// a browser without JavaScript (the page), to a handler that returns `HtmlResult` or, with

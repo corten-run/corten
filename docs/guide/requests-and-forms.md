@@ -1785,7 +1785,9 @@ the app does not build: `get(h)` carries what `h` answers (`Methods<S, Patches>`
 check it where they check the route's path, when the code that mounts it is compiled
 (`cargo build`, or `cargo test` where a test or the library reaches it; not `cargo check`, and
 not `cargo test` when only a binary's `main` mounts it). An answer type of the app's own cannot
-say it answers a patch (`type Kind = AnyAnswer;` is all it can say). What is checked is the
+say it answers a patch (`type Kind = AnyAnswer;` is all it can say), and a handler that sets
+`req.mode` cannot turn `patch_or`, `invalid` or `invalid_with` into a page: they answer the
+mode the client asked in. What is checked is the
 handler's answer. Three things can still answer the read otherwise: a stage or an extractor that
 answers before the handler runs (a `Caller` that refuses someone signed out answers
 `Mode::Action` with a `204` and `corten-location`, sending the browser to sign in), a handler
