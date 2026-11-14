@@ -12,6 +12,8 @@ merged native producers/validators and the explicit unit preparation below remai
 
 ```sh
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign
+# On a dedicated host for exactly one complete registry group:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 ```
 
 The argument order and root are fixed. No selection, recipe, command, validator, image,
@@ -26,11 +28,27 @@ operator-authorization boundary, not the offline contract's executionAuthorized:
 `createCampaign({authorize})` has `begin(plan,{stateRoot,signal})`,
 `advance(handle,{signal})`, `submitJsonAudit(handle,delivery)`, `submitMixedAudit(handle,delivery)`, `stop(handle,reason)`,
 `status(handle)`, `verify(handle)` and `collect(handle)`. `begin` accepts only a frozen
-recomputed `bindCampaign({round,commit})` plan, reserves `.host-attempt.json` exclusively
+recomputed `bindCampaign({round,commit})` or `bindGroupCampaign({round,commit,group})` plan, reserves `.host-attempt.json` exclusively
 and returns an opaque live-process handle. The API also requires the fixed root. Callers
 must supply an authorization policy, not a review JSON field. Serialized handles do not
 work. A second instance, round, restart or completed attempt cannot acquire that root.
 No lock release, native-directory deletion, automatic cleanup or retry API exists.
+
+The optional final `--group GROUP` is one exact current registry name, not an app/case
+filter. `bindGroupCampaign` returns `benchmark-isolated-group-campaign/v1`, with order
+exactly `[group]` and the same complete native binding that group has in `bindCampaign`.
+All nine source procedures, the shared source digest, fixed recipes and round mapping
+remain identical to the all-group plan. Unknown groups, injected selections/options and
+edited plans are rejected by rebinding. A non-JSON group neither prepares JSON nor checks
+its output freshness. JSON and mixed groups still stop at their mandatory independent
+audit waits; no single-group mode approves or bypasses them. OS/supervisor/lifetime,
+source-integrity, replay, collection and terminal gates are unchanged.
+
+Each group plan owns one fresh host and its fixed reservation root. The parent may run
+these hosts in parallel, but neither a group plan nor its result asserts a complete fleet.
+The parent's separate fleet gate must bind the complete current roster, common round and
+source, unique host ownership and complete evidence for every group. The legacy all-group
+API still executes all nine sequentially and keeps its existing evidence schema.
 
 The CLI owns the handle throughout sequential advancement, including audit waiting.
 SIGINT/SIGTERM cancels the owned native command using the existing IPC supervisor and
@@ -38,7 +56,8 @@ bounded shutdown; the bootstrap retains its parent-loss watchdog. An uncertain t
 or cleanup boundary halts further work. The parent must allow that shutdown before its
 own unit-wide terminal observation. It must not infer terminal ownership from these files.
 
-Exit 0 means complete all-nine intrinsic replay, not external approval or a successful
+Exit 0 means complete intrinsic replay of the bound scope (all nine by default, or the one
+complete group with `--group`), not external approval or a successful
 comparative baseline. Complete, safely collected failed/blocked evidence exits 1. Uncertain
 lifecycle/collection, interrupted review or an invalid replay exits 2 and preserves state.
 No result file authorizes host deletion. The parent records its own unit terminal state, run.log,
@@ -419,6 +438,15 @@ no final collection manifest is unsealed-partial, never called a verified collec
 `uncollectedNativeRoots` must be empty before the parent considers any terminal-safe cleanup.
 `campaign-contract.mjs::validateCampaign(plan)` is a different, offline plan rebind API.
 
+Saved group evidence is recognized only from its recomputed group plan, without a caller
+scope override. Its report uses `benchmark-isolated-group-campaign-inspection/v1` and the
+same legacy top-level report fields, with `selection.groups` containing only that exact
+group and its complete apps. There is no added top-level `group` field. It never labels
+single-group evidence a full-registry campaign or invents missing groups. Group evidence
+requires the current execution-version-3 audit/host gates; legacy all-group evidence
+retains its existing read compatibility. Invalid/unsafe evidence retains the existing
+fixed invalid result, not an untrusted scope label.
+
 Review repair: cancellation observed in any phase (including a drained zero exit after
 cancellation or forced shutdown) now latches preserved-uncertain in the API itself. A later
 advance without the original signal cannot run another group. Already drained native
@@ -529,7 +557,7 @@ Focused deterministic tests use Node's test-only module mocks, never production 
 callbacks or real benchmark processes:
 
 ```sh
-node --experimental-test-module-mocks --test --test-concurrency=1 bench/workloads/isolated/campaign-contract.test.mjs bench/workloads/isolated/campaign-entry.test.mjs bench/workloads/isolated/campaign.test.mjs bench/workloads/isolated/json-staging.test.mjs bench/workloads/isolated/host-observation.test.mjs
+node --experimental-test-module-mocks --test --test-concurrency=1 bench/workloads/isolated/campaign-contract.test.mjs bench/workloads/isolated/campaign-entry.test.mjs bench/workloads/isolated/campaign-verify.test.mjs bench/workloads/isolated/campaign.test.mjs bench/workloads/isolated/json-staging.test.mjs bench/workloads/isolated/host-observation.test.mjs
 ```
 
 Run binding tests in a clean committed checkout. Source/procedure hashes are real. Mocked

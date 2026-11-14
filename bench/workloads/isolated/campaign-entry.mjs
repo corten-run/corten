@@ -4,17 +4,21 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { campaignRounds } from "./campaign-contract.mjs";
+import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
 
 export const auditWaitMs = 24 * 60 * 60 * 1000;
 export function parseCampaignArgs(args) {
   assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string"));
-  assert.equal(args.length, 5, "usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign");
-  const [round, commitFlag, commit, stateFlag, stateRoot] = args;
+  assert.ok([5, 7].includes(args.length), "usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP]");
+  const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group] = args;
   campaignRounds(round);
   assert.equal(commitFlag, "--commit"); assert.match(commit, /^[a-f0-9]{40}$/);
   assert.equal(stateFlag, "--state-dir"); assert.equal(stateRoot, "/bench/campaign", "one fixed host reservation root required");
-  return Object.freeze({ round, commit, stateRoot });
+  if (args.length === 7) {
+    assert.equal(groupFlag, "--group"); assert.ok(groupNames.includes(group), "unknown registry group");
+  }
+  return Object.freeze({ round, commit, stateRoot, ...(args.length === 7 ? { group } : {}) });
 }
 
 // The parent/operator controls delivery to this same-UID private inbox. JSON fields
@@ -35,20 +39,23 @@ export function readAuditInbox(directory, group = "json-api") {
 
 export async function runCampaignEntry(args) {
   const input = parseCampaignArgs(args);
-  const [{ bindCampaign }, { createCampaign }] = await Promise.all([import("./campaign-contract.mjs"), import("./campaign.mjs")]);
+  const [{ bindCampaign, bindGroupCampaign }, { createCampaign }] = await Promise.all([import("./campaign-contract.mjs"), import("./campaign.mjs")]);
   const abort = new AbortController(), cancel = () => abort.abort();
   process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
   let handle, transport = null;
   const campaign = createCampaign({ authorize(subject) {
     // Calling this fixed entry is the trusted parent's operator-authorized launch.
-    if (subject.action === "begin-campaign") return subject.commit === input.commit && subject.round === input.round;
+    if (subject.action === "begin-campaign") return subject.commit === input.commit && subject.round === input.round
+      && (input.group === undefined || subject.groups?.length === 1 && subject.groups[0] === input.group);
     return ["stage-json-audit", "stage-mixed-audit"].includes(subject.action) && transport !== null
       && subject.action === (transport.group === "mixed-production" ? "stage-mixed-audit" : "stage-json-audit")
       && transport.subjectSha256 === subject.auditSubjectSha256
       && readAuditInbox(handle.directory, transport.group)?.sha256 === transport.sha256;
   } });
   try {
-    handle = await campaign.begin(bindCampaign({ round: input.round, commit: input.commit }), { stateRoot: input.stateRoot, signal: abort.signal });
+    const request = { round: input.round, commit: input.commit };
+    const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group });
+    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {
       if (abort.signal.aborted) { status = campaign.stop(handle); break; }

@@ -21,6 +21,99 @@ systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
 
+## Dedicated Group Hosts
+
+A fleet binds the complete current registry to one dedicated host per group. The
+hosts run in parallel; contenders and phases within a group retain their native
+ordering, CPU budgets, correctness checks and measurement settings. A group host
+builds and runs only its group's complete selection, not a filtered list of apps.
+Popular and performance views still share the same measurements.
+
+`cloud-contract.mjs::fleetPlan` fixes the round, measured source, account/context,
+SSH key, host configuration and a unique ownership token for every registry group.
+The full roster and selection are hashed before launch. A host reservation retains
+that complete roster but has the distinct `benchmark-dedicated-group-host/v1`
+schema and exactly one group's selection. Legacy all-group reservations remain
+readable and cannot acquire group-selection fields after reservation.
+
+The per-host production launch adds `--group GROUP --fleet ABSOLUTE_PLAN_JSON`.
+Both fields are required together, only at detach, and the approval binds the exact
+plan file bytes. Collection and source-audit delivery use the saved host identity;
+they cannot change the group. An audit for another group's host is refused.
+The existing account, source, process-settlement, archive and deletion gates remain
+mandatory independently for every host. No host is retried or adopted after an
+ambiguous create/start.
+
+`fleet.mjs` is the complete-registry operator entry. Its root is a fresh physical
+directory outside the checkout, separate from legacy reservations. Preparation
+uses only local Git and exclusively saves `fleet-ROUND.json`; it neither allocates
+a host nor authorizes execution:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --prepare --commit SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+Preparation returns 3 with a saved roster. A preview cannot execute: independently
+review its exact source, physical root, complete roster and every contained child
+subject before supplying the batch approval. Source review and merged native
+readiness remain prerequisites; never automatically feed a preview into execution.
+The launch intent is durable before any child starts and prevents a second launch,
+including after partial failure. Each child has an independent state directory,
+operation lock, private credential worker and remote systemd unit.
+
+Each production controller runs on a separate worker event loop, so synchronous
+SSH/SCP calls do not serialize group launches. Worker entry and dependency modules
+execute captured, hash-checked source bytes with a deny-unlisted loader. Batch
+approval binds that executable closure. The parent propagates cancellation to all
+children and keeps its lock until every worker exits; uncertainty retains the lock.
+It never terminates a possibly mutating child merely to make a timeout look clean.
+
+Collection reuses only saved identities and independently collects terminal hosts:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --collect --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --collect --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit SHA
+```
+
+Missing, ambiguous or locked child state stays visible and never triggers another
+launch. Both successful and failed native inspections must match the host's exact
+reserved selection before cleanup. Batch receipts are diagnostics, not proof.
+The read-only fleet verifier replays every saved native archive, rechecks its
+immutable hashes and confirmed cleanup, and requires unique host identities for
+the entire roster. Its intrinsic `verified` status is not publication approval:
+`publishableBaseline` remains false until the separate review/results workflow
+qualifies and merges the evidence. Preparation/preview return 3; execution returns
+0 for all collected verified groups, 1 for terminal incomplete evidence, 3 while
+groups remain pending and 2 for control errors. No code means full-round readiness.
+
+A launch census permits only the exact names, ownership tags, sizes and regions
+of reserved siblings. An unrelated benchmark host still blocks allocation. The
+account must have room for the entire remaining roster, not just the next host.
+Sibling membership is not permission to collect, stop or delete that sibling.
+
+Single-group inspection uses a distinct report schema and cannot establish a
+complete official round. Full-round publication requires every current registry
+group, exact source and selection, native replay, immutable saved evidence and
+confirmed terminal cleanup. Missing, blocked and failed groups stay visible rather
+than being omitted. Framework failure outcomes remain distinct from a broken
+apparatus and from comparison-eligible measurements.
+
+Report hardware and measurements per group host. Same-size droplets need not have
+the same CPU model: compare contenders against Corten on their own group host,
+not raw numbers across hosts or unrelated workloads. Parallel wall time is governed
+by the slowest group plus launch/collection overhead, rather than the sum of group
+times. Total allocated time can rise because provisioning and builds repeat;
+neither equal cost nor a morning completion time is guaranteed.
+
+These contracts do not themselves establish fleet readiness or authorize a cloud
+action. The complete controller, native single-group producer/replay and fleet
+aggregation require independent exact-head review and their normal checks before
+an official launch. Existing uncertain hosts and their evidence are not restarted,
+discarded or retroactively qualified by this topology change.
+
 **Production is operator gated, not a fake-only transport.** `cloud-production.mjs`
 composes the lifecycle with a private credential-owning worker for bounded read-only
 doctl credential consumption and fixed-endpoint DigitalOcean REST, plus OpenSSH

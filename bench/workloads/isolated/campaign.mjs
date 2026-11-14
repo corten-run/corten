@@ -175,7 +175,7 @@ export function createCampaign({ authorize }) {
       assert.equal(await authorize(subject), true, "parent did not authorize this exact campaign");
       assert.ok(!signal?.aborted); verifyWorkingSources(plan.bindings[0]);
       for (const b of plan.bindings) fresh(join(repo, ...b.validation.artifactRoot.split("/")));
-      fresh(join(repo, ...jsonPhase(plan, "prepare").validation.artifactRoot.split("/")));
+      if (plan.order.includes("json-api")) fresh(join(repo, ...jsonPhase(plan, "prepare").validation.artifactRoot.split("/")));
       const id = `${plan.round}-${randomBytes(8).toString("hex")}`;
       const lock = json({ schema: "benchmark-isolated-campaign-reservation/v1", id, campaignSha256: plan.campaignSha256,
         commit: plan.commit, pid: process.pid, createdAt: new Date().toISOString() });

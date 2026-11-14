@@ -6,6 +6,7 @@ import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
+export const groupCampaignSchema = "benchmark-isolated-group-campaign/v1";
 export const productionRecipes = Object.freeze(Object.fromEntries(groupNames.map((group) => [group,
   group === "localized-marketplace" ? "marketplace-short-window"
     : group === "mixed-production" ? "mixed-production-measure"
@@ -28,8 +29,17 @@ export function campaignRounds(round) {
 }
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
+  return bindNativeCampaign(input, groupNames, campaignSchema);
+}
+export function bindGroupCampaign(input) {
+  exact(input, ["round", "commit", "group"]);
+  const { group, ...request } = input;
+  assert.ok(groupNames.includes(group), "unknown registry group");
+  return bindNativeCampaign(request, [group], groupCampaignSchema);
+}
+function bindNativeCampaign(input, order, schema) {
   const rounds = campaignRounds(input.round);
-  const bindings = groupNames.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
+  const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
     recipe: productionRecipes[group], review: null }));
   const first = bindings[0];
   assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
@@ -37,12 +47,14 @@ export function bindCampaign(input) {
     "bench/mixed-production/README.md", "bench/fullstack-browser/README.md", "bench/client-heavy/README.md",
     "bench/live/README.md", "bench/recoverable-live/README.md", "bench/hardening/README.md"]
     .map((path) => { const entry = first.sources.files.find((e) => e.path === path); assert.ok(entry, `missing procedure ${path}`); return entry; });
-  const body = { schema: campaignSchema, ...input, bindings, procedures, recipes: productionRecipes,
-    sourceSha256: first.sources.sha256, order: [...groupNames], ready: false, executionAuthorized: false };
+  const body = { schema, ...input, bindings, procedures, recipes: productionRecipes,
+    sourceSha256: first.sources.sha256, order: [...order], ready: false, executionAuthorized: false };
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
 export function validateCampaign(plan) {
-  assert.deepEqual(plan, bindCampaign({ round: plan?.round, commit: plan?.commit }), "campaign differs from fixed native bindings");
+  const request = { round: plan?.round, commit: plan?.commit };
+  const expected = plan?.schema === groupCampaignSchema ? bindGroupCampaign({ ...request, group: plan.order?.[0] }) : bindCampaign(request);
+  assert.deepEqual(plan, expected, "campaign differs from fixed native bindings");
 }
 
 // These are operational phases, not arbitrary overrides or a replacement native parser.
