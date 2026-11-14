@@ -21,6 +21,54 @@ systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
 
+## Dedicated Group Hosts
+
+A fleet binds the complete current registry to one dedicated host per group. The
+hosts run in parallel; contenders and phases within a group retain their native
+ordering, CPU budgets, correctness checks and measurement settings. A group host
+builds and runs only its group's complete selection, not a filtered list of apps.
+Popular and performance views still share the same measurements.
+
+`cloud-contract.mjs::fleetPlan` fixes the round, measured source, account/context,
+SSH key, host configuration and a unique ownership token for every registry group.
+The full roster and selection are hashed before launch. A host reservation retains
+that complete roster but has the distinct `benchmark-dedicated-group-host/v1`
+schema and exactly one group's selection. Legacy all-group reservations remain
+readable and cannot acquire group-selection fields after reservation.
+
+The per-host production launch adds `--group GROUP --fleet ABSOLUTE_PLAN_JSON`.
+Both fields are required together, only at detach, and the approval binds the exact
+plan file bytes. Collection and source-audit delivery use the saved host identity;
+they cannot change the group. An audit for another group's host is refused.
+The existing account, source, process-settlement, archive and deletion gates remain
+mandatory independently for every host. No host is retried or adopted after an
+ambiguous create/start.
+
+A launch census permits only the exact names, ownership tags, sizes and regions
+of reserved siblings. An unrelated benchmark host still blocks allocation. The
+account must have room for the entire remaining roster, not just the next host.
+Sibling membership is not permission to collect, stop or delete that sibling.
+
+Single-group inspection uses a distinct report schema and cannot establish a
+complete official round. Full-round publication requires every current registry
+group, exact source and selection, native replay, immutable saved evidence and
+confirmed terminal cleanup. Missing, blocked and failed groups stay visible rather
+than being omitted. Framework failure outcomes remain distinct from a broken
+apparatus and from comparison-eligible measurements.
+
+Report hardware and measurements per group host. Same-size droplets need not have
+the same CPU model: compare contenders against Corten on their own group host,
+not raw numbers across hosts or unrelated workloads. Parallel wall time is governed
+by the slowest group plus launch/collection overhead, rather than the sum of group
+times. Total allocated time can rise because provisioning and builds repeat;
+neither equal cost nor a morning completion time is guaranteed.
+
+These contracts do not themselves establish fleet readiness or authorize a cloud
+action. The complete controller, native single-group producer/replay and fleet
+aggregation require independent exact-head review and their normal checks before
+an official launch. Existing uncertain hosts and their evidence are not restarted,
+discarded or retroactively qualified by this topology change.
+
 **Production is operator gated, not a fake-only transport.** `cloud-production.mjs`
 composes the lifecycle with a private credential-owning worker for bounded read-only
 doctl credential consumption and fixed-endpoint DigitalOcean REST, plus OpenSSH

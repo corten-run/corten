@@ -120,6 +120,13 @@ test("foreign benchmark, own preexisting host, or fleet/account tampering cannot
   }
 });
 
+test("first host requires account room for the whole reserved fleet, not just itself", async (t) => {
+  const { h, options } = configured(t);
+  h.hosts(Array.from({ length: 20 - groupNames.length + 1 }, (_, i) => ({ id: 1000 + i, name: `unrelated-${i}`, tags: [] })));
+  await assert.rejects(h.task({}, options).launch(), /capacity cannot cover/);
+  assert.equal(h.creates, 0); assert.equal(h.deletes, 0);
+});
+
 test("group inspection is distinct from whole-campaign evidence and retains terminal deletion gates", async (t) => {
   const { h, options } = configured(t); await h.task({}, options).launch();
   const report = syntheticInspection("verified");

@@ -162,6 +162,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
           assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
+          if (fleet) {
+            const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
+            assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
+          }
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
