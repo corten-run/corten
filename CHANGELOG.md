@@ -8,12 +8,15 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
-  spurious missing-heartbeat errors. Record the dependency-driven MSRV policy and the
-  deliberate hold on SQLx 0.8 in the design choices and cluster documentation.
-- Link auction-room against a patched system SQLite instead of SQLx's bundled copy, which
-  is affected by RUSTSEC-2026-0459. Its Docker image and workspace CI install checksum-verified
-  upstream SQLite 3.54.1 (the fix first shipped in 3.54.0). Local builds now need patched
-  SQLite development files; version-only lockfile scans still flag the unbundled FFI crate.
+  spurious missing-heartbeat errors. [Choice 50](docs/design.md#choice-msrv) records when the
+  floor moves and why SQLx stays on 0.8.
+- **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
+  `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
+  `From<String>` for `HeaderValue`; use `HeaderValue::try_from`, `from_lossy` or the
+  `insert`/`append` methods that take a string.
+- Record RUSTSEC-2026-0459 in auction-room's bundled SQLite as an explained exception
+  ([Choice 50](docs/design.md#choice-msrv)): it needs a database file a less trusted party
+  wrote, and the example opens only its own data directory.
 - Link to [corten.run](https://corten.run) from the README's introduction.
 
 - Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with

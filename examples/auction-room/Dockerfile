@@ -2,11 +2,6 @@
 # Build from the repository root: docker build -f examples/auction-room/Dockerfile -t corten-auction-room .
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY scripts/install-sqlite.sh /tmp/install-sqlite.sh
-# Bookworm's SQLite is older than the WAL disclosure fix (3.54.0). Install a checked
-# upstream release as the system library instead of SQLx's affected bundled copy.
-RUN apt-get update && apt-get install -y --no-install-recommends libclang-dev \
-    && rm -rf /var/lib/apt/lists/* && sh /tmp/install-sqlite.sh
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
@@ -29,8 +24,6 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
 FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=build /out/server /app/server
-COPY --from=build /usr/local/lib/libsqlite3.so* /usr/local/lib/
-RUN ldconfig
 # The database is a file in /app/data, which the server's user owns: mount a volume there to keep
 # it. A new Docker volume takes this owner; a bind mount or a Kubernetes volume needs
 # `fsGroup: 10001` or a directory 10001 owns, and a volume an earlier image wrote as root needs

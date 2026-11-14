@@ -33,10 +33,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Patched system SQLite for auction-room
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev
-          sudo sh scripts/install-sqlite.sh
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -74,10 +70,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Patched system SQLite for auction-room
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev
-          sudo sh scripts/install-sqlite.sh
       # rustfmt: `corten ui add` lays out the copies it writes with it, and its tests run it.
       - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -87,10 +79,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Patched system SQLite for auction-room
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev
-          sudo sh scripts/install-sqlite.sh
       # Keep in step with workspace.package.rust-version in Cargo.toml.
       - run: rustup toolchain install 1.89 --profile minimal && rustup default 1.89
       - uses: Swatinem/rust-cache@v2
