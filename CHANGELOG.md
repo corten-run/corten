@@ -429,6 +429,32 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A `#[component]`'s own string (`to_html`, which a patch, a refused form's patch and a live
+  fragment are rendered with when the view is a component) now starts at the size that component
+  last rendered to, an eighth more and never below 256 bytes, as an `html!` call site's does,
+  where it started empty and grew while the component was drawn. Each component keeps its own
+  size, so a small patch does not shrink a large one's. Measured (callgrind, release, jemalloc,
+  `tests::what_a_patch_costs` at 200 and 1,200 requests, three runs of each build alternated)
+  against main `0ff569c6`: a small component's patch costs 17,537.5 instructions a request
+  against 18,734.5 and a 4 KiB component's 26,695.9 against 32,414.8; a bare `html!` patch
+  (17,512.2) and a 45-byte `Remove` and a 4 KiB `html!` patch in turn (22,728.4 a request)
+  cost what they did. The string a response holds until it is written is near the size it
+  needs: a 4 KiB component's is 4,628 bytes where it grew to 8,192, and a small one's 256 where it
+  grew to 32, as an `html!` patch's already was (the new sizes asserted by a test, the old ones
+  reasoned from `String`'s doubling from empty).
+  Wall time, the same harness at 200,000 requests, three runs of each build alternated, median
+  [range] in seconds, main `9c867b5e` with the harness added against this change, in a 4-CPU
+  container: a small component 1.06 [1.05-1.32] against 0.99 [0.84-1.28], a bare `html!` 0.85
+  [0.74-0.89] against 0.90 [0.72-0.91], a 4 KiB component 1.34 [1.22-1.64] against 1.09
+  [1.04-1.30], and the mixed sequence 1.20 [1.15-1.31] against 1.17 [1.13-1.34]. Every range
+  overlaps the other build's, so no wall-time gain is established beyond the noise on that host;
+  the instruction counts are the evidence.
+  A patch whose handler is under an area with a stylesheet ends with that stylesheet's link
+  ([design Choice 47](docs/design.md#choice-patch-brings-area-styles)); a component patch's
+  string now starts with room for it (256 bytes against the watchlist's 88-byte link), so it no
+  longer grows to hold the link, the about 510 instructions that Choice counts in its harness
+  (reasoned from the sizes, not measured on the merged code).
+
 - The app `corten new` writes posts its form to the page's own route
   (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
   with no `GET`, where a browser without JavaScript was left at an address that answers 405 when

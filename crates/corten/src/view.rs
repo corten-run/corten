@@ -1323,11 +1323,20 @@ impl<T: Render + ?Sized> Render for &T {
     fn render(&self, out: &mut String) {
         (**self).render(out)
     }
+
+    /// The view's own, so a view passed by reference keeps its size.
+    fn to_html(&self) -> String {
+        (**self).to_html()
+    }
 }
 
 impl<T: Render + ?Sized> Render for Box<T> {
     fn render(&self, out: &mut String) {
         (**self).render(out)
+    }
+
+    fn to_html(&self) -> String {
+        (**self).to_html()
     }
 }
 
@@ -1349,6 +1358,11 @@ impl<T: Render> Render for Option<T> {
         if let Some(value) = self {
             value.render(out)
         }
+    }
+
+    /// The view's own, so an optional view keeps its size.
+    fn to_html(&self) -> String {
+        self.as_ref().map_or_else(String::new, Render::to_html)
     }
 }
 
