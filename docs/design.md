@@ -2858,8 +2858,9 @@ rules something out.
     download, not who built it), which closes the manual-download half of a gap of its own
     ([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
     `cargo binstall` does not consume that file or GitHub attestations; it verifies only a
-    minisign signature, which needs a signing key the release holds, so it still has only HTTPS
-    until that is decided, and verification before installation uses the
+    minisign signature, which Corten chooses not to add
+    ([Choice 52](#choice-release-verification)), so it still has only HTTPS,
+    and verification before installation uses the
     [manual download](guide/getting-started.md#verify-a-prebuilt-binary) (cargo-binstall
     1.27.0's `SUPPORT.md` and `SIGNING.md`, read 2026-11-13).
     That evidence does not make an npm initializer's extra channel or lifecycle any smaller.
@@ -3453,6 +3454,49 @@ rules something out.
     and of the merge `4c6ac3e3d`; 2026-11-14, matchit's release notes for 0.8.4, 0.8.5 and
     0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
     `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
+
+52. <a id="choice-release-verification"></a>**Release archives are verified with GitHub artifact
+    attestations and `SHA256SUMS`; Corten keeps no minisign signing key.** `cargo binstall`
+    checks a Corten archive's download over HTTPS, not against its build. Its users verify by
+    hand before installation: download the archive and `SHA256SUMS`, run `gh attestation verify`
+    against this repository's release workflow and the release tag, check the checksum, then
+    extract the binary and put it on `PATH`
+    ([Getting started](guide/getting-started.md#verify-a-prebuilt-binary)). The checksum detects
+    a damaged download, not who built it; the attestation ties the archive to the workflow run
+    that built it. This is the platform's standard build provenance, not a Corten signing format.
+    The release workflow verifies each archive before publication and checks that the uploaded
+    bytes match those verified
+    ([#1369 Attest release binaries and verify checksums before publication](https://github.com/corten-run/corten/pull/1369),
+    merged as `c3d455a1`). Its first tagged run has not yet been verified end to end.
+
+    Not chosen: a minisign signature binstall checks itself. A long-lived key is another secret
+    to hold, rotate and potentially leak, and adds a second trust root for one installation
+    path. Binstall also documents just-in-time minisign keys, discarded after each release:
+    these avoid a long-lived secret but still add a second signing scheme and public-key
+    publication in the crate's metadata. Neither is needed to make each archive verifiable
+    against its build, though the manual step remains a cost for binstall users.
+
+    Stands on: platform (cargo-binstall's [signing documentation](https://github.com/cargo-bins/cargo-binstall/blob/b0ba29dbf234bdaba340dd6c57c96c560756b5e3/SIGNING.md)
+    supports minisign, including just-in-time keys, not GitHub attestations, and its
+    [supported metadata](https://github.com/cargo-bins/cargo-binstall/blob/b0ba29dbf234bdaba340dd6c57c96c560756b5e3/SUPPORT.md)
+    has no checksum-file setting); platform (the [release workflow](../.github/workflows/release.yml)
+    added in `c3d455a1` attests each archive and gates publication on verification against the
+    workflow, source commit and tag, then publishes `SHA256SUMS` and the verified archives);
+    reasoned (using that provenance avoids a second trust root and a long-lived signing secret
+    to guard and rotate, at the cost of a manual check with `gh` for binstall users);
+    value (standard platform evidence and a documented check serve Standards first and
+    Verified, not assumed, Values 2 and 9, without another signing scheme, Values 5 and 6).
+
+    Revisit when: binstall verifies GitHub attestations itself, closing the gap without another
+    signing key; a user reports an installation path that cannot run `gh`; or the release
+    workflow's first tagged run shows the attestation check failing.
+
+    Last checked: 2026-11-14, cargo-binstall's `SIGNING.md` and `SUPPORT.md` read at
+    `cargo-bins/cargo-binstall@b0ba29dbf234bdaba340dd6c57c96c560756b5e3`: minisign is the supported
+    signature algorithm, just-in-time keys are documented, and neither GitHub attestation
+    verification nor a checksum-file setting is documented; 2026-11-14, the release workflow
+    read at `ff78cf143` against its introduction in `c3d455a1`, including `attest`,
+    `verify-archives`, the `publish` dependency and the uploaded archive digest checks.
 
 ## Rules
 

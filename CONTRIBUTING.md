@@ -330,10 +330,10 @@ the release carries the bytes `verify-archives` verified; the checksums themselv
 signed and say nothing about who built the archives, which only the attestations show. Users
 verify downloaded archives as in
 [Getting started](docs/guide/getting-started.md#verify-a-prebuilt-binary). `cargo binstall`
-checks only HTTPS today: it would verify a minisign signature
-(`[package.metadata.binstall.signing]`), which needs a signing key the release holds as a
-secret, and whether to keep one is not decided
-([#1286 The release's corten binaries carry no checksum, signature or build attestation, so a cargo binstall or manual download has only HTTPS to trust](https://github.com/corten-run/corten/issues/1286)).
+checks only HTTPS today. Corten keeps no minisign signing key: binstall users download and
+verify the archive by hand with `gh attestation verify` and `SHA256SUMS` before extracting it
+and putting the binary on `PATH`, as the guide describes
+([Choice 52](docs/design.md#choice-release-verification)).
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.

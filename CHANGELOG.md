@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Record [Choice 52](docs/design.md#choice-release-verification): verify release archives with
+  GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
+  follow the documented manual check before installing the binary.
+
 - Retry entire host-lifetime snapshots for comm-only bookend changes within the
   existing three-attempt budget. Every accepted identity must still match in full;
   PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
