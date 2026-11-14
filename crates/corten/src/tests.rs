@@ -4311,6 +4311,43 @@ fn a_router_conflict_names_both_routes() {
     );
 }
 
+/// matchit 0.9.2's order-dependent false conflict, as an app reaches it: a hand-written `Route`
+/// with text before a parameter, given to the hidden `Routes::__route` (derived routes cannot put
+/// text there). `/{z}/b` after `/a{x}/{y}` stops the app; the two in the other order start and
+/// each answers its own paths (docs/design.md#choice-matchit).
+#[tokio::test]
+async fn a_prefixed_hand_written_route_conflicts_in_one_order_only() {
+    struct Prefixed;
+    impl crate::Route for Prefixed {
+        const PATH: &'static str = "/a{x}/{y}";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/ax/c");
+        }
+    }
+    struct Leading;
+    impl crate::Route for Leading {
+        const PATH: &'static str = "/{z}/b";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/q/b");
+        }
+    }
+    let prefixed = || crate::Methods::reads(get(|| async { "prefixed" }));
+    let leading = || crate::Methods::reads(get(|| async { "leading" }));
+    let refused = std::panic::catch_unwind(|| {
+        App::new(Routes::new().__route::<Prefixed>(prefixed()).__route::<Leading>(leading())).router()
+    });
+    let message = refused.err().and_then(|panic| panic.downcast::<String>().ok()).expect("the later route is refused");
+    assert!(
+        message.contains("the route \"/{z}/b\" cannot be routed beside the app's others")
+            && message.contains("conflict with previously registered route: /a{x}/{y}"),
+        "{message}"
+    );
+    let router = App::new(Routes::new().__route::<Leading>(leading()).__route::<Prefixed>(prefixed())).router();
+    for (path, body) in [("/ax/c", "prefixed"), ("/ax/b", "prefixed"), ("/q/b", "leading")] {
+        assert_eq!(call_with(router.clone(), "GET", path, None, None).await.2, body, "{path}");
+    }
+}
+
 /// Never a false no: with each route alone in a router of the matchit this build resolves, every
 /// path at or under a prefix that it matches is one `can_match_under` says it can reach. A route
 /// must be accepted; a changed insertion rule must not silently remove a case.

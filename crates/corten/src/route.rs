@@ -4696,17 +4696,14 @@ pub mod __private {
 
     /// Where a path parameter sits in its route's path.
     pub mod place {
-        /// A whole segment, first or last in the path (`/{user}/posts`, `/items/{id}`): the router
-        /// has no segment for an empty value there.
-        pub const EDGE: u8 = 0;
-        /// A whole segment between two others (`/items/{id}/offers`, `/shelves/{id}/`),
-        /// nonempty as an edge segment is.
-        pub const INNER: u8 = 1;
+        /// A whole segment, wherever it is in the path (`/{user}/posts`, `/items/{id}/offers`,
+        /// `/items/{id}`): the router matches no empty value there.
+        pub const WHOLE: u8 = 0;
         /// Followed by text in its segment (`{page}.xml`), so never a dot segment; an empty value
         /// leaves the text alone, which the route does not read.
-        pub const TEXT: u8 = 2;
+        pub const TEXT: u8 = 1;
         /// `{*rest}`: the rest of the path, slashes kept, each segment of it read as one.
-        pub const REST: u8 = 3;
+        pub const REST: u8 = 2;
     }
 
     impl<const PLACE: u8> Param<PLACE> {
@@ -4722,7 +4719,7 @@ pub mod __private {
         #[inline(always)]
         fn refuses(value: &[u8], dotless: bool) -> bool {
             match PLACE {
-                place::EDGE | place::INNER => value.len() <= 2 && matches!(value, b"" | b"." | b".."),
+                place::WHOLE => value.len() <= 2 && matches!(value, b"" | b"." | b".."),
                 place::TEXT => value.is_empty(),
                 _ => value.is_empty() || (!dotless && dot_segment(value)),
             }

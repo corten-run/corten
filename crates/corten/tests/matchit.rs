@@ -20,6 +20,51 @@ fn parameters_are_nonempty_and_suffixes_are_matched() {
     }
 }
 
+/// The rules the routing guide states, as matchit answers them: a catch-all is the nonempty rest
+/// of the path and may hold empty segments, a trailing slash and case are compared as written,
+/// `%2F` stays in its segment undecoded, and a path an empty parameter does not match falls back
+/// to a catch-all.
+#[test]
+fn catch_alls_slashes_and_escapes_match_as_the_guide_says() {
+    let mut router = matchit::Router::new();
+    for route in ["/items", "/items/{id}", "/items/{id}/edit", "/shelves/{id}/", "/files/{*rest}"] {
+        router.insert(route, route).unwrap();
+    }
+    let mut with_rest = router.clone();
+    with_rest.insert("/{*rest}", "/{*rest}").unwrap();
+    let found = |router: &matchit::Router<&'static str>, path: &str| {
+        router.at(path).ok().map(|found| {
+            let value = found.params.get("id").or_else(|| found.params.get("rest")).map(str::to_owned);
+            (*found.value, value)
+        })
+    };
+    let some = |route: &'static str, value: &str| Some((route, Some(value.to_owned())));
+    for (path, alone, beside_rest) in [
+        // A catch-all's value is nonempty but may have empty segments.
+        ("/files/a//b", some("/files/{*rest}", "a//b"), some("/files/{*rest}", "a//b")),
+        ("/files/a/", some("/files/{*rest}", "a/"), some("/files/{*rest}", "a/")),
+        ("/files/", None, some("/{*rest}", "files/")),
+        ("/files", None, some("/{*rest}", "files")),
+        ("/", None, None),
+        // The guide's example: an empty parameter does not match, so the catch-all answers.
+        ("/items//edit", None, some("/{*rest}", "items//edit")),
+        ("/shelves//", None, some("/{*rest}", "shelves//")),
+        ("/items/7/edit", some("/items/{id}/edit", "7"), some("/items/{id}/edit", "7")),
+        // A trailing slash is its own path, and case is compared as written.
+        ("/items/", None, some("/{*rest}", "items/")),
+        ("/items/7/", None, some("/{*rest}", "items/7/")),
+        ("/shelves/7", None, some("/{*rest}", "shelves/7")),
+        ("/Items/7", None, some("/{*rest}", "Items/7")),
+        ("/items", Some(("/items", None)), Some(("/items", None))),
+        // An escaped slash is one segment's text, not decoded before matching.
+        ("/items/%2F", some("/items/{id}", "%2F"), some("/items/{id}", "%2F")),
+        ("/items/a%2Fb/edit", some("/items/{id}/edit", "a%2Fb"), some("/items/{id}/edit", "a%2Fb")),
+    ] {
+        assert_eq!(found(&router, path), alone, "{path} without a catch-all at the root");
+        assert_eq!(found(&with_rest, path), beside_rest, "{path} beside /{{*rest}}");
+    }
+}
+
 #[test]
 fn overlapping_prefixes_and_suffixes_choose_the_longest() {
     for (routes, paths) in [
@@ -71,6 +116,38 @@ fn ambiguous_prefix_suffix_combinations_conflict_in_either_order() {
                 Err(matchit::InsertError::Conflict { with: first.into() }),
                 "{first} beside {next}"
             );
+        }
+    }
+}
+
+/// A known limit of 0.9.2, which Corten's derived routes cannot reach (their parameters are whole
+/// segments) but a hand-written `Route` with text before a parameter can: 0.9.2 refuses a
+/// parameter route beside an earlier one with a parameter prefix, and accepts the same two in the
+/// other order (0.8.6 accepts both orders). Neither path's segment is shared, so the refusal is
+/// not an ambiguity (docs/design.md#choice-matchit).
+#[test]
+fn a_prefixed_parameter_conflicts_with_a_later_leading_parameter_in_one_order_only() {
+    for (prefixed, leading, paths) in [
+        ("/a{x}/{y}", "/{z}/b", [("/ax/c", "/a{x}/{y}"), ("/q/b", "/{z}/b"), ("/ax/b", "/a{x}/{y}")]),
+        ("/a{x}", "/{z}/b", [("/ax", "/a{x}"), ("/q/b", "/{z}/b"), ("/ax/b", "/{z}/b")]),
+        (
+            "/shop{x}/desk",
+            "/{slug}/more",
+            [("/shopa/desk", "/shop{x}/desk"), ("/q/more", "/{slug}/more"), ("/shopa/more", "/{slug}/more")],
+        ),
+    ] {
+        let mut refused = matchit::Router::new();
+        refused.insert(prefixed, prefixed).unwrap();
+        assert_eq!(
+            refused.insert(leading, leading),
+            Err(matchit::InsertError::Conflict { with: prefixed.into() }),
+            "{leading} after {prefixed}"
+        );
+        let mut accepted = matchit::Router::new();
+        accepted.insert(leading, leading).unwrap();
+        accepted.insert(prefixed, prefixed).unwrap();
+        for (path, route) in paths {
+            assert_eq!(accepted.at(path).map(|found| *found.value), Ok(route), "{path}: {leading} before {prefixed}");
         }
     }
 }
