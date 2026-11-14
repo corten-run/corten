@@ -328,8 +328,10 @@ pub struct AnyAnswer;
 /// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
 /// route that says `patches` returns, so the handler's answer to the runtime's read of a part of
 /// a page ([`crate::ReadAgain::from`]) is a patch. What answers before the handler (a stage, an
-/// extractor such as a `Caller` that refuses someone signed out) and a response the handler
-/// replaces through `DerefMut` are not checked:
+/// extractor such as a `Caller` that refuses someone signed out), a response the handler
+/// replaces through `DerefMut`, and a handler that writes `req.mode` (to `Mode::Document`, say)
+/// before `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page
+/// or a redirect, as they do for any `HtmlResult` handler, are not checked:
 ///
 /// ```
 /// use corten::prelude::*;

@@ -1825,8 +1825,9 @@ patch (the error page: the server has logged it) or offline stops them quietly a
 part as it was; any answer that is a patch is applied whatever its status, so a handler whose
 read failed after the write can say so in place (`req.patch_with_status(StatusCode::BAD_GATEWAY,
 ..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which the
-handler of a route that says `patches` does not answer (but a stage before it, or a response
-replaced through `DerefMut`, can), is logged in the console and stops the reads.
+handler of a route that says `patches` does not answer (but a stage before it, a response
+replaced through `DerefMut`, or a handler that writes `req.mode` before `patch_or`, `invalid`
+or `invalid_with` can), is logged in the console and stops the reads.
 
 A page can ask the same of its parts, with the same `ReadAgain::from` among its markup: when the
 whole page would be the wrong thing to read again (a form the user is filling in, a payment
