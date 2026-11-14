@@ -5,6 +5,25 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
+  tests run
+  ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).
+  An empty segment no longer matches a path parameter anywhere: `/items//edit` used to reach
+  `/items/{id}/edit` with an empty `id`, and is now a 404 unless another route, such as a
+  catch-all, matches it. To keep such a request working, give the empty case a route of its
+  own (`/items/edit`) or move the value to the query (`/items/edit?id=`). A `#[derive(Route)]`
+  link with an empty path parameter between two segments, which used to write `//`, now does
+  what one at the start or end of the path already did: a debug build panics naming the route
+  and field, and a release build writes `%FF` after it, which the route answers with a 400, and
+  logs an error once for each route and field. Cargo takes one matchit 0.9.x per build, so an
+  app with another dependency that needs matchit 0.9.3 or later cannot resolve until Corten
+  moves the pin, and a matchit fix reaches apps in a Corten release. A matched request costs
+  about 50 instructions more (0.29%) and a 404 about 11 more (0.06%). Derived, area and API
+  routes match and insert as before apart from empty values; a `Route` implemented by hand
+  with text before a parameter (`/a{x}/{y}`) and given to the hidden `Routes::__route` now
+  meets 0.9's prefix and suffix conflict checks, and some such pairs stop the app in one order
+  only (`/{z}/b` after `/a{x}/{y}`; design Choice 48's known limit).
+
 - Keep grouped cloud create actions with a numeric zero resource ID pending until
   the matching action completes with the exact owned droplet ID. Preserve strict
   identity/link checks, bounded polling and the single-create rule; this fixes a
@@ -395,6 +414,26 @@ Corten is pre-1.0, so any minor version may change the API.
   few. No limit keeps a request under it waiting, and one request in a hundred opens a
   connection; readers who share an address share its limits, and someone with many addresses
   is not slowed by them. The deploy guide has what was measured (What one address can do).
+- `examples/corten-site`'s machine is replaced by one that already serves. A new droplet is
+  handed the old one's certificate and the release it serves, and the address moves to it
+  once it answers as the site; before, the address moved to a droplet that then took minutes
+  to get a certificate and a release, and the site was away meanwhile. Every droplet lets one
+  key, which the `Site machine` workflow alone holds, run one command as root that gives or
+  takes those (`infra/handover.sh`), and the apply runs `infra/relay.sh` between making a
+  droplet and moving the address: when the new droplet does not come to serve, the apply
+  fails with the address where it was. A droplet that is handed a certificate asks Let's
+  Encrypt for none. `bootstrap.sh` makes the key, and run again adds it to a repository set
+  up before. Where nothing can be handed over (no key, or a droplet made before this) the
+  address moves first, as it did. The workflow asks the site once a second while it applies
+  and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
+  makes a new machine where nothing has changed (`-f without_handover=true` makes one that
+  is handed nothing). Rehearsed in containers and not yet run on a droplet: the deploy README
+  says what that leaves untried. `provision.sh`, when it runs a second time, writes in the deploy
+  user's directories as that user: as root it made whatever a link there pointed at that
+  user's, so the holder of the deploy key could become root. It stops for a key's file that
+  is not there. The workflow's check runs the handover's command, those lines of
+  `provision.sh` and the relay in containers (`infra/handover.test.sh`, `provision.test.sh`,
+  `infra/relay.test.sh`).
 - `examples/corten-site`'s machine sends other names on to the site's: the repository variable
   `SITE_REDIRECTS` (a JSON list, such as `["www.example.com"]`; `provision.sh`'s fifth argument
   by hand) gives each name a record at the machine's address and a place on the site's
@@ -418,7 +457,7 @@ Corten is pre-1.0, so any minor version may change the API.
   checked). Before, any route compiled, and one whose handler answered its page left
   the part as it was with an error in the console, found only when the page ran; now that route,
   or a `patches` route whose `get` handler may answer a page or a redirect, does not compile, at
-  the call or at the handler's name ([design Choice 48](docs/design.md#choice-patch-routes)). A
+  the call or at the handler's name ([design Choice 49](docs/design.md#choice-patch-routes)). A
   route given by hand (a `#[derive(Route)]` struct) is never one, and a `patches` route mounted
   by hand (`Area::route`, `Api::route`) takes only a `get` handler that returns
   `HtmlResult<Patches>`: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and

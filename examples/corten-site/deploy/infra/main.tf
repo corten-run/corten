@@ -14,7 +14,9 @@ locals {
     "/root/deploy/nginx.conf"                      = file("${path.module}/../nginx.conf")
     "/root/deploy/corten-site.service"             = file("${path.module}/../corten-site.service")
     "/root/deploy/boot.sh"                         = file("${path.module}/boot.sh")
+    "/root/deploy/handover.sh"                     = file("${path.module}/handover.sh")
     "/root/deploy/deploy.pub"                      = "${trimspace(var.deploy_key)}\n"
+    "/root/deploy/handover.pub"                    = "${trimspace(var.handover_key)}\n"
     "/etc/systemd/system/corten-site-boot.service" = file("${path.module}/corten-site-boot.service")
     # Read by boot.sh as shell. Each value is checked to hold no quote (variables.tf), the size
     # and region in the third among them.
@@ -55,11 +57,36 @@ resource "digitalocean_tag" "site" {
 }
 
 # The address stays when the machine is replaced, so the name never has to move. It names its
-# machine itself, so a replacement changes it in place, once the new machine is made: a separate
-# assignment is replaced instead, and its old half is removed before the new machine exists.
+# machine itself, so a replacement changes it in place: a separate assignment is replaced
+# instead, and its old half is removed before the new machine exists. The machine it names is
+# read through `served` below, so it moves only once the new machine answers as the site.
 resource "digitalocean_reserved_ip" "site" {
   region     = var.region
-  droplet_id = digitalocean_droplet.site.id
+  droplet_id = terraform_data.served.output
+}
+
+# What stands between a new machine and the address. `relay.sh` runs where this is applied,
+# once the new droplet exists: it carries the certificate and the release being served from
+# the old machine to the new one, and ends when the new one answers as the site. Only then
+# does the address move, and the old machine is removed after that. Where it fails, the apply
+# fails with the address still on the old machine. The handover key's private half is read
+# from the environment of whoever applies (HANDOVER_KEY), so it is in no plan and no state.
+resource "terraform_data" "served" {
+  triggers_replace = digitalocean_droplet.site.id
+  input            = digitalocean_droplet.site.id
+
+  provisioner "local-exec" {
+    command = "bash ${path.module}/relay.sh"
+    environment = {
+      DOMAIN          = var.domain
+      NEW             = digitalocean_droplet.site.ipv4_address
+      HOST_KEY_PUBLIC = trimspace(var.host_key_public)
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "digitalocean_droplet" "site" {
@@ -71,9 +98,10 @@ resource "digitalocean_droplet" "site" {
   tags      = [digitalocean_tag.site.id]
   user_data = "#cloud-config\n${yamlencode(local.cloud_config)}"
 
-  # The new machine is made before the address moves to it, and the old one goes after that: a
-  # machine that cannot be made leaves the old one serving. The site is down from the move
-  # until the new machine has its certificate and its first release.
+  # The new machine is made, and serves, before the address moves to it (`served` above), and
+  # the old one goes after that: a machine that cannot be made, or does not come to serve,
+  # leaves the old one serving. Where nothing could be handed to the new machine, the address
+  # moves first and the site is away until that machine has a certificate and a release.
   lifecycle {
     create_before_destroy = true
   }
