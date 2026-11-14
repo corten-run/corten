@@ -637,11 +637,27 @@ mod tests {
             assert!(page.contains(r#"<p id="watch-message" aria-live="polite">That stock is not on the market.</p>"#), "{page}");
             assert_eq!(rows(page), ["ACME", "INIT"], "the list as it was");
         }
-        // With JavaScript the refusal is the form, as a patch with the refusal's status.
-        let patch = app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "ZZZZ").await;
-        assert_eq!(patch.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(patch.text().starts_with(r#"<form data-scope="watch-form" id="watch-form""#), "{}", patch.text());
-        assert!(patch.text().contains("That stock is not on the market."), "{}", patch.text());
+        // With JavaScript the refusal is the form, as a patch with the refusal's status; to a data
+        // client, a Problem Details document (a 200 with the watchlist before #1340).
+        let refuse_watch =
+            |mode: Mode| app.post(&url::Watch).mode(mode).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "ZZZZ");
+        let refuse_unwatch =
+            |mode: Mode| app.post(&url::Unwatch).mode(mode).cookie("visitor", VISITOR).field(UnwatchForm::FIELDS.remove, "ZZZZ");
+        for patch in [refuse_watch(Mode::Action).await, refuse_unwatch(Mode::Action).await] {
+            assert_eq!(patch.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(patch.text().starts_with(r#"<form data-scope="watch-form" id="watch-form""#), "{}", patch.text());
+            assert!(patch.text().contains("That stock is not on the market."), "{}", patch.text());
+        }
+        for data in [refuse_watch(Mode::Data).await, refuse_unwatch(Mode::Data).await] {
+            let kind = data.headers()["content-type"].to_str().unwrap().to_string();
+            assert_eq!(
+                (data.status(), &kind[..]),
+                (StatusCode::UNPROCESSABLE_ENTITY, "application/problem+json"),
+                "{}",
+                data.text()
+            );
+            assert!(data.text().contains("That stock is not on the market."), "{}", data.text());
+        }
     }
 
     #[tokio::test]

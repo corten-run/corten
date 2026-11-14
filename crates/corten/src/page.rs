@@ -2481,14 +2481,15 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
 /// handler: the browser shows it at that address, which answers 405 when it is opened again
 /// from a bookmark or a link. A form that belongs to one page posts to that page's route; a write
 /// with a path of its own redirects once it is done and draws a page only to refuse. The handler's
-/// cookies go out with the error page, as the browser would have kept them with the page.
+/// cookies and `Clear-Site-Data` go out with the error page, as the browser would have acted on them
+/// with the page; the page's other headers describe the page the error replaces and do not.
 ///
 /// What it does not see: it reads the routes `#[corten::routes]` declares (`route::chosen` on
 /// `Shared::pages`), so a hand-built `Table` router's paths are not checked, and a page a
 /// hand-built route serves at a path a post-only macro route also matches is taken for that
 /// route's, a false 500; an `unstaged` route skips the stages this runs in, so it is not checked;
-/// an `any = ..` route answers `GET` too; and a release build (every example's smoke image)
-/// compiles none of it.
+/// an `any = ..` route answers `GET` too; and a release build compiles none of it, so it never
+/// runs in a production image or a smoke test against one.
 #[cfg(debug_assertions)]
 fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response {
     if !res.status().is_success()
@@ -2507,9 +2508,12 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
         ),
     )
     .into_response();
-    // The page's other headers are the page's own, which the error page's replace.
-    for cookie in parts.headers.get_all(header::SET_COOKIE) {
-        error.headers_mut().append(header::SET_COOKIE, cookie.clone());
+    // What the browser would have done with the page's cookies and stored data, it does with the
+    // error's; the page's other headers are the page's own, which the error page's replace.
+    for name in [header::SET_COOKIE, HeaderName::from_static("clear-site-data")] {
+        for value in parts.headers.get_all(&name) {
+            error.headers_mut().append(name.clone(), value.clone());
+        }
     }
     error
 }

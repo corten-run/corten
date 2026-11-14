@@ -6127,15 +6127,19 @@ async function run(browser) {
   const noJs = await browser.newContext({ javaScriptEnabled: false });
   const plain = await noJs.newPage();
   seen(`[${engine}] (step) loading the page without JavaScript`);
-  await plain.goto(base);
+  const plainFirst = await plain.goto(base);
   check("without JavaScript prices are server-rendered", (await plain.$$('[data-ref="price"]')).length === 3);
-  // The visitor's list rides in a Secure cookie, which Playwright's WebKit stores from
-  // http://localhost but never sends back: there the id the page set is given back as a plain cookie
-  // (as the sign-in's is), so the write and the page it goes back to are the same visitor's.
+  // The visitor's list rides in a Secure cookie, which Playwright's WebKit never sends back over
+  // http: there the id the first page set, read from its answer as the sign-in's token is, is given
+  // back as a plain cookie, so the write and the page it goes back to are the same visitor's.
   if (!signsIn) {
-    const visitor = (await noJs.cookies(base)).find((c) => c.name === "visitor")?.value ?? "";
-    await noJs.clearCookies({ name: "visitor" });
-    await noJs.addCookies([{ name: "visitor", value: visitor, url: base }]);
+    const setCookie = (await plainFirst?.headerValue("set-cookie")) ?? "";
+    const visitor = /(?:^|\n)visitor=([0-9a-f]{32});/.exec(setCookie)?.[1];
+    check("WebKit is given the visitor id the first page set, to send back as a plain cookie", visitor !== undefined, `set-cookie: ${setCookie || "(none)"}`);
+    if (visitor) {
+      await noJs.clearCookies({ name: "visitor" });
+      await noJs.addCookies([{ name: "visitor", value: visitor, url: base }]);
+    }
   }
   await plain.selectOption("select[name=id]", "SOLR");
   // `/watch` is a path of its own with no page: the write sends the browser back to the watchlist,
@@ -6170,9 +6174,10 @@ async function run(browser) {
   ]).then(([answer]) => answer);
   check(
     "without JavaScript a stock the market does not list is refused with the page, where it was posted",
-    refusedWatch.status() === 422 && new URL(plain.url()).pathname === "/watch" && (await plain.textContent("#watch-message")) === "That stock is not on the market." && (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null,
+    refusedWatch.status() === 422 && new URL(plain.url()).pathname === "/watch" && (await plain.textContent("#watch-message")) === "That stock is not on the market.",
     `${refusedWatch.status()} ${plain.url()} ${await plain.textContent("#watch-message")}`,
   );
+  check("the refused page shows the list as it was", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
   await plain.goto(base);
   // A slow part a <corten-live> stream sends once: no stream opens, so the line saying it is on
   // its way is hidden under @media (scripting: none), and the link to the same page with it read

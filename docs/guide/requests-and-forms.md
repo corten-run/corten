@@ -180,7 +180,8 @@ posting again (the browser asks first), so a write that must not run twice carri
 
 A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500 that
 says so when a path whose route has no `GET` handler answers it with a page and a success status,
-so an app's router test fails there; the handler's cookies go out with the error. It reads the
+so an app's router test fails there; the handler's cookies and `Clear-Site-Data` go out with the
+error, and the page's other headers do not. It reads the
 routes `#[corten::routes]` declares, so it does not see everything: a router built by hand from
 a `Table` is not checked, and a page such a route serves at a path a post-only macro route also
 matches is taken for that route's, a false 500; an `unstaged` route skips the stages the check

@@ -302,13 +302,14 @@ Corten is pre-1.0, so any minor version may change the API.
   ui-gallery lists a card on the draft's route and `/save` sends the browser back to the draft
   with a notice; watchlist uploads a picture to `/account`, and `/watch` and `/unwatch` send a
   browser without JavaScript back to the watchlist with a notice and refuse a stock the market
-  does not list with a 422 and the page
+  does not list with a 422 (the page without JavaScript, the form as a patch with it, and a
+  Problem Details document to a data client, which got a 200 with the watchlist before)
   ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)).
 
 - A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500
   that says what to do when a path whose `#[corten::routes]` route has no `GET` handler answers
-  it with a page and a success status, keeping the handler's cookies; a release build compiles
-  none of the check. **Breaking (debug builds only):** an app from an earlier `corten new`
+  it with a page and a success status, keeping the handler's cookies and `Clear-Site-Data`; a
+  release build compiles none of the check. **Breaking (debug builds only):** an app from an earlier `corten new`
   (`/greet`, with no `GET`), or any post-only route that answers a browser's plain post with a
   200 page (a payment provider's return, a sign-in provider's `form_post` callback, a refusal
   sent with 200), now gets a 500 in debug builds and in its router tests. To move: post the form

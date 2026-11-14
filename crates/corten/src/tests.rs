@@ -2564,10 +2564,13 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
     assert_eq!(call(app(api, None), "GET", None).await.0, StatusCode::OK, "only pages are checked");
 }
 
-/// A write that answers a page wherever it is posted, as a patch for the runtime, with a cookie.
+/// A write that answers a page wherever it is posted, as a patch for the runtime, with a cookie,
+/// `Clear-Site-Data` and a header of the page's own.
 async fn post_page_drawn(req: Req) -> HtmlResult {
-    let res =
+    let mut res =
         req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await?;
+    res.headers_mut().insert("clear-site-data", HeaderValue::from_static("\"cache\""));
+    res.headers_mut().insert("x-drawn", HeaderValue::from_static("saved"));
     Ok(res.with_cookie(SetCookie::new("saved", "1")))
 }
 
@@ -2587,8 +2590,11 @@ async fn post_page_redirected(req: Req) -> HtmlResult {
     req.redirect(&post_page_url::Home)
 }
 
-async fn post_api_saved() -> &'static str {
-    "saved"
+/// An API's answer carrying a page's shell header, as the check reads a page: at a post-only
+/// path of the app's it would be an error, and at the API's it is not.
+async fn post_api_saved() -> HtmlResult {
+    let res = crate::response::Response::builder().header(crate::page::SHELL_HEADER, "api").body(Body::from("saved"));
+    Ok(HtmlResponse::new(res.unwrap()))
 }
 
 #[crate::routes]
@@ -2657,9 +2663,10 @@ const POST_PAGE_BROWSER: &[(&str, &str)] = &[("accept", "text/html")];
 
 /// A browser's post answered with a page at a path with no `GET` is an error in a debug build: the
 /// browser would show it at an address that answers 405 when it is opened again. The handler's
-/// cookies go out with it. A page's own route, a refusal, a redirect, the runtime's patch, a client
-/// that does not ask for HTML, an `any = ..` route (which answers `GET` too) and an API's path
-/// are not.
+/// cookies and `Clear-Site-Data` go out with it, and the page's other headers do not. A page's own
+/// route, a refusal, a redirect, the runtime's patch, a client that does not ask for HTML, an
+/// `any = ..` route (which answers `GET` too) and an API's path (answered with a page's shell
+/// header) are not.
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_builds() {
@@ -2669,6 +2676,8 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
     assert!(body.contains("post to /save, which has no GET handler"), "it names the route outside dev too: {body}");
     let cookies: Vec<_> = headers.get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
     assert!(cookies.iter().any(|c| c.starts_with("saved=1;")), "the handler's cookie is kept: {cookies:?}");
+    assert_eq!(headers.get("clear-site-data").map(|v| v.to_str().unwrap()), Some("\"cache\""), "and Clear-Site-Data");
+    assert!(headers.get("x-drawn").is_none(), "the page's own header is not: {headers:?}");
     let (status, _, body) = post_page_send(&router, "/items/7/save", POST_PAGE_BROWSER).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a route with a parameter: {body}");
     assert!(body.contains("post to /items/{id}/save, which has no GET handler"), "{body}");
@@ -2678,7 +2687,12 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
     assert_eq!(post_page_send(&router, "/refuse", POST_PAGE_BROWSER).await.0, StatusCode::UNPROCESSABLE_ENTITY, "a refusal");
     assert_eq!(post_page_send(&router, "/done", POST_PAGE_BROWSER).await.0, StatusCode::SEE_OTHER, "a redirect");
     assert_eq!(post_page_send(&router, "/relay", POST_PAGE_BROWSER).await.0, StatusCode::OK, "any = .. answers GET too");
-    assert_eq!(post_page_send(&router, "/api/save", POST_PAGE_BROWSER).await.0, StatusCode::OK, "an API's path");
+    let (status, headers, body) = post_page_send(&router, "/api/save", POST_PAGE_BROWSER).await;
+    assert_eq!(
+        (status, headers.get("corten-shell").is_some()),
+        (StatusCode::OK, true),
+        "an API's path, its answer read as a page: {body}"
+    );
     let patch = post_page_send(&router, "/save", &[("accept", "text/html"), ("corten", "action")]).await;
     assert_eq!(patch.0, StatusCode::OK, "the runtime's patch");
     assert_eq!(post_page_send(&router, "/save", &[]).await.0, StatusCode::OK, "not a browser");
