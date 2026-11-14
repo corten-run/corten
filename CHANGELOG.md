@@ -10,6 +10,11 @@ Corten is pre-1.0, so any minor version may change the API.
   continuity or cleanup proof. This adds diagnostics; it does not establish or repair
   the historical r21 failure's cause.
 
+- Make generated catalog fixtures and Gin's public static assets readable by native
+  non-root image users under a private job umask. Preserve original catalog checker
+  errors when negative-response receipts are missing or invalid, without accepting
+  failed checks or starting timing; add private-umask native Gin CI coverage.
+
 - Preserve bounded provider failure-phase codes and allowlisted HTTP statuses through
   grouped cloud worker IPC, teardown and CLI errors, without printing native errors,
   raw responses or credentials, or changing provider validation and recovery rules.

@@ -86,6 +86,11 @@ jobs:
       # This workflow does not measure/publish performance or touch nightly state.
       - name: Build and verify both catalog sources
         run: node bench/catalog/run.mjs c1 --apps ${{ matrix.app }} --build --check-only
+      - name: Test native Gin catalog under a private umask
+        if: matrix.app == 'gin'
+        run: node --test bench/catalog/gin-permissions.test.mjs
+        env:
+          CATALOG_GIN_DOCKER_TESTS: "1"
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
         run: |

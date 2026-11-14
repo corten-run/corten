@@ -16,6 +16,8 @@ WORKDIR /app
 COPY --from=build /out/itempage ./
 COPY static ./static
 ADD --chmod=644 --checksum=sha256:a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130 https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js static/htmx.min.js
+# Public assets must remain readable/traversable after a private-umask checkout.
+RUN chmod -R a+rX /app/static
 ENV GIN_MODE=release PORT=8080
 EXPOSE 8080
 USER nobody

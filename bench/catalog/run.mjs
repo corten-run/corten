@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
 import { commandOutput } from "./output.mjs";
+import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -124,7 +125,11 @@ async function remove(name) {
 async function portOf(name) {
   const info = await inspect(name);
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
-  assert.ok(port, `${name}: no private host port`);
+  if (!info.State.Running || !port) {
+    const file = join(folder, `${name}-startup.log`);
+    await docker(["logs", name], { file, capture: false });
+    throw new Error(`${name}: native startup failed; state=${JSON.stringify(info.State)}\n${readFileSync(file, "utf8")}`);
+  }
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
@@ -318,9 +323,9 @@ try {
         }
         let checked;
         if (checkerFailure) {
-          const failure = JSON.parse(readFileSync(join(out, "checks.json.failure.json"), "utf8"));
-          verifyFailedCheck(failure, source); verifyCheckBoundary(boundary, summary, app, source, true);
-          checked = { failure };
+          checked = readFailedCheck(join(out, "checks.json.failure.json"), checkerFailure, (failure) => {
+            verifyFailedCheck(failure, source); verifyCheckBoundary(boundary, summary, app, source, true);
+          });
           writeFileSync(join(out, "checks.json"), JSON.stringify(checked, null, 2));
         } else checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
         if (group) {
