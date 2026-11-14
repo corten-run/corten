@@ -95,6 +95,9 @@ held() {
 }
 take_over() {
     if [ -d "$handed/etc/letsencrypt" ]; then
+        # cli.ini is the certbot package's own and is not sent: where an earlier try has
+        # installed the package, its file is kept.
+        [ ! -e /etc/letsencrypt/cli.ini ] || cp -p /etc/letsencrypt/cli.ini "$handed/etc/letsencrypt/cli.ini"
         rm -rf /etc/letsencrypt
         mv "$handed/etc/letsencrypt" /etc/letsencrypt
     fi
@@ -103,8 +106,10 @@ take_over() {
         release=${release%/}
         name=${release##*/}
         [ -x "$release/corten-site" ] || continue
-        # A release's name was a deploy's to choose on the machine before this one.
-        case $name in *[!A-Za-z0-9._-]* | [!A-Za-z0-9]*) continue ;; esac
+        # A release's name was a deploy's to choose on the machine before this one, which
+        # sends none that a command would take for an option, nor `etc`, where certbot's
+        # directory lay (handover.sh). Refused here too.
+        case $name in etc | *[!A-Za-z0-9._-]* | [!A-Za-z0-9]*) continue ;; esac
         # Put there by the deploy user, as a deploy puts one: the directory is that user's,
         # and its key is on this machine by now, so root writes nothing in it and follows no
         # link there. What that user's tar writes is that user's, whatever its mode was.

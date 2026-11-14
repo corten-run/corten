@@ -121,7 +121,7 @@ address where it was, the new droplet is left as it is, and the next run
 (`gh workflow run site-machine.yml`) asks it again, and ships `main` to it once the address
 is there. A droplet that cannot set itself up from what it was handed, however often it is
 asked, is replaced by one that is handed nothing
-(`gh workflow run site-machine.yml -f replace=true -f without_handover=true`): the address
+(`gh workflow run site-machine.yml -f without_handover=true`, which makes a new one): the address
 moves first, as below. What the address's own move costs is in each run's log: the site is
 asked once a second while the apply runs, and the run says how many of those went
 unanswered.
@@ -162,7 +162,7 @@ unless the names given are no longer the ones it holds, and then for one, once t
 is there. When an apply fails, run the workflow again (`gh workflow run site-machine.yml`):
 what it made is in the state, and the run ships the site to a machine that answers 502. With
 deploys on, a run fails when the machine does not answer. To make a new machine where
-nothing it is made from has changed, run the workflow with its one input
+nothing it is made from has changed, run the workflow with its input `replace`
 (`gh workflow run site-machine.yml -f replace=true`).
 If a second run fails the same way, see in DigitalOcean's control panel whether the address is
 on the droplet: an apply does not notice an address that is on none, and puts it back only
@@ -234,7 +234,10 @@ it root there: certbot's directory holds the hooks certbot runs as root when it 
 the release is what the service runs. The same environment holds the DigitalOcean token,
 whose holder can read a droplet's disk, and make one, without it. The release is put in
 place by the `deploy` user, whose directory it goes into, so what a deploy left in a release
-gains nothing by being carried. The deploy key cannot run the command, and nothing on the
+gains nothing by being carried; and a release is carried only under a name of letters,
+digits, `.`, `_` and `-` that starts with a letter or a digit and is not `etc`, since the
+deploy user names it and root's tar reads the name. A replacement fails, with the address
+where it was, while the release served has another. The deploy key cannot run the command, and nothing on the
 machine holds the private half. A new handover key (the secret and the variable removed, and
 `bootstrap.sh` run again) replaces the droplet on the next apply, and the droplet serving
 then does not know it: that one replacement moves the address first.

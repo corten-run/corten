@@ -21,17 +21,28 @@ ask)
     ;;
 give)
     served=$(readlink -f /opt/corten-site/current || true)
-    case $served in
-    /opt/corten-site/releases/?*) ;;
-    *) echo "no release is served here" >&2; exit 1 ;;
+    name=${served##*/}
+    # A release's name is the deploy user's to choose, and it is root's tar that reads it
+    # here: one that tar would take for an option, or that would lie beside certbot's
+    # directory in what is sent (`etc`), is not carried. boot.sh refuses the same names.
+    case $name in
+    '' | etc | *[!A-Za-z0-9._-]* | [!A-Za-z0-9]*)
+        echo "the release served here has a name the handover does not carry" >&2
+        exit 1
+        ;;
     esac
+    [ "$served" = "/opt/corten-site/releases/$name" ] || { echo "no release is served here" >&2; exit 1; }
     [ -e "/etc/letsencrypt/live/$domain/fullchain.pem" ] || { echo "no certificate for $domain here" >&2; exit 1; }
-    # certbot's whole directory: the certificate and its key, and the account and the settings
-    # it renews with. Not cli.ini, which is the certbot package's own file: left for the
-    # package to write, since apt stops to ask about one that is there already and differs.
-    # The release goes under its own directory's name. As gzip, which ends with a count of
+    # From inside the releases' directory, which is the deploy user's to rename: what is
+    # read is the directory this is in, whatever its path leads to afterwards.
+    cd /opt/corten-site/releases
+    [ "$(pwd -P)" = /opt/corten-site/releases ] || { echo "no release is served here" >&2; exit 1; }
+    # The release under its own directory's name, and certbot's whole directory: the
+    # certificate and its key, and the account and the settings it renews with. Not cli.ini,
+    # which is the certbot package's own file: left for the package to write, since apt stops
+    # to ask about one that is there already and differs. As gzip, which ends with a count of
     # what it held: a tar cut short between two files reads as a whole one.
-    tar -czf - --exclude=etc/letsencrypt/cli.ini -C / etc/letsencrypt -C /opt/corten-site/releases "${served##*/}"
+    tar -czf - --anchored --exclude=etc/letsencrypt/cli.ini "$name" -C / etc/letsencrypt
     ;;
 take)
     # A machine that serves already has a certificate of its own, and a deploy's releases.

@@ -31,7 +31,7 @@ on:
         type: boolean
         default: false
       without_handover:
-        description: Hand a new machine nothing, so the address moves first and the site is away meanwhile (for one that cannot set itself up from what it is handed)
+        description: Make a new machine that is handed nothing, so the address moves first and the site is away meanwhile (in place of one that cannot set itself up from what it was handed)
         type: boolean
         default: false
 
@@ -137,7 +137,9 @@ jobs:
           TF_VAR_host_key: ${{ secrets.SITE_HOST_KEY }}
           # Empty on a push, where there are no inputs, and so the key is there.
           HANDOVER_KEY: ${{ !inputs.without_handover && secrets.SITE_HANDOVER_KEY || '' }}
-          REPLACE: ${{ inputs.replace && '-replace=digitalocean_droplet.site' || '' }}
+          # A machine that is to be handed nothing is a new one: the one a failed run left was
+          # handed everything already.
+          REPLACE: ${{ (inputs.replace || inputs.without_handover) && '-replace=digitalocean_droplet.site' || '' }}
         run: |
           # What relay.sh has to say that a run should not be missed for: under the apply its
           # lines follow the resource's name, and GitHub reads a warning only from a line's start.

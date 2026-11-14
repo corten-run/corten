@@ -86,8 +86,14 @@ done
 # A run after one that failed further on finds the new machine set up already.
 if ! serves --resolve "$DOMAIN:443:$NEW"; then
     # From one machine to the other through this one's memory: never a file here.
-    machine "$DOMAIN" give < /dev/null | machine "$NEW" take
-    echo "The new machine at $NEW has the certificate and the release $DOMAIN is served with."
+    if machine "$DOMAIN" give < /dev/null | machine "$NEW" take; then
+        echo "The new machine at $NEW has the certificate and the release $DOMAIN is served with."
+    # A machine that is set up already takes nothing: one that an earlier run handed
+    # everything, and that did not answer the one question above.
+    elif ! thrice serves --resolve "$DOMAIN:443:$NEW"; then
+        say error "What $DOMAIN is served with did not reach the new machine at $NEW: the lines above say which end refused. The address has not moved, and the old machine serves. Run the workflow again."
+        exit 1
+    fi
     # Twenty-five minutes: a step that fails on the new machine (a package mirror out of
     # reach) is tried again a quarter of an hour later, and that try is waited for.
     ends=$((SECONDS + 1500))
