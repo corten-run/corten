@@ -17,6 +17,8 @@ Corten is pre-1.0, so any minor version may change the API.
   Existing all-group reservations and uncertain-host recovery remain separate;
   local workload verification files run serially without changing measurements.
 
+- Link to [corten.run](https://corten.run) from the README's introduction.
+
 - Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
   GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
   follow the documented manual check before installing the binary.
