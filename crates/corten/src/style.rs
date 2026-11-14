@@ -1356,6 +1356,104 @@ mod tests {
     }
 
     #[derive(crate::Route)]
+    #[route("/admin/badge")]
+    struct AdminBadge;
+
+    #[derive(crate::Route)]
+    #[route("/admin/refused")]
+    struct AdminRefused;
+
+    #[derive(crate::view::Id)]
+    struct BadgeNoteId;
+
+    /// A badge as a patch sends it, with the stylesheet of BadgeList.
+    #[component(css = BadgeList)]
+    fn BadgeNote() -> impl crate::view::Patch {
+        html! { <p id={BadgeNoteId} class={Badge}>"Saved"</p> }
+    }
+
+    /// The same element with no stylesheet.
+    #[component]
+    fn PlainNote() -> impl crate::view::Patch {
+        html! { <p id={BadgeNoteId}>"Saved"</p> }
+    }
+
+    /// A patch brings the stylesheets of its handler's area, as a navigation into the area does:
+    /// the page it lands on may be outside the area (a form on `/` whose action is
+    /// `/admin/badge`), and the runtime adds the ones that page lacks before putting the patch in
+    /// place. A patch from outside every area links nothing, and one there that renders an area's
+    /// component is an error in a debug build.
+    #[tokio::test]
+    async fn a_patch_links_the_stylesheets_of_its_handlers_area() {
+        use crate::body::Body;
+        use crate::router::{get, Table};
+        use http::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        async fn badge(req: crate::Req) -> crate::HtmlResult {
+            req.patch(BadgeNote {})
+        }
+        async fn refused(req: crate::Req) -> crate::HtmlResult {
+            let mut errors = crate::Errors::new();
+            errors.refuse(crate::Refusal::Conflict, "The badge moved on.");
+            req.invalid_with(&errors, |form| async move { form.draw(BadgeNote {}) }, || async { req.patch(BadgeNote {}) }).await
+        }
+        async fn plain(req: crate::Req) -> crate::HtmlResult {
+            req.patch(PlainNote {})
+        }
+        let app = |dev: bool| {
+            App::new(Routes::from(Table::new().route("/note", get(plain)).route("/stray", get(badge))))
+                .dev(dev)
+                .components(&[theme::TOKENS])
+                .area::<Admin>(|admin| {
+                    admin
+                        .route::<AdminBadge>(crate::Methods::reads(get(badge)))
+                        .route::<AdminRefused>(crate::Methods::reads(get(refused)))
+                        .components(&[BadgeList])
+                })
+                .router()
+        };
+        let action = |app: crate::Router, path: &'static str| async move {
+            let req = Request::get(path).header("corten", "action").body(Body::empty()).unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status();
+            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        };
+        let link = r#"/sections/admin.css" data-corten-style>"#;
+
+        let (status, body) = action(app(true), "/admin/badge").await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.starts_with(r#"<p id=""#) && body.contains(r#"class="badge-list__badge">Saved</p>"#), "{body}");
+        assert_eq!(body.matches(link).count(), 1, "the patch links its area's stylesheet: {body}");
+        let (status, body) = action(app(true), "/admin/refused").await;
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(body.matches(link).count(), 1, "and so does a refused form's: {body}");
+        let (status, body) = action(app(true), "/note").await;
+        assert!(status == 200 && !body.contains("data-corten-style"), "no area, no link: {body}");
+
+        #[cfg(debug_assertions)]
+        for dev in [true, false] {
+            let (status, body) = action(app(dev), "/stray").await;
+            assert_eq!(status, 500);
+            assert!(
+                !dev || body.contains(
+                    "/stray answers with a patch that renders BadgeList, whose stylesheet is linked from the area /admin only"
+                ),
+                "{body}"
+            );
+        }
+        // A component no list names is the patch's in its message, not the page's.
+        #[cfg(debug_assertions)]
+        {
+            let unlisted =
+                App::new(Routes::from(Table::new().route("/stray", get(badge)))).dev(true).components(&[theme::TOKENS]);
+            let (status, body) = action(unlisted.router(), "/stray").await;
+            assert!(status == 500 && body.contains("the patch renders BadgeList, which the app does not list"), "{body}");
+        }
+    }
+
+    #[derive(crate::Route)]
     #[route("/shop")]
     struct Shop;
 
