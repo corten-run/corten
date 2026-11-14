@@ -2723,10 +2723,15 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // middleware answers ([`FillsLate`]), under the deadline and before the error page, as the
     // route's own page was filled as the route answered. Anything else passes with one look at its
     // extensions.
+    // Boxed, as the whole document's is below, so every other request's future stays the size it
+    // was: with the fill's state inline, a navigation and a patch in an app without layout reads
+    // each ran about 250 more instructions, most of them copying (callgrind).
     if action_write {
         signal.mark_late();
         let next = FillsLate { next: next.late(until), shared, until };
-        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
+        let late: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> =
+            Box::pin(page_or_error(shared, req, next, deadline, signal, (mode, fetched)));
+        return late.await;
     }
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
