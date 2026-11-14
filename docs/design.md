@@ -3242,12 +3242,17 @@ rules something out.
     `Patches` answer but through the methods that answer a patch to the runtime; the marker types
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
-    request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, three
-    alternate runs of each build on `d1cb28f9` and on the commit that made this choice: the patch
-    (`Mode::Action`) 20,375.07 before (20,375.05 to 20,375.08) and 20,375.10 after (20,375.09 to
-    20,375.19); the page (`Mode::Document`) 24,018.99 before (24,018.98 to 24,019.09) and
-    24,003.11 after (24,003.07 to 24,004.65), 16 fewer, a difference in how the generic page side
-    was inlined rather than work removed); bet (the routes a part is read from are few and
+    request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
+    `#[ignore]` test `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, three
+    alternate runs of each build, the median and the range, on `0ff569c69` (before) and on
+    `811324247` (after, a handler returning `HtmlResult` and one returning
+    `HtmlResult<Patches>`): the patch (`Mode::Action`) 17,971.83 before (17,971.80 to
+    17,971.84), 17,972.76 after with `HtmlResult` (17,972.75 to 17,972.83) and 17,972.76 with
+    `HtmlResult<Patches>` (17,972.76 to 17,972.90), one more; the page (`Mode::Document`)
+    18,404.68 before (18,404.65 to 18,406.15), 18,389.72 after with `HtmlResult` (18,389.65 to
+    18,389.74) and 18,389.60 with `HtmlResult<Patches>` (18,388.02 to 18,389.69), 15 fewer; both
+    differences are in how the generic methods were inlined, not work added or removed, and the
+    two kinds cost the same); bet (the routes a part is read from are few and
     declared in a routes module, so the one word and the one return type cost an app little, and
     no app reads a part again from a route given by hand); value (mistakes fail at compile time,
     Values 4).
@@ -3261,9 +3266,10 @@ rules something out.
     hand; or a `data-patch` form whose handler lost its patch is reported as sending whole pages
     unnoticed, which would make the form's route worth checking too.
 
-    Last checked: 2026-11-13, rustc 1.99.1 and 1.88 (`rust-version`), `type_alias_impl_trait`
-    still unstable, and the `compile_fail` doctests on `ReadAgain::from`, `Patches` and
-    `corten::routes` with the messages `tests/handler_message.rs` holds, written on `d1cb28f9`.
+    Last checked: 2026-11-14, rustc 1.99.1 and 1.88 (`rust-version`), `type_alias_impl_trait`
+    still unstable, and the `compile_fail` doctests on `ReadAgain::from`, `Patches`,
+    `Public::new` and `corten::routes` with the messages `tests/handler_message.rs` holds, on
+    `811324247` (merged with main at `0ff569c69`), first written on `d1cb28f9`.
 
 ## Rules
 

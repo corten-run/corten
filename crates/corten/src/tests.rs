@@ -2580,7 +2580,7 @@ async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
 /// What a request through `req.patch_or` costs: `PATCH_REQUESTS` (200) requests in process, one
 /// at a time, read by the runtime (`corten: action`, the patch) or, with `PATCH_MODE=document`, by
 /// a browser without JavaScript (the page), to a handler that returns `HtmlResult` or, with
-/// `PATCH_KIND=patches`, `HtmlResult<Patches>` (design Choice 47). Counting it under callgrind at
+/// `PATCH_KIND=patches`, `HtmlResult<Patches>` (`docs/design.md#choice-patch-routes`). Counting it under callgrind at
 /// two numbers of requests gives the instructions per request. A build from before `Patches`
 /// counts the `HtmlResult` handler with this function less `cost_patches`. The test binary has no
 /// global allocator, so preload the one to count with. Run in release: `cargo test --release -p corten-run --all-features --lib --no-run`,
