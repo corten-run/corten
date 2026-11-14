@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "@playwright/test";
 import { reconcileRequests } from "./ledger.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream, upstreamDelta } from "./upstream.mjs";
@@ -57,11 +58,15 @@ test("browser cleanup and mutation probes retain real final request and upstream
     if (req.url === "/late-failure") { req.socket.destroy(); return; }
     await (await fetch(source + "/marketplace/records/item_1")).arrayBuffer();
     if (req.method === "POST") { res.writeHead(req.url.endsWith("item_missing") ? 404 : 403); res.end("Rejected"); return; }
-    if (req.url === "/cleanup") { res.end("Away"); return; }
+    if (req.url === "/cleanup") { await new Promise((resolve) => setTimeout(resolve, 250)); res.end("Away"); return; }
     res.setHeader("content-type", "text/html");
     res.end(`<!doctype html><header><a href="/">Away</a></header><article class="marketplace"><div class="marketplace__alert"><form method="post" action="/marketplace/en-US/item_1"><input name="email"><input name="target_price"><button>Submit</button></form></div></article><script>
       const root = document.querySelector('article');
-      document.querySelector('header a').addEventListener('click', event => { event.preventDefault(); root.remove(); fetch('/cleanup'); });
+      document.querySelector('header a').addEventListener('click', async event => {
+        event.preventDefault();
+        await (await fetch('/cleanup')).text();
+        root.remove();
+      }, { once: true });
     </script>`);
   });
   let browser;
@@ -82,6 +87,11 @@ test("browser cleanup and mutation probes retain real final request and upstream
       assert.deepEqual(probes.failures, []); assert.equal((await audit.end(probePhase)).completed, 3);
       const cleanupPhase = await audit.begin("cleanup");
       const cleanup = await resources.cleanup({ timeoutMs: 5000, observationMs: 25, network, runtimeErrors: [] });
+      if (cleanup.outcome !== "observed") {
+        const folder = new URL("./work/diagnostics/", import.meta.url);
+        await mkdir(folder, { recursive: true });
+        await writeFile(new URL(`ledger-cleanup-${Date.now()}-${process.pid}.json`, folder), JSON.stringify(cleanup, null, 2));
+      }
       assert.equal(cleanup.outcome, "observed", JSON.stringify(cleanup.failures));
       assert.equal((await audit.end(cleanupPhase)).completed, 1);
       assert.ok(cleanup.requests.some((r) => r.path === "/cleanup" && r.completed));

@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { publicURL, publicInput, sha256, transportOf } from "./contract.mjs";
 import { snapshotPage } from "../marketplace/check.mjs";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
-import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";
+import { discoverReactEndpoint } from "./bindings.mjs";
+import { observeBindingLinks } from "./binding-links.mjs";
 import { inspectScopedBinding } from "./scopes.mjs";
 import { singleFetchData } from "./navigation.mjs";
 import { NativeNetworkAudit } from "./cancellations.mjs";
@@ -146,9 +147,15 @@ export function nativeDOM() {
       turbo: form.closest("[data-turbo]")?.getAttribute("data-turbo") !== "false", encoding: form.enctype,
       updatePath: updateURL?.origin === location.origin ? updateURL.pathname : null } : null };
 }
-export async function nativeForm(page, native, app, js, cdp, inspect = true) {
+export async function nativeForm(page, native, app, js, cdp, inspect = true, bindingWindow = null) {
   const form = native.form;
-  if (form && js && inspect && app === "nextjs") form.enhancement = discoverReactEndpoint(await page.locator(".marketplace__alert form").evaluate(reactHandlerSources));
+  if (form && js && inspect && app === "nextjs") {
+    const observed = await observeBindingLinks(cdp, ".marketplace__alert form", page.url(), bindingWindow);
+    const diagnostics = [];
+    form.enhancement = observed.outcome === "observed" ? discoverReactEndpoint([observed.candidate], observed.linked, diagnostics) : null;
+    form.bindingObservation = { outcome: form.enhancement ? "proved" : "unknown", reason: form.enhancement ? null
+      : observed.reason ?? diagnostics[0] ?? "Emitted component/native scope effects are unsupported" };
+  }
   if (form && js && inspect && ["nuxt", "tanstack-start"].includes(app)) {
     const receipt = await inspectScopedBinding(cdp, app, page.url(), form.action);
     form.enhancement = receipt.binding; form.bindingObservation = { trace: receipt.trace, reason: receipt.reason };

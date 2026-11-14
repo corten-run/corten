@@ -28,6 +28,9 @@ navigation cleanup. CDP sessions are local to the runner's owned Chromium browse
   is not included in that page session's coverage.
 - Browser `Target.targetCreated`, `targetInfoChanged`, `targetDestroyed`: target ID, type,
   browser-context ID and opener ID when available. No auto-attach pause or target termination.
+- Successful `Target.setDiscoverTargets({discover:true})`: host command start/completion and
+  actual empty native result, before the initial inventory. A coverage flag or successful
+  inventory cannot supply this receipt; a failed command records an observation failure.
 
 ## What this proves
 
@@ -127,6 +130,17 @@ header completion must follow dispatch and precede transfer finish or redirect c
 `loadingFinished.timestamp`; it is not substituted for the actual header-completion timestamp.
 Its own native time still must follow dispatch and header completion and precede its bounded
 host delivery. No arbitrary clock epsilon or missing-timing fallback supplies proof.
+
+Socket creation identities must be unique, and handshake/close receipts must conserve that
+identity exactly once in observation order. A handshake after close, duplicate receipt,
+missing native timestamp, backwards handshake/close time or time outside the same bounded
+native-clock envelope leaves proof unknown. Creation has no native CDP timestamp, so its host
+receipt is checked against the observation bounds and the subsequent handshake/close receipts;
+no creation timestamp is invented. Handshake status must be a native HTTP status, not an
+assumed successful upgrade. Socket receipts outside the observation interval cannot be dropped
+to manufacture a positive proof. `row7.test.mjs` applies these mutations to an actual closed
+Chromium socket and keeps the intact journal positive and unchanged. This is still not server
+peer-closure evidence or a shared-oracle waiver.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
 and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.

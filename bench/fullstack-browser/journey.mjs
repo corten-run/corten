@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { settings, alertsFromReadback, nativeFailures } from "./contract.mjs";
 import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM } from "./observe.mjs";
-import { UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
+import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
@@ -11,6 +11,8 @@ import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { PlatformLifecycle, validatePlatformRetirement, classifyNoJSRequests } from "./lifecycle.mjs";
+import { BindingLinkObserver } from "./binding-links.mjs";
+import { beginBindingWindow, finishBindingWindow, replayActionBinding } from "./binding-window.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -76,7 +78,7 @@ export async function dispatch(page, step) {
   return form.locator('[type="submit"]').click();
 }
 
-export async function runJourney({ browser, app, base, profile, records, readback, counters }) {
+export async function runJourney({ browser, app, base, profile, records, readback, counters, bindingArtifact = null }) {
   const environment = structuredClone(settings.profiles[profile.device]);
   const result = { case: profile.key, outcome: "failed", qualificationPassed: false, evidence: {
     environment: { ...environment, js: profile.js }, architecture: null, steps: [], failures: [], gaps: [], cleanup: null,
@@ -84,10 +86,11 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     timingScope: "Host-observed elapsed time including Playwright dispatch/polling. Visible-change is an upper bound, not a hydration or comparative speed claim.",
   } };
   const evidence = result.evidence;
+  evidence.bindingInstance = randomUUID();
   const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
-  let network, lifecycle;
+  let network, lifecycle, bindings;
   const runtimeErrors = [];
   const started = performance.now();
   evidence.clock = { origin: "node.performance.now", startedAt: started };
@@ -100,6 +103,10 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
+    if (app === "nextjs" && profile.js) {
+      bindings = new BindingLinkObserver(cdp, bindingArtifact); await bindings.enable();
+      evidence.bindingArtifact = bindingArtifact ? { sha256: bindingArtifact.sha256, imageId: bindingArtifact.imageId, sourceCommit: bindingArtifact.sourceCommit } : null;
+    }
     lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
     network.attachCDP(cdp);
     const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
@@ -133,9 +140,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
       const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
-      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input)); row.componentsBefore = nativeBefore.components;
+      if (app === "nextjs" && profile.js && step.input) row.bindingWindow = await beginBindingWindow(cdp, lifecycle, resources,
+        { instance: evidence.bindingInstance, case: profile.key, action: step.id });
+      row.formBefore = await nativeForm(page, nativeBefore, app, profile.js, cdp, Boolean(step.input), row.bindingWindow); row.componentsBefore = nativeBefore.components;
+      if (row.bindingWindow) await finishBindingWindow(lifecycle, row.bindingWindow, row.formBefore?.enhancement);
       network.bindForm(row.formBefore);
       const at = performance.now();
+      row.dispatchStartedAt = at;
       const deadline = at + settings.actionTimeoutMs;
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
@@ -227,7 +238,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js, form: row.formBefore }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
       if (profile.source === "fixture" && row.upstream.started !== 0) row.failures.push("Fixture source unexpectedly fetched upstream");
       if (row.upstream.pending || row.upstream.completed + row.upstream.cancelled !== row.upstream.started) row.failures.push("Upstream work still pending/unaccounted");
-      if (profile.source === "api" && step.kind !== "missing" && row.requests.some((r) => ["document", "fetch", "router", "turbo", "livewire"].includes(r.transport) && (r.path.includes("marketplace") || r.method === "POST")) && !row.upstream.completed) row.failures.push("Request-time upstream read missing");
+      row.failures.push(...upstreamReadFailures(profile.source, step, row.requests, row.upstream));
     }
     evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
@@ -252,6 +263,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (lifecycle) try { await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] }); }
     catch (error) { evidence.failures.push(`Platform terminal observation: ${error.message}`); }
     evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
+    if (app === "nextjs" && profile.js) for (const row of evidence.steps.filter((r) => r.action.input)) {
+      if (!replayActionBinding(row.formBefore?.enhancement, bindingArtifact, evidence, row, profile.key)) {
+        evidence.functionalChecksPassed = false;
+        row.failures.push("Next binding proof lacks its native pre-dispatch observation window");
+        evidence.failures.push(`${row.action.id}: Next binding observation cannot replay`);
+      }
+    }
     if (evidence.platformLifecycle) {
       evidence.platformRetirementProofs = evidence.steps.filter((s) => s.platformRetirement).map((s) => ({ action: s.action.id,
         proof: validatePlatformRetirement(evidence.platformLifecycle, { ...s.platformRetirement, observationMs: settings.observationMs }) }));
@@ -266,7 +284,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     }
     await upstream.finish();
     evidence.upstreamReconciliation = reconcileUpstream(evidence.upstreamLedger, { source: profile.source,
-      actions: profile.steps.map((s) => s.id), observationMs: settings.observationMs });
+      actions: profile.steps.map((s) => s.id), steps: evidence.steps, observationMs: settings.observationMs });
     if (evidence.upstreamReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.upstreamReconciliation.reasons);
     if (network) {
       await network.drain(); network.annotate(); evidence.requestLedger = structuredClone(network.rows);
@@ -276,6 +294,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     evidence.requestReconciliation = reconcileRequests(evidence);
     if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
     const beforeClose = performance.now();
+    if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
     try {
       await context.close();
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,

@@ -75,7 +75,17 @@ export class PlatformLifecycle {
   async enable() {
     const { targetInfo: t } = await this.cdp.send("Target.getTargetInfo");
     this.target = { target: t.targetId, context: t.browserContextId ?? null, type: t.type };
-    if (this.targets) { await this.targets.send("Target.setDiscoverTargets", { discover: true }); this.discovery = true; }
+    if (this.targets) {
+      const startedAt = performance.now(), params = { discover: true };
+      try {
+        const result = await boundedSend(this.targets, "Target.setDiscoverTargets", params);
+        this.events.push({ event: "Target.setDiscoverTargets", startedAt, receivedAt: performance.now(), params, result });
+        this.discovery = true;
+      } catch (error) {
+        this.observationFailures.push({ phase: "target-discovery", at: performance.now(), error: error.message });
+        throw error;
+      }
+    }
   }
   async inventory(phase) {
     const startedAt = performance.now();
@@ -209,7 +219,7 @@ function redirectTerminal(prior, continuation, identities) {
   return { event: "native-redirect", status: r.status, receivedAt: continuation.receivedAt, at: continuation.at, response: structuredClone(r) };
 }
 
-function networkCoverage(journal, requests) {
+function networkCoverage(journal, requests, sockets = []) {
   const reasons = [], events = journal.events, b = journal.boundaries ?? {};
   const text = (value) => typeof value === "string" && value.length > 0;
   const path = (value) => text(value) && value.startsWith("/");
@@ -251,6 +261,14 @@ function networkCoverage(journal, requests) {
     // responseReceived.timestamp is notification time and can follow the native
     // transfer finish. Actual response header timing must precede that finish.
     if (r && (headersAt(r) === null || headersAt(r) < d.at || headersAt(r) > r.at || headersAt(r) > t?.at)) reasons.push(`Request ${d.request} lacks consistent native response/terminal timing`);
+  }
+  for (const { created: c, handshake: h, closed: end } of sockets) {
+    if (!text(c.request) || !["ws:", "wss:"].includes(c.scheme) || !path(c.path)
+      || !finite(c.receivedAt) || c.receivedAt < b.startedAt || c.receivedAt > b.endedAt) reasons.push("Incomplete native WebSocket creation receipt");
+    if (!h || h.request !== c.request || !Number.isInteger(h.status) || h.status < 100 || h.status > 599
+      || !withinNativeClock(h) || h.receivedAt < c.receivedAt || h.receivedAt > b.endedAt) reasons.push(`Page socket ${c.request} lacks an ordered native handshake receipt`);
+    if (!end || end.request !== c.request || !withinNativeClock(end) || end.receivedAt < c.receivedAt || end.receivedAt > b.endedAt
+      || h && (end.receivedAt < h.receivedAt || end.at < h.at)) reasons.push(`Page socket ${c.request} lacks an ordered native close receipt`);
   }
   // Page commits are independent positive receipts: deleting the entire Network
   // stream cannot turn an observed HTTP navigation into empty-network success.
@@ -403,6 +421,8 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
     || !finite(probe.finishedAt) || probe.finishedAt < probe.receivedAt || probe.finishedAt - probe.receivedAt > probe.timeoutMs) unknown("Bounded terminal unique-context-not-found receipt absent");
   if (probe?.outcome === "still-executable") { failed = true; unknown("Retired realm still executes at terminal probe"); }
   const requests = new Map(), sockets = new Map(), identities = redirectDispatchIdentities(events);
+  if (events.some((e) => e.event.startsWith("Network.webSocket") && (!finite(e.receivedAt)
+    || e.receivedAt < b.startedAt || e.receivedAt > b.endedAt))) unknown("WebSocket receipts outside the native observation interval");
   for (const e of events.filter((e) => e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt)) {
     if (e.event === "Network.requestWillBeSent") {
       if (!e.frame || !e.loader) unknown(`Request ${e.request} has unknown document ownership`);
@@ -425,14 +445,22 @@ export function validatePlatformRetirement(journal, { realm, retiredAt, observat
       }
       else { if (row.terminal) unknown("Duplicate native request terminal receipt"); row.terminal = e; if (e.event === "Network.loadingFailed") result.nativeFailures.push(e); }
     }
-    if (e.event === "Network.webSocketCreated") { const row = { created: e, handshake: null, closed: null }; sockets.set(e.request, row); result.sockets.push(row); }
+    if (e.event === "Network.webSocketCreated") {
+      if (sockets.has(e.request)) unknown("Duplicate native WebSocket creation receipt");
+      else { const row = { created: e, handshake: null, closed: null }; sockets.set(e.request, row); result.sockets.push(row); }
+    }
     if (["Network.webSocketHandshakeResponseReceived", "Network.webSocketClosed"].includes(e.event)) {
       const row = sockets.get(e.request); if (!row) unknown("Unmatched WebSocket receipt");
-      else if (e.event === "Network.webSocketClosed") row.closed = e; else row.handshake = e;
+      else if (e.event === "Network.webSocketClosed") {
+        if (row.closed) unknown("Duplicate native WebSocket close receipt"); else row.closed = e;
+      } else {
+        if (row.handshake || row.closed) unknown("Duplicate/late native WebSocket handshake receipt");
+        else row.handshake = e;
+      }
     }
   }
   for (const row of result.requests) if (!row.terminal || row.terminal.event === "Network.loadingFinished" && !row.response) unknown(`Request ${row.dispatch.request} lacks terminal/response evidence`);
-  result.reasons.push(...networkCoverage(journal, result.requests));
+  result.reasons.push(...networkCoverage(journal, result.requests, result.sockets));
   // CDP socket creation lacks a reliable initiator execution-context ID. An open
   // socket on this page is unknown ownership, not an exemption or a forced close.
   for (const row of result.sockets) if (!row.closed) unknown(`Page socket ${row.created.request} has no native close receipt`);

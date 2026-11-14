@@ -5,6 +5,7 @@ import { records } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { candidates, emptyCells, settings } from "./contract.mjs";
 import { exportBrowserCaptures, projectRequest, projectCase } from "./capture.mjs";
+import { createBindingArtifact } from "./binding-artifact.mjs";
 
 const fixture = records(), plan = createBrowserPlan({ records: fixture });
 const summary = () => ({ effectivePlan: plan, settings, cells: emptyCells(plan), images: {}, code: { diagnostic: true }, browser: null });
@@ -15,7 +16,7 @@ function projectionEvidence() {
   let at = 0;
   const sample = () => ({ startedAt: ++at, finishedAt: at, error: null, snapshot: { schema: "native-browser-upstream-counters/v1", ledger: "unit-only", events: [] } });
   const upstreamLedger = { schema: "native-browser-upstream-ledger/v1", baseline: sample(),
-    phases: ["initial-store", "mutation-probes", "cleanup"].map((phase) => ({ phase, before: sample(), after: sample() })) };
+    phases: ["initial-store", ...plan.cases[0].steps.map((s) => s.id), "mutation-probes", "cleanup"].map((phase) => ({ phase, before: sample(), after: sample() })) };
   at += 1000; upstreamLedger.terminal = sample();
   return { functionalChecksPassed: true, failures: [], gaps: [], clock: { origin: "node.performance.now", startedAt: 1 },
     provenance: { stillSameProcess: true }, resourceBaseline: { unattributed: zero, scopes: [{ owned: zero }] }, steps: [], requestLedger: [], networkFailures: [], runtimeErrors: [], upstreamLedger,
@@ -34,6 +35,16 @@ test("projection recomputes final upstream coverage rather than trusting an earl
   evidence.upstreamReconciliation = { outcome: "reconciled" };
   evidence.upstreamLedger.terminal.snapshot.events.push({ request: "late", id: "item_1", status: 200, started: 1, completed: null, cancelled: null });
   assert.throws(() => projectCase({ evidence }, plan.cases[0], "nuxt", settings), /upstream/i);
+});
+
+test("Next projection cannot borrow a positive endpoint without linked emitted effects", () => {
+  const profile = plan.cases.find((p) => p.js), evidence = projectionEvidence();
+  const artifact = createBindingArtifact({ imageId: `sha256:${"1".repeat(64)}`, sourceCommit: "2".repeat(40), scripts: [] });
+  evidence.bindingArtifact = { sha256: artifact.sha256, imageId: artifact.imageId, sourceCommit: artifact.sourceCommit };
+  evidence.steps = [{ action: profile.steps.find((s) => s.input), formBefore: { enhancement: { path: "/api/marketplace/item_2", transport: "fetch", bindingProof: { outcome: "proved" } } } }];
+  assert.throws(() => projectCase({ evidence }, profile, "nextjs", settings, artifact), /binding effects/);
+  const changed = structuredClone(artifact); changed.imageId = `sha256:${"3".repeat(64)}`;
+  assert.throws(() => projectCase({ evidence }, profile, "nextjs", settings, changed), /artifact|differ/i);
 });
 test("strict export retains every candidate/profile and unavailable evidence stays outside strict cells", () => {
   const raw = summary(), cell = raw.cells.nuxt[0]; cell.outcome = "failed"; cell.reason = "observed native request failed";

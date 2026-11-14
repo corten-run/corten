@@ -76,7 +76,14 @@ export class UpstreamAudit {
   async finish() { this.ledger.terminal = await this.sample(); }
 }
 
-export function reconcileUpstream(ledger, { source, actions, observationMs = 0 } = {}) {
+export function upstreamReadFailures(source, step, requests, delta) {
+  if (source !== "api" || step.kind === "missing" || !requests.some((r) => ["document", "fetch", "router", "turbo", "livewire"].includes(r.transport)
+    && (r.path.includes("marketplace") || r.method === "POST"))) return [];
+  return typeof step.itemId === "string" && delta?.events?.some((e) => e.id === step.itemId && e.status === 200 && e.completed !== null && e.cancelled === null)
+    ? [] : ["Successful request-time upstream read for requested record missing"];
+}
+
+export function reconcileUpstream(ledger, { source, actions, steps, observationMs = 0 } = {}) {
   const result = { outcome: "unknown", reasons: [], phases: [], final: null };
   try {
     assert.ok(ledger?.schema === "native-browser-upstream-ledger/v1" && Array.isArray(ledger.phases), "Final upstream ledger unavailable");
@@ -105,6 +112,13 @@ export function reconcileUpstream(ledger, { source, actions, observationMs = 0 }
     assert.equal(result.final.pending, 0, "Final upstream work lacks terminal finish/close receipts");
     assert.ok(source === "api" || source === "fixture", "Upstream source identity unavailable");
     if (source === "fixture") assert.equal(result.final.started, 0, "Fixture journey fetched upstream outside/inside actions");
+    if (steps !== undefined) {
+      assert.ok(Array.isArray(steps), "Upstream action observations unavailable");
+      assert.deepEqual(steps.map((s) => s.action.id), actions, "Upstream action observations incomplete");
+      for (const row of steps) result.reasons.push(...upstreamReadFailures(source, row.action, row.requests,
+        result.phases.find((p) => p.phase === row.action.id)).map((reason) => `${row.action.id}: ${reason}`));
+      if (result.reasons.length) return result;
+    }
     result.outcome = "reconciled";
   } catch (error) { result.reasons.push(error.message); }
   return result;
