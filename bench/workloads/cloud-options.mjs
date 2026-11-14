@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isAbsolute } from "node:path";
-import { roundName, validateState } from "./cloud-contract.mjs";
+import { roundName, selection, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "list-request", "list-http", "list-response",
@@ -30,7 +30,7 @@ export function full(value, pattern, label) {
 }
 export function validateOptions(o) {
   assert.ok(o && typeof o === "object" && !Array.isArray(o));
-  const allowed = ["round", "stateDir", "detach", "collect", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject"];
+  const allowed = ["round", "stateDir", "detach", "collect", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
   assert.ok(Object.keys(o).every((k) => allowed.includes(k)), "unknown option/override");
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17, "official campaigns start at r17");
   assert.ok(typeof o.stateDir === "string" && isAbsolute(o.stateDir) && !/[\r\n\0]/.test(o.stateDir)
@@ -41,6 +41,12 @@ export function validateOptions(o) {
     full(o.commit, /[a-f0-9]{40}/, "full measured commit required"); full(o.sshKey, /[1-9]\d*/, "SSH key ID required");
     providerIdentity({ accountId: o.accountId, context: o.context });
   } else assert.ok(o.commit === undefined && o.sshKey === undefined && o.accountId === undefined && o.context === undefined, "collection/delivery uses saved reservation");
+  if (o.group !== undefined || o.fleet !== undefined) {
+    assert.equal(o.detach, true, "group/fleet selection is fixed at reservation, not collection");
+    assert.ok(selection().groups.some((row) => row.group === o.group), "current registry group required");
+    assert.ok(typeof o.fleet === "string" && isAbsolute(o.fleet) && !/[\r\n\0]/.test(o.fleet)
+      && !/^[\\/]{2}/.test(o.fleet), "absolute local fleet plan required");
+  }
   if (o.deliverAudit !== undefined) {
     assert.ok(o.auditGroup === undefined || ["json-api", "mixed-production"].includes(o.auditGroup), "fixed native audit group required");
     assert.ok(typeof o.deliverAudit === "string" && isAbsolute(o.deliverAudit), "absolute delivery file required");
@@ -51,7 +57,7 @@ export function validateOptions(o) {
 }
 export function parseDropletArgs(args) {
   const o = { round: args[0] }, seen = new Set();
-  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject" };
+  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "duplicate option"); seen.add(flag);
     if (flag === "--detach" || flag === "--collect") o[flag.slice(2)] = true;
@@ -80,9 +86,10 @@ export function controllerState(s, round) {
   validateState(s, round);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
+  if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
   assert.equal(s.id === undefined, s.ip === undefined, "partial host identity");
   if (s.status !== "reserved") assert.ok(s.createIntentAt, "missing create intent");
   if (s.status === "reserved") assert.ok(!s.createIntentAt && !s.id, "reserved host already has create intent");
@@ -117,7 +124,8 @@ export function controllerState(s, round) {
 }
 export function campaignOutcome(report, s, exitCode) {
   assert.ok(report && ["verified", "failed", "blocked"].includes(report.status), "invalid/missing or unsupported native campaign validation; preserve host");
-  assert.equal(report.schema, "benchmark-isolated-campaign-inspection/v1"); assert.equal(report.scope, "intrinsic-evidence");
+  assert.equal(report.schema, s.group === undefined ? "benchmark-isolated-campaign-inspection/v1" : "benchmark-isolated-group-campaign-inspection/v1");
+  assert.equal(report.scope, "intrinsic-evidence");
   assert.equal(report.round, s.round); assert.equal(report.commit, s.commit);
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");
   assert.deepEqual(report.uncollectedNativeRoots, [], "native evidence remains on host");

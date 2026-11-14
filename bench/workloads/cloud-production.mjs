@@ -8,6 +8,7 @@ import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
+import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -44,7 +45,13 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
-  let reservationSha256 = null, deliverySha256 = null;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256;
+  if (options.group !== undefined) {
+    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateFleet(JSON.parse(bytes));
+    assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
+    assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
+    fleetSha256 = digest(bytes);
+  }
   if (options.detach) assert.equal(options.commit, head, "launch must measure the approved controller source");
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
@@ -55,7 +62,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
   const subject = { action: options.detach ? "detach" : options.collect ? "collect" : "deliver-audit", controllerCommit: head,
-    options, stateRoot: physicalRequest, reservationSha256, deliverySha256,
+    options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }

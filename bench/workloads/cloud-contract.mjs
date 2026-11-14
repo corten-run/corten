@@ -23,18 +23,71 @@ export function selection() {
     group, contractSha256: contractSha256(group), apps: selectedApps(group),
   })) };
 }
-export function reservation({ round, commit, token }, createdAt = new Date().toISOString()) {
+const exact = (value, fields) => {
+  assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
+  assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
+};
+export function fleetPlan(input, createdAt = new Date().toISOString()) {
+  exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
+  const { round, commit, token, tokens, provider, sshKey } = input;
+  roundName(round); assert.ok(Number(round.slice(1)) >= 17, "official campaigns start at r17");
+  full(commit, /[a-f0-9]{40}/, "measured commit"); full(token, /[a-f0-9]{16}/, "fleet token");
+  exact(tokens, groupNames); exact(provider, ["accountId", "context"]);
+  full(provider.accountId, /(?:user|team):[A-Za-z0-9][A-Za-z0-9-]{0,127}/, "scoped stable account UUID required");
+  full(provider.context, /[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/, "explicit saved doctl context required");
+  full(sshKey, /[1-9]\d*/, "SSH key ID required"); date(createdAt);
+  const jobs = groupNames.map((group) => {
+    const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
+    return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
+      tag: `corten-bench-groups-run-${ownership}` };
+  });
+  assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
+  const body = { schema: "benchmark-group-fleet/v1", round, commit, token, createdAt,
+    provider: { ...provider }, sshKey, host: { ...host }, selection: selection(), jobs };
+  return { ...body, fleetSha256: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
+}
+export function validateFleet(plan) {
+  assert.ok(plan && Array.isArray(plan.jobs), "complete fleet plan required");
+  const expected = fleetPlan({ round: plan.round, commit: plan.commit, token: plan.token,
+    tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey }, plan.createdAt);
+  assert.deepEqual(plan, expected, "fleet differs from complete fixed registry and owned hosts");
+  return plan;
+}
+export function assertFleetCensus(droplets, plan) {
+  validateFleet(plan); assert.ok(Array.isArray(droplets));
+  const names = new Set(), ids = new Set();
+  for (const d of droplets) {
+    if (!d.name?.startsWith("corten-bench-groups-") && !d.tags?.includes(tags[0])) continue;
+    const job = plan.jobs.find((row) => row.name === d.name);
+    assert.ok(job, "foreign benchmark host blocks fleet launch");
+    full(String(d.id), /[1-9]\d*/, "droplet ID");
+    assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
+    names.add(d.name); ids.add(String(d.id));
+    for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
+    assert.equal(d.size_slug ?? d.size?.slug, host.size); assert.equal(d.region?.slug, host.region);
+  }
+  return true;
+}
+export function reservation(input, createdAt = new Date().toISOString()) {
+  const { round, commit, token, group, fleet } = input;
+  exact(input, group === undefined ? ["round", "commit", "token"] : ["round", "commit", "token", "group", "fleet"]);
   roundName(round);
   full(commit, /[a-f0-9]{40}/, "measured commit");
   full(token, /[a-f0-9]{16}/, "ownership token");
   const name = `corten-bench-groups-${round}-${token}`;
-  return validateState({ schema: "benchmark-group-host/v1", round, commit, token, name,
+  if (group !== undefined) {
+    validateFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
+    assert.equal(fleet.jobs.find((row) => row.group === group)?.token, token, "host not reserved in fleet");
+  }
+  return validateState({ schema: group === undefined ? "benchmark-group-host/v1" : "benchmark-dedicated-group-host/v1", round, commit, token, name,
     tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...host },
-    selection: selection(), createdAt, status: "reserved" }, round);
+    selection: group === undefined ? selection() : { schema: registrySchema, groups: selection().groups.filter((row) => row.group === group) },
+    ...(group === undefined ? {} : { group, fleet: structuredClone(fleet) }), createdAt, status: "reserved" }, round);
 }
 export function validateState(s, round) {
   assert.ok(s && typeof s === "object" && !Array.isArray(s), "host state required");
-  assert.equal(s.schema, "benchmark-group-host/v1");
+  const dedicated = s.schema === "benchmark-dedicated-group-host/v1";
+  assert.ok(dedicated || s.schema === "benchmark-group-host/v1");
   assert.equal(s.round, roundName(round));
   full(s.commit, /[a-f0-9]{40}/, "measured commit");
   full(s.token, /[a-f0-9]{16}/, "ownership token");
@@ -42,7 +95,15 @@ export function validateState(s, round) {
   assert.equal(s.tag, `corten-bench-groups-run-${s.token}`);
   assert.equal(s.unit, `${s.name}.service`);
   assert.deepEqual(s.host, host);
-  assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
+  if (dedicated) {
+    validateFleet(s.fleet); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
+    assert.ok(groupNames.includes(s.group));
+    assert.equal(s.fleet.jobs.find((row) => row.group === s.group)?.token, s.token, "host not reserved in fleet");
+    assert.deepEqual(s.selection, { schema: registrySchema, groups: selection().groups.filter((row) => row.group === s.group) }, "complete native group required");
+  } else {
+    assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet"), "legacy host cannot select a group");
+    assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
+  }
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected"].includes(s.status));
   if (["preparing", "starting", "running", "collected"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -268,7 +329,7 @@ export PATH=/root/.cargo/bin:$PATH
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign
+node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
 Description=Official grouped benchmark ${s.round}, pinned ${s.commit}

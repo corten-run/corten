@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ownedDroplet, reservation, tags, terminalUnit } from "./cloud-contract.mjs";
+import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
@@ -24,6 +24,11 @@ const outside = (root, path) => { const r = relative(root, path); return isAbsol
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {} } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
+  const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
+  if (fleet) {
+    assert.equal(fleet.round, options.round); assert.equal(fleet.commit, options.commit); assert.equal(fleet.sshKey, options.sshKey);
+    assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
+  }
   const requested = resolve(options.stateDir), physicalRequest = resolveStateRoot(requested);
   assert.ok(outside(repo, physicalRequest) && outside(physicalRequest, repo), "state and checkout must be disjoint");
   mkdirSync(requested, { recursive: true, mode: 0o700 });
@@ -137,7 +142,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.ok(read(join(base, entry), match[1]).destroyedAt, "unresolved reservation blocks launch");
         }
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
-        state = { ...reservation({ round: options.round, commit: options.commit, token: randomBytes(8).toString("hex") }),
+        state = { ...reservation({ round: options.round, commit: options.commit,
+          token: fleet ? fleet.jobs.find((row) => row.group === options.group).token : randomBytes(8).toString("hex"),
+          ...(fleet ? { group: options.group, fleet } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false };
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
@@ -148,7 +155,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs"])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
           const existing = await list();
-          assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
+          if (fleet) assertFleetCensus(existing, fleet);
+          else assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
+          assert.ok(!existing.some((d) => d.name === state.name || d.tags?.includes(state.tag)), "this host already exists; never adopt/relaunch");
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
           assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
@@ -227,6 +236,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
         const { group, prefix } = auditProtocol(options.auditGroup);
+        if (state.group !== undefined) assert.equal(group, state.group, "audit delivery belongs to a different group host");
         assert.ok(!state.auditIntents?.[group] && !(group === "json-api" && state.auditIntent), "audit delivery already attempted; inspect, never repeat");
         const bytes = regular(resolve(options.deliverAudit), 16 * 1024 ** 2), intent = auditDelivery(bytes, options);
         assert.equal(await unit(), false, "terminal campaign cannot accept delivery");
