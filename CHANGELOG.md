@@ -66,6 +66,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - Pin grouped benchmark helper images, native live Express and the Express/Bun
   Node comparator to Node 26.13.1 by immutable digest. Retain their separate
   native qualification requirements instead of borrowing older runtime results.
+  Django's local production-qualification helper uses that same upstream pin.
 
 - Capture request-local marketplace trace context in Gin, Drogon and Topcoat,
   preserving native rendering and source clients. Keep Drogon's native parser
