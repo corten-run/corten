@@ -69,8 +69,18 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
     const urlBefore = publicURL(location.href, location.href, true);
     if (JSON.stringify(urlBefore) !== JSON.stringify(identity.url)) throw Error("native-scope-mismatch");
     if (scopeBefore !== identity.scope) throw Error("native-scope-mismatch");
-    const visible = (el) => el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })
-      && !el.closest('[hidden],[aria-hidden="true"]');
+    const visible = (el) => {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })
+        || el.closest('[hidden],[aria-hidden="true"]')) return false;
+      // checkVisibility does not check an element's own skipped contents.
+      // Only the fixed visible policy is supported, including on ancestors.
+      let members = 0;
+      for (let at = el; at; at = at.parentElement) {
+        if (++members > 10000) throw Error("native-dom-snapshot-failed");
+        if (getComputedStyle(at).contentVisibility !== "visible") return false;
+      }
+      return true;
+    };
     const secrets = new Set(); let privateBytes = 0;
     const privateValue = (value) => {
       if (value === undefined || value === null || value === "") return;
@@ -79,20 +89,26 @@ function recordBrowserDOM(identity, makeSnapshot, missing, publicURL, phrases) {
     };
     // Inventory actual private native fields before recording anything. Never
     // return these values, source names, or a diagnostic containing them.
-    const privateSources = document.querySelectorAll("input,textarea,select,meta");
-    if (privateSources.length > 10000) throw Error("credential-filter-blocked");
-    let privateMembers = privateSources.length;
-    for (const el of privateSources) {
-      if (el.localName === "meta") {
-        if (el.childNodes.length) throw Error("credential-filter-blocked");
-        privateValue(el.getAttribute("value")); privateValue(el.content);
-      } else {
-        if (el.localName === "input" && el.type === "file" && el.files?.length) throw Error("credential-filter-blocked");
-        if (el.type !== "hidden" && el.type !== "password" && visible(el)) continue;
-        privateValue(el.getAttribute("value")); privateValue(el.value); privateValue(el.defaultValue);
-        if (el.localName === "select") {
-          if ((privateMembers += el.options.length) > 10000) throw Error("credential-filter-blocked");
-          for (const option of el.options) privateValue(option.value);
+    const privateRoots = [document]; let privateMembers = 0;
+    for (let root = 0; root < privateRoots.length; root++) {
+      const privateSources = privateRoots[root].querySelectorAll("input,textarea,select,meta,template");
+      if ((privateMembers += privateSources.length) > 10000) throw Error("credential-filter-blocked");
+      for (const el of privateSources) {
+        if (el.localName === "template") {
+          if (!(el instanceof HTMLTemplateElement) || !(el.content instanceof DocumentFragment)) throw Error("credential-filter-blocked");
+          privateRoots.push(el.content);
+        } else if (el.localName === "meta") {
+          if (el.childNodes.length) throw Error("credential-filter-blocked");
+          privateValue(el.getAttribute("value")); privateValue(el.content);
+        } else {
+          if (el.localName === "input" && el.type === "file" && el.files?.length) throw Error("credential-filter-blocked");
+          // Inert template controls are private even if their own style appears visible.
+          if (root === 0 && el.type !== "hidden" && el.type !== "password" && visible(el)) continue;
+          privateValue(el.getAttribute("value")); privateValue(el.value); privateValue(el.defaultValue);
+          if (el.localName === "select") {
+            if ((privateMembers += el.options.length) > 10000) throw Error("credential-filter-blocked");
+            for (const option of el.options) privateValue(option.value);
+          }
         }
       }
     }
