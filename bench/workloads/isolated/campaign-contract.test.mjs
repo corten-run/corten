@@ -59,6 +59,8 @@ test("full campaign binds real committed procedures, all groups, exact native de
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
   const all = bindCampaign({ round: "r17", commit });
+  for (const path of ["campaign-contract.mjs", "campaign-entry.mjs", "campaign.mjs", "campaign-verify.mjs"])
+    assert.ok(all.bindings[0].sources.files.some((f) => f.path === `bench/workloads/isolated/${path}`), "campaign modules must be source-bound");
   assert.equal(typeof campaigns.bindGroupCampaign, "function");
   for (const group of groupNames) {
     const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group });

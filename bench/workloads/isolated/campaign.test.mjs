@@ -31,6 +31,7 @@ mock.module("./worker.mjs", { namedExports: {
   matchesWorkingSource: () => true,
 } });
 function jsonPhase(plan, phase, receiptPath) {
+  assert.ok(plan.order.includes("json-api"), "unselected JSON preparation/freshness is forbidden");
   if (receiptPath?.startsWith("/bench/campaign/")) receiptPath = join(root, ...receiptPath.split("/").slice(3));
   const b = structuredClone(plan.bindings.find((b) => b.request.group === "json-api"));
   b.request.round = phase === "prepare" ? "j34" : "j35";
@@ -156,12 +157,72 @@ function setup(policy = () => true) {
   return { campaign, plan: expectedPlan };
 }
 const begin = ({ campaign, plan }) => campaign.begin(plan, { stateRoot: "/bench/campaign" });
+function setupGroup(group, policy) {
+  const s = setup(policy);
+  s.plan.schema = contracts.groupCampaignSchema; s.plan.order = [group];
+  s.plan.bindings = s.plan.bindings.filter((b) => b.request.group === group);
+  return s;
+}
 const delivery = (handle) => audit.auditDelivery(JSON.parse(readFileSync(join(handle.directory, "json-audit-subject.json"))).subjectSha256);
 const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-delivery/v1", subjectSha256,
   review: { reviewer: "independent", reviewedAt: "2026-11-13T12:00:00Z", subjectSha256, findings: [], decision: "approved" },
   bundle: { schema: "mixed-native-source-audits/v1", receipts: [] } });
 const submitPending = (campaign, handle, status) => status.auditGroup === "mixed-production"
   ? campaign.submitMixedAudit(handle, mixedDelivery(status.mixedAuditSubjectSha256)) : campaign.submitJsonAudit(handle, delivery(handle));
+
+for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {
+  const s = setupGroup(group), h = await begin(s); mode = "complete";
+  assert.deepEqual(authorizations[0].groups, [group]);
+  let current = await s.campaign.advance(h);
+  if (["json-api", "mixed-production"].includes(group)) {
+    assert.equal(current.state, "blocked-review-needed"); assert.equal(current.auditGroup, group);
+    assert.equal(calls.length, group === "json-api" ? 2 : 0, "no timing before independent audit");
+    assert.equal(existsSync(join(h.directory, "json-native-audits.json")), false);
+    assert.equal(existsSync(join(h.directory, "mixed-native-audits.json")), false);
+    current = await submitPending(s.campaign, h, current); current = await s.campaign.advance(h);
+  }
+  assert.equal(current.state, "finished"); assert.deepEqual(current.outcomes.map((r) => r.group), [group]);
+  assert.equal(calls.length, group === "json-api" ? 4 : 2);
+  assert.ok(calls.every((argv) => argv[0].endsWith("fixtures.mjs") || argv[0] === s.plan.bindings[0].execution.invocation.argv[0]));
+  assert.equal(current.outcomes[0].outcome, "native-validated");
+  writeFileSync(join(h.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(h)));
+  const request = { folder: root, round: s.plan.round, commit: s.plan.commit };
+  const before = evidence.tree(root), saved = await validateSavedCampaign(request);
+  assert.deepEqual(evidence.tree(root), before, "inspection is read-only");
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.equal(saved.schema, "benchmark-isolated-group-campaign-inspection/v1");
+  assert.deepEqual(saved.selection.groups, [{ group, apps: s.plan.bindings[0].selection.apps, contractSha256: undefined }]);
+  assert.deepEqual(saved.groups.map((r) => r.group), [group]); assert.equal(Object.hasOwn(saved, "group"), false);
+  assert.equal(Object.hasOwn(saved, "qualified"), false); assert.equal(Object.hasOwn(saved, "deletionAuthorized"), false);
+  assert.equal(saved.collectionIntegrity, "manifest-verified"); assert.equal(saved.commandLifecycle, "observed-terminal");
+  assert.deepEqual(saved.uncollectedNativeRoots, []);
+  replayLifetimeFailure = 0;
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "group scope cannot waive fixture lifetime proof");
+  replayLifetimeFailure = null;
+  appendFileSync(join(h.directory, `00-${group}-timing`, "native", "raw.log"), "changed native bytes");
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "group scope cannot waive native seals");
+});
+for (const group of ["json-api", "mixed-production"]) test(`${group}: single group audit wait still needs separate transport authorization`, async () => {
+  const s = setupGroup(group, (subject) => subject.action === "begin-campaign"), h = await begin(s);
+  const current = await s.campaign.advance(h), count = calls.length;
+  assert.equal(current.state, "blocked-review-needed");
+  await assert.rejects(submitPending(s.campaign, h, current), /did not authorize/);
+  assert.equal(s.campaign.status(h).state, "preserved-uncertain"); assert.equal(calls.length, count);
+  await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, count);
+  const saved = await validateSavedCampaign({ folder: root, round: s.plan.round, commit: s.plan.commit });
+  assert.equal(saved.status, "blocked", JSON.stringify(saved)); assert.equal(saved.schema, "benchmark-isolated-group-campaign-inspection/v1");
+  assert.deepEqual(saved.selection.groups.map((r) => r.group), [group]); assert.equal(saved.qualified, false);
+});
+for (const boundary of ["unsafe", "leak", "source-changed", "abort-native"]) test(`single-group ${boundary} keeps the original failure boundary`, async () => {
+  const s = setupGroup("client-heavy"), h = await begin(s); mode = boundary;
+  if (boundary === "abort-native") { abort = new AbortController(); await s.campaign.advance(h, { signal: abort.signal }); }
+  else await assert.rejects(s.campaign.advance(h));
+  const status = s.campaign.status(h), count = calls.length;
+  assert.equal(status.state, "preserved-uncertain"); assert.deepEqual(status.outcomes.map((r) => r.group), ["client-heavy"]);
+  assert.notEqual(status.outcomes[0].outcome, "native-validated");
+  if (boundary === "unsafe") assert.equal(status.uncollectedNativeRoots.length, 1);
+  await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, count);
+});
 
 test("one root, opaque handle, all nine fixed native commands and retained failed outcome", async () => {
   const s = setup(), handle = await begin(s), { campaign } = s;
