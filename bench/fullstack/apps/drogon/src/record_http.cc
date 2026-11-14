@@ -73,7 +73,8 @@ struct Read
 };
 }  // namespace
 
-void get(const drogon::HttpRequestPtr &caller, const std::string &prefix, const std::string &id, Callback done)
+void get(const drogon::HttpRequestPtr &caller, const std::string &prefix, const std::string &id, Callback done,
+         const trace_context::Context &trace)
 {
     auto read = std::make_shared<Read>();
     read->caller = caller;
@@ -100,6 +101,7 @@ void get(const drogon::HttpRequestPtr &caller, const std::string &prefix, const 
         component.replace(at, 1, "%20");
     request->setPath(prefix + component);
     request->setPathEncode(false);
+    trace.apply(request);
     // The weak timer never keeps the caller or its callback alive after completion.
     read->watch = read->loop->runEvery(0.05, [weak = std::weak_ptr<Read>(read)] {
         if (auto read = weak.lock(); read && !read->completed && !read->caller->connected())

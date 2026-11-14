@@ -1,0 +1,6 @@
+phoenix native adversarial lost native event before browser acknowledgement: passed
+phoenix native adversarial lost browser acknowledgement retains exactly one real effect: passed
+phoenix native adversarial two pages sharing the native session remain independent consumers: passed
+phoenix native adversarial one consumer disconnects and detaches while its peer keeps receiving: passed
+phoenix native adversarial unknown per-consumer counters cannot prove cleanup: passed
+phoenix native adversarial overlapping publications cannot bypass the earlier native acknowledgement: passed

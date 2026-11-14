@@ -1,0 +1,33 @@
+{
+  "app": "corten",
+  "group": "live-delivery",
+  "profile": {
+    "schema": "native-live-fanout-profile/v1",
+    "clients": [
+      1,
+      2,
+      4
+    ],
+    "seed": 17,
+    "rowCount": 5,
+    "eventCount": 60,
+    "rate": 20,
+    "deadlineMs": 90000,
+    "maxScheduleLagMs": 500,
+    "limits": "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking"
+  },
+  "files": [
+    {
+      "file": "corten-fanout-1.json.gz",
+      "sha256": "853025c55945102e70bc699a8cf14c53e5d2ef0ec1208c86eef580d1b8357923"
+    },
+    {
+      "file": "corten-fanout-2.json.gz",
+      "sha256": "6c0888a74cfa0cce9d86ac6535c4d5b421379acaa44499d4027d38007d4555a6"
+    },
+    {
+      "file": "corten-fanout-4.json.gz",
+      "sha256": "bfa9225e339a9c23772ef7087d58f7ef9da975e8cdd57a1ca6d51be4404ee800"
+    }
+  ]
+}

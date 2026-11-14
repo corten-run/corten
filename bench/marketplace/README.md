@@ -542,3 +542,9 @@ checkmark. Record which implementations maintainers have reviewed.
 Never claim build times, instruction counts, bytes or interactive timings from the nightly load suite;
 those need their own measurements. Do not present preliminary catalog c1 data as a completed
 comparison or compare it with marketplace r16 as a before/after change.
+
+The separate [native trace capture cost diagnostic](../fullstack/native-trace-cost.md)
+can compare optimized Gin, Drogon and Topcoat source revisions. It is not part of
+nightly timing, a workload qualification or evidence that request tracing is free.
+Its parser and cleanup controls run with the marketplace harness checks. Strict
+native parser failures remain failed observations even when response bytes match.

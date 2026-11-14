@@ -18,6 +18,11 @@ defmodule ItemPageWeb.Router do
     plug :accepts, ["json", "html"]
   end
 
+  pipeline :alerts_api do
+    plug :accepts, ["json", "html"]
+    plug :fetch_session
+  end
+
   scope "/", ItemPageWeb do
     pipe_through :browser
 
@@ -44,6 +49,11 @@ defmodule ItemPageWeb.Router do
   end
 
   # The live benchmark's publisher: the JSON body goes to every "prices" subscriber.
+  scope "/api", ItemPageWeb do
+    pipe_through :alerts_api
+    get "/alerts", MarketplaceController, :alerts
+  end
+
   scope "/live", ItemPageWeb do
     pipe_through :api
     post "/publish", LivePublishController, :publish

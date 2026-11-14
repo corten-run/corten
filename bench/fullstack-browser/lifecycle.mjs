@@ -1,0 +1,605 @@
+import { performance } from "node:perf_hooks";
+import { createHash } from "node:crypto";
+import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
+import { responseDateHash } from "./cancellations.mjs";
+
+function address(value) {
+  try { const url = new URL(value); return { scheme: url.protocol, path: ["http:", "https:", "ws:", "wss:"].includes(url.protocol) ? url.pathname : null }; }
+  catch { return { scheme: null, path: null }; }
+}
+const targetInfo = (t) => ({ target: t.targetId, context: t.browserContextId ?? null, type: t.type,
+  opener: t.openerId ?? null, openerFrame: t.openerFrameId ?? null, ...address(t.url) });
+const notFound = (message) => /Protocol error \(Runtime\.evaluate\): (?:uniqueContextId not found|Cannot find context with specified (?:unique )?id)$/.test(message ?? "");
+const sameOrigin = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };
+const urlHash = (value) => typeof value === "string" ? createHash("sha256").update(value).digest("hex") : null;
+const responseTiming = (r) => r?.timing ? { requestTime: r.timing.requestTime, receiveHeadersEnd: r.timing.receiveHeadersEnd } : null;
+function parserURLs() {
+  const audit = globalThis.__fullstackBrowserAudit?.checkpoint();
+  const asset = (url) => ({ url, path: new URL(url).pathname, sameOrigin: new URL(url).origin === location.origin });
+  return { realm: audit?.realm, scope: audit?.scope, path: location.pathname, url: location.href,
+    preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, ...asset(el.href) })),
+    assets: [...document.querySelectorAll('link[rel~="stylesheet"][href],img[src]')].map((el) => ({
+      type: el.localName === "link" ? "Stylesheet" : "Image", ...asset(el.localName === "link" ? el.href : el.currentSrc || el.src) })) };
+}
+async function boundedSend(session, method, params, timeoutMs = 1000) {
+  let timer;
+  try { return await Promise.race([session.send(method, params), new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${method} observation deadline exceeded`)), timeoutMs);
+  })]); } finally { clearTimeout(timer); }
+}
+
+// Read-only receipts, not a cleanup decision or a resource-count substitute.
+export class PlatformLifecycle {
+  constructor(cdp, targets = null, contextConfiguration = {}) {
+    this.cdp = cdp; this.targets = targets; this.events = []; this.contexts = new Map(); this.frames = new Map(); this.realms = new Map();
+    this.discovery = false; this.target = null; this.boundaries = {}; this.observationFailures = [];
+    this.domains = new Set();
+    this.contextConfiguration = structuredClone(contextConfiguration); this.documents = []; this.pendingDocuments = [];
+    for (const [name, session] of [["page", cdp], ["targets", targets]]) session?.on("close", () => this.observationFailures.push({ phase: `${name}-session-closed`, at: performance.now() }));
+    cdp.on("Inspector.detached", (e) => this.observationFailures.push({ phase: "inspector-detached", at: performance.now(), error: e.reason }));
+    targets?.on("Target.targetCrashed", (e) => this.observationFailures.push({ phase: "target-crashed", at: performance.now(), target: e.targetId }));
+    const record = (event, fields) => { const row = { event, receivedAt: performance.now(), ...fields }; this.events.push(row); return row; };
+    cdp.on("Runtime.executionContextCreated", ({ context: c }) => {
+      const row = record("Runtime.executionContextCreated", { context: c.id, uniqueId: c.uniqueId, frame: c.auxData?.frameId ?? null, default: c.auxData?.isDefault === true });
+      this.contexts.set(c.id, { ...row, live: true });
+    });
+    cdp.on("Runtime.executionContextDestroyed", (e) => {
+      record("Runtime.executionContextDestroyed", { context: e.executionContextId, uniqueId: e.executionContextUniqueId ?? null });
+      const context = this.contexts.get(e.executionContextId); if (context) context.live = false;
+    });
+    cdp.on("Runtime.executionContextsCleared", () => {
+      record("Runtime.executionContextsCleared", { contexts: [...this.contexts.values()].filter((c) => c.live).map((c) => ({ context: c.context, uniqueId: c.uniqueId })) });
+      for (const context of this.contexts.values()) context.live = false;
+    });
+    cdp.on("Page.frameNavigated", ({ frame: f, type }) => {
+      const row = record("Page.frameNavigated", { frame: f.id, parent: f.parentId ?? null, loader: f.loaderId, navigationType: type ?? null, ...address(f.url) }); this.frames.set(f.id, row);
+    });
+    cdp.on("Page.frameDetached", (e) => record("Page.frameDetached", { frame: e.frameId, reason: e.reason }));
+    cdp.on("Network.webSocketCreated", (e) => record("Network.webSocketCreated", { request: e.requestId, ...address(e.url) }));
+    cdp.on("Network.webSocketHandshakeResponseReceived", (e) => record("Network.webSocketHandshakeResponseReceived", { request: e.requestId, at: e.timestamp, status: e.response.status }));
+    cdp.on("Network.webSocketClosed", (e) => record("Network.webSocketClosed", { request: e.requestId, at: e.timestamp }));
+    cdp.on("Network.requestWillBeSent", (e) => {
+      record("Network.requestWillBeSent", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, method: e.request.method, at: e.timestamp, wall: e.wallTime * 1000, ...address(e.request.url), urlSha256: urlHash(e.request.url),
+        document: { ...address(e.documentURL), urlSha256: urlHash(e.documentURL) }, sameDocumentOrigin: sameOrigin(e.request.url, e.documentURL), initiator: { type: e.initiator?.type ?? null, ...address(e.initiator?.url), urlSha256: urlHash(e.initiator?.url), sameDocumentOrigin: sameOrigin(e.initiator?.url, e.documentURL), line: e.initiator?.lineNumber ?? null,
+          request: e.initiator?.requestId ?? null }, redirectStatus: e.redirectResponse?.status ?? null,
+        redirectHasExtraInfo: e.redirectHasExtraInfo,
+        redirectResponse: e.redirectResponse ? { ...address(e.redirectResponse.url), urlSha256: urlHash(e.redirectResponse.url), status: e.redirectResponse.status, timing: responseTiming(e.redirectResponse) } : null });
+    });
+    cdp.on("Network.requestWillBeSentExtraInfo", (e) => record("Network.requestWillBeSentExtraInfo", { request: e.requestId, at: e.connectTiming?.requestTime ?? null }));
+    cdp.on("Network.responseReceived", (e) => record("Network.responseReceived", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, status: e.response.status, at: e.timestamp,
+      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), dateSha256: responseDateHash(e.response.headers), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
+    cdp.on("Network.loadingFinished", (e) => record("Network.loadingFinished", { request: e.requestId, at: e.timestamp }));
+    cdp.on("Network.loadingFailed", (e) => record("Network.loadingFailed", { request: e.requestId, at: e.timestamp, canceled: e.canceled === true, errorText: e.errorText, blockedReason: e.blockedReason ?? null }));
+    for (const event of ["Target.targetCreated", "Target.targetInfoChanged"]) targets?.on(event, ({ targetInfo: t }) => record(event, targetInfo(t)));
+    targets?.on("Target.targetDestroyed", (e) => record("Target.targetDestroyed", { target: e.targetId }));
+  }
+  async enable() {
+    const { targetInfo: t } = await this.cdp.send("Target.getTargetInfo");
+    this.target = { target: t.targetId, context: t.browserContextId ?? null, type: t.type };
+    if (this.targets) {
+      const startedAt = performance.now(), params = { discover: true };
+      try {
+        const result = await boundedSend(this.targets, "Target.setDiscoverTargets", params);
+        this.events.push({ event: "Target.setDiscoverTargets", startedAt, receivedAt: performance.now(), params, result });
+        this.discovery = true;
+      } catch (error) {
+        this.observationFailures.push({ phase: "target-discovery", at: performance.now(), error: error.message });
+        throw error;
+      }
+    }
+  }
+  async inventory(phase) {
+    const startedAt = performance.now();
+    try {
+      if (!this.discovery) throw new Error("Browser target discovery unavailable");
+      const { targetInfos } = await boundedSend(this.targets, "Target.getTargets");
+      this.events.push({ event: "Target.getTargets", phase, startedAt, receivedAt: performance.now(), targets: targetInfos.map(targetInfo),
+        observedContexts: [...this.contexts.values()].filter((c) => c.live).map(({ context, uniqueId, frame, default: isDefault }) => ({ context, uniqueId, frame, default: isDefault })),
+        contextInventoryBasis: "Runtime.enable enumeration and continuous created/destroyed/cleared events" });
+    } catch (error) { this.observationFailures.push({ phase, at: performance.now(), error: error.message }); }
+  }
+  async enableDomains() {
+    for (const domain of ["Runtime", "Page", "Network"]) {
+      await boundedSend(this.cdp, `${domain}.enable`); this.domains.add(domain);
+      this.events.push({ event: "domain-enabled", domain, receivedAt: performance.now() });
+    }
+  }
+  async startObservation() {
+    await boundedSend(this.cdp, "Performance.enable");
+    await this.sampleNativeClock("initial");
+    await this.inventory("initial"); this.boundaries.startedAt = performance.now();
+  }
+  async sampleNativeClock(phase) {
+    const startedAt = performance.now();
+    try {
+      const { metrics } = await boundedSend(this.cdp, "Performance.getMetrics");
+      const at = metrics.find((m) => m.name === "Timestamp")?.value ?? null;
+      this.events.push({ event: "native-clock-sample", phase: `${phase}-native-clock`, startedAt, receivedAt: performance.now(), at });
+    } catch (error) { this.observationFailures.push({ phase: `${phase}-native-clock`, at: performance.now(), error: error.message }); }
+  }
+  markApplicationStart() { this.boundaries.applicationStartedAt = performance.now(); }
+  recordDocument(dom, resources) {
+    const binding = this.realms.get(resources?.realm);
+    if (!binding || !dom?.observer || dom.scope !== resources.scope) return;
+    const doc = { observedAt: performance.now(), observer: dom.observer, realm: resources.realm, scope: resources.scope,
+      frame: binding.frame, loader: binding.loader, path: dom.url.path, hasMetaCsp: dom.native?.hasMetaCsp ?? null,
+      preloads: structuredClone(dom.native?.preloads ?? []), assets: structuredClone(dom.native?.assets ?? []) };
+    this.documents.push(doc);
+    const startedAt = performance.now();
+    const pending = boundedSend(this.cdp, "Runtime.evaluate", { expression: `(${parserURLs.toString()})()`, uniqueContextId: binding.uniqueId, returnByValue: true, silent: true }).then((result) => {
+      const observed = result.result?.value;
+      if (result.exceptionDetails || observed?.realm !== doc.realm || observed?.scope !== doc.scope || observed?.path !== doc.path) throw new Error("Unmatched parser identity observation");
+      for (const key of ["preloads", "assets"]) {
+        const publicRows = observed[key].map(({ url, ...row }) => row);
+        if (JSON.stringify(publicRows) !== JSON.stringify(doc[key])) throw new Error("Parser declarations changed during URL identity observation");
+      }
+      for (const key of ["preloads", "assets"]) doc[key] = observed[key].map(({ url, ...row }) => ({ ...row, urlSha256: urlHash(url) }));
+      doc.identityObservation = { startedAt, finishedAt: performance.now(), uniqueId: binding.uniqueId, documentSha256: urlHash(observed.url) };
+    }).catch(() => { this.observationFailures.push({ phase: "parser-url-identity", at: performance.now(), error: "Native parser URL identity observation unavailable or changed" }); });
+    this.pendingDocuments.push(pending); return pending;
+  }
+  async finishObservation({ observationMs = 250, realms = [] } = {}) {
+    await Promise.all(this.pendingDocuments);
+    this.boundaries.terminalStartedAt = performance.now();
+    await new Promise((resolve) => setTimeout(resolve, observationMs));
+    for (const realm of new Set(realms)) await this.probeRealm(realm);
+    await this.sampleNativeClock("terminal");
+    await this.inventory("terminal"); this.boundaries.endedAt = performance.now();
+  }
+  async bindRealm(realm) {
+    if (this.realms.has(realm)) return;
+    for (const context of this.contexts.values()) {
+      if (!context.live || !context.default) continue;
+      try {
+        if (!context.uniqueId) throw new Error("Default context lacks native unique identity");
+        const result = await this.cdp.send("Runtime.evaluate", { expression: "globalThis.__fullstackBrowserAudit?.checkpoint()?.realm ?? null", uniqueContextId: context.uniqueId, returnByValue: true, silent: true });
+        if (result.result?.value === realm) {
+          this.realms.set(realm, { realm, context: context.context, uniqueId: context.uniqueId, frame: context.frame,
+            loader: this.frames.get(context.frame)?.loader ?? null, observedAt: performance.now() }); return;
+        }
+      } catch (error) {
+        // A real navigation can destroy the context during the read. Preserve
+        // that failed association; never assign a replacement context by guess.
+        this.events.push({ event: "realm-association-failed", receivedAt: performance.now(), context: context.context, error: error.message });
+      }
+    }
+  }
+  snapshot() {
+    return structuredClone({ schema: "native-browser-platform-lifetimes/v2", target: this.target, boundaries: this.boundaries, observationFailures: this.observationFailures,
+      contextConfiguration: this.contextConfiguration, documents: this.documents,
+      coverage: { runtime: this.domains.has("Runtime"), pageFrames: this.domains.has("Page"), pageNetwork: this.domains.has("Network"), browserTargetDiscovery: this.discovery,
+        workerNetwork: false, serverSocketPeerClosure: false, sharedWorkerOwnership: false },
+      realms: [...this.realms.values()], events: this.events,
+      limits: ["Target destruction is not server-side socket closure", "Missing close/destroy receipts remain unknown, not zero",
+        "Shared/service worker lifetime is not owned by a document without additional proof", "No retired DOM or successful event probe follows from realm destruction"] });
+  }
+  async probeRealm(realm, timeoutMs = 1000) {
+    const observed = this.realms.get(realm);
+    if (!observed?.uniqueId) return { realm, outcome: "unavailable", reason: "Old realm has no observed unique context identity" };
+    const receipt = { event: "unique-context-read-probe", receivedAt: performance.now(), realm, uniqueId: observed.uniqueId, outcome: null, error: null, timeoutMs };
+    this.events.push(receipt);
+    let timer;
+    try {
+      await Promise.race([this.cdp.send("Runtime.evaluate", { expression: "1", uniqueContextId: observed.uniqueId, returnByValue: true, silent: true }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("Unique-context observer probe deadline exceeded"), { code: "observer-probe-timeout" })), timeoutMs); })]);
+      receipt.outcome = "still-executable";
+    } catch (error) {
+      receipt.error = error.message;
+      receipt.outcome = error.code === "observer-probe-timeout" ? "probe-timeout" : notFound(error.message) ? "context-not-found" : "probe-failed";
+    } finally { clearTimeout(timer); receipt.finishedAt = performance.now(); }
+    return structuredClone(receipt);
+  }
+  async close() { if (this.targets) await this.targets.detach(); }
+}
+
+function redirectDispatchIdentities(events) {
+  const chains = new Map(), identities = new Map();
+  for (const e of events.filter((e) => e.event === "Network.requestWillBeSent")) {
+    if (!chains.has(e.request)) chains.set(e.request, []);
+    chains.get(e.request).push(e);
+  }
+  for (const [request, chain] of chains) {
+    if (chain.length < 2) continue;
+    const extra = events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo" && e.request === request);
+    // Independent network-stack receipts count dispatches even when a same-URL
+    // requestWillBeSent hop is deleted. Missing/ambiguous pairings stay unknown.
+    if (extra.length !== chain.length || extra.some((e, i) => !Number.isFinite(e.at) || e.at < 0 || i && e.at <= extra[i - 1].at)) continue;
+    chain.forEach((dispatch, i) => identities.set(dispatch, extra[i].at));
+  }
+  return identities;
+}
+function redirectTerminal(prior, continuation, identities) {
+  const d = prior?.dispatch, r = continuation.redirectResponse;
+  // The request ID is deliberately reused by CDP. Only the actual redirect
+  // response identifies which URL immediately preceded this continuation.
+  if (!d || prior.response || prior.terminal || d.frame !== continuation.frame || d.loader !== continuation.loader || d.type !== continuation.type
+    || !r || !/^[a-f0-9]{64}$/.test(d.urlSha256 ?? "") || r.urlSha256 !== d.urlSha256 || r.scheme !== d.scheme || r.path !== d.path
+    || continuation.redirectHasExtraInfo !== true || !identities.has(d) || r.timing?.requestTime !== identities.get(d)
+    || r.status !== continuation.redirectStatus || !Number.isInteger(r.status) || r.status < 300 || r.status >= 400
+    || !Number.isFinite(d.at) || !Number.isFinite(continuation.at) || continuation.at < d.at) return null;
+  return { event: "native-redirect", status: r.status, receivedAt: continuation.receivedAt, at: continuation.at, response: structuredClone(r) };
+}
+
+function networkCoverage(journal, requests, sockets = []) {
+  const reasons = [], events = journal.events, b = journal.boundaries ?? {};
+  const text = (value) => typeof value === "string" && value.length > 0;
+  const path = (value) => text(value) && value.startsWith("/");
+  const finite = (value) => Number.isFinite(value) && value >= 0;
+  const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const clocks = events.filter((e) => e.event === "native-clock-sample"), initial = clocks.filter((e) => e.phase === "initial-native-clock"), terminal = clocks.filter((e) => e.phase === "terminal-native-clock");
+  const clock = initial[0], end = terminal[0];
+  const validClocks = initial.length === 1 && terminal.length === 1 && [clock, end].every((e) => finite(e.at) && finite(e.startedAt) && finite(e.receivedAt) && e.startedAt <= e.receivedAt)
+    && clock.receivedAt <= b.startedAt && end.startedAt >= b.terminalStartedAt && end.receivedAt <= b.endedAt && clock.at <= end.at;
+  if (!validClocks) reasons.push("Bounded native monotonic-clock observations unavailable");
+  const withinNativeClock = (e) => validClocks && finite(e.at) && e.at >= clock.at && e.at <= end.at
+    // A CDP timestamp cannot be later than delivery on the host. The initial
+    // round trip supplies a conservative clock-offset envelope, not an epsilon.
+    && e.at <= clock.at + (e.receivedAt - clock.startedAt) / 1000;
+  const headersAt = (response) => {
+    const timing = response?.timing;
+    return finite(timing?.requestTime) && finite(timing?.receiveHeadersEnd) ? timing.requestTime + timing.receiveHeadersEnd / 1000 : null;
+  };
+  if (journal.coverage?.pageFrames !== true || journal.coverage?.pageNetwork !== true
+    || !["Page", "Network"].every((domain) => events.some((e) => e.event === "domain-enabled" && e.domain === domain && e.receivedAt <= b.startedAt))) reasons.push("Native Page/Network domain coverage unavailable");
+  if (!Number.isFinite(b.startedAt) || !Number.isFinite(b.endedAt) || b.endedAt < b.startedAt
+    || events.some((e, i) => !Number.isFinite(e.receivedAt) || i && e.receivedAt < events[i - 1].receivedAt)) reasons.push("Native network observation bounds/order unavailable");
+  for (const { dispatch: d, response: r, terminal: t } of requests) {
+    if (![d.request, d.frame, d.loader, d.type].every(text) || !hash(d.urlSha256) || !hash(d.document?.urlSha256) || !text(d.method) || !/^[A-Z!#$%&'*+.^_`|~-]+$/.test(d.method)
+      || !["http:", "https:"].includes(d.scheme) || !path(d.path) || !["http:", "https:"].includes(d.document?.scheme) || !path(d.document?.path)
+      || typeof d.sameDocumentOrigin !== "boolean" || !text(d.initiator?.type) || typeof d.initiator?.sameDocumentOrigin !== "boolean"
+      || !withinNativeClock(d) || !finite(d.receivedAt) || d.receivedAt < b.startedAt || d.receivedAt > b.endedAt
+      || !(d.redirectStatus === null || Number.isInteger(d.redirectStatus) && d.redirectStatus >= 300 && d.redirectStatus < 400)) reasons.push(`Request ${d.request} lacks mandatory native dispatch fields`);
+    if (!t || !finite(t.receivedAt) || t.receivedAt < d.receivedAt || t.receivedAt > b.endedAt
+      || !withinNativeClock(t) || t.at < d.at) reasons.push(`Request ${d.request} lacks an ordered terminal receipt`);
+    if (t?.event === "Network.loadingFailed" && (typeof t.canceled !== "boolean" || typeof t.errorText !== "string"
+      || !(t.blockedReason === null || text(t.blockedReason)))) reasons.push(`Request ${d.request} lacks native failure fields`);
+    if (t?.event === "native-redirect" && (!(t.status >= 300 && t.status < 400) || headersAt(t.response) === null
+      || headersAt(t.response) < d.at || headersAt(t.response) > t.at)) reasons.push(`Request ${d.request} lacks a valid timed redirect receipt`);
+    if (t?.event === "Network.loadingFinished" && !r) reasons.push(`Request ${d.request} lacks its native response receipt`);
+    if (r && (r.frame !== d.frame || r.loader !== d.loader || r.type !== d.type || !Number.isInteger(r.status) || r.status < 100 || r.status > 599
+      || !withinNativeClock(r) || r.at < d.at || !finite(r.receivedAt) || typeof r.hasCsp !== "boolean" || typeof r.mime !== "string"
+      || r.receivedAt < d.receivedAt || r.receivedAt > (t?.receivedAt ?? b.endedAt))) reasons.push(`Request ${d.request} has unmatched response identity/status/order`);
+    // responseReceived.timestamp is notification time and can follow the native
+    // transfer finish. Actual response header timing must precede that finish.
+    if (r && (headersAt(r) === null || headersAt(r) < d.at || headersAt(r) > r.at || headersAt(r) > t?.at)) reasons.push(`Request ${d.request} lacks consistent native response/terminal timing`);
+  }
+  for (const { created: c, handshake: h, closed: end } of sockets) {
+    if (!text(c.request) || !["ws:", "wss:"].includes(c.scheme) || !path(c.path)
+      || !finite(c.receivedAt) || c.receivedAt < b.startedAt || c.receivedAt > b.endedAt) reasons.push("Incomplete native WebSocket creation receipt");
+    if (!h || h.request !== c.request || !Number.isInteger(h.status) || h.status < 100 || h.status > 599
+      || !withinNativeClock(h) || h.receivedAt < c.receivedAt || h.receivedAt > b.endedAt) reasons.push(`Page socket ${c.request} lacks an ordered native handshake receipt`);
+    if (!end || end.request !== c.request || !withinNativeClock(end) || end.receivedAt < c.receivedAt || end.receivedAt > b.endedAt
+      || h && (end.receivedAt < h.receivedAt || end.at < h.at)) reasons.push(`Page socket ${c.request} lacks an ordered native close receipt`);
+  }
+  // Page commits are independent positive receipts: deleting the entire Network
+  // stream cannot turn an observed HTTP navigation into empty-network success.
+  if (events.some((e) => e.event === "Page.frameNavigated" && (![e.frame, e.loader, e.scheme, e.navigationType].every(text)
+    || ["http:", "https:"].includes(e.scheme) && !path(e.path)))) reasons.push("Native committed document identity/scheme unavailable");
+  const commits = events.filter((e) => e.event === "Page.frameNavigated" && ["http:", "https:"].includes(e.scheme)
+    && e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt);
+  if (!commits.length) reasons.push("No native HTTP document commits observed");
+  for (const commit of commits) {
+    const matches = requests.filter(({ dispatch: d, terminal: t }) => t?.event !== "native-redirect" && d.type === "Document" && d.frame === commit.frame && d.loader === commit.loader
+      && d.scheme === commit.scheme && d.path === commit.path);
+    if (matches.length !== 1 || !matches[0].response || matches[0].terminal?.event !== "Network.loadingFinished"
+      || matches[0].response.receivedAt > commit.receivedAt) reasons.push(`Committed HTTP loader ${commit.loader} lacks matched document/request/response/terminal receipts`);
+  }
+  for (const { dispatch: d, terminal: t } of requests.filter((r) => r.dispatch.type === "Document" && r.terminal?.event === "Network.loadingFinished")) {
+    const matches = commits.filter((c) => c.frame === d.frame && c.loader === d.loader && c.scheme === d.scheme && c.path === d.path
+      && c.receivedAt >= d.receivedAt && c.receivedAt <= t.receivedAt);
+    if (matches.length !== 1) reasons.push(`HTTP document ${d.request} lacks a unique matched native commit`);
+    if (!Array.isArray(journal.documents) || !journal.documents.some((doc) => doc?.frame === d.frame && doc.loader === d.loader && finite(doc.observedAt)
+      && doc.observedAt >= matches[0]?.receivedAt && doc.observedAt <= b.endedAt)) reasons.push(`HTTP document ${d.request} lacks an observed parser inventory`);
+  }
+  if (!Array.isArray(journal.documents)) reasons.push("Native parser inventory unavailable");
+  else for (const doc of journal.documents) {
+    if (![doc?.observer, doc?.realm, doc?.scope, doc?.frame, doc?.loader].every(text) || !path(doc?.path) || !finite(doc?.observedAt)
+      || doc.observedAt < b.startedAt || doc.observedAt > b.endedAt || typeof doc.hasMetaCsp !== "boolean"
+      || !Array.isArray(doc.assets) || !Array.isArray(doc.preloads)) { reasons.push("Incomplete native parser inventory fields"); continue; }
+    if (commits.filter((c) => c.frame === doc.frame && c.loader === doc.loader && c.path === doc.path && c.receivedAt <= doc.observedAt).length !== 1) reasons.push("Parser inventory lacks a unique matched native HTTP commit");
+    const identity = doc.identityObservation;
+    if (!identity || !text(identity.uniqueId) || !hash(identity.documentSha256) || !finite(identity.startedAt) || !finite(identity.finishedAt)
+      || identity.startedAt < doc.observedAt || identity.finishedAt < identity.startedAt || identity.finishedAt > b.endedAt
+      || !Array.isArray(journal.realms) || !journal.realms.some((r) => r?.realm === doc.realm && r.uniqueId === identity.uniqueId && r.frame === doc.frame && r.loader === doc.loader)
+      || !requests.some(({ dispatch: d, terminal: t }) => d.type === "Document" && d.frame === doc.frame && d.loader === doc.loader
+        && d.urlSha256 === identity.documentSha256 && t?.event === "Network.loadingFinished")) reasons.push("Parser URL identity observation unavailable or unmatched");
+    if (doc.preloads.some((p) => !p || typeof p.rel !== "string" || typeof p.as !== "string" || !path(p.path) || typeof p.sameOrigin !== "boolean")) reasons.push("Incomplete native preload declaration fields");
+    const declarations = [
+      ...doc.assets.map((a) => ({ ...a, valid: a && ["Stylesheet", "Image"].includes(a.type) })),
+      ...doc.preloads.filter((p) => p && typeof p.rel === "string" && typeof p.as === "string" && isScriptPreload(p)).map((p) => ({ ...p, type: "Script", valid: true })),
+    ];
+    for (const a of declarations) {
+      if (!a.valid || !path(a.path) || !hash(a.urlSha256) || a.sameOrigin !== true) { reasons.push("Parser asset has unknown native request coverage"); continue; }
+      if (!requests.some(({ dispatch: d }) => d.frame === doc.frame && d.loader === doc.loader && d.path === a.path && d.type === a.type
+        && d.urlSha256 === a.urlSha256 && d.receivedAt <= doc.observedAt)) reasons.push(`Observed parser asset ${a.path} lacks a matched native dispatch`);
+    }
+  }
+  return reasons;
+}
+
+// Reuse the native redirect/clock/commit coverage rules without interpreting
+// JavaScript or assigning a Playwright request to a native dispatch.
+export function nativeNetworkRequests(journal) {
+  const requests = [], reasons = [], live = new Map(), events = journal?.events, b = journal?.boundaries;
+  if (!Array.isArray(events) || !b || ![b.startedAt, b.applicationStartedAt, b.terminalStartedAt, b.endedAt].every((v, i, all) => Number.isFinite(v) && v >= 0 && (!i || all[i - 1] <= v)))
+    return { requests, reasons: ["Native network journal/window unavailable"] };
+  const identities = redirectDispatchIdentities(events);
+  for (const e of events) {
+    if (e.event === "Network.requestWillBeSent" && ["http:", "https:"].includes(e.scheme)) {
+      if (e.receivedAt < b.applicationStartedAt || e.receivedAt > b.endedAt) reasons.push("Native request outside application observation");
+      const prior = live.get(e.request), terminal = prior && redirectTerminal(prior, e, identities);
+      if ((!prior && e.redirectStatus !== null) || prior && !terminal) reasons.push("Native request ID reuse lacks complete redirect binding");
+      if (terminal) prior.terminal = terminal;
+      const row = { dispatch: e, hop: (prior?.hop ?? -1) + 1, response: null, terminal: null };
+      requests.push(row); live.set(e.request, row);
+    } else if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(e.event)) {
+      const row = live.get(e.request);
+      if (!row) { reasons.push("Orphan native network response/terminal"); continue; }
+      if (e.event === "Network.responseReceived") {
+        if (row.response || row.terminal) reasons.push("Duplicate/late native network response");
+        row.response = e;
+      } else {
+        if (row.terminal) reasons.push("Duplicate native network terminal");
+        row.terminal = e;
+      }
+    }
+  }
+  const chains = new Map(), extras = new Map();
+  for (const r of requests) { if (!chains.has(r.dispatch.request)) chains.set(r.dispatch.request, []); chains.get(r.dispatch.request).push(r); }
+  for (const e of events.filter((e) => e.event === "Network.requestWillBeSentExtraInfo")) {
+    if (!extras.has(e.request)) extras.set(e.request, []); extras.get(e.request).push(e);
+  }
+  for (const request of extras.keys()) if (!chains.has(request)) reasons.push("Orphan native network-stack dispatch receipt");
+  const clock = events.find((e) => e.event === "native-clock-sample" && e.phase === "initial-native-clock"), endClock = events.find((e) => e.event === "native-clock-sample" && e.phase === "terminal-native-clock");
+  for (const [request, chain] of chains) {
+    const stack = extras.get(request) ?? [];
+    if (stack.length !== chain.length) { reasons.push("Native/network-stack dispatch multiplicity differs"); continue; }
+    stack.forEach((e, i) => {
+      const r = chain[i], requestTime = r.response?.timing?.requestTime ?? r.terminal?.response?.timing?.requestTime;
+      if (!Number.isFinite(e.at) || e.at < 0 || i && e.at <= stack[i - 1].at || e.receivedAt < b.startedAt || e.receivedAt > b.endedAt
+        || !clock || !endClock || e.at < clock.at || e.at > endClock.at || e.at > clock.at + (e.receivedAt - clock.startedAt) / 1000
+        || requestTime !== undefined && requestTime !== e.at) reasons.push("Native/network-stack dispatch clock identity differs");
+    });
+  }
+  reasons.push(...networkCoverage(journal, requests));
+  return { requests, reasons: [...new Set(reasons)] };
+}
+
+// This proof is deliberately separate from the shared DOM/event-probe oracle.
+// Native loading failures are terminal receipts, NOT successful functional work.
+export function validatePlatformRetirement(journal, { realm, retiredAt, observationMs = 250, maxProbeMs = 1000 } = {}) {
+  const result = { schema: "native-platform-retirement-proof/v1", outcome: "unknown", reasons: [], binding: null,
+    destruction: null, replacement: null, terminalProbe: null, requests: [], sockets: [], nativeFailures: [],
+    scope: "One observed default document realm; no retired DOM/count/event probe, worker-network or server-peer cleanup proof" };
+  const unknown = (message) => result.reasons.push(message);
+  let failed = false;
+  const finish = () => { result.outcome = failed ? "failed" : result.reasons.length ? "unknown" : "proved"; return structuredClone(result); };
+  const finite = (value) => Number.isFinite(value) && value >= 0;
+  if (journal?.schema !== "native-browser-platform-lifetimes/v2" || !Array.isArray(journal.events) || !Array.isArray(journal.realms)) {
+    unknown("Complete v2 platform journal unavailable"); return finish();
+  }
+  if (journal.events.some((e) => !e || typeof e.event !== "string" || e.event === "Runtime.executionContextsCleared" && (!Array.isArray(e.contexts) || e.contexts.some((c) => !c)))
+    || journal.realms.some((r) => !r || typeof r.realm !== "string")) {
+    unknown("Malformed native event/realm records"); return finish();
+  }
+  const events = journal.events, b = journal.boundaries ?? {}, target = journal.target, coverage = journal.coverage;
+  if (!realm || !finite(retiredAt) || !finite(observationMs) || observationMs <= 0 || !finite(maxProbeMs) || maxProbeMs <= 0) {
+    unknown("Invalid consumer identity or observation/probe bounds"); return finish();
+  }
+  if (!target?.context || target.type !== "page" || !target.target || coverage?.runtime !== true || coverage.pageFrames !== true
+    || coverage.pageNetwork !== true || coverage.browserTargetDiscovery !== true
+    || !Array.isArray(journal.observationFailures) || journal.observationFailures.length) unknown("Incomplete native domain/discovery coverage");
+  if (![b.startedAt, b.applicationStartedAt, b.terminalStartedAt, b.endedAt].every(finite)
+    || !(b.startedAt <= b.applicationStartedAt && b.applicationStartedAt <= retiredAt && retiredAt <= b.terminalStartedAt
+      && b.endedAt - b.terminalStartedAt >= observationMs)) unknown("Observation does not span application start through bounded terminal interval");
+  if (events.some((e, index) => !finite(e.receivedAt) || index && e.receivedAt < events[index - 1].receivedAt)) unknown("Journal event order/timestamps unavailable");
+  const inventories = events.filter((e) => e.event === "Target.getTargets"), initial = inventories.filter((e) => e.phase === "initial"), terminal = inventories.filter((e) => e.phase === "terminal");
+  if (initial.length !== 1 || terminal.length !== 1 || !Array.isArray(initial[0]?.targets) || !Array.isArray(terminal[0]?.targets)
+    || !Array.isArray(initial[0].observedContexts) || !Array.isArray(terminal[0].observedContexts)
+    || [...initial[0].observedContexts, ...terminal[0].observedContexts].some((c) => !c || !Number.isInteger(c.context) || typeof c.uniqueId !== "string" || !c.uniqueId || !c.frame)
+    || [...initial[0].targets, ...terminal[0].targets].some((t) => !t || typeof t.target !== "string" || typeof t.type !== "string")
+    || !finite(initial[0].startedAt) || !finite(terminal[0].startedAt) || initial[0].startedAt > initial[0].receivedAt
+    || terminal[0].startedAt > terminal[0].receivedAt || initial[0].receivedAt > b.startedAt
+    || terminal[0].startedAt < b.terminalStartedAt || terminal[0].receivedAt > b.endedAt) {
+    unknown("Complete initial/terminal target inventories unavailable"); return finish();
+  }
+  for (const domain of ["Runtime", "Page", "Network"]) if (!events.some((e) => e.event === "domain-enabled" && e.domain === domain && e.receivedAt <= initial[0].startedAt)) unknown(`Initial ${domain} enable receipt absent`);
+  const contextKey = (c) => JSON.stringify([c.context, c.uniqueId, c.frame, c.default]);
+  const contexts = new Map();
+  for (const c of initial[0].observedContexts) {
+    if (!c?.uniqueId || !Number.isInteger(c.context) || !c.frame) unknown("Initial execution-context identity incomplete");
+    else { if (contexts.has(c.context)) unknown("Duplicate initial execution context"); contexts.set(c.context, c); }
+  }
+  for (const e of events.filter((e) => e.receivedAt > initial[0].receivedAt && e.receivedAt <= terminal[0].receivedAt)) {
+    if (e.event === "Runtime.executionContextCreated") {
+      if (!e.uniqueId || contexts.has(e.context)) unknown("Unmatched/reused live execution-context identity");
+      contexts.set(e.context, e);
+      if (e.frame !== target?.target) unknown("Child/unknown-frame execution context requires additional ownership coverage");
+    }
+    if (e.event === "Runtime.executionContextDestroyed") {
+      const old = contexts.get(e.context);
+      if (!old || e.uniqueId && e.uniqueId !== old.uniqueId) unknown("Unmatched execution-context destruction");
+      contexts.delete(e.context);
+    }
+    if (e.event === "Runtime.executionContextsCleared") {
+      const cleared = e.contexts?.map((c) => c.uniqueId).sort(), liveIds = [...contexts.values()].map((c) => c.uniqueId).sort();
+      if (JSON.stringify(cleared) !== JSON.stringify(liveIds)) unknown("Context-clear receipt does not match previously live identities");
+      contexts.clear();
+    }
+  }
+  if (JSON.stringify([...contexts.values()].map(contextKey).sort()) !== JSON.stringify(terminal[0].observedContexts.map(contextKey).sort())) unknown("Continuous execution-context ledger differs from terminal inventory");
+  const live = new Map(initial[0].targets.map((t) => [t.target, t]));
+  if (live.size !== initial[0].targets.length || new Set(terminal[0].targets.map((t) => t.target)).size !== terminal[0].targets.length) unknown("Duplicate inventory target identities");
+  const inspectTarget = (t) => {
+    if (!t.context && t.type !== "browser") unknown(`Target ${t.target} has unknown browser-context ownership`);
+    if (t.context === target?.context && (t.target !== target.target || t.type !== "page")) unknown(`Application-context target ${t.target} (${t.type}) lacks complete owned page coverage`);
+    if (t.target === target?.target && t.context !== target.context) unknown("Owned target changed browser-context identity");
+  };
+  initial[0].targets.forEach(inspectTarget); terminal[0].targets.forEach(inspectTarget);
+  if (!initial[0].targets.some((t) => t.target === target?.target && t.context === target.context)
+    || !terminal[0].targets.some((t) => t.target === target?.target && t.context === target.context)) unknown("Owned page target absent from boundary inventory");
+  for (const e of events.filter((e) => e.receivedAt > initial[0].receivedAt && e.receivedAt <= terminal[0].receivedAt)) {
+    if (["Target.targetCreated", "Target.targetInfoChanged"].includes(e.event)) { inspectTarget(e); live.set(e.target, e); }
+    if (e.event === "Target.targetDestroyed") { if (!live.has(e.target)) unknown("Unmatched target destruction"); live.delete(e.target); }
+  }
+  const expected = terminal[0].targets.filter((t) => t.context === target?.context).map((t) => t.target).sort();
+  const actual = [...live.values()].filter((t) => t.context === target?.context).map((t) => t.target).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) unknown("Discovery events do not reconcile with terminal app-context inventory");
+  const bindings = journal.realms.filter((r) => r.realm === realm);
+  if (bindings.length !== 1) { unknown("Retired realm has no unique observed native binding"); return finish(); }
+  const old = bindings[0]; result.binding = old;
+  const created = events.filter((e) => e.event === "Runtime.executionContextCreated" && e.uniqueId === old.uniqueId && e.context === old.context && e.frame === old.frame && e.default === true);
+  if (!old.uniqueId || !old.loader || old.frame !== target?.target || created.length !== 1 || created[0]?.receivedAt > old.observedAt || !finite(old.observedAt)
+    || old.observedAt < b.applicationStartedAt || old.observedAt > retiredAt
+    || !events.some((e) => e.event === "Page.frameNavigated" && e.frame === old.frame && e.loader === old.loader && e.receivedAt <= old.observedAt)) unknown("Default-context/frame/loader/realm association incomplete");
+  const destruction = events.find((e) => e.receivedAt >= retiredAt && (e.event === "Runtime.executionContextDestroyed" && e.context === old.context && e.uniqueId === old.uniqueId
+    || e.event === "Runtime.executionContextsCleared" && e.contexts?.some((c) => c.context === old.context && c.uniqueId === old.uniqueId)));
+  if (!destruction) unknown("Matched old unique-context destruction/clear receipt absent");
+  else {
+    result.destruction = destruction;
+    const commit = events.find((e) => e.event === "Page.frameNavigated" && e.frame === old.frame && e.loader !== old.loader && e.receivedAt >= destruction.receivedAt && e.receivedAt <= b.terminalStartedAt);
+    const next = journal.realms.find((r) => r.realm !== realm && r.frame === old.frame && r.loader === commit?.loader && r.uniqueId !== old.uniqueId && r.observedAt >= commit?.receivedAt && r.observedAt <= b.terminalStartedAt);
+    if (!commit || commit.navigationType !== "Navigation" || !next || !events.some((e) => e.event === "Runtime.executionContextCreated"
+      && e.uniqueId === next.uniqueId && e.context === next.context && e.frame === next.frame && e.default === true)) unknown("Committed replacement default context with a distinct loader/realm absent");
+    else result.replacement = { commit, binding: next };
+    if (events.some((e) => e.event === "Page.frameDetached" && e.frame === old.frame && e.receivedAt >= retiredAt && e.receivedAt <= b.endedAt)) unknown("Frame detach/swap requires additional coverage");
+  }
+  const probes = events.filter((e) => e.event === "unique-context-read-probe" && e.realm === realm && e.uniqueId === old.uniqueId && e.receivedAt >= b.terminalStartedAt && e.finishedAt <= b.endedAt);
+  const probe = probes.at(-1); result.terminalProbe = probe ?? null;
+  if (!probe || probe.outcome !== "context-not-found" || !notFound(probe.error) || !finite(probe.timeoutMs) || probe.timeoutMs > maxProbeMs
+    || !finite(probe.finishedAt) || probe.finishedAt < probe.receivedAt || probe.finishedAt - probe.receivedAt > probe.timeoutMs) unknown("Bounded terminal unique-context-not-found receipt absent");
+  if (probe?.outcome === "still-executable") { failed = true; unknown("Retired realm still executes at terminal probe"); }
+  const requests = new Map(), sockets = new Map(), identities = redirectDispatchIdentities(events);
+  if (events.some((e) => e.event.startsWith("Network.webSocket") && (!finite(e.receivedAt)
+    || e.receivedAt < b.startedAt || e.receivedAt > b.endedAt))) unknown("WebSocket receipts outside the native observation interval");
+  for (const e of events.filter((e) => e.receivedAt >= b.startedAt && e.receivedAt <= b.endedAt)) {
+    if (e.event === "Network.requestWillBeSent") {
+      if (!e.frame || !e.loader) unknown(`Request ${e.request} has unknown document ownership`);
+      const prior = requests.get(e.request);
+      if (!prior && e.redirectStatus !== null) unknown("Orphan native redirect continuation lacks its predecessor dispatch");
+      if (prior && (!e.redirectStatus || prior.terminal)) unknown("Reused request ID lacks native redirect binding");
+      const redirect = prior && redirectTerminal(prior, e, identities);
+      if (prior && !redirect) unknown("Native redirect predecessor response identity/clock/state differs from continuation");
+      const row = { dispatch: e, response: null, terminal: null }; requests.set(e.request, row); result.requests.push(row);
+      if (redirect) prior.terminal = redirect;
+      if (destruction && e.frame === old.frame && e.loader === old.loader && e.receivedAt > destruction.receivedAt) { failed = true; unknown("Old-loader request dispatched after realm destruction"); }
+    }
+    if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(e.event)) {
+      const row = requests.get(e.request);
+      if (!row) unknown(`Unmatched page network receipt ${e.request}`);
+      else if (e.event === "Network.responseReceived") {
+        if (row.response || row.terminal) unknown(`Duplicate/late native response receipt ${e.request}`);
+        row.response = e;
+        if (e.frame !== row.dispatch.frame || e.loader !== row.dispatch.loader || !Number.isInteger(e.status)) unknown("Response document identity/status differs from native dispatch");
+      }
+      else { if (row.terminal) unknown("Duplicate native request terminal receipt"); row.terminal = e; if (e.event === "Network.loadingFailed") result.nativeFailures.push(e); }
+    }
+    if (e.event === "Network.webSocketCreated") {
+      if (sockets.has(e.request)) unknown("Duplicate native WebSocket creation receipt");
+      else { const row = { created: e, handshake: null, closed: null }; sockets.set(e.request, row); result.sockets.push(row); }
+    }
+    if (["Network.webSocketHandshakeResponseReceived", "Network.webSocketClosed"].includes(e.event)) {
+      const row = sockets.get(e.request); if (!row) unknown("Unmatched WebSocket receipt");
+      else if (e.event === "Network.webSocketClosed") {
+        if (row.closed) unknown("Duplicate native WebSocket close receipt"); else row.closed = e;
+      } else {
+        if (row.handshake || row.closed) unknown("Duplicate/late native WebSocket handshake receipt");
+        else row.handshake = e;
+      }
+    }
+  }
+  for (const row of result.requests) if (!row.terminal || row.terminal.event === "Network.loadingFinished" && !row.response) unknown(`Request ${row.dispatch.request} lacks terminal/response evidence`);
+  result.reasons.push(...networkCoverage(journal, result.requests, result.sockets));
+  // CDP socket creation lacks a reliable initiator execution-context ID. An open
+  // socket on this page is unknown ownership, not an exemption or a forced close.
+  for (const row of result.sockets) if (!row.closed) unknown(`Page socket ${row.created.request} has no native close receipt`);
+  return finish();
+}
+
+// Classification receipts only. Nothing is removed, including intentionally
+// disabled preloads; this function cannot authorize a shared-oracle exception.
+export function classifyNoJSRequests(journal) {
+  const result = { schema: "native-no-js-request-proof/v1", outcome: "unknown", reasons: [], requests: [],
+    scope: "Parser provenance classification, not functional qualification or a failed-request waiver" };
+  if (journal?.schema !== "native-browser-platform-lifetimes/v2" || journal.contextConfiguration?.javaScriptEnabled !== false
+    || journal.coverage?.pageNetwork !== true || !Array.isArray(journal.events) || !journal.events.length || !Array.isArray(journal.documents)
+    || journal.events.some((e) => !e || typeof e.event !== "string") || journal.documents.some((d) => !d || !Array.isArray(d.assets) || !Array.isArray(d.preloads)
+      || d.assets.some((a) => !a || typeof a !== "object") || d.preloads.some((p) => !p || typeof p.rel !== "string" || typeof p.as !== "string"))) {
+    result.reasons.push("Script-disabled context configuration and native page/parser journal required"); return result;
+  }
+  if (!Array.isArray(journal.observationFailures) || journal.observationFailures.length) result.reasons.push("Native observer coverage interrupted");
+  const latest = new Map(), identities = redirectDispatchIdentities(journal.events);
+  for (const event of journal.events) {
+    if (event.event === "Network.requestWillBeSent") {
+      if (typeof event.type !== "string") { result.reasons.push("Request resource type unavailable"); continue; }
+      const previous = latest.get(event.request);
+      if (!previous && event.redirectStatus !== null) result.reasons.push("Orphan native redirect continuation lacks its predecessor dispatch");
+      if (previous && (!event.redirectStatus || previous.terminal)) result.reasons.push("Reused request ID lacks native redirect binding");
+      const redirect = previous && redirectTerminal(previous, event, identities);
+      if (previous && !redirect) result.reasons.push("Native redirect predecessor response identity/clock/state differs from continuation");
+      if (redirect) previous.terminal = redirect;
+      const row = { dispatch: event, response: null, terminal: null, classification: "unknown", proof: null };
+      result.requests.push(row); latest.set(event.request, row);
+    }
+    if (["Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"].includes(event.event)) {
+      const row = latest.get(event.request);
+      if (!row) result.reasons.push(`Unmatched network receipt ${event.request}`);
+      else if (event.event === "Network.responseReceived") {
+        if (row.response || row.terminal) result.reasons.push(`Duplicate/late response receipt ${event.request}`);
+        row.response = event;
+      } else {
+        if (row.terminal) result.reasons.push(`Duplicate terminal receipt ${event.request}`);
+        row.terminal = event;
+      }
+    }
+  }
+  for (const row of result.requests) {
+    const r = row.dispatch;
+    if (!row.terminal) { result.reasons.push(`Unfinished request ${r.request}`); continue; }
+    if (row.terminal.event === "Network.loadingFinished" && (!row.response || row.response.frame !== r.frame || row.response.loader !== r.loader
+      || row.response.type !== r.type || !Number.isInteger(row.response.status) || row.response.status < 100 || row.response.status > 599)) {
+      result.reasons.push(`Request ${r.request} lacks a matched native response/status receipt`); continue;
+    }
+    if (r.type === "Document") {
+      if (!r.frame || !r.loader) result.reasons.push(`Document ${r.request} lacks native frame/loader ownership`);
+      else if (row.terminal.event === "Network.loadingFailed") row.classification = "failed-document";
+      else if (row.terminal.event === "native-redirect" && row.terminal.status >= 300 && row.terminal.status < 400
+        || row.response?.frame === r.frame && row.response?.loader === r.loader && Number.isInteger(row.response?.status)
+          && row.response.status >= 100 && row.response.status <= 599) row.classification = "document";
+      else result.reasons.push(`Document ${r.request} lacks a matched native response/status receipt`);
+      continue;
+    }
+    const documentRequest = result.requests.find((d) => d.dispatch.type === "Document" && d.dispatch.frame === r.frame && d.dispatch.loader === r.loader && d.terminal?.event === "Network.loadingFinished");
+    const observed = journal.documents.find((d) => d.observer && d.scope && d.frame === r.frame && d.loader === r.loader
+      && d.path === r.document?.path && typeof d.identityObservation?.documentSha256 === "string"
+      && d.identityObservation.documentSha256 === r.document?.urlSha256 && d.observedAt >= r.receivedAt);
+    if (documentRequest?.classification !== "document" || !documentRequest.response || !observed || r.sameDocumentOrigin !== true || !r.frame || !r.loader) {
+      result.reasons.push(`Request ${r.request} lacks matching native document/parser ownership`); continue;
+    }
+    const directParser = r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && r.initiator.path === observed.path && r.initiator.urlSha256 === observed.identityObservation.documentSha256;
+    const declaration = observed.assets.find((a) => a.type === r.type && a.path === r.path && a.urlSha256 === r.urlSha256 && a.sameOrigin === true);
+    const preload = observed.preloads.find((p) => p.path === r.path && p.urlSha256 === r.urlSha256 && p.sameOrigin === true && isScriptPreload(p));
+    const disabled = intentionalDisabledPreload({ javaScriptEnabled: false, resourceType: r.type.toLowerCase(),
+      errorText: row.terminal.event === "Network.loadingFailed" && row.terminal.blockedReason === "csp" ? "csp" : row.terminal.errorText,
+      scriptPreload: Boolean(preload), hasCsp: documentRequest.response.hasCsp !== false || observed.hasMetaCsp !== false });
+    row.proof = { documentRequest: documentRequest.dispatch.request, observer: observed.observer, scope: observed.scope,
+      frame: r.frame, loader: r.loader, initiator: r.initiator, declaration: declaration ?? null, preload: preload ?? null,
+      hasHeaderCsp: documentRequest.response.hasCsp, hasMetaCsp: observed.hasMetaCsp };
+    // Chromium can report a script/about:blank initiator for a disabled parser
+    // preload. Preserve that native fact; the existing strict exception instead
+    // requires the disabled context, exact DOM declaration and absent real CSP.
+    if (disabled) { row.classification = "intentionally-disabled-preload"; continue; }
+    if (row.terminal.event === "Network.loadingFailed") { row.classification = "failed-request"; continue; }
+    if (["Fetch", "XHR", "Script", "EventSource", "WebSocket"].includes(r.type)) { row.classification = "application-transport"; continue; }
+    const stylesheet = result.requests.find((s) => s.dispatch.type === "Stylesheet" && s.dispatch.frame === r.frame && s.dispatch.loader === r.loader
+      && s.dispatch.path === r.initiator?.path && s.dispatch.urlSha256 === r.initiator?.urlSha256 && s.response?.mime === "text/css" && s.terminal?.event === "Network.loadingFinished"
+      && observed.assets.some((a) => a.type === "Stylesheet" && a.path === s.dispatch.path && a.urlSha256 === s.dispatch.urlSha256 && a.sameOrigin === true));
+    if (r.method === "GET" && (directParser && declaration || r.initiator?.type === "parser" && r.initiator.sameDocumentOrigin === true && stylesheet && ["Image", "Font", "Stylesheet"].includes(r.type))) {
+      row.classification = "parser-asset"; row.proof.stylesheetRequest = stylesheet?.dispatch.request ?? null;
+    } else result.reasons.push(`Request ${r.request} has no independently observed parser asset provenance`);
+  }
+  result.reasons.push(...networkCoverage(journal, result.requests));
+  if (!result.requests.length) result.reasons.push("No native document requests observed");
+  result.outcome = result.reasons.length || result.requests.some((r) => ["unknown", "failed-document", "failed-request", "application-transport"].includes(r.classification)) ? "unknown" : "classified";
+  return structuredClone(result);
+}

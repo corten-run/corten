@@ -3,10 +3,11 @@
 FROM rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 AS build
 WORKDIR /src
 COPY . .
+ENV CARGO_HOME=/var/cache/cargo
 # Sources touched first, since cargo goes by file times and a checkout older than the cache's last
 # build would get that build's crates; one build at a time on the cache (`locked`).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/bench/nodelay/app/target,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,id=bench-nodelay-corten.target,target=/src/bench/nodelay/app/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && cd bench/nodelay/app && test -f Cargo.toml && cargo build --release && mkdir -p /out && cp target/release/nodelay-corten /out/server
 

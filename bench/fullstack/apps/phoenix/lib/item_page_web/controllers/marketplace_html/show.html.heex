@@ -89,22 +89,23 @@
       }
     >{@t["show_all"]}</a>
   </section>
-  <section class="marketplace__alert">
-    <h2>{@t["alert"]}</h2>
-    <form
-      method="post"
-      action={
-        ~p"/marketplace/#{@locale}/#{@record["id"]}?#{[seller: @prefix, sort: @sort, offers: if(@all_offers, do: "all", else: "")]}"
-      }
-    >
-      <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-      <label>{@t["email"]} <input name="email" type="email" /></label><label>{@t["target"]}
-      <input name="target_price" type="text" inputmode="decimal" /></label><button type="submit">{@t[
-        "submit"
-      ]}</button>
-    </form>
-    <p class="marketplace__message">{@message}</p>
-  </section>
+  {Phoenix.Component.live_render(@conn, ItemPageWeb.MarketplaceAlertLive,
+    id: "marketplace-alert",
+    session: %{
+      "item_id" => @record["id"],
+      "locale" => @locale,
+      "alert_session" => @alert_session,
+      "message" => @message,
+      "query" => %{
+        "seller" => @prefix,
+        "sort" => @sort,
+        "offers" => if(@all_offers, do: "all", else: "")
+      },
+      "email" => @email,
+      "target" => @target,
+      "csrf_token" => get_csrf_token()
+    }
+  )}
   <section class="marketplace__details">
     <h2>{@t["details"]}</h2><p>{@record["description"]}</p>
     <dl>
