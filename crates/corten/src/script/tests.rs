@@ -637,6 +637,56 @@ fn SvgTemplateKeys() -> impl Render {
 fn debug_builds_stop_on_equal_keys_in_an_svg_s_template() {
     SvgTemplateKeys {}.to_html();
 }
+/// A keyed label in the page and one with the same key in a `<template>` in an `<svg>`'s `<desc>`
+/// and one in its `<title>`. Their children are HTML's (the HTML standard's integration points),
+/// so each `<template>` is HTML's, and the runtime's query does not reach its content.
+#[component]
+fn DescTemplateKeys() -> impl Render {
+    let label = refs();
+    html! {
+        <div>
+            <span ref={label} key="a">"1"</span>
+            <svg>
+                <desc><template><span ref={label} key="a">"2"</span></template></desc>
+                <title><template><span ref={label} key="a">"3"</span></template></title>
+            </svg>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_in_a_template_in_an_svg_s_desc_or_title_is_not_one_of_the_page_s() {
+    let html = DescTemplateKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="label" data-key="a">"#).count(), 3, "{html}");
+}
+
+/// A mark keyed as its parent's is, in a `<template>` of a component's own markup.
+#[component]
+fn MarkTemplate(mark: Ref<el::SVGElement, script::NoRows, script::NoValue, script::Keyed>) -> impl Render {
+    html! { <template><g ref={mark} key="a"></g></template> }
+}
+
+/// A mark and `MarkTemplate`'s copy of it, written into this `<svg>`: there the template is SVG's
+/// and the runtime finds the copy, so the ref has two marks keyed `a`.
+#[component]
+fn OuterSvgKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <svg>
+            <g ref={mark} key="a"></g>
+            <MarkTemplate mark={mark} />
+        </svg>
+    }
+}
+
+/// A limit design Choice 46 states: a component's markup does not see the `<svg>` its parent
+/// writes it into, so it takes its `<template>` for HTML's and its keys are not checked. The
+/// check misses the duplicate rather than stop a render it cannot be sure of.
+#[test]
+fn a_key_in_a_template_a_component_writes_into_an_outer_svg_is_not_checked() {
+    let html = OuterSvgKeys {}.to_html();
+    assert_eq!(html.matches(r#"<g data-ref="mark" data-key="a">"#).count(), 2, "{html}");
+}
 
 /// A key written as it is by an `AttrValue` of the app's, which Corten's escapers would not write.
 struct RawKey(&'static str);

@@ -909,10 +909,14 @@ fn respan(tokens: TokenStream, at: Span) -> TokenStream {
         .collect()
 }
 
+/// The SVG elements whose children are HTML's: the HTML standard's HTML integration points in
+/// SVG, where a browser parses what they hold as HTML.
+const SVG_HTML_POINTS: &[&str] = &["foreignObject", "desc", "title"];
+
 /// Whether the children of `name`, inside an `<svg>` when `outer`, are SVG's elements.
 fn within_svg(outer: bool, name: &str) -> bool {
     if outer {
-        !name.eq_ignore_ascii_case("foreignObject")
+        !SVG_HTML_POINTS.iter().any(|point| name.eq_ignore_ascii_case(point))
     } else {
         name.eq_ignore_ascii_case("svg")
     }
@@ -922,7 +926,8 @@ struct Cursor {
     tokens: Vec<TokenTree>,
     i: usize,
     end: Span,
-    /// Inside an `<svg>` (and not its `<foreignObject>`), where elements are SVG's.
+    /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where elements
+    /// are SVG's.
     svg: bool,
 }
 
@@ -1503,7 +1508,8 @@ struct Gen {
     level: Level,
     /// Set while a patch's top-level element opens: the local its `id={..}` binds its shape to.
     id_shape: Option<TokenStream>,
-    /// Inside an `<svg>` (and not its `<foreignObject>`), where an `<a>` is SVG's.
+    /// Inside an `<svg>` (and not in its `<foreignObject>`, `<desc>` or `<title>`), where an `<a>`
+    /// is SVG's.
     svg: bool,
     /// The locals declared so far that hold a debug build's record while markup is written.
     debug_locals: usize,
@@ -2054,7 +2060,11 @@ impl Gen {
                     // A `<template>`'s content and a `<noscript>`'s, which the runtime's query for a
                     // ref's elements does not reach (with scripts on, a `<noscript>` holds text):
                     // debug builds record none of their keys. In an `<svg>` both are elements like
-                    // any other, whose children the query finds.
+                    // any other, whose children the query finds, except in what an element whose
+                    // children are HTML's holds (`SVG_HTML_POINTS`). A component's markup does
+                    // not see an `<svg>` its parent writes it into, so it takes its `<template>`
+                    // for HTML's: the check misses those keys rather than stop a render it cannot
+                    // be sure of.
                     let unqueried = !self.svg && (name.eq_ignore_ascii_case("template") || name.eq_ignore_ascii_case("noscript"));
                     let content = unqueried.then(|| self.debug_local("::corten::script::__private::UnqueriedContent::open()"));
                     let outer = self.svg;
