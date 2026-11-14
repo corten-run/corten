@@ -3316,6 +3316,70 @@ rules something out.
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
     `stylesOf` (`9c722e27`) put back in this head's runtime.
 
+48. <a id="choice-asked-open-state"></a>**A patch keeps what the user opened or closed, except that the element a `data-patch`
+    answer replaces takes the answer's open state when the user asked for it from outside it.** A
+    patch carries a `<dialog>`, `<details>` or popover the user opened or closed into the fresh
+    markup unless the server changed it from what it sent before
+    ([#84 A patch or live fragment closes a <dialog> the user opened and folds a <details> they unfolded](https://github.com/corten-run/corten/issues/84)),
+    as it keeps a field they edited ([Limit 2](#limit-whole-element-patches)): what a screen shows
+    open belongs to the client showing it (README Value 8). That rests on the user's state being
+    newer than whatever the patch draws, which holds for a redraw nobody asked for (a live
+    fragment, a `ReadAgain` read, a script's `patch()`, a patch of a region around the element).
+    It fails for the answer to a press: a Preview button beside a dialog, in a `data-patch` form
+    whose answer draws the dialog `open`, opened it once, and after the user closed it the next
+    press sent the request, got the dialog drawn open and showed nothing, since the user's close
+    differed from what the server had sent
+    ([#1371 A data-patch answer to a trigger outside a dialog cannot open it again once the user closed it: the patch keeps the user's closed state over the answer's open](https://github.com/corten-run/corten/issues/1371)).
+    The press is newer than the close. So when a `data-patch` submit's answer replaces an element
+    and the control that sent it (the submitter, else the form) is outside that element, the
+    element takes the open state the answer draws; where both say open, a modal dialog stays
+    modal. A press inside the element (a refused form in a dialog the user closed with Escape
+    while it was on its way), the elements inside the one replaced, and every redraw nobody asked
+    for keep the user's. A popover has no markup that shows it, so no answer can ask for one shown
+    and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
+    outside it is on its way opens when the answer comes: the runtime knows the press, not what the
+    user meant by the close after it.
+
+    Not chosen: keeping the user's state only while the server's markup of the element is what it
+    was, so a dialog the server draws `open` again counts as the server changing it. It is wider
+    than the press: a live fragment that sends an open dialog again, as a ticker redraws the same
+    region, would open a dialog the user closed, the case #84 fixed. An attribute on the fresh
+    element that says to open it, which the runtime honours: an answer could then say it, but it
+    is a second way to open a dialog beside the markup's `open` and a concept of Corten's own,
+    for what the press already says (README Value 5). The pilot's workaround, a script that
+    replaces the closed dialog with an empty element before each submit, is the per-page script
+    this removes.
+
+    What it costs: the runtime is 61 bytes larger raw, 39 with gzip (15,069 to 15,108) and 26 with
+    brotli (13,601 to 13,627), paid once a release by every user. A patch pays an argument passed
+    down; the new test runs for the patch's own root only, after the checks that already find the
+    user changed it, so a patch whose root is no dialog or `<details>`, or one the user left as
+    the server sent it, does no more work than before, and one the user changed and asked for
+    from outside does one `Node.contains` (reasoned, not measured: a single call where the root's
+    state is already read).
+
+    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
+    defaults, once each build); platform (a `<dialog>`'s and a `<details>`' open state is their
+    `open` attribute, which markup sets and closing removes, while a popover's shown state has no
+    attribute; the smoke's dialog, `<details>` and live checks in Chromium, Firefox and WebKit);
+    reasoned (a submitter or form outside the element it asks for is the user asking for that
+    element, and nothing else the runtime sees is; the cost is one call in the case it changes);
+    value (a control pressed again that does nothing visible is wrong output, the README's conflict
+    order 1, correctness, above the bytes it costs, its 2; a server-drawn dialog opens from its
+    trigger without a per-page script or an attribute of Corten's own, README Value 5; the user's
+    open state still belongs to the client wherever they did not ask, README Value 8).
+
+    Revisit when: an app needs a form outside an element to redraw it without changing its open
+    state (a Refresh beside a sheet the user closed on purpose), which would call for a way to say
+    so; the platform gets markup for a shown popover, when an answer could ask for one; or a
+    press inside an element is found to ask for it open (a Show more in a `<details>` the user
+    folded), when the rule would need the submitter's intent rather than its place.
+
+    Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
+    runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
+    in-flight and live checks passing on both, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit
+    27.2 (Playwright 1.64.1); 2026-11-14, the runtime's size on `bf1b2eaa2` against `e59c32c28`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -3413,9 +3477,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A field they edited keeps its value (for the form that was sent, edited after it was sent),
    and focus and the caret move to the matching element (same id; else, inside the nearest
    element with an id, the same name; focus also follows an element without either to the same
-   place). A field without an id or a unique name takes the server's value. Other browser
-   state inside a replaced element (an open `<details>`, scroll position) resets, so keep
-   targets small.
+   place). A field without an id or a unique name takes the server's value. A `<dialog>`,
+   `<details>` or popover the user opened or closed stays so, unless the server changed it or the
+   user asked for the element from outside it ([Choice 48](#choice-asked-open-state)). Other
+   browser state inside a replaced element (scroll position) resets, so keep targets small.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating
