@@ -621,7 +621,7 @@ Corten is pre-1.0, so any minor version may change the API.
   Preview button beside a server-drawn sheet works on every press, not only the first, and a
   `<details>` asked for unfolded unfolds. A submit from inside the element, the elements inside
   the one replaced, a live fragment, a `ReadAgain` read and a script's `patch()` still keep what
-  the user opened or closed, and a popover stays as the user left it (design Choice 49). The
+  the user opened or closed, and a popover stays as the user left it (design Choice 51). The
   runtime is 39 bytes larger with gzip.
 
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
