@@ -14122,11 +14122,15 @@ mod layout_reads {
                 "/form",
                 crate::router::post(|req: Req| async move { refused(&req, "too short") })
                     .put(|req: Req| async move {
-                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"given"</p> } }).map(|page| page.give::<CartCount>(9))
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"given"</p> } })
+                            .map(|page| page.give::<CartCount>(9))
                     })
                     .get(|req: Req| async move { refused(&req, "searched") }),
             )
-            .route("/patch", crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }))
+            .route(
+                "/patch",
+                crate::router::post(|req: Req| async move { req.patch::<ForOne>(html! { <p id={MsgId}>"saved"</p> }) }),
+            )
             .route("/away", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Done) }))
             .route("/refused", crate::router::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }));
         let router = App::new(Routes::from(routes))
