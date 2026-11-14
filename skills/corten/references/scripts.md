@@ -107,8 +107,9 @@ division: end statements with `;` and keep a division on the line it continues.
 3. Rows a feed updates by id: `key={item.id}` on the cells, a `Map<string, HTMLTableCellElement>`
    parameter, `cells.get(row.id)`. Do not read `data-*` attributes for this. Every element given
    the ref has a key (without one, the call does not compile), and each its own: two equal keys
-   are one entry of the map, and debug builds stop on them. A child component that puts the
-   parent's ref on its cells takes it as `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>`.
+   are one entry of the map, and debug builds stop on them. A key is `key={..}`'s alone: a spread
+   of attributes does not write `data-key`. A child component that puts the parent's ref on its
+   cells takes it as `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>`.
 4. Rows a script only reorders or filters by a value the server knows (a price in cents, a
    stock count): `ref={row.with(sort_cents(l))}` on each row and a
    `Map<HTMLTableRowElement, number>` parameter (`string` for text, `boolean` for a `bool`), read

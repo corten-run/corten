@@ -418,14 +418,17 @@ Corten is pre-1.0, so any minor version may change the API.
   ref in one render of its component have keys the browser reads as equal (`key={true}` and
   `key=""` are one, and so are a carriage return and a line feed), or a `key={..}` writes none
   (`None`), since the `Map` would hold one entry for them, counting the elements the runtime finds
-  (none in a `<template>`'s content); release builds do not check, and the runtime is
-  unchanged
+  (none in a `<template>`'s or a `<noscript>`'s content, outside an `<svg>`) and leaving out a key
+  written with a reference Corten does not write (an app's own `AttrValue`); whether it runs is
+  `corten-run`'s debug-assertions setting, for every crate's markup, release builds do not check,
+  and the runtime is unchanged
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
   [design Choice 46](docs/design.md#choice-ref-values)). **Breaking:** a component that puts a
   parent's ref on elements with a key names the ref's type
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
-  gets `key={..}` on each of its elements.
+  gets `key={..}` on each of its elements. A spread of attribute pairs now skips `data-key`, as it
+  skips `data-ref` and `data-ref-value`: a key is `key={..}`'s to write.
 
 - The app `corten new` writes posts its form to the page's own route
   (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path
