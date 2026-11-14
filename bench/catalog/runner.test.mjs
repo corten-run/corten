@@ -4,10 +4,23 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parse } from "yaml";
 import { allApps } from "../fullstack/apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
+test("catalog checks include failure reporting regressions and native umask coverage is Gin-only parity work", () => {
+  const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
+  const script = "node --test bench/catalog/gin-permissions.test.mjs";
+  const steps = workflow.jobs.parity.steps.filter((step) => step.run === script);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].if, "matrix.app == 'gin'");
+  assert.equal(steps[0].env.CATALOG_GIN_DOCKER_TESTS, "1");
+  assert.ok(workflow.jobs.harness.steps.every((step) => !step.run?.includes("gin-permissions.test.mjs")));
+  const check = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).scripts["check:catalog"];
+  for (const file of ["check-result.test.mjs", "runner-failure.test.mjs"]) assert.ok(check.split(" ").includes(`bench/catalog/${file}`));
+});
+
 test("an existing catalog results directory is reserved, including a failed or check-only round", () => {
   const round = `c${Date.now()}${process.pid}`;
   const parent = join(here, "results");
