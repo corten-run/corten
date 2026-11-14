@@ -34,9 +34,10 @@ Corten is pre-1.0, so any minor version may change the API.
   handler argument is now written as markup writes a number, with the same digits as before.
   **Breaking:** `data-ref-value` is printed by Corten, as `data-ref` is, so markup that writes it by
   hand no longer compiles; give the value with the element's ref. A spread of pairs (`{..attrs}`)
-  now skips `data-ref-value`, `data-ref`, `data-on` and `data-scope` in any case, as it skipped
-  `data-vars`, so pairs that wrote them are dropped. corten-ui's `rows::sort` still reads the
-  `data-sort` an app writes (moving it onto ref values is
+  now skips `data-ref-value`, `data-ref`, `data-on` and `data-scope`, whole names in any case, as it
+  skipped `data-vars`, so pairs that wrote them are dropped; it costs at most five length-checked
+  comparisons per pair, on pair spreads only. corten-ui's `rows::sort` still reads the `data-sort`
+  an app writes (moving it onto ref values is
   [#1387](https://github.com/corten-run/corten/issues/1387)).
 
 - Refresh the Rust benchmark inputs with pinned Rust/trixie build and runtime

@@ -3125,31 +3125,24 @@ rules something out.
     value costs nothing: seller-desk's desk took 2,080,520,197 instructions to render in every run
     of both builds.
 
-    The trade is a Value 4 benefit against a small Value 1 cost. The benefit is Value 4's, mistakes
-    failing at compile time: a value a script reads back is checked when the crate compiles, where
-    with a `data-` attribute a misspelled or renamed name compiled, passed `tsc` and gave the script
-    `undefined` with no error anywhere (a sort that subtracts gets NaN, which `sort` takes as equal,
-    and leaves the rows as they were), and a number came as text the script had to convert (one
-    compared with `<` orders `"999"` after `"1250"`); one way for a script to get what an element
-    carries, its ref, is Value 5's. Value 1 ranks above both and says no to features that cost every
-    user to help a few, which is why [Choice 45](#choice-data-on-single-quoted) did not spend 41
-    bytes with gzip (128 raw, 45 with brotli) on a reader for a block of large data. The render cost
-    here is not of that kind: only a page whose elements give values writes them, and a page that
-    gives none is unchanged to the instruction. The runtime's 21 bytes are of that kind: every user
-    downloads them once a release, whether or not a page they load gives a value. That is the
-    deciding point, and it was accepted because it is half what
-    [Choice 45](#choice-data-on-single-quoted) refused, and because what it buys differs in kind:
-    that Choice's block would have made pages that were already correct a fraction of a millisecond
-    faster, while this makes a silent wrong answer a compile error in any app whose script reads a
-    value its markup wrote, which no change without a reader in the runtime does (a value read
-    through `dataset` is text the compiler cannot see, and the other ways below each give up a row's
-    identity or its order). It rests on the bet in Stands on that more than one app's scripts read
-    such values; if that fails, the 21 bytes help a few, and the Revisit-when reopens them. The
-    README prints the runtime's size to 0.1 KB, and `npm run check` accepts the figure a build
-    within 32 bytes would print, the spread between two zlibs (`scripts/readme-size.mjs`). 15,016
-    bytes is 14.66 KB, which on its own rounds to 14.7, but 32 bytes less rounds to 14.6, so the
-    README's "14.6 KB (gzip) runtime" still passes: the 21 bytes are inside that allowance, and they
-    leave 17 bytes (to 15,033) before the printed figure has to become 14.7.
+    Value 1 comes first. It says no to features that cost every user to help a few, and on it
+    [Choice 45](#choice-data-on-single-quoted) refused a 41-byte reader whose help went only to the
+    few pages that hand a script tens of kilobytes. This reader's help does not go to a few: under
+    the bet in Stands on, it goes to every app whose script reads back a value its markup wrote,
+    which a script that reorders, filters or follows rows the server drew does. Its cost, in
+    [Choice 45](#choice-data-on-single-quoted)'s terms, is 21 bytes with gzip, 168 bits, about 0.1
+    ms at 1.6 Mbit/s, downloaded once a release and cached after, since the runtime's URL is
+    versioned and `immutable`; the render cost falls only on a page whose elements give values, and
+    a page that gives none is unchanged to the instruction. So Value 1 does not refuse it, and Value
+    4, mistakes failing at compile time, decides: a value a script reads back is checked when the
+    crate compiles, where with a `data-` attribute a misspelled or renamed name compiled, passed
+    `tsc` and gave the script `undefined` with no error anywhere (a sort that subtracts gets NaN,
+    which `sort` takes as equal, and leaves the rows as they were), and a number came as text the
+    script had to convert (one compared with `<` orders `"999"` after `"1250"`). No change without a
+    reader in the runtime does that: a value read through `dataset` is text the compiler cannot see,
+    and the ways not chosen above each give up a row's identity or its order. One way for a script
+    to get what an element carries, its ref, is Value 5's. If the bet fails, the help goes to a few
+    after all, and the Revisit-when reopens the 21 bytes on Value 1.
 
     Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
     brotli at quality 11, once each build; the item page's bytes from `render_cost` in
@@ -3160,15 +3153,16 @@ rules something out.
     order for `*` and `#`, so a value is one attribute read per element when the handler runs and
     nothing on a load; the ref's third type parameter is one type wherever the component uses the
     ref, so a ref given text on one element and a number on another, or a value on one and none on
-    another, is a type error); bet (apps beyond card-market hand their scripts values on elements
-    the scripts reorder, filter or follow, so the reader serves more than one page; today the values
-    are given in card-market's listing sort, `listing_sort.rs`, read by `listing_sort.js`;
-    corten-site's wall, `surface.rs`, read by `wall.js`; its seam's marked names, `apart.rs`, read
-    by `apart.js`; its header table, `steel.rs`, read by `answer.js`; and the watchlist's smoke
-    page, `smoke.rs`, read by `quoted.js`); value (a mistake in a value a script reads fails when
-    the crate compiles, Values 4, at a cost every user pays of 21 bytes with gzip once a release,
-    Values 1, which ranks above it; no name as text at a seam, Values 4; one way for a script to get
-    what an element carries, its ref, Values 5; a value on a ref, not a new concept, Values 6).
+    another, is a type error); bet (values are given today in five places: card-market's listing
+    sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
+    `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
+    `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
+    `quoted.js`. Apps beyond these five places hand their scripts values on elements the scripts
+    reorder, filter or follow, so the reader helps every such app, not a few); value (that help, at
+    a cost every user pays of 21 bytes with gzip once a release, which Value 1 does not refuse; a
+    mistake in a value a script reads fails when the crate compiles, and no name is text at a seam,
+    Values 4; one way for a script to get what an element carries, its ref, Values 5; a value on a
+    ref, not a new concept, Values 6).
 
     Revisit when: an app's script needs a record per element rather than one number, text or `bool`
     (then the value might be any `ToJson` with its generated declaration), or the platform gives
@@ -3189,9 +3183,7 @@ rules something out.
     `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
     and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
     card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
-    `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1); 2026-11-13,
-    the room left under the README's printed size, by `phrase` in `scripts/readme-size.mjs` on
-    `d1cb28f9`, for the runtime built on `d1cb28f9` merged with the change.
+    `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
 
 ## Rules
 
