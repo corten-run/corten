@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Keep grouped cloud create actions with a numeric zero resource ID pending until
+  the matching action completes with the exact owned droplet ID. Preserve strict
+  identity/link checks, bounded polling and the single-create rule; this fixes a
+  synthetic API-schema compatibility case, not a confirmed cause of the r21 failure.
+
 - Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
   is about six HTTP/1.1 connections per host; an eight-tab direct-TLS check passed over h2 in
   Chromium and Firefox. The opt-in prototype missed a flow-controlled send timeout and left

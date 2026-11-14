@@ -96,7 +96,7 @@ test("controller exposes no direct credential-taking REST constructor", () => {
 });
 
 test("approved productionMain reaps the actual clean worker and retains locks for uncertain create", async (t) => {
-  for (const mode of ["success", "hang-create", "withhold-close"]) await t.test(mode, async (t) => {
+  for (const mode of ["success", "hang-create", "withhold-close", "post-link-failure", "first-action-http-failure", "zero-resource-create"]) await t.test(mode, async (t) => {
   const h = controllerHarness(t), workers = [];
   let approval;
   const interrupted = () => {
@@ -119,13 +119,22 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
   assert.equal(workers[0].launches, 0);
   const launched = productionMain([...args, "--approve-reviewed-merged-ready", approval], deps);
-  if (mode === "success") assert.equal(await launched, 3);
+  const completed = ["success", "first-action-http-failure", "zero-resource-create"].includes(mode);
+  if (completed) assert.equal(await launched, 3);
   else await assert.rejects(launched, (error) => error.controlTreeUncertain === true);
   const worker = workers[1]; assert.equal(worker.state().consumes, 1);
   assert.equal(worker.state().calls.filter((value) => value.method === "POST").length, 1);
-  assert.equal(h.saved().status, mode === "hang-create" ? "creating" : "running");
+  const earlyFailure = ["hang-create", "post-link-failure"].includes(mode);
+  assert.equal(h.saved().status, earlyFailure ? "creating" : "running");
+  if (earlyFailure) {
+    assert.equal(Object.hasOwn(h.saved(), "id"), false);
+    assert.equal(h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), false);
+    assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, 0);
+  }
+  if (mode === "first-action-http-failure" || mode === "zero-resource-create")
+    assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, mode === "zero-resource-create" ? 2 : 1);
   assert.ok(worker.child.exitCode !== null || worker.child.signalCode !== null);
-  if (mode !== "success") {
+  if (!completed) {
     assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   } else {
     assert.equal(existsSync(join(h.local, "operation.lock")), false); assert.equal(existsSync(join(h.base, ".groups-launch.lock")), false);

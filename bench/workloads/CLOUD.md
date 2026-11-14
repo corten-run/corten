@@ -287,6 +287,14 @@ never followed and no HTTP error/network failure is retried. Census pagination
 must remain on the fixed endpoint, contain unique IDs and match its stable total;
 an incomplete census cannot prove absence. Create waits only through bounded
 read-only polling of its exact droplet/action identity, never a repeated POST.
+An `in-progress` create action may have `resource_id: null` or numeric zero;
+both remain pending, not ownership or completion proof. Completion still requires
+the exact positive droplet ID returned by the single POST, the matching action
+ID/type/resource type, and the existing exact action-link URL. Zero never extends
+the polling deadline or permits another create. This covers a synthetic instance
+permitted by the [published action model](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/actions/models/action.yml),
+not an observed response from the failed r21 launch, whose initial action body was
+not retained; that launch's exact cause remains unconfirmed.
 Responses have a body bound and whole-request deadline; in-flight timeout,
 cancellation or malformed responses conservatively retain lifecycle locks.
 Every provider-owning controller action awaits the same cached worker-close promise
