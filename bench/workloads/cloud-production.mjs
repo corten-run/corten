@@ -111,7 +111,8 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
     }
     return run(binary, argv, timeout, allowFail);
   };
-  const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted, settle: () => providerRun.close() });
+  const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
+    mergedHead: remoteHead, settle: () => providerRun.close() });
   let result;
   if (options.detach) { await task.launch(); result = 3; }
   else result = options.collect ? await task.collect() : await task.deliverAudit();

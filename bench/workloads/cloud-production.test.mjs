@@ -22,6 +22,7 @@ function productionHarness(t, flags = {}) {
       }
       if (argv[0] === "cat-file" && flags.missingNative) return { status: 1, stderr: "private" };
       if (argv[0] === "merge-base" && flags.unmerged) return { status: 1, stderr: "private" };
+      if (argv[0] === "merge-base" && flags.staleTracking && argv.at(-1) === "origin/main") return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.afterFetch) flags.afterFetch();
       if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M private-file" };
@@ -330,4 +331,13 @@ test("missing, malformed or ambiguous remote main advertisements refuse before c
     assert.equal(p.h.creates, 0); assert.ok(p.calls.every(([binary]) => binary === "git"));
     assert.ok(!p.calls.some(([binary, argv]) => binary === "git" && argv[0] === "fetch"));
   }
+});
+
+test("locked launch rechecks the observed remote SHA rather than stale shared tracking refs", async (t) => {
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead, staleTracking: true });
+  assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
+  const ancestry = p.calls.filter(([binary, argv]) => binary === "git" && argv[0] === "merge-base");
+  assert.equal(ancestry.length, 2);
+  for (const [, argv] of ancestry) assert.deepEqual(argv, ["merge-base", "--is-ancestor", commit, remoteHead]);
+  assert.equal(p.h.creates, 1); assert.equal(p.h.saved().status, "running");
 });
