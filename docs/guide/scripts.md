@@ -415,8 +415,10 @@ where both are elements like any other, it is, except in its `<foreignObject>`, 
 and a component's children do not see where the component writes them, so the keys in a
 `<template>` or `<noscript>` a component writes into an outer `<svg>`, or one among a component's
 children (outside an `<svg>` the children write themselves), are not checked: where the check
-cannot be sure, it lets a duplicate pass rather than stop a correct render. They see what one
-render writes: rows a patch or a script adds later are the page's, so give every row a key of its
+cannot be sure, it lets a duplicate pass rather than stop a correct render. A view written into a
+string of its own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value, which
+the browser reads as text) does not count toward its component's keys; a component rendered so
+checks its own. They see what one render writes: rows a patch or a script adds later are the page's, so give every row a key of its
 own (an id, not a name two rows can share). A key an `AttrValue` of the app's writes with any other
 `&` (`&#128;`, `&nbsp;`) is not checked, since what a browser reads there follows rules of HTML's
 the check does not repeat.

@@ -3116,9 +3116,14 @@ rules something out.
     markup, it lets a duplicate pass. The check counts the elements the runtime's query finds, so
     one in a `<template>`'s or a `<noscript>`'s content is not counted (in an `<svg>` both are
     elements like any other, and what they hold is, except in its `<foreignObject>`, `<desc>` and
-    `<title>`, the HTML standard's integration points, whose children are HTML's), and an element's
+    `<title>`, the HTML standard's integration points, whose children are HTML's). It counts an
+    element against its component's render only when the element is written into the string that
+    render writes, so a view written into a string of its own (`html! { .. }.to_html()` or a
+    component's `children.to_html()` as an attribute's value, which the browser reads as text) is
+    not counted there, though a component rendered so has a record of its own; and an element's
     ref and key are noted on it until its tag is written, so a view an attribute's expression
-    renders meanwhile notes its own. Its limit is at a component's edge, where the markup on
+    renders meanwhile notes its own. Markup a view writes into its own string and an app then
+    places in the page (`raw`) is not checked against the page's. Its limit is at a component's edge, where the markup on
     either side cannot know the other's context: a component's markup does not see an `<svg>` its
     parent writes it into, so it takes its own `<template>` there for HTML's, and the keys in it,
     which the runtime finds, are not checked; and a component's children do not see where the
@@ -3200,8 +3205,8 @@ rules something out.
     nothing on a load; the ref's third type parameter is one type wherever the component uses the
     ref, so a ref given text on one element and a number on another, or a value on one and none on
     another, is a type error, as its fourth is for a key on one element and none on another; a debug
-    build's record of keys is per render of a component, as the runtime finds a ref's elements under
-    the component's root nearest them, and leaves out a `<template>`'s or a `<noscript>`'s content,
+    build's record of keys is per render of a component and the string it writes, as the runtime
+    finds a ref's elements under the component's root nearest them, and leaves out a `<template>`'s or a `<noscript>`'s content,
     which its query does not reach, but not an `<svg>`'s outside its `<foreignObject>`, `<desc>` and
     `<title>`, which it does); bet (values are given today in five places: card-market's listing
     sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by

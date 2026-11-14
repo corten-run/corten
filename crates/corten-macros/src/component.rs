@@ -526,7 +526,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
     let render_fn = if returns_patch { "::corten::view::__private::render_patch" } else { "::corten::view::Render::render" };
     let draw = if scoped {
         q(
-            &format!("::corten::script::__private::scoped(__A1, || {render_fn}(&__A0, __corten_component_out));"),
+            &format!("::corten::script::__private::scoped_into(__A1, __corten_component_out, |__corten_component_out| {render_fn}(&__A0, __corten_component_out));"),
             &[TokenTree::Group(body).into(), literal(&scope_name)],
         )
     } else {
@@ -555,7 +555,9 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         let draw = "::corten::view::Document::render_part(&__A0, __corten_component_out, __corten_part)";
         let draw = if scoped {
             q(
-                &format!("::corten::script::__private::scoped(__A1, || {draw});"),
+                &format!(
+                    "::corten::script::__private::scoped_into(__A1, __corten_component_out, |__corten_component_out| {draw});"
+                ),
                 &[TokenTree::Group(doc_body).into(), literal(&scope_name)],
             )
         } else {

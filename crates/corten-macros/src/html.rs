@@ -1836,9 +1836,9 @@ impl Gen {
         let is_key = |attr: &str| attr.eq_ignore_ascii_case("data-key");
         let keyed = attrs.iter().any(|a| matches!(a, Attr::Expr(attr, _) | Attr::Static(attr, _) if is_key(attr)));
         let has_ref = attrs.iter().any(|a| matches!(a, Attr::Ref(..)));
-        // A keyed ref's element: debug builds note its ref and key on it until its tag is written,
-        // whatever an attribute's expression renders meanwhile.
-        let tag = (has_ref && keyed).then(|| self.debug_local("::corten::script::__private::KeyTag::open()"));
+        // A keyed ref's element: debug builds note its ref and key on it, and the string it is written
+        // into, until its tag is written, whatever an attribute's expression renders meanwhile.
+        let tag = (has_ref && keyed).then(|| self.debug_local("::corten::script::__private::KeyTag::open(__OUT)"));
         for attr in attrs {
             match attr {
                 Attr::Bare(attr) => {

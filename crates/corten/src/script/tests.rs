@@ -858,6 +858,80 @@ fn debug_builds_stop_on_equal_keys_whatever_renders_inside_a_key() {
     NestedKeys { keys: &[("a", true), ("a", false)] }.to_html();
 }
 
+/// `view` written into a string of its own with `render`, not `to_html`.
+fn rendered_alone(view: impl Render) -> String {
+    let mut own = String::new();
+    view.render(&mut own);
+    own
+}
+
+/// A keyed mark in the page, and copies a view writes into strings of its own, which become
+/// attributes' text: the browser finds one element of the ref.
+#[component]
+fn TitledKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <p title={html! { <span ref={mark} key="a"></span> }.to_html()}>"to_html"</p>
+            <p title={rendered_alone(html! { <span ref={mark} key="a"></span> })}>"render"</p>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_a_view_writes_into_a_string_of_its_own_is_not_the_page_s() {
+    let html = TitledKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="mark" data-key="a"></span>"#).count(), 1, "{html}");
+    assert_eq!(html.matches("&lt;span data-ref=&quot;mark&quot; data-key=&quot;a&quot;&gt;").count(), 2, "{html}");
+}
+
+/// Writes its children as its paragraph's title.
+#[component]
+fn Titled(children: impl Render) -> impl Render {
+    html! { <p title={children.to_html()}>"Example"</p> }
+}
+
+/// A keyed mark in the page, and a copy among `Titled`'s children, which it writes as text.
+#[component]
+fn ChildTitledKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <Titled><span ref={mark} key="a"></span></Titled>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_among_children_a_component_writes_into_a_string_of_its_own_is_not_the_page_s() {
+    let html = ChildTitledKeys {}.to_html();
+    assert_eq!(html.matches(r#"<span data-ref="mark" data-key="a"></span>"#).count(), 1, "{html}");
+    assert!(html.contains("&lt;span data-ref=&quot;mark&quot; data-key=&quot;a&quot;&gt;"), "{html}");
+}
+
+/// Two keyed marks in the page beside a view written into a string of its own: the page's are
+/// still checked.
+#[component]
+fn TitledTwiceKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <p title={html! { <span ref={mark} key="b"></span> }.to_html()}>"Example"</p>
+            <span ref={mark} key="a"></span>
+        </div>
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "two elements of ref mark in one titled-twice-keys have the key \"a\"")]
+fn debug_builds_stop_on_equal_keys_in_the_page_beside_a_view_written_alone() {
+    TitledTwiceKeys {}.to_html();
+}
+
 /// Two cells whose keys are written differently and read the same: `true` and `""` both read as
 /// the empty string.
 #[component]

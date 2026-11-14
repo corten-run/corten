@@ -2454,8 +2454,9 @@ thread_local! {
 /// one ref whose keys the browser reads as equal, or one whose `key={..}` wrote none (`None`),
 /// stop the render, as an integer past 2^53 does. A handler's `Map<string, El>` would hold one
 /// entry for the two, or one under `null`. Keys follow the runtime's query for a ref's elements:
-/// those in a `<template>`'s or a `<noscript>`'s content are not the page's and are not recorded.
-/// A key is read as the browser reads it when it is written as Corten writes text; one written
+/// those in a `<template>`'s or a `<noscript>`'s content are not the page's and are not recorded,
+/// and those a view writes into a string of its own (`html! { .. }.to_html()` in an attribute, a
+/// component's `children.to_html()`) are not its component's render's. A key is read as the browser reads it when it is written as Corten writes text; one written
 /// otherwise (a custom `AttrValue`) is left out rather than guessed at. The page's other renders
 /// (a patch, rows a script adds) are not seen. Whether the check runs is `corten-run`'s own
 /// debug-assertions setting: the code `html!` writes calls it in every build.
@@ -2468,13 +2469,16 @@ mod keys {
     type RefName = (&'static str, &'static str);
     /// A component's refs' keys so far, by ref, each as the browser reads it.
     type Keys = HashSet<(&'static str, String)>;
-    /// The keyed ref and the key (as written, ` data-key="a"`) of an element whose tag is being
-    /// written.
-    type Tag = (Option<RefName>, Option<String>);
+    /// The string an element or a component's render is written into, by its address.
+    type Buffer = usize;
+    /// The string a keyed element is written into, and its ref and key (as written,
+    /// ` data-key="a"`), while its tag is being written.
+    type Tag = (Buffer, Option<RefName>, Option<String>);
 
     thread_local! {
-        /// Each component rendering (`scoped`), innermost last, with its refs' keys.
-        static RENDERING: RefCell<Vec<(&'static str, Keys)>> = const { RefCell::new(Vec::new()) };
+        /// Each component rendering (`scoped`), innermost last, with the string it is written into
+        /// (none known for a bare `scoped`) and its refs' keys.
+        static RENDERING: RefCell<Vec<(&'static str, Option<Buffer>, Keys)>> = const { RefCell::new(Vec::new()) };
         /// The keyed elements whose tags are being written, innermost last: a render in a ref's
         /// or a key's expression writes its own above the element's.
         static TAGS: RefCell<Vec<Tag>> = const { RefCell::new(Vec::new()) };
@@ -2482,8 +2486,8 @@ mod keys {
         static UNQUERIED: Cell<usize> = const { Cell::new(0) };
     }
 
-    pub(super) fn enter(scope: &'static str) {
-        RENDERING.with(|r| r.borrow_mut().push((scope, HashSet::new())));
+    pub(super) fn enter(scope: &'static str, into: Option<Buffer>) {
+        RENDERING.with(|r| r.borrow_mut().push((scope, into, HashSet::new())));
     }
 
     pub(super) fn leave() {
@@ -2491,8 +2495,8 @@ mod keys {
     }
 
     /// A keyed element's tag begins: its ref and key are noted on it until it ends.
-    pub(super) fn open() {
-        TAGS.with(|t| t.borrow_mut().push((None, None)));
+    pub(super) fn open(into: Buffer) {
+        TAGS.with(|t| t.borrow_mut().push((into, None, None)));
     }
 
     /// Its tag ends: checks its key, or, when a render unwinds (`checked` is false), drops it.
@@ -2501,15 +2505,15 @@ mod keys {
         if !checked || UNQUERIED.with(Cell::get) > 0 {
             return;
         }
-        if let Some((Some(at), Some(written))) = tag {
-            check(at, &written);
+        if let Some((into, Some(at), Some(written))) = tag {
+            check(at, &written, into);
         }
     }
 
     pub(super) fn ref_written(at: RefName) {
         TAGS.with(|t| {
             if let Some(tag) = t.borrow_mut().last_mut() {
-                tag.0 = Some(at);
+                tag.1 = Some(at);
             }
         });
     }
@@ -2517,7 +2521,7 @@ mod keys {
     pub(super) fn key_written(written: &str) {
         TAGS.with(|t| {
             if let Some(tag) = t.borrow_mut().last_mut() {
-                tag.1 = Some(written.to_owned());
+                tag.2 = Some(written.to_owned());
             }
         });
     }
@@ -2527,7 +2531,16 @@ mod keys {
         UNQUERIED.with(|t| t.set(if inside { t.get() + 1 } else { t.get().saturating_sub(1) }));
     }
 
-    fn check((scope, name): RefName, written: &str) {
+    fn check((scope, name): RefName, written: &str, into: Buffer) {
+        // The innermost render of the ref's component holds it, as the page's `data-scope` root
+        // nearest the element does, when the element is written into that render's string: one a
+        // view writes into a string of its own (an attribute's text, say) is not among its elements.
+        let theirs = RENDERING.with(|r| {
+            r.borrow().iter().rev().find(|(at, ..)| *at == scope).is_none_or(|(_, own, _)| own.is_none_or(|own| own == into))
+        });
+        if !theirs {
+            return;
+        }
         let key = match read(written) {
             Read::Key(key) => key,
             Read::Unknown => return,
@@ -2536,14 +2549,12 @@ mod keys {
                  Map<string, ..> would get it under null: give every element of the ref a key"
             ),
         };
-        // The innermost render of the ref's component holds it, as the page's `data-scope` root
-        // nearest the element does.
         let repeated = RENDERING.with(|r| {
             r.borrow_mut()
                 .iter_mut()
                 .rev()
-                .find(|(at, _)| *at == scope)
-                .is_some_and(|(_, seen)| !seen.insert((name, key.clone())))
+                .find(|(at, ..)| *at == scope)
+                .is_some_and(|(.., seen)| !seen.insert((name, key.clone())))
         });
         if repeated {
             panic!(
@@ -2824,6 +2835,27 @@ pub mod __private {
     /// Marks the component whose markup renders while `f` runs.
     #[inline]
     pub fn scoped<T>(scope: &'static str, f: impl FnOnce() -> T) -> T {
+        scoped_at(scope, None, f)
+    }
+
+    /// [`scoped`] for a component's render into `out`, which `f` is given: debug builds count the
+    /// keys of its refs' elements written into `out`, not those of a view its markup renders into a
+    /// string of its own (`html! { .. }.to_html()` in an attribute). In a release build it is
+    /// [`scoped`].
+    #[inline]
+    pub fn scoped_into<T>(scope: &'static str, out: &mut String, f: impl FnOnce(&mut String) -> T) -> T {
+        let into = buffer(out);
+        scoped_at(scope, Some(into), || f(out))
+    }
+
+    /// The string `out` by its address, which debug builds compare and release builds ignore.
+    #[inline]
+    fn buffer(out: &String) -> usize {
+        std::ptr::from_ref(out) as usize
+    }
+
+    #[inline]
+    fn scoped_at<T>(scope: &'static str, _into: Option<usize>, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<&'static str>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -2833,7 +2865,7 @@ pub mod __private {
             }
         }
         #[cfg(debug_assertions)]
-        keys::enter(scope);
+        keys::enter(scope, _into);
         let _restore = Restore(SCOPE.with(|s| s.replace(Some(scope))));
         f()
     }
@@ -2939,18 +2971,18 @@ pub mod __private {
         keys::key_written(&_out[_from..]);
     }
 
-    /// The start tag of an element with a keyed ref, held while its attributes are written, so
-    /// its ref and key are checked together even when an attribute's expression renders another
-    /// view. The code `html!` writes holds it in every build; one dropped without `close` (a
+    /// The start tag of an element with a keyed ref, written into `out`, held while its attributes
+    /// are written, so its ref and key are checked together even when an attribute's expression
+    /// renders another view. The code `html!` writes holds it in every build; one dropped without `close` (a
     /// render that unwinds) is let go unchecked. In a release build it is an empty value with no
     /// `Drop`.
     pub struct KeyTag(());
 
     impl KeyTag {
         #[inline]
-        pub fn open() -> Self {
+        pub fn open(_out: &String) -> Self {
             #[cfg(debug_assertions)]
-            keys::open();
+            keys::open(buffer(_out));
             KeyTag(())
         }
 
