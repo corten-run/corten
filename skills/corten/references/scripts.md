@@ -124,7 +124,11 @@ division: end statements with `;` and keep a division on the line it continues.
    only the new page, never the whole list again.
 7. Filters applied on change: a GET form with `data-keep-place` and a handler that calls
    `form.requestSubmit()`; the runtime keeps the scroll position, a
-   scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Never save and
+   scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Focus matches by
+   id, else name (and value for a checkbox or radio) inside the nearest ancestor with an id,
+   falling back to `<main>`. Give the filter form or rail a `#[derive(Id)]` id to separate it
+   from other forms' visible copies; hidden inputs and disabled, hidden or inert controls do
+   not count toward the match's index. Never save and
    restore them yourself. `on:change` on the form applies every control (a text field and a
    `<textarea>` too, when they lose focus); `form.requestSubmit(button)` sends it as a submit
    button of the form (its `formaction` decides where); to apply for one control only, put the
