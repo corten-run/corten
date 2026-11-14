@@ -114,6 +114,15 @@ export function validateBindingClockPhase(sample, evidence, caseKey, journal = e
     const initial = journal.events.find((r) => r.event === "native-clock-sample" && r.phase === "initial-native-clock");
     const terminal = journal.events.find((r) => r.event === "native-clock-sample" && r.phase === "terminal-native-clock" && r.startedAt >= w.finishedAt);
     assert.ok(Number.isFinite(initial?.at) && Number.isFinite(terminal?.at) && initial.at <= pair[0].at && pair[1].at <= terminal.at);
+    const clocks = journal.events.filter((r) => r.event === "native-clock-sample");
+    assert.equal(clocks.filter((r) => r.phase === "initial-native-clock").length, 1);
+    assert.equal(clocks.filter((r) => r.phase === "terminal-native-clock").length, 1);
+    assert.ok(clocks.every((r) => [r.at, r.startedAt, r.receivedAt].every((v) => Number.isFinite(v) && v >= 0) && r.startedAt <= r.receivedAt));
+    // Each CDP timestamp happened somewhere inside its own host round-trip.
+    // All samples must admit one offset between those two monotonic clocks.
+    const offsetLow = Math.max(...clocks.map((r) => r.at - r.receivedAt / 1000));
+    const offsetHigh = Math.min(...clocks.map((r) => r.at - r.startedAt / 1000));
+    assert.ok(offsetLow <= offsetHigh + 0.000001);
     assert.ok(journal.boundaries.applicationStartedAt <= w.startedAt && row.dispatchStartedAt <= journal.boundaries.endedAt);
     assert.deepEqual(w.target, journal.target);
     assert.equal(journal.realms.filter((r) => isDeepStrictEqual(r, w.native)).length, 1);

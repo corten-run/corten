@@ -183,7 +183,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         for (const p of pattern.elements) {
           if (p.dotDotDotToken || p.propertyName && !ts.isIdentifier(p.propertyName) && !ts.isStringLiteral(p.propertyName)) fail("Unsupported destructuring key/rest");
           let item = property(value, p.propertyName?.text ?? p.name.text);
-          if (p.initializer) { const fallback = expression(p.initializer, env); if (item.kind === "null") item = fallback; }
+          if (p.initializer && ["null", "unknown", "union"].includes(item.kind)) fail("Unproved destructuring default");
           bind(p.name, item, env);
         }
         return;
@@ -285,6 +285,22 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         && receipt.intrinsicIdentities.some((r) => r.label === name && r.observed && r.snapshot)) return { kind: "intrinsic", name };
       return fail(`Unresolved callable/data binding ${name}`);
     };
+    const supportedBindings = (node) => {
+      // Environments are value snapshots, not general mutable binding cells.
+      // Only local writes with no captured mutable name fit that model.
+      const writes = new Set(), closures = [];
+      const scan = (n) => {
+        if (n !== node && ts.isFunctionLike(n)) { closures.push(n); return; }
+        if (ts.isBinaryExpression(n) && ts.isAssignmentOperator(n.operatorToken.kind) && ts.isIdentifier(n.left)) writes.add(n.left.text);
+        ts.forEachChild(n, scan);
+      };
+      scan(node);
+      for (const closure of closures) if (effectFreeNames(closure, candidate.handlerSource).some((name) => writes.has(name))) fail("Unsupported mutable render closure capture");
+      effectFreeNames(node, candidate.handlerSource, (reference) => {
+        const parent = reference.parent;
+        if (ts.isBinaryExpression(parent) && parent.left === reference && ts.isAssignmentOperator(parent.operatorToken.kind)) fail("Write to captured/nonlocal render binding");
+      });
+    };
     const invoke = (fn, args) => {
       if (fn.kind !== "function") fail("Unresolved or unsupported callee");
       const { node, entry } = fn;
@@ -316,12 +332,13 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         return { kind: "array", fresh: true, items: [decode(observed.value), { kind: "hookSetter", slot }] };
       }
       if (!entry || stack.has(node) || stack.size >= 24 || node.asteriskToken || node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) fail("Unsupported recursive/async render call");
+      if (node.parameters.some((p) => p.initializer)) fail("Unsupported render parameter default");
+      supportedBindings(node);
       moduleEnvironment(entry);
       const env = new Map(fn.environment ?? []);
       node.parameters.forEach((p, i) => {
         if (p.dotDotDotToken) fail("Unsupported render rest parameter");
-        const fallback = p.initializer ? expression(p.initializer, env, entry) : nil;
-        bind(p.name, args[i] ?? fallback, env);
+        bind(p.name, args[i] ?? nil, env);
       });
       stack.add(node);
       try {
@@ -348,10 +365,17 @@ export function checkBindingEffects(candidate, artifact, receipt) {
           for (const key of env.keys()) env.set(key, selected ? selected.get(key) : join(yes.get(key), no.get(key)));
           if (known !== false && a.value) returns.push(a.value);
           if (known !== true && b.value) returns.push(b.value);
-        } else if (ts.isBlock(s)) { const nested = statements(s.statements, new Map(env), entry); if (nested.value) returns.push(nested.value); }
+        } else if (ts.isBlock(s)) { rejectCopiedWrites(s); const nested = statements(s.statements, new Map(env), entry); if (nested.value) returns.push(nested.value); }
         else fail(`Unsupported effect statement ${ts.SyntaxKind[s.kind]}`);
       }
       return { value: returns.length ? returns.reduce(join) : undefined };
+    };
+    const rejectCopiedWrites = (node) => {
+      const walk = (n) => {
+        if (ts.isBinaryExpression(n) && ts.isAssignmentOperator(n.operatorToken.kind)) fail("Unsupported assignment in copied render scope");
+        ts.forEachChild(n, walk);
+      };
+      walk(node);
     };
     const expression = (input, env, entry = root) => {
       if (++operations > 25000) fail("Effect grammar operation bound exceeded");
@@ -391,6 +415,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
         return property(expression(node.expression, env, entry), String(key.value));
       }
       if (ts.isConditionalExpression(node)) {
+        rejectCopiedWrites(node.whenTrue); rejectCopiedWrites(node.whenFalse);
         const condition = expression(node.condition, env, entry);
         const a = expression(node.whenTrue, new Map(env), entry), b = expression(node.whenFalse, new Map(env), entry);
         return truth(condition) === true ? a : truth(condition) === false ? b : join(a, b);
@@ -465,6 +490,7 @@ export function checkBindingEffects(candidate, artifact, receipt) {
     if (props.fields.record?.fields) props.fields.record.fields.id = scalar("string", candidate.recordId);
     root.node.parameters.forEach((p, i) => { if (p.dotDotDotToken || p.initializer || i > 0) fail("Unsupported component parameters"); bind(p.name, props, env); });
     assert.ok(ts.isBlock(root.node.body), "Unsupported component body");
+    supportedBindings(root.node);
     moduleEnvironment(root);
     const rendered = statements(root.node.body.statements, env, root).value;
     const installed = (value) => {

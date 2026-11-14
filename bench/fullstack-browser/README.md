@@ -175,6 +175,13 @@ Plain-object reads likewise require an own field on every modeled path; a protot
 property-name inventory is not an accessor-purity proof. Map/filter callbacks receive the actual
 abstract traversed array as argument three, so caching that receiver cannot hide borrowed records
 behind a missing-argument/null approximation. Unknown reads and borrowed retention stay unsupported.
+Render parameter initializers are unsupported; an explicitly supplied undefined cannot silently
+disable a native default. Destructuring defaults require a definitely supplied non-null own value.
+The bounded environment model does not implement mutable lexical cells: captured local names
+that are assigned, writes to outer bindings, and assignments inside copied conditional-expression
+or standalone-block scopes reject rather than reusing a stale snapshot. Immutable scalar closures
+remain supported. Native controls retain and mutate the actual record before calling the captured
+handler, independently of whether static discovery succeeds.
 
 The raw summary embeds artifacts and each positive binding retains its native links and effect
 derivation. Capture projection and saved validation recompute the proof, including image/source
@@ -198,6 +205,8 @@ a guarantee about unobserved future state; existing qualification blockers are u
 Saved chronology admits binding-clock phases only through their unique case/action window,
 journal receipt and native initial/terminal clock envelope, including incomplete diagnostics that
 never proved an enhancement. Unknown, orphaned, duplicate or contradictory phases remain invalid.
+Every native sample must also admit one common monotonic-clock offset inside its own host
+round-trip. Merely transplanting a timestamp within the outer native envelope is insufficient.
 The native-journal saved regression remains blocked for its explicitly uncollected semantic/source/
 response/cleanup proof; admitting its clock receipts does not qualify that diagnostic.
 Handler parameters participate in lexical shadow checks. Prop reassignment (including property

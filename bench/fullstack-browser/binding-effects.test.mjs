@@ -375,3 +375,60 @@ test("native own-property and callback-receiver effects cannot attest borrowed r
     });
   } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
 });
+
+test("native callback defaults and copied lexical scopes cannot hide retained records", { timeout: 45000 }, async (t) => {
+  const cases = [
+    ["explicit undefined map default", 'const result=items.map((value,index,array)=>{const save=(retained=array)=>{cache.set("retained",retained);return value.id;};return save(undefined);});', true],
+    ["explicit undefined filter default", 'const result=items.filter((value,index,array)=>{const save=(retained=array)=>{cache.set("retained",retained);return true;};return save(undefined);});', true],
+    ["conditional outer alias", 'const result=items.map((value,index,array)=>{let retained=null;const unused=l.startsWith("fr")?(retained=array):null;cache.set("retained",retained);return value.id;});', true],
+    ["nested block outer alias", 'const result=items.map((value,index,array)=>{let retained=null;{retained=array;}cache.set("retained",retained);return value.id;});', true],
+    ["live closure alias", 'const result=items.map((value,index,array)=>{let retained=null;const save=()=>{cache.set("retained",retained);return value.id;};retained=array;return save();});', true],
+    ["component live closure alias", 'let retained=null;const save=()=>cache.set("retained",retained);retained=items;save();', true],
+    ["closure writes captured alias", 'const result=items.map((value,index,array)=>{let retained=null;const save=()=>{retained=array;return value.id;};save();cache.set("retained",retained);return value.id;});', true],
+    ["undefined destructuring default", 'const result=items.map((value,index,array)=>{const save=({retained=array})=>{cache.set("retained",retained);return value.id;};return save({retained:undefined});});', true],
+    ["own field", 'const value=r.id;', false],
+    ["immutable closure", 'const result=items.map(value=>{const id=value.id;const read=()=>id;return read();});', false],
+  ];
+  let scripts, browser; const posts = [];
+  const server = createServer((req, res) => {
+    if (req.method === "POST") posts.push(req.url);
+    const script = scripts.find((s) => s.path === req.url);
+    res.setHeader("content-type", script ? "text/javascript" : "text/html");
+    res.end(script?.source ?? '<form action="/marketplace/fr-FR/item_2"></form>');
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening"); const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const [name, prefix, retained] of cases) await t.test(name, async () => {
+      scripts = [
+        { path: "/component.mjs", source: `import {jsx} from "/runtime.mjs";const cache=new Map();export function M({record:r,locale:l,items}){${prefix}return jsx("form",{onSubmit:async e=>{e.preventDefault();return fetch("/api/marketplace/"+r.id+"?locale="+l,{method:"POST"});}});}export function saved(){return cache.get("retained");}` },
+        { path: "/runtime.mjs", source: 'export function jsx(tag,props){return {tag,props}}' },
+      ];
+      const artifact = createBindingArtifact({ ...identity, scripts }), context = await browser.newContext(), page = await context.newPage();
+      const observer = new BindingLinkObserver(await context.newCDPSession(page), artifact); await observer.enable();
+      try {
+        await page.goto(base);
+        assert.equal(await page.evaluate(async () => {
+          const { M, saved } = await import("/component.mjs"), record = { id: "item_2" }, props = { record, locale: "fr-FR", items: [record] };
+          const tree = M(props), form = document.querySelector("form");
+          form.__reactProps$control = { onSubmit: tree.props.onSubmit }; form.__reactFiber$control = { type: M, memoizedProps: props };
+          globalThis.nativeAliasControl = { record, saved, handler: tree.props.onSubmit };
+          return saved()?.[0] === record;
+        }), retained, "The actual native callback retains the borrowed record");
+        const observed = await observer.capture("form", page.url()); assert.equal(observed.outcome, "observed", observed.reason);
+        const effects = checkBindingEffects(observed.candidate, artifact, observed.receipt);
+        const found = discoverReactEndpoint([observed.candidate], observed.linked);
+        const at = posts.length;
+        await page.evaluate(async () => {
+          const { record, saved, handler } = globalThis.nativeAliasControl, alias = saved();
+          if (alias?.[0] === record) alias[0].id = "item_1";
+          await handler({ preventDefault() {}, currentTarget: document.querySelector("form") });
+        });
+        assert.deepEqual(posts.slice(at), [`/api/marketplace/${retained ? "item_1" : "item_2"}?locale=fr-FR`], "Actual handler runs independently of discovery");
+        t.diagnostic(JSON.stringify({ name, effects: effects.outcome, discovered: found?.path ?? null, posts: posts.slice(at) }));
+        assert.equal(effects.outcome, retained ? "unknown" : "proved", effects.reason);
+        if (retained) assert.equal(found, null); else assert.equal(found?.path, "/api/marketplace/item_2");
+      } finally { await observer.close(); await context.close(); }
+    });
+  } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+});

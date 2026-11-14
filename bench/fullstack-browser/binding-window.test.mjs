@@ -80,8 +80,10 @@ test("binding windows reject stale, transplanted and incomplete native receipts"
 test("binding clock phases require a unique action window and native envelope", async (t) => {
   const setup = () => {
     const e = fixture(), j = e.platformLifecycle;
-    j.events.unshift({ event: "native-clock-sample", phase: "initial-native-clock", startedAt: 100, receivedAt: 100.5, at: 195 });
-    j.events.push({ event: "native-clock-sample", phase: "terminal-native-clock", startedAt: 145, receivedAt: 146, at: 205 });
+    j.events.find((r) => r.phase === "binding-window-before-native-clock").at = 200.02075;
+    j.events.find((r) => r.phase === "binding-window-after-native-clock").at = 200.03125;
+    j.events.unshift({ event: "native-clock-sample", phase: "initial-native-clock", startedAt: 100, receivedAt: 100.5, at: 200 });
+    j.events.push({ event: "native-clock-sample", phase: "terminal-native-clock", startedAt: 145, receivedAt: 146, at: 200.04525 });
     return e;
   };
   const check = (e) => {
@@ -101,6 +103,8 @@ test("binding clock phases require a unique action window and native envelope", 
     ["wrong context", (e) => { e.platformLifecycle.events.find((r) => r.event === "Runtime.executionContextCreated").uniqueId = "other"; }],
     ["destroyed context", (e) => { e.platformLifecycle.events.push({ event: "Runtime.executionContextDestroyed", context: 2, receivedAt: 129 }); }],
     ["future native samples", (e) => { e.platformLifecycle.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at += 3600; }); }],
+    ["terminal time transplanted inside envelope", (e) => { const j = e.platformLifecycle; j.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at = j.events.at(-1).at; }); }],
+    ["initial time transplanted inside envelope", (e) => { const j = e.platformLifecycle; j.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at = j.events[0].at; }); }],
     ["missing outer native envelope", (e) => { e.platformLifecycle.events.pop(); }],
     ["sample after dispatch", (e) => { e.platformLifecycle.events.find((r) => r.phase === "binding-window-after-native-clock").receivedAt = 136; }],
   ]) await t.test(name, () => { const e = setup(); mutate(e); assert.equal(check(e), false); });

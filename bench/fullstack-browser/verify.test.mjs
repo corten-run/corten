@@ -110,6 +110,14 @@ test("native binding-clock journal survives saved validation as an honest incomp
     assert.ok(baseline.blocked.length, "Native/source/response/peer limitations remain blocked, not erased");
     const original = structuredClone(e);
     for (const [name, mutate] of [
+      ["binding pair at terminal native time", (e) => {
+        const at = e.platformLifecycle.events.find((r) => r.phase === "terminal-native-clock").at;
+        for (const j of [e.platformLifecycle, e.harnessClosedLifecycle]) j.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at = at; });
+      }],
+      ["binding pair at initial native time", (e) => {
+        const at = e.platformLifecycle.events.find((r) => r.phase === "initial-native-clock").at;
+        for (const j of [e.platformLifecycle, e.harnessClosedLifecycle]) j.events.filter((r) => r.phase?.startsWith("binding-")).forEach((r) => { r.at = at; });
+      }],
       ["unbound clock", (e) => { e.platformLifecycle.events.find((r) => r.phase?.startsWith("binding-")).phase = "binding-other-before-native-clock"; }],
       ["misbound action", (e) => { e.steps[0].bindingWindow.action = "other"; }],
       ["future sample", (e) => { e.platformLifecycle.events.find((r) => r.phase?.startsWith("binding-")).at += 3600; }],
