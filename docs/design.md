@@ -3199,11 +3199,12 @@ rules something out.
     `data-sort` and the attributes beside it onto ref values. If that issue is still open on
     2027-11-13, the first condition alone decides on that date.
 
-    Last checked: 2026-11-14, the debug check's keys against what the runtime finds, in Chromium,
-    Firefox and WebKit: an element in a `<template>`'s content is not found, and `key={true}` and
-    `key=""`, and a carriage return and a line feed, are one key of the handler's `Map`, as the
-    tests beside `TemplateKeys`, `NestedKeys`, `BlankKeys` and `NewlineKeys` now hold the check
-    to; 2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
+    Last checked: 2026-11-14, the debug check's keys against what the runtime finds, in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): an element in a `<template>`'s
+    content is not found, and `key={true}` and `key=""`, and a carriage return and a line feed,
+    are one key of the handler's `Map`, as the tests beside `TemplateKeys`, `NestedKeys`,
+    `BlankKeys` and `NewlineKeys` now hold the check to;
+    2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
     render with two equal keys stopped in a debug build, on the change for
     [#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)
     against `0ff569c69`, where the first compiled (`compile_fail` doctests on `ts::Map` and
