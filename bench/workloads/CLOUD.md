@@ -229,7 +229,11 @@ refuses when no parent remains, and permission, non-directory or symlink-loop
 errors refuse immediately rather than being treated as missing directories.
 Preview never creates missing directories; core setup may create normal new ones.
 No control child inherits a DigitalOcean token override. SSH/SCP may use the existing
-agent/default keys. No credential is accepted in CLI arguments or remote scripts.
+agent/default keys. Their allowlist also retains `ProgramData`, which Windows OpenSSH
+needs during initialization even for a local `-G` configuration check. Like the other
+allowed locations, it is captured when the transport is composed, not reread between
+calls. Neither Git nor doctl receives it; the remaining environment stays allowlisted,
+and no credential store is copied. No credential is accepted in CLI arguments or remote scripts.
 `cloud-provider.mjs` is the controller-side IPC client, not a credential consumer
 or native HTTPS client. It captures the builtin-only worker bootstrap bytes in the
 same read whose hash enters the fixed thirteen-file executable manifest. It starts

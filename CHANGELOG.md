@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve captured `ProgramData` only for grouped cloud SSH/SCP children so Windows
+  OpenSSH can initialize with the sanitized environment. Git/doctl environments and
+  credential handling are unchanged; local configuration-only checks make no connection.
+
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run
   ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).
