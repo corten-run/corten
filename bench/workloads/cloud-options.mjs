@@ -127,6 +127,7 @@ export function campaignOutcome(report, s, exitCode) {
   assert.equal(report.schema, s.group === undefined ? "benchmark-isolated-campaign-inspection/v1" : "benchmark-isolated-group-campaign-inspection/v1");
   assert.equal(report.scope, "intrinsic-evidence");
   assert.equal(report.round, s.round); assert.equal(report.commit, s.commit);
+  assert.deepEqual(report.selection, s.selection, "complete current native selection required");
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");
   assert.deepEqual(report.uncollectedNativeRoots, [], "native evidence remains on host");
   assert.equal(report.collectionIntegrity, "manifest-verified", "unsealed native evidence");
@@ -138,7 +139,7 @@ export function campaignOutcome(report, s, exitCode) {
     const fields = ["schema", "scope", "status", "round", "commit", "campaign", "campaignSha256", "sourceSha256", "selection", "groups", "blockers",
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");
-    assert.deepEqual(report.selection, s.selection, "complete current native selection required"); assert.deepEqual(report.blockers, []);
+    assert.deepEqual(report.blockers, []);
     assert.deepEqual(report.groups.map((r) => r.group), s.selection.groups.map((r) => r.group), "complete ordered native groups required");
     for (const [index, group] of report.groups.entries()) {
       assert.equal(group.outcome, "native-validated");

@@ -155,3 +155,20 @@ test("CLI group selection cannot omit the full fleet or change collection scope"
     [...detach, "--group", "unknown", "--fleet", path], [...common, "--collect", "--group", groupNames[0], "--fleet", path],
     [...detach, "--group", groupNames[0], "--fleet", path, "--apps", "corten"]]) assert.throws(() => parseDropletArgs(args));
 });
+
+test("failed and blocked collection preserves a host when evidence belongs to another selection", async (t) => {
+  for (const status of ["failed", "blocked"]) for (const change of ["group", "apps", "contract"]) {
+    const { h, options } = configured(t); await h.task({}, options).launch();
+    const report = syntheticInspection(status);
+    report.schema = "benchmark-isolated-group-campaign-inspection/v1";
+    report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
+    report.groups = [];
+    if (change === "group") report.selection.groups[0].group = groupNames[1];
+    if (change === "apps") report.selection.groups[0].apps.pop();
+    if (change === "contract") report.selection.groups[0].contractSha256 = "0".repeat(64);
+    assert.throws(() => campaignOutcome(report, h.saved(), 1), /complete current native selection required/);
+    await assert.rejects(h.task({ inspect: async () => report }).collect(), /native campaign validation unavailable or invalid/);
+    assert.equal(h.deletes, 0); assert.equal(h.saved().destroyedAt, undefined);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+  }
+});
