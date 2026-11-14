@@ -49,33 +49,37 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   const entry = summary.apps[app], budget = summary.measurement.cpus;
   const checkout = summary.host?.checkout;
   assert.ok(typeof checkout === "string" && checkout.startsWith("/") && !checkout.endsWith("/") && !checkout.includes(".."), "native Linux checkout binding missing");
-  const mount = (info, destination, sourcePath, writable = false) => {
-    assert.deepEqual(info.mounts.filter((m) => m.Destination === destination), [{ Type: "bind", Source: sourcePath, Destination: destination, RW: writable }], "native mount differs");
+  const mount = (Source, Destination, RW = false) => ({ Type: "bind", Source, Destination, RW });
+  const mounts = (info, expected) => {
+    const ordered = (values) => [...values].sort((a, b) => a.Destination.localeCompare(b.Destination));
+    assert.deepEqual(ordered(info.mounts), ordered(expected), "native mount set differs");
   };
   const running = (info, imageId, role, memory) => {
     assert.match(info.Id, /^[a-f0-9]{64}$/); assert.equal(info.Image, imageId);
     assert.equal(info.Config.Labels?.["run.corten.catalog"], summary.runId);
     assert.equal(info.HostConfig.NanoCpus, budget[role].quota * 1e9);
     assert.equal(info.HostConfig.CpusetCpus, budget[role].cpuset ?? ""); assert.equal(info.HostConfig.Memory, memory);
-    assert.equal(info.State.Running, true); assert.equal(info.State.OOMKilled, false); assert.equal(info.State.Dead, false);
+    assert.equal(info.RestartCount, 0); assert.equal(info.State.Status, "running"); assert.equal(info.State.Running, true);
+    for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(info.State[key], false);
+    assert.equal(info.State.ExitCode, 0); assert.equal(info.State.Error, "");
     assert.ok(Date.parse(info.State.StartedAt) >= Date.parse(summary.startedAt));
   };
   running(runtime, entry.imageId, "app", 2 ** 30);
   assert.deepEqual(runtime.networks, [`${summary.runId}-net`]);
-  mount(runtime, "/fixtures", `${checkout}/bench/catalog/fixtures`);
+  mounts(runtime, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")]);
   assert.equal(containerEvidence(runtime).source, source);
   assert.ok(runtime.Config.Env.includes("CATALOG_FIXTURE_PATH=/fixtures/catalog.json"));
   assert.ok(runtime.Config.Env.includes(`API_BASE=http://${summary.runId}-upstream:8080`));
   running(upstream, summary.tools.upstream.imageId, "api", 512 * 2 ** 20);
   assert.deepEqual(upstream.networks, [`${summary.runId}-net`]);
-  mount(upstream, "/fixtures", `${checkout}/bench/catalog/fixtures`); mount(upstream, "/bench", `${checkout}/bench`);
+  mounts(upstream, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures"), mount(`${checkout}/bench`, "/bench")]);
   assert.equal(upstream.Config.Cmd.at(-1), "/bench/catalog/upstream.mjs");
   assert.match(checker.Id, /^[a-f0-9]{64}$/); assert.equal(checker.Image, summary.tools.checker.imageId);
   assert.equal(checker.Config.Labels?.["run.corten.catalog"], summary.runId);
   assert.equal(checker.HostConfig.NanoCpus, budget.load.quota * 1e9);
   assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
-  mount(checker, "/repo", checkout); mount(checker, "/results", `${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, true);
+  mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
   assert.deepEqual(checker.Config.Cmd, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${summary.runId}-upstream:8080`, "/results/checks.json"]);
   assert.equal(checker.State.Status, "exited"); assert.equal(checker.State.Running, false);
   for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(checker.State[key], false);

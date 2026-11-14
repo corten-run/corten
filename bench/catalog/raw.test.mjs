@@ -114,7 +114,9 @@ function failedFixture() {
     entry.runs = {}; entry.phases = {};
     for (const src of s.group.sources) {
       const running = (image, role, memory, cmd = []) => ({ Id: (role === "api" ? "d" : "c").repeat(64), Image: image,
-        State: { Running: true, OOMKilled: false, Dead: false, StartedAt: s.startedAt },
+        RestartCount: 0,
+        State: { Status: "running", Running: true, OOMKilled: false, Dead: false, Paused: false, Restarting: false,
+          ExitCode: 0, Error: "", StartedAt: s.startedAt },
         HostConfig: { NanoCpus: s.measurement.cpus[role].quota * 1e9, CpusetCpus: s.measurement.cpus[role].cpuset ?? "", Memory: memory },
         Config: { Cmd: cmd, Env: [`CATALOG_SOURCE=${src}`, "CATALOG_FIXTURE_PATH=/fixtures/catalog.json", `API_BASE=http://${s.runId}-upstream:8080`], Labels: { "run.corten.catalog": s.runId } } });
       const runtime = running(entry.imageId, "app", 2 ** 30), upstream = running(s.tools.upstream.imageId, "api", 512 * 2 ** 20, ["node", "/bench/catalog/upstream.mjs"]);
@@ -139,6 +141,62 @@ test("catalog negative raw replay retains every selected app without timing or b
   assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true);
   assert.deepEqual(report.outcomes, f.summary.group.apps.map((app, i) => ({ app, outcome: i ? "passed" : "failed" })));
   assert.deepEqual(report.comparisonEligibleApps, []);
+  for (const [path, bytes] of f.files) if (path.endsWith("/checker.json")) {
+    const proof = JSON.parse(bytes);
+    for (const role of ["runtime", "upstream", "checker"]) proof[role].mounts.reverse();
+    f.put(path, proof);
+  }
+  assert.deepEqual(replayCatalog(f.summary, f.reader, f.commit), report, "Docker mount enumeration order is not semantic");
+});
+
+const boundaryFile = "fixture/corten/checker.json";
+const overlays = [
+  ["checker", "/repo/bench/catalog/check.mjs"], ["runtime", "/app"], ["upstream", "/bench/catalog/upstream.mjs"],
+].map(([role, Destination]) => ({ name: `${role} source overlay`, mutate: (p) => {
+  p[role].mounts.push({ Type: "bind", Source: "/unreviewed/source", Destination, RW: false });
+} }));
+const participantStates = ["runtime", "upstream"].flatMap((role) => [
+  ["restart count", (info) => { info.RestartCount = 1; }],
+  ["restarting", (info) => { info.State.Restarting = true; info.State.Status = "restarting"; }],
+  ["paused", (info) => { info.State.Paused = true; info.State.Status = "paused"; }],
+  ["restarting flag alone", (info) => { info.State.Restarting = true; }],
+  ["paused flag alone", (info) => { info.State.Paused = true; }],
+  ["status", (info) => { info.State.Status = "created"; }],
+  ["exit code", (info) => { info.State.ExitCode = 137; }],
+  ["error", (info) => { info.State.Error = "runtime failure"; }],
+  ["missing restart count", (info) => { delete info.RestartCount; }],
+  ["missing paused state", (info) => { delete info.State.Paused; }],
+].map(([name, mutate]) => ({ name: `${role} ${name}`, mutate: (p) => mutate(p[role]) })));
+
+test("catalog replay rejects every extra mount and unhealthy participant boundary", async (t) => {
+  const mounts = ["checker", "runtime", "upstream"].flatMap((role) => [
+    { name: `${role} image volume`, mutate: (p) => p[role].mounts.push({ Type: "volume", Source: "/docker/volume", Destination: "/unexpected", RW: true }) },
+    { name: `${role} duplicate mount`, mutate: (p) => p[role].mounts.push({ ...p[role].mounts[0] }) },
+    { name: `${role} missing mount`, mutate: (p) => p[role].mounts.pop() },
+  ]);
+  for (const { name, mutate } of [...overlays, ...mounts, ...participantStates]) await t.test(name, () => {
+    const f = failedFixture(), proof = JSON.parse(f.files.get(boundaryFile));
+    mutate(proof); f.put(boundaryFile, proof);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+  });
+});
+
+test("catalog saved API and isolated bridge reject source overlays and interrupted participants", async (t) => {
+  for (const { name, mutate } of [...overlays, ...participantStates]) await t.test(name, async () => {
+    const f = failedFixture(), proof = JSON.parse(f.files.get(boundaryFile));
+    mutate(proof); f.put(boundaryFile, proof);
+    const folder = mkdtempSync(join(tmpdir(), "catalog-invalid-boundary-"));
+    try {
+      for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
+      const saved = validateSaved({ folder, round: f.summary.round, commit: f.commit });
+      assert.equal(saved.status, "invalid"); assert.equal(saved.complete, false);
+      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+        execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
+      const report = await inspectNative(b, folder);
+      assert.equal(report.status, "invalid"); assert.equal(report.attemptComplete, false);
+      assert.ok(report.outcomes.every((row) => row.outcome === "not-run"));
+    } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+  });
 });
 
 test("the real catalog saved API feeds the fixed isolated replay for positive and failed attempts", async () => {

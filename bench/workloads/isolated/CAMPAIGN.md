@@ -425,7 +425,9 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
    actual request intents and complete responses replay against canonical records, all
    started requests settle, and the fixed checker exits normally with code one. Catalog
    additionally retains inspected checker/app/upstream identities, CPU/memory/source settings
-   and checker terminal state; JSON binds actual child exit/clock plus its existing runtime
+   and checker terminal state. Catalog requires each role's entire exact native mount set
+   (no extra binds or image volumes), zero participant restarts and normal running,
+   nonpaused/nonrestarting/error-free app/upstream observations; JSON binds actual child exit/clock plus its existing runtime
    and upstream observations. Every selected app/source/payload is still attempted. Native
    owned-resource cleanup and all existing source/image/configuration gates remain mandatory.
    A single proven negative gates timing for the whole group; healthy peers remain passed
