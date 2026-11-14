@@ -12,6 +12,20 @@ test("complete observed failures stay selected; apparatus completion is not a su
   assert.equal(result.outcome, "native-validated"); assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [true, false, false]);
 });
 
+test("browser intrinsic unsupported attempts use only the replayed qualification exit and never gain comparison eligibility", () => {
+  const b = { ...binding, request: { group: "fullstack-browser" }, latestStable: policy("fullstack-browser") };
+  const n = { ...native, status: "verified", qualificationPassed: false, expectedExitCode: 1, comparisonEligibleApps: [],
+    outcomes: native.outcomes.map((row) => ({ ...row, outcome: row.outcome === "failed" ? "unsupported" : row.outcome })) };
+  const host = { cleanupComplete: true, resources: "verified" };
+  const value = composePhase(b, n, host, [command]);
+  assert.equal(value.outcome, "native-validated"); assert.equal(value.nativeStatus, "verified");
+  assert.deepEqual(value.appOutcomes.map(({ comparisonEligible, ...row }) => row), n.outcomes);
+  assert.ok(value.appOutcomes.every((row) => !row.comparisonEligible));
+  for (const code of [0, 2, 137, null]) assert.notEqual(composePhase(b, n, host, [{ ...command, code }]).outcome, "native-validated");
+  for (const expectedExitCode of [undefined, null, "1", 2, 137, 0])
+    assert.notEqual(composePhase(b, { ...n, expectedExitCode }, host, [command]).outcome, "native-validated");
+});
+
 test("mixed complete failures retain healthy functional apps without inventing their gated timing", () => {
   const b = { ...binding, request: { group: "mixed-production" }, latestStable: policy("mixed-production") };
   for (const comparisonEligibleApps of [undefined, null, "a", { 0: "a" }, [], ["unselected"]]) {
