@@ -3340,17 +3340,27 @@ rules something out.
     (January 2025) is 0.8's last release, and 0.9.0 to 0.9.2 have followed since October 2025,
     so a fix lands where the pin can take it without a minor-version move. `=0.8.4` was weighed:
     it keeps the matcher every app has tested with and costs no instructions. It lost on
-    correctness, which the conflict order puts before the instructions: 0.8.4 matches an empty
-    value only between segments (`/items//edit` reaches `/items/{id}/edit` with `id` empty while
-    `/items/` reaches no `/items/{id}`), so a handler meets an empty value in one place and not
-    the other, and links already refused it at the edges; and it holds Corten on a line that no
-    longer gets fixes, so the same change would come later with a forced move. Corten no longer
+    correctness and reliability, which the conflict order puts before the instructions. Upstream
+    calls its empty-value matching a bug: matchit 0.8.5's release note says "Fixed a bug where
+    empty route parameters were accepted"
+    ([ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60)).
+    The bug gives a wrong answer: under 0.8.4 an empty value lets a parameter route shadow a
+    catch-all, so `/x//y` reaches a POST-only `/x/{a}/y` instead of a `/{*page}` page, and a
+    GET there fails (`tests::serves_agrees_with_the_router` now requires the page to answer it).
+    And 0.8 gets no more fixes; they ship only on 0.9.x, so a pin on 0.8.4 would take the next
+    one only through a forced minor-version move. 0.8.4 also matches an empty value in some
+    places and not others: as the first segment (`//posts` reaches `/{user}/posts` with `user`
+    empty) and between segments (`/items//edit` reaches `/items/{id}/edit`), but not at the end
+    (`/items/` reaches no `/items/{id}`). That inconsistency alone is a Value 5 point, which
+    ranks below the instructions, and is not why 0.8.4 lost. Links already refused an empty
+    value at both ends, for different reasons: at the start because a browser reads `//posts`
+    as another host, at the end because the router missed it. Corten no longer
     depends on axum, so card-market's comparison-only axum 0.8.9 keeps its own matchit 0.8.4.
 
     This is breaking for apps tested with 0.8.4: a parameter must be nonempty even before a
     slash (`/items//edit` no longer matches `/items/{id}/edit`), and links refuse that empty
-    value as they already refuse one at the end. Without another matching route it is a 404;
-    a catch-all can now answer where an empty parameter used to shadow it, including a
+    value as they already refuse one at the start or end. Without another matching route it is a
+    404; a catch-all can now answer where an empty parameter used to shadow it, including a
     POST-only parameter route that previously caused a GET to fail. Catch-alls still carry
     empty inner segments.
     Corten keeps one suffix convention: it inserts `{name}text` as `{name}` and checks the
@@ -3372,7 +3382,11 @@ rules something out.
     one 0.9.x here, so an app with another dependency that requires matchit 0.9.3 or later (a
     future axum, say) cannot resolve until Corten moves the pin; and a matchit fix, a security
     fix included, reaches apps only in a Corten release. The matched request costs about 50
-    instructions more (0.29%), and an unknown path about 11 more (0.06%), measured below.
+    instructions more (0.29%), and an unknown path about 11 more (0.06%), measured below. The
+    cost most likely arrived with 0.8.6, not 0.9: 0.8.6 rewrote `tree.rs` and changed
+    `params.rs`, while from 0.8.6 to 0.9.2 `Node::at` is unchanged and `params.rs` only gains
+    `Debug` impls, so `=0.8.6` would likely cost about the same (reasoned from the sources, not
+    measured).
     Correctness and reliability take those costs first: no app changes matcher with its
     lockfile, and every app matches as Corten's tests do.
 
@@ -3380,7 +3394,13 @@ rules something out.
     values before `/`, 0.8.6 and 0.9.2 refuse them; the 0.8.6 to 0.9.2 diff of `tree.rs` leaves
     `Node::at` alone and adds only insertion checks, each for a parameter with a prefix or
     suffix in its segment; crates.io's release dates for 0.8.6, 0.9.0, 0.9.1 and 0.9.2; Cargo
-    unifies semver-compatible versions, so one 0.9.x per build); measured (callgrind 3.19.0,
+    unifies semver-compatible versions, so one 0.9.x per build; matchit 0.8.5's release note,
+    "Fixed a bug where empty route parameters were accepted", from
+    [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60));
+    measured (a probe of matchit 0.8.4 and 0.9.2, one router per question: on 0.8.4 `//posts`
+    reaches `/{user}/posts` with `user` empty and `/x//y` reaches `/x/{id}/y` beside
+    `/{*rest}` with `id` empty, while `/items/` reaches no `/items/{id}`; on 0.9.2 `//posts`
+    and `/items/` reach nothing and `/x//y` reaches `/{*rest}`); measured (callgrind 3.19.0,
     release with thin LTO and glibc's allocator, three alternating runs each of
     `tests/router_cost.rs`, 1,200 requests less 200 divided by 1,000, the merge `4c6ac3e3d`
     against main `de46e974b`: a matched `/items/7/edit` request 17,413.113 instructions
@@ -3394,8 +3414,11 @@ rules something out.
     `params.rs` 9 more, standard-library slice, `Vec` and comparison code inlined beside them
     about 21 more, `memcmp` 9 more and `memcpy` 10 fewer, and no Corten file more than 3; in
     the 404 `tree.rs` counts 21 more, slice iteration 9 more, `params.rs` 5 fewer, `memcmp` 14
-    fewer and `memcpy` 10 fewer: the cost is 0.9.2's lookup and parameter code, not Corten's);
-    reasoned (an exact pin makes a new app
+    fewer and `memcpy` 10 fewer: the cost is matchit's lookup and parameter code, not Corten's);
+    reasoned (that lookup and parameter code is 0.8.6's: `tree.rs` differs by 954 changed lines
+    from 0.8.4 to 0.8.6, and by 267 from 0.8.6 to 0.9.2, none of those 267 in `Node::at`;
+    `params.rs` by 55 and then 11, the 11 being `Debug` impls; so `=0.8.6` would likely cost
+    the same; not measured); reasoned (an exact pin makes a new app
     and the workspace resolve the same matcher, independently of axum; `tests/matchit.rs` asks
     matchit itself about values, catch-alls, trailing slashes, `%2F`, the fallback from a
     refused empty value to a catch-all, longest prefixes and suffixes, conflicts in either
@@ -3427,7 +3450,9 @@ rules something out.
     valgrind 3.19.0, and the cost split by source file at the second pair;
     2026-11-14, the six direct matching tests, 17 dispatch tests, scope differential and the
     hand-written order-dependent conflict test passed in the full debug tests of `0653768e1`
-    and of the merge `4c6ac3e3d`.
+    and of the merge `4c6ac3e3d`; 2026-11-14, matchit's release notes for 0.8.4, 0.8.5 and
+    0.8.6 and [ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60) read, a probe of matchit 0.8.4 and 0.9.2 run on `//posts`,
+    `/x//y` and `/items/`, and the 0.8.4, 0.8.6 and 0.9.2 sources line-counted file by file.
 
 ## Rules
 
