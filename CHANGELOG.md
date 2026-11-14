@@ -14,6 +14,9 @@ Corten is pre-1.0, so any minor version may change the API.
   is affected by RUSTSEC-2026-0459. Its Docker image and workspace CI install checksum-verified
   upstream SQLite 3.54.1 (the fix first shipped in 3.54.0). Local builds now need patched
   SQLite development files; version-only lockfile scans still flag the unbundled FFI crate.
+- Record [Choice 49](docs/design.md#choice-release-verification): verify release archives with
+  GitHub artifact attestations and `SHA256SUMS`, without a minisign signing key. Binstall users
+  follow the documented manual check before installing the binary.
 
 - Retry entire host-lifetime snapshots for comm-only bookend changes within the
   existing three-attempt budget. Every accepted identity must still match in full;
