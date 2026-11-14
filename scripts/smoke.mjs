@@ -4345,6 +4345,94 @@ async function run(browser) {
     return got;
   });
   check("a patch of rows with a menu each keeps the details and popover the user opened", menus.count === "2" && menus.details && menus.open === 1 && menus.pop, JSON.stringify(menus));
+  // A dialog the page drew closed, which a data-patch form outside it asks for: the answer draws it
+  // open, and it opens again after the user closed it, since the press is newer than their close
+  // (#1371). A press inside it, and a live fragment, keep what the user did (#84). A script makes
+  // it modal as it joins, as corten_ui::dialog::modal does from its on:connect.
+  {
+    const sheet = await browser.newPage();
+    sheet.on("pageerror", (e) => errors.push(`sheet: ${e.message}`));
+    await sheet.goto(`${base}/smoke/sheet`);
+    await sheet.evaluate(() =>
+      new MutationObserver(() => {
+        const dialog = document.getElementById("smoke-sheet");
+        if (!(dialog instanceof HTMLDialogElement) || !dialog.open || dialog.matches(":modal")) return;
+        dialog.removeAttribute("open");
+        dialog.showModal();
+      }).observe(document.body, { childList: true, subtree: true }),
+    );
+    const state = () =>
+      sheet.evaluate(() => {
+        const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet"));
+        return { replaced: dialog !== /** @type {any} */ (window).__sheet, open: dialog.open, modal: dialog.matches(":modal"), text: dialog.querySelector("p")?.textContent };
+      });
+    /** Does `act`, then waits for an answer to replace the dialog, and says how it is then. @param {() => Promise<unknown>} act */
+    const answered = async (act) => {
+      await sheet.evaluate(() => (/** @type {any} */ (window).__sheet = document.getElementById("smoke-sheet")));
+      await act();
+      await sheet.waitForFunction(() => document.getElementById("smoke-sheet") !== /** @type {any} */ (window).__sheet, undefined, { timeout: 5000 }).catch(() => {});
+      return state();
+    };
+    const closed = () => sheet.waitForFunction(() => !(/** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).open), undefined, { timeout: 5000 }).then(() => true, () => false);
+    const preview = () => sheet.getByRole("button", { name: "Preview", exact: true }).click();
+    const first = await answered(preview);
+    await sheet.getByRole("button", { name: "Close", exact: true }).click();
+    const shut = await closed();
+    const again = await answered(preview);
+    check(
+      "a data-patch answer to a form outside a dialog opens it again, modal, after the user closed it",
+      first.replaced && first.open && first.modal && shut && again.replaced && again.open && again.modal,
+      JSON.stringify({ first, shut, again }),
+    );
+    // Pressed inside the dialog, closed (Escape) while the answer is on its way: it stays closed.
+    // Opened as a button would (`command="show-modal"`) when the press above left it closed.
+    await sheet.evaluate(() => {
+      const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet"));
+      if (!dialog.open) dialog.showModal();
+    });
+    /** @type {() => void} */
+    let release = () => {};
+    const sheetAnswer = (/** @type {URL} */ url) => url.pathname === "/smoke/sheet/open";
+    await sheet.route(sheetAnswer, async (route) => {
+      await new Promise((resolve) => (release = () => resolve(undefined)));
+      await route.continue();
+    });
+    const inside = await answered(async () => {
+      const sent = sheet.waitForRequest((r) => sheetAnswer(new URL(r.url())), { timeout: 5000 }).catch(() => null);
+      await sheet.getByRole("button", { name: "Again", exact: true }).click();
+      await sent;
+      await sheet.keyboard.press("Escape");
+      await closed();
+      release();
+    });
+    await sheet.unroute(sheetAnswer);
+    check("a data-patch answer to a form inside a dialog the user closed while it was on its way keeps it closed", inside.replaced && !inside.open && !inside.modal, JSON.stringify(inside));
+    // A live fragment that draws it open, after the user closed it: it stays closed.
+    await sheet.route(
+      (url) => url.pathname === "/smoke/live/sheet",
+      (route) =>
+        route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: patch\ndata: <dialog id="smoke-sheet" open><p>Live</p></dialog>\n\nevent: end\ndata: end\n\n' }),
+    );
+    const live = await answered(() =>
+      sheet.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="sheet-live" src="/smoke/live/sheet"></corten-live>'))),
+    );
+    check("a live fragment that draws a dialog open keeps it closed after the user closed it", live.replaced && live.text === "Live" && !live.open, JSON.stringify(live));
+    // The same for a <details>: a form outside it that asks for it unfolded unfolds it again after
+    // the user folded it. The dialog is closed first, so the page behind it is not inert.
+    await sheet.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("smoke-sheet")).close());
+    const unfolded = async () => {
+      await sheet.evaluate(() => (/** @type {any} */ (window).__more = document.getElementById("smoke-more")));
+      await sheet.getByRole("button", { name: "Unfold", exact: true }).click();
+      await sheet.waitForFunction(() => document.getElementById("smoke-more") !== /** @type {any} */ (window).__more, undefined, { timeout: 5000 }).catch(() => {});
+      return sheet.evaluate(() => /** @type {HTMLDetailsElement} */ (document.getElementById("smoke-more")).open);
+    };
+    const unfoldedFirst = await unfolded();
+    await sheet.click("#smoke-more summary");
+    const folded = await sheet.evaluate(() => !(/** @type {HTMLDetailsElement} */ (document.getElementById("smoke-more")).open));
+    const unfoldedAgain = await unfolded();
+    check("a data-patch answer to a form outside a <details> unfolds it again after the user folded it", unfoldedFirst && folded && unfoldedAgain, JSON.stringify({ unfoldedFirst, folded, unfoldedAgain }));
+    await sheet.close();
+  }
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");

@@ -1,8 +1,9 @@
 //! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::for_the_smoke`):
 //! a live stream whose one event is larger than a page's usual patch and is followed by nothing,
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
-//! argument and as the value an element gives its ref, and a patch drawn with this area's
-//! stylesheet, which a form on a page outside the area is answered with.
+//! argument and as the value an element gives its ref, a patch drawn with this area's
+//! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
+//! `<details>` drawn closed that a form outside each asks for again.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -26,6 +27,19 @@ pub mod url {
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
     pub struct Styled;
+
+    /// A page with a dialog drawn empty and closed and a `data-patch` form outside it that asks
+    /// for it (#1371).
+    #[route("/smoke/sheet", get = sheet_page)]
+    pub struct SheetPage;
+
+    /// The dialog drawn open, as the answer to a form that asks for it.
+    #[route("/smoke/sheet/open", get = open_sheet)]
+    pub struct OpenSheet;
+
+    /// The page's `<details>` drawn open, as the answer to a form that asks for it.
+    #[route("/smoke/sheet/more", get = open_more)]
+    pub struct OpenMore;
 }
 
 /// The components the smoke's pages draw.
@@ -81,6 +95,53 @@ fn StyledNote() -> impl Patch {
 /// outside the area as it is on one inside.
 async fn styled(req: Req) -> HtmlResult {
     req.patch(StyledNote {})
+}
+
+#[derive(Id)]
+struct SmokeSheetId;
+
+#[derive(Id)]
+struct SmokeMoreId;
+
+/// The page: the triggers outside the dialog and the `<details>`, and the two their answers
+/// replace.
+async fn sheet_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Sheet" viewer={None} head="">
+            <form method="get" action={url::OpenSheet} data-patch><button>"Preview"</button></form>
+            <dialog id={SmokeSheetId}></dialog>
+            <form method="get" action={url::OpenMore} data-patch><button>"Unfold"</button></form>
+            <details id={SmokeMoreId}><summary>"More"</summary></details>
+        </Layout>
+    })
+}
+
+/// The dialog drawn open, with a form inside it that asks for it again and a button that closes
+/// it.
+#[component]
+fn Sheet() -> impl Patch {
+    html! {
+        <dialog id={SmokeSheetId} open>
+            <p>"Preview"</p>
+            <form method="get" action={url::OpenSheet} data-patch><button>"Again"</button></form>
+            <button type="button" command="close" commandfor={SmokeSheetId}>"Close"</button>
+        </dialog>
+    }
+}
+
+/// Answers any form that asks with the dialog drawn open.
+async fn open_sheet(req: Req) -> HtmlResult {
+    req.patch(Sheet {})
+}
+
+/// Answers with the `<details>` drawn open.
+async fn open_more(req: Req) -> HtmlResult {
+    req.patch(html! {
+        <details id={SmokeMoreId} open>
+            <summary>"More"</summary>
+            <p>"Unfolded"</p>
+        </details>
+    })
 }
 
 #[derive(Id)]
