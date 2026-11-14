@@ -107,6 +107,16 @@ variable "host_key_public" {
   }
 }
 
+variable "handover_key" {
+  description = "The public half of the key a certificate and a release are carried from one machine to the next with. Its private half is HANDOVER_KEY in the environment of whoever applies. With none, a machine that replaces another gets its own of each once the address has moved, and the site is away meanwhile."
+  type        = string
+  default     = ""
+  validation {
+    condition     = trimspace(var.handover_key) == "" || can(regex("^ssh-ed25519 [A-Za-z0-9+/=]+( [^\\n]*)?$", trimspace(var.handover_key)))
+    error_message = "Give one ed25519 public key, as ssh-keygen writes it, or none."
+  }
+}
+
 variable "admin_keys" {
   description = "Fingerprints of the account's SSH keys that may sign in as root. With none, root is reached through the control panel's console alone."
   type        = list(string)
