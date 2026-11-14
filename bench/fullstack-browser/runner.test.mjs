@@ -15,7 +15,7 @@ import { createUpstream, upstreamDelta } from "./upstream.mjs";
 import { observeNetwork, architecture, classifyDisabledPreloads, observedContext, closeObservedContext, visibleDOM, responseDocument } from "./observe.mjs";
 import { readStore, waitForSemanticChange } from "./journey.mjs";
 import { imageEvidence, captureLiveInputs } from "./run.mjs";
-import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts, validateCaseParticipant, validateExecutionSources, replayDOMObservation, nativeToolIdentities, reconcileNativeNetwork } from "./verify.mjs";
+import { replayLiveInputs, replayPrerequisite, nativeAttemptCells, validateContextReceipts, validateCaseParticipant, validateExecutionSources, replayDOMObservation, validateDOMIdentity, nativeToolIdentities, reconcileNativeNetwork } from "./verify.mjs";
 import { sha256 } from "./contract.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { navigationDestination, normalizeSvelteKitCase } from "./navigation.mjs";
@@ -319,8 +319,51 @@ test("native DOM consumer binds actual document scope and interval for page Alic
       for (const row of rows) {
         const result = replayDOMObservation(reader, row.dom, row, evidence, observation.contexts[0], profile.key, observers);
         assert.equal(result.extractionComplete, row.dom.extractionComplete);
-        if (row.document) assert.equal(replayDOMObservation(reader, row.document, row, evidence, observation.contexts.find((c) => c.id === row.document.context), profile.key, observers, true).extractionComplete, true);
+        if (row.document) {
+          const parser = row.document.parserNative, realm = parser.lifecycle.realms.find((r) => r.realm === parser.before.realm);
+          const application = journal.realms.find((r) => r.realm === row.resourcesAtDOM.realm);
+          assert.notEqual(realm.frame, application.frame, "The script-disabled parser owns a distinct actual native frame");
+          assert.notEqual(realm.uniqueId, application.uniqueId);
+          assert.equal(replayDOMObservation(reader, row.document, row, evidence, observation.contexts.find((c) => c.id === row.document.context), profile.key, observers, true).extractionComplete, true);
+        }
       }
+      await t.test("rejects coherent foreign-frame boundary through the installed sealed store", async () => {
+        const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs"), { tmpdir } = await import("node:os"), { join, dirname, resolve } = await import("node:path");
+        const { EvidenceStore, openEvidence } = await import("./native-evidence.mjs");
+        const { retainBrowserDOMProjection } = await import("./native-responses.mjs");
+        const foreign = await browser.newContext(), root = mkdtempSync(join(tmpdir(), "caller-foreign-frame-"));
+        try {
+          const page = await foreign.newPage(), session = await foreign.newCDPSession(page);
+          let frame;
+          try { frame = (await session.send("Page.getFrameTree")).frameTree.frame; }
+          finally { await session.detach(); }
+          for (const parser of [false, true]) for (const substitution of ["frame", "loader", "frame-loader"]) {
+            const row = rows[0], original = parser ? row.document : row.dom;
+            const context = observation.contexts.find((c) => c.id === original.context);
+            const identity = validateDOMIdentity(original, row, evidence, context, profile.key, new Set(), parser);
+            const changed = JSON.parse(reader.read(original.responseEvidence.body));
+            assert.notEqual(frame.id, changed.boundaryObservation.document.frameId);
+            if (substitution.includes("frame")) changed.boundaryObservation.document.frameId = frame.id;
+            // Change the whole retained native document, including every command,
+            // while leaving independently captured caller receipts untouched.
+            if (substitution.includes("loader")) changed.boundaryObservation.document.loaderId = frame.loaderId;
+            let commands = 0;
+            for (const command of changed.boundaryObservation.commands) {
+              if ("frameId" in command) { if (substitution.includes("frame")) command.frameId = frame.id; commands++; }
+              if ("loaderId" in command && substitution.includes("loader")) command.loaderId = frame.loaderId;
+            }
+            assert.equal(commands, 9, "The substitution is internally coherent, not a single inconsistent field");
+            const folder = join(root, `${parser ? "parser" : "application"}-${substitution}`); mkdirSync(folder);
+            assert.throws(() => {
+              const store = new EvidenceStore(folder), receipt = retainBrowserDOMProjection(store, changed, identity);
+              const ref = store.record("foreign-frame-dom", receipt); store.seal();
+              const saved = openEvidence(folder), dom = { ...original, responseEvidence: saved.json(ref) };
+              replayDOMObservation(saved, dom, parser ? { ...row, document: dom } : { ...row, dom }, evidence, context, profile.key, new Set(), parser);
+              saved.finish();
+            }, /native.*document.*differ/i);
+          }
+        } finally { await foreign.close(); assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true }); }
+      });
       const original = { row: rows[0], evidence, context: observation.contexts[0] };
       const negative = (mutate) => { const value = structuredClone(original); mutate(value); assert.throws(() => {
         const result = replayDOMObservation(reader, value.row.dom, value.row, value.evidence, value.context, profile.key, new Set()); assert.ok(result);
@@ -359,6 +402,27 @@ test("native DOM consumer binds actual document scope and interval for page Alic
       await t.test("rejects script-enabled independent parser", () => {
         const c = { ...observation.contexts.find((c) => c.id === rows[0].document.context), javaScriptEnabled: true };
         assert.throws(() => replayDOMObservation(reader, rows[0].document, rows[0], evidence, c, profile.key, new Set(), true));
+      });
+      for (const [kind, mutate] of [
+        ["application frame", (p) => { p.lifecycle.realms[0].frame = journal.realms.find((r) => r.realm === rows[0].resourcesAtDOM.realm).frame; }],
+        ["application context", (p) => { p.lifecycle.target.context = journal.target.context; }],
+        ["wrong loader", (p) => { p.lifecycle.realms[0].loader = "other-loader"; }],
+        ["changed scope", (p) => { p.after.scope = "other-scope"; }],
+        ["missing native context", (p) => { p.lifecycle.events = p.lifecycle.events.filter((e) => e.event !== "Runtime.executionContextCreated"); }],
+        ["destroyed context", (p) => {
+          const realm = p.lifecycle.realms.find((r) => r.realm === p.before.realm);
+          p.lifecycle.events.push({ event: "Runtime.executionContextDestroyed", context: realm.context, uniqueId: realm.uniqueId, receivedAt: (p.before.at + p.after.at) / 2 });
+          p.lifecycle.events.sort((a, b) => a.receivedAt - b.receivedAt);
+        }],
+      ]) await t.test(`rejects parser ${kind}`, () => {
+        const row = structuredClone(rows[0]), context = observation.contexts.find((c) => c.id === row.document.context);
+        mutate(row.document.parserNative);
+        assert.throws(() => replayDOMObservation(reader, row.document, row, evidence, context, profile.key, new Set(), true));
+      });
+      await t.test("missing parser native document stays unqualified", () => {
+        const row = structuredClone(rows[0]), context = observation.contexts.find((c) => c.id === row.document.context);
+        delete row.document.parserNative;
+        assert.equal(replayDOMObservation(reader, row.document, row, evidence, context, profile.key, new Set(), true), null);
       });
       const missing = structuredClone(original); missing.row.dom.responseEvidence = null;
       assert.equal(replayDOMObservation(reader, missing.row.dom, missing.row, missing.evidence, missing.context, profile.key, new Set()), null);

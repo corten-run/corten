@@ -8,7 +8,8 @@ import { inspectScopedBinding } from "./scopes.mjs";
 import { singleFetchData } from "./navigation.mjs";
 import { NativeNetworkAudit, responseDateHash } from "./cancellations.mjs";
 import { performance } from "node:perf_hooks";
-import { installResourceObserver } from "./resources.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
+import { PlatformLifecycle } from "./lifecycle.mjs";
 import { collectBrowserDOM } from "./native-browser-dom.mjs";
 import { retainBrowserDOMProjection } from "./native-responses.mjs";
 
@@ -242,8 +243,16 @@ export async function responseDocument(browser, response, url, observation = nul
     || nativeResponse.url !== url || sha256(nativeResponse.body) !== nativeResponse.sha256)) throw new Error("Native initial response bytes unavailable");
   const body = observation ? nativeResponse.body : await response.body(), status = observation ? nativeResponse.status : response.status();
   const context = await observedContext(browser, { javaScriptEnabled: false, serviceWorkers: "block" }, observation, "ssr-parser");
+  let parserSession;
   try {
     const page = await context.newPage();
+    let parserLifecycle, parserResources;
+    if (observation) {
+      parserSession = await context.newCDPSession(page);
+      parserLifecycle = new PlatformLifecycle(parserSession, null, { javaScriptEnabled: false });
+      await parserLifecycle.enable(); await parserLifecycle.enableDomains();
+      parserResources = new ResourceAudit(page, parserSession, false, parserLifecycle);
+    }
     await page.route("**/*", async (route) => {
       if (route.request().isNavigationRequest() && route.request().url() === url) await route.fulfill({ status, contentType: "text/html", body });
       else await route.abort();
@@ -251,6 +260,7 @@ export async function responseDocument(browser, response, url, observation = nul
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
     await page.evaluate(installResourceObserver);
     const scope = await page.evaluate(() => globalThis.__fullstackBrowserAudit.checkpoint().scope);
+    const before = parserResources ? await parserResources.checkpoint() : null;
     const result = { observer: randomUUID(), scope, url: publicURL(url), error: null,
       responseSha256: sha256(body), status, page: observation ? null : await page.evaluate(snapshotPage), native: sanitizeNative(await page.evaluate(nativeDOM)),
       parserScope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
@@ -260,8 +270,11 @@ export async function responseDocument(browser, response, url, observation = nul
       try {
         Object.assign(result, await retainedDOM(page, observation, { context: result.context, case: observation.case, action, scope,
           originatingResponse: { requestId: result.requestId, sha256: result.responseSha256 } }));
+        const after = await parserResources.checkpoint();
+        await parserLifecycle.recordDocument(result, before);
+        result.parserNative = { before, after, lifecycle: parserLifecycle.snapshot() };
       } catch { result.captureFailure = "public-dom-projection-unproved"; }
     }
     return result;
-  } finally { await closeObservedContext(browser, context, observation); }
+  } finally { try { await parserSession?.detach(); } finally { await closeObservedContext(browser, context, observation); } }
 }

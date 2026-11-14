@@ -429,6 +429,12 @@ Live, independent parser and missing-item DOM observations use the installed fix
 projection API. Each typed read binds its unique observer, action/context, native resource scope,
 bounded read interval and originating document response. The response is reconciled with native
 frame/loader/dispatch/terminal observations; a live read is not claimed to reproduce earlier HTML.
+The installed leaf also checks its complete native boundary against the caller's independently
+derived current frame/loader pair; an internally consistent foreign boundary is not enough.
+An independent script-disabled parser retains its own native commit, unique default context,
+realm/scope association and before/after resource checkpoints. Its frame is distinct from the
+application's, while its input remains bound separately to the original response bytes. Missing
+parser linkage stays unqualified. Neither caller nor adapter decodes the opaque leaf boundary.
 The primary origin is the actual CDP document dispatch/redirect hop, frame and loader, namespaced
 by an explicitly observer-assigned session UUID and the actual native target ID. The UUID is not
 claimed to be a protocol session ID. Replay derives each opaque origin ID from those native

@@ -82,6 +82,32 @@ test("actual strict page/Alice observations replay installed snapshot and preser
   } finally { assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true }); }
   t.diagnostic(`ordinary ${ordinary.observation.events.length} reads; Alice ${alice.observation.events.length} reads/${Buffer.byteLength(JSON.stringify(alice.observation))} bytes`);
 });
+test("native DOM adapter binds independent native frame and loader without changing standalone results", async (t) => {
+  const f = await browserDOMFixture(t), { observation } = await f.read(), expected = expectation(observation);
+  const session = await f.page.context().newCDPSession(f.page);
+  let frame;
+  try { frame = (await session.send("Page.getFrameTree")).frameTree.frame; }
+  finally { await session.detach(); }
+  const nativeDocument = { frameId: frame.id, loaderId: frame.loaderId };
+  assert.deepEqual(replayBrowserDOM(observation, expected, nativeDocument), replayBrowserDOM(observation, expected));
+  const { root, store } = fixture(t), receipt = retainBrowserDOMProjection(store, observation, expected, nativeDocument);
+  const ref = store.record("native-frame-dom", receipt); store.seal(); const reader = openEvidence(root);
+  assert.equal(replayResponse(reader, reader.json(ref), expected, nativeDocument).extractionComplete, true); reader.finish();
+  for (const changed of [{ ...nativeDocument, frameId: "foreign-frame" }, { ...nativeDocument, loaderId: "foreign-loader" }]) {
+    assert.throws(() => replayBrowserDOM(observation, expected, changed), /Native DOM document differs/);
+    assert.throws(() => replayResponse(reader, receipt, expected, changed), /Native DOM document differs/);
+  }
+  for (const malformed of [null, { frameId: frame.id }, { ...nativeDocument, other: true }, { ...nativeDocument, loaderId: "" }])
+    assert.throws(() => replayBrowserDOM(observation, expected, malformed));
+  const retiredPolicy = structuredClone(observation);
+  retiredPolicy.snapshotSha256 = "eb52db985d79761c16939ddc308b8b7d2ed4f63bb199cc5b57eb1e26a12981d7";
+  assert.throws(() => replayBrowserDOM(retiredPolicy, expected, nativeDocument), "The earlier e682 policy cannot attest the new validation");
+  f.setBody('<!doctype html><html><body><h1>unknown error</h1></body></html>');
+  const incomplete = await f.read("/marketplace/en-US/item_missing");
+  assert.notEqual(incomplete.observation.failure, null);
+  assert.equal(replayBrowserDOM(incomplete.observation, expectation(incomplete.observation), nativeDocument).extractionComplete, false);
+});
+
 test("actual missing-item captures article absence and exact visible error, never arbitrary body text", async (t) => {
   const f = await browserDOMFixture(t);
   f.setBody('<!doctype html><html><body><input type="hidden" value="csrf-private-canary"><meta name="csrf-token" content="csrf-private-canary"><h1>Not found</h1><p>arbitrary diagnostic text that must not be retained</p><x-private-tag-canary role="alert">unknown text</x-private-tag-canary><p aria-hidden="attribute-private-canary">unknown text</p></body></html>');
@@ -383,6 +409,8 @@ test("native boundary retains complete typed population and UA roots but rejects
     (o) => { o.boundaryObservation.observer = randomUUID(); },
     (o) => { o.boundaryObservation.document.backendNodeId++; },
     (o) => { o.boundaryObservation.document.frameId = "other-frame"; },
+    (o) => { o.boundaryObservation.document.loaderId = "other-loader"; },
+    (o) => { delete o.boundaryObservation.commands.find((c) => c.method === "Page.getFrameTree").loaderId; },
     (o) => { o.boundaryObservation.commands.splice(5, 1); },
     (o) => { o.boundaryObservation.commands.push({ method: "DOM.disable" }); },
     (o) => { o.boundaryObservation.commands.find((c) => c.role === "mutation-start").result.roots++; },

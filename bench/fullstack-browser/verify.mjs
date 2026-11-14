@@ -806,15 +806,63 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
     originatingResponse: { requestId: body.originId, sha256: body.bodySha256 }, readInterval: dom.readInterval, url: dom.url };
 }
 
+function nativeDOMDocument(dom, row, evidence, context, parser) {
+  const application = evidence.platformLifecycle.realms.find((r) => r.realm === row.resourcesAtDOM.realm);
+  if (!parser) return { frameId: application.frame, loaderId: application.loader };
+  const p = dom.parserNative;
+  if (!p?.before || !p.after || !p.lifecycle) return null;
+  exactKeys(p, ["before", "after", "lifecycle"], "Unknown parser native document receipt");
+  const j = p.lifecycle, epoch = (at) => evidence.clock.timeOrigin + at;
+  need(j.schema === "native-browser-platform-lifetimes/v2" && j.contextConfiguration?.javaScriptEnabled === false
+    && j.coverage?.runtime === true && j.coverage?.pageFrames === true && Array.isArray(j.events) && Array.isArray(j.realms)
+    && Array.isArray(j.documents) && j.observationFailures?.length === 0, "Parser native document observation incomplete");
+  need(j.target?.type === "page" && text(j.target.context) && j.target.context !== evidence.platformLifecycle.target?.context,
+    "Parser native target reused application context");
+  need(p.before.scriptExecutionEnabled === false && p.after.scriptExecutionEnabled === false, "Parser resource JS configuration differs");
+  same([p.before.realm, p.before.scope], [p.after.realm, p.after.scope], "Parser native document changed during read");
+  same(p.before.scope, dom.scope, "Parser native scope differs from DOM read");
+  const times = [Math.floor(epoch(p.before.at)), dom.readWindow.startedAt, dom.readInterval.startedAt,
+    dom.readInterval.finishedAt, dom.readWindow.finishedAt, Math.ceil(epoch(p.after.at))];
+  need(times.every((v, i) => finite(v) && (!i || times[i - 1] <= v)) && context.createdAt <= times[0]
+    && times.at(-1) <= context.closeStartedAt + 1, "Parser native document outside bounded read/context window");
+  need(j.events.length <= 100000 && j.events.every((e, i) => finite(e.receivedAt) && context.createdAt <= epoch(e.receivedAt) + 1
+    && epoch(e.receivedAt) <= context.closeStartedAt + 1 && (!i || j.events[i - 1].receivedAt <= e.receivedAt)), "Parser native event chronology differs");
+  const realms = j.realms.filter((r) => r.realm === p.before.realm);
+  need(realms.length === 1, "Parser native realm is missing/ambiguous");
+  const realm = realms[0];
+  need(text(realm.frame) && text(realm.loader) && text(realm.uniqueId) && Number.isInteger(realm.context)
+    && realm.frame !== application.frame && realm.uniqueId !== application.uniqueId && finite(realm.observedAt)
+    && realm.observedAt <= p.before.at, "Parser native document reused application frame/realm");
+  const created = j.events.filter((e) => e.event === "Runtime.executionContextCreated" && e.uniqueId === realm.uniqueId);
+  need(created.length === 1 && created[0].context === realm.context && created[0].frame === realm.frame && created[0].default === true
+    && created[0].receivedAt <= realm.observedAt, "Parser lacks its own native default context");
+  const commits = j.events.filter((e) => e.event === "Page.frameNavigated" && e.frame === realm.frame && e.receivedAt <= p.before.at);
+  need(commits.length === 1 && commits[0].loader === realm.loader && commits[0].path === dom.url.path, "Parser lacks its own native document commit");
+  need(!j.events.some((e) => e.receivedAt >= created[0].receivedAt && e.receivedAt <= p.after.at
+    && (e.event === "Runtime.executionContextsCleared" || e.event === "Runtime.executionContextDestroyed" && (e.uniqueId === realm.uniqueId || e.context === realm.context)
+      || e.event === "Page.frameDetached" && e.frame === realm.frame || e.event === "Page.frameNavigated" && e.frame === realm.frame && e.loader !== realm.loader)),
+  "Parser native document destroyed/replaced during read");
+  const docs = j.documents.filter((d) => d.observer === dom.observer);
+  need(docs.length === 1 && docs[0].scope === dom.scope && docs[0].realm === realm.realm && docs[0].frame === realm.frame && docs[0].loader === realm.loader
+    && docs[0].path === dom.url.path && docs[0].identityObservation?.uniqueId === realm.uniqueId
+    && finite(docs[0].identityObservation.startedAt) && finite(docs[0].identityObservation.finishedAt)
+    && p.after.at <= docs[0].identityObservation.startedAt && docs[0].identityObservation.startedAt <= docs[0].identityObservation.finishedAt
+    && epoch(docs[0].identityObservation.finishedAt) <= context.closeStartedAt + 1, "Parser current document/scope identity unavailable");
+  const origin = evidence.platformLifecycle.events.find((e) => e.event === "native-document-body" && e.originId === dom.originatingResponse.requestId);
+  same(docs[0].identityObservation.documentSha256, origin.urlSha256, "Parser native URL differs from originating response");
+  return { frameId: realm.frame, loaderId: realm.loader };
+}
+
 export function replayDOMObservation(reader, dom, row, evidence, context, caseKey, observers, parser = false) {
   const identity = validateDOMIdentity(dom, row, evidence, context, caseKey, observers, parser);
-  if (!identity) {
+  const nativeDocument = identity ? nativeDOMDocument(dom, row, evidence, context, parser) : null;
+  if (!identity || !nativeDocument) {
     // Retained bytes still belong to the attempt, but without the native link
     // they cannot attest a DOM model or qualify this cell.
     if (dom?.responseEvidence?.body) reader.read(dom.responseEvidence.body);
     return null;
   }
-  const response = replayResponse(reader, dom.responseEvidence, identity);
+  const response = replayResponse(reader, dom.responseEvidence, identity, nativeDocument);
   same(response.type, "public-browser-dom-observation", "Native DOM requires installed browser projection");
   same([response.page, response.error?.text ?? null, response.articleCount, response.extractionComplete],
     [dom.page, dom.error, dom.articleCount, dom.extractionComplete], "Native DOM model differs from typed public transcript");

@@ -165,10 +165,12 @@ const expected = {
   originatingResponse: { requestId, sha256 },
   readInterval: { startedAt, finishedAt }, url: { path, query }
 };
-const result = replayBrowserDOM(observation, expected);
-const receipt = retainBrowserDOMProjection(store, observation, expected);
+// Derive from independent caller native receipts, never from observation:
+const nativeDocument = { frameId, loaderId };
+const result = replayBrowserDOM(observation, expected, nativeDocument);
+const receipt = retainBrowserDOMProjection(store, observation, expected, nativeDocument);
 // Additive replayResponse branch, with expected LIVE identity, not byte binding:
-const stored = replayResponse(reader, receipt, expected);
+const stored = replayResponse(reader, receipt, expected, nativeDocument);
 ```
 
 `collectBrowserDOM` generates a fresh observer UUID and brackets the native read
@@ -284,6 +286,20 @@ Caller retains unchanged strict comparePage, native form, status, request,
 resource and qualification gates. Neither a missing article nor safe error text
 alone proves an HTTP 404. Existing mixed/JSON/asset APIs remain unchanged.
 
+The optional third `replayBrowserDOM` argument is exactly `{frameId,loaderId}`.
+The response adapter forwards it as its fourth argument without decoding the
+opaque boundary. Standalone two-argument leaf calls remain compatible; the
+native-v2 caller ALWAYS supplies the independently established current native
+document. Live reads derive it from the originating dispatch/commit and live
+resource realm. The independent SSR parser instead retains its own native
+lifecycle/default unique context, commit and realm/scope checkpoints bracketing
+the read; its frame differs from the application's. Original response bytes and
+origin are separately checked. Missing parser linkage remains unqualified.
+Internally coherent foreign frame or loader substitutions must reject even if
+the semantic model is unchanged. Incomplete leaf extraction stays unknown.
+The policy digest includes the installed replay validation; earlier policy
+observations cannot attest the new binding and require fresh capture.
+
 ### Native unsupported-structure boundary
 
 The fixed leaf refuses author shadow roots (open/closed, declarative/imperative,
@@ -299,11 +315,11 @@ is distinguished from a subdocument owner using actual Page.getFrameTree.
 ```js
 {
   schema: 'native-browser-dom-boundary/v1', observer,
-  document: {nodeId, backendNodeId, frameId},
+  document: {nodeId, backendNodeId, frameId, loaderId},
   commands: [
     {method:'DOM.enable'},
-    {method:'Page.getFrameTree',frameId,childFrames:[]},
-    {method:'DOM.getDocument',role:'observer-document',backendNodeId,frameId},
+    {method:'Page.getFrameTree',frameId,loaderId,childFrames:[]},
+    {method:'DOM.getDocument',role:'observer-document',backendNodeId,frameId,loaderId},
     {method:'Page.createIsolatedWorld',frameId,executionContextId},
     {method:'Runtime.callFunctionOn',role:'mutation-start',executionContextId,
       result:{observer,roots}},
@@ -328,7 +344,7 @@ is distinguished from a subdocument owner using actual Page.getFrameTree.
 ```
 
 The observer-document receipt projects only the original depth-0 native document's
-backend identity and main frame, obtained before observer installation. Its backend
+backend identity, main frame and actual loader, obtained before observer installation. Its backend
 must match the subsequently populated document. Initial and incremental population
 receipts are the actual depth-1, pierce-false native
 responses, projected immediately. Null children means not yet populated; every

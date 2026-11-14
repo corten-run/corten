@@ -39,7 +39,7 @@ const methods = ["querySelector", "querySelectorAll", "matches", "getAttribute",
 const properties = ["documentElement", "localName", "hidden", "textContent", "disabled", "readOnly", "htmlFor", "id", "name", "method", "action", "type", "inputMode", "options", "lang", "display", "visibility", "opacity", "pathname", "marketplaceInjected", "publicMissingTag", "publicMissingText"];
 const snapshotSha256 = sha256(encoded([snapshotPage.toString(), missingSnapshot.toString(), publicBrowserURL.toString(), recordBrowserDOM.toString(),
   nativeNodeRecords.toString(), startNativeMutations.toString(), finishNativeMutations.toString(), clearNativeMutations.toString(),
-  readNativeBoundary.toString(), replayNativeBoundary.toString(), collectBrowserDOM.toString(), errorTexts]));
+  readNativeBoundary.toString(), replayNativeBoundary.toString(), collectBrowserDOM.toString(), replayBrowserDOM.toString(), errorTexts]));
 const cases = definition("fullstack-browser").cases.map((c) => c.key);
 function identityFields(value) {
   for (const key of ["context", "scope"]) assert.match(value[key], /^[a-zA-Z0-9_.:-]{1,128}$/);
@@ -279,7 +279,8 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
   };
   const clearOwned = async (active, until) => {
     const send = (method, params = {}) => { assert.ok(Date.now() < until); return within(active.send(method, params), until); };
-    const { frameTree } = measure(await send("Page.getFrameTree")); assert.equal(frameTree.frame.id, ownedDocument.frameId);
+    const { frameTree } = measure(await send("Page.getFrameTree"));
+    assert.deepEqual([frameTree.frame.id, frameTree.frame.loaderId], [ownedDocument.frameId, ownedDocument.loaderId]);
     const { root } = measure(await send("DOM.getDocument", { depth: 0, pierce: false }));
     assert.equal(root.nodeType, 9); assert.equal(root.backendNodeId, ownedDocument.backendNodeId);
     const isolated = await send("Page.createIsolatedWorld", { frameId, worldName: "corten-native-dom-boundary" });
@@ -313,10 +314,12 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
       } catch { changed = true; }
     });
     const { frameTree } = await send("Page.getFrameTree"); check(); assert.ok(!frameTree.childFrames?.length); frameId = frameTree.frame.id;
-    commands.push({ method: "Page.getFrameTree", frameId, childFrames: [] });
+    const loaderId = frameTree.frame.loaderId;
+    assert.match(loaderId, /^[a-zA-Z0-9_.:-]{1,128}$/);
+    commands.push({ method: "Page.getFrameTree", frameId, loaderId, childFrames: [] });
     const { root: originalDocument } = measure(await send("DOM.getDocument", { depth: 0, pierce: false })); check();
     assert.equal(originalDocument.nodeType, 9); assert.ok(Number.isSafeInteger(originalDocument.backendNodeId) && originalDocument.backendNodeId > 0);
-    ownedDocument = { backendNodeId: originalDocument.backendNodeId, frameId };
+    ownedDocument = { backendNodeId: originalDocument.backendNodeId, frameId, loaderId };
     commands.push({ method: "DOM.getDocument", role: "observer-document", ...ownedDocument });
     const isolated = await send("Page.createIsolatedWorld", { frameId, worldName: "corten-native-dom-boundary" }); check(); world = isolated.executionContextId;
     commands.push({ method: "Page.createIsolatedWorld", frameId, executionContextId: world });
@@ -327,7 +330,7 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
     commands.push({ method: "Runtime.callFunctionOn", role: "mutation-start", executionContextId: world, result: started.result.value });
     const { root } = await send("DOM.getDocument", { depth: 1, pierce: false }); check();
     assert.equal(root.backendNodeId, ownedDocument.backendNodeId);
-    const document = { nodeId: root.nodeId, backendNodeId: root.backendNodeId, frameId };
+    const document = { nodeId: root.nodeId, backendNodeId: root.backendNodeId, frameId, loaderId };
     commands.push({ method: "DOM.getDocument", root: root.nodeId, nodes: consume([root]) });
     for (const n of nodes.values()) if (n.children === null) {
       check(); pending = { nodeId: n.nodeId, reply: null };
@@ -390,7 +393,8 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
 function replayNativeBoundary(boundary, observer) {
   exact(boundary, ["schema", "observer", "document", "commands"]);
   assert.equal(boundary.schema, "native-browser-dom-boundary/v1"); assert.equal(boundary.observer, observer);
-  exact(boundary.document, ["nodeId", "backendNodeId", "frameId"]); assert.match(boundary.document.frameId, /^[a-zA-Z0-9_.:-]{1,128}$/);
+  exact(boundary.document, ["nodeId", "backendNodeId", "frameId", "loaderId"]);
+  for (const key of ["frameId", "loaderId"]) assert.match(boundary.document[key], /^[a-zA-Z0-9_.:-]{1,128}$/);
   const nodes = new Map(), ids = new Set(), backends = new Set(); let at = 0;
   const take = (method) => { const command = boundary.commands[at++]; assert.ok(command); assert.equal(command.method, method); return command; };
   const add = (records, roots) => {
@@ -419,8 +423,9 @@ function replayNativeBoundary(boundary, observer) {
   };
   assert.ok(Array.isArray(boundary.commands) && boundary.commands.length <= 10013);
   exact(take("DOM.enable"), ["method"]);
-  assert.deepEqual(take("Page.getFrameTree"), { method: "Page.getFrameTree", frameId: boundary.document.frameId, childFrames: [] });
-  assert.deepEqual(take("DOM.getDocument"), { method: "DOM.getDocument", role: "observer-document", backendNodeId: boundary.document.backendNodeId, frameId: boundary.document.frameId });
+  assert.deepEqual(take("Page.getFrameTree"), { method: "Page.getFrameTree", frameId: boundary.document.frameId, loaderId: boundary.document.loaderId, childFrames: [] });
+  assert.deepEqual(take("DOM.getDocument"), { method: "DOM.getDocument", role: "observer-document", backendNodeId: boundary.document.backendNodeId,
+    frameId: boundary.document.frameId, loaderId: boundary.document.loaderId });
   const isolated = take("Page.createIsolatedWorld"); exact(isolated, ["method", "frameId", "executionContextId"]);
   assert.equal(isolated.frameId, boundary.document.frameId); const world = isolated.executionContextId; assert.ok(Number.isSafeInteger(world) && world > 0);
   const start = take("Runtime.callFunctionOn"); exact(start, ["method", "role", "executionContextId", "result"]);
@@ -473,8 +478,12 @@ export async function collectBrowserDOM(page, identity) {
   return observation;
 }
 
-export function replayBrowserDOM(observation, expectedIdentity) {
+export function replayBrowserDOM(observation, expectedIdentity, nativeDocument) {
   expectedShape(expectedIdentity);
+  if (nativeDocument !== undefined) {
+    exact(nativeDocument, ["frameId", "loaderId"]);
+    for (const key of ["frameId", "loaderId"]) assert.match(nativeDocument[key], /^[a-zA-Z0-9_.:-]{1,128}$/);
+  }
   exact(observation, ["schema", ...Object.keys(expectedIdentity), "snapshotSha256", "roots", "events", "result", "failure", "scopeObservation", "urlObservation", "boundaryObservation"]);
   assert.equal(observation.schema, "native-browser-dom-observation/v1"); assert.equal(observation.snapshotSha256, snapshotSha256);
   for (const key of Object.keys(expectedIdentity)) assert.deepEqual(observation[key], expectedIdentity[key]);
@@ -487,6 +496,10 @@ export function replayBrowserDOM(observation, expectedIdentity) {
     assert.equal(observation.scopeObservation, null); assert.equal(observation.urlObservation, null); assert.equal(observation.boundaryObservation, null); return unknown();
   }
   replayNativeBoundary(observation.boundaryObservation, observation.observer);
+  if (nativeDocument !== undefined) {
+    const { frameId, loaderId } = observation.boundaryObservation.document;
+    assert.deepEqual({ frameId, loaderId }, nativeDocument, "Native DOM document differs from caller-bound native document");
+  }
   assert.deepEqual(observation.scopeObservation, { before: observation.scope, after: observation.scope });
   assert.deepEqual(observation.urlObservation, { before: observation.url, after: observation.url });
   const refs = new Map(); let at = 0;

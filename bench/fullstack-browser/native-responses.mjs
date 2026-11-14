@@ -31,15 +31,15 @@ export function retainDOMProjection(store, transcript, binding) {
   const page = replayDOMReads(transcript);
   return { schema: "native-browser-response/v2", type: "public-dom-read-projection", binding, body: store.blob(encoded(transcript)), page };
 }
-export function retainBrowserDOMProjection(store, observation, expectedIdentity) {
-  const result = replayBrowserDOM(observation, expectedIdentity);
+export function retainBrowserDOMProjection(store, observation, expectedIdentity, nativeDocument) {
+  const result = replayBrowserDOM(observation, expectedIdentity, nativeDocument);
   return { schema: "native-browser-response/v2", type: "public-browser-dom-observation", identity: expectedIdentity, body: store.blob(encoded(observation)), result };
 }
-export function replayResponse(reader, receipt, binding) {
+export function replayResponse(reader, receipt, binding, nativeDocument) {
   if (receipt.type === "public-browser-dom-observation") {
     exact(receipt, ["schema", "type", "identity", "body", "result"]); assert.equal(receipt.schema, "native-browser-response/v2");
     assert.deepEqual(receipt.identity, binding);
-    const result = replayBrowserDOM(reader.json(receipt.body), binding); assert.deepEqual(result, receipt.result);
+    const result = replayBrowserDOM(reader.json(receipt.body), binding, nativeDocument); assert.deepEqual(result, receipt.result);
     return { type: receipt.type, ...result };
   }
   assert.equal(receipt.schema, "native-browser-response/v2"); bindingShape(binding); assert.deepEqual(receipt.binding, binding);
