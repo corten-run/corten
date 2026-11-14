@@ -349,7 +349,9 @@ not compile.
 
 A path parameter matches a nonempty value: `/items//edit` does not match
 `/items/{id}/edit`, and `/shelves//` does not match `/shelves/{id}/`. A catch-all must
-also be nonempty, but may contain empty segments (`/files/a//b`). Matching is case-sensitive
+also be nonempty, but may contain empty segments (`/files/a//b`); it can answer a path such as
+`/items//edit` when the parameter route does not match. Without another matching route the
+answer is 404. Matching is case-sensitive
 and keeps trailing slashes distinct. Corten pins the matchit version it tests, so a fresh app
 gets these same rules ([design Choice 47](../design.md#choice-matchit)).
 

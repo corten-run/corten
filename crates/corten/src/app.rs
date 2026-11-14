@@ -2519,11 +2519,13 @@ mod tests {
         assert_eq!(api.mount.as_ref().map(|mount| mount.prefix.as_str()), Some("/shop/api"));
         assert_eq!((api.deadline, api.body_limit, api.middleware.len(), api.shell), (eight, 16 << 10, 2, shop.shell));
         assert!(Arc::ptr_eq(scopes.of_route("/about/{id}").expect("outside every prefix"), &scopes.app));
-        // `/shop{x}/desk` matches `/shop/desk` with an empty value, and `/corten{x}/{b}` `/corten/a`.
-        let reach =
-            ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}", "/shop{x}/desk", "/corten{x}/{b}"];
+        let reach = ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}"];
         for pattern in reach {
             assert!(scopes.of_route(pattern).is_none(), "{pattern} can match under another prefix");
+        }
+        // A parameter must be nonempty: these cannot reach `/shop/desk` or `/corten/a`.
+        for pattern in ["/shop{x}/desk", "/corten{x}/{b}"] {
+            assert!(Arc::ptr_eq(scopes.of_route(pattern).expect("cannot match an empty value"), &scopes.app));
         }
         // One segment matches `/shop`, never a path under `/corten/`.
         assert!(Arc::ptr_eq(scopes.of_route("/cor{x}").expect("one segment, not /shop"), &scopes.app));

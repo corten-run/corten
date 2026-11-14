@@ -3195,8 +3195,11 @@ rules something out.
     so card-market's comparison-only axum 0.8.9 can keep its separate matchit 0.8.4.
 
     This is breaking for apps tested with 0.8.4: a parameter must be nonempty even before a
-    slash (`/items//edit` is now a 404 for `/items/{id}/edit`), and links refuse that empty
-    value as they already refuse one at the end. Catch-alls still carry empty inner segments.
+    slash (`/items//edit` no longer matches `/items/{id}/edit`), and links refuse that empty
+    value as they already refuse one at the end. Without another matching route it is a 404;
+    a catch-all can now answer where an empty parameter used to shadow it, including a
+    POST-only parameter route that previously caused a GET to fail. Catch-alls still carry
+    empty inner segments.
     Corten keeps one suffix convention: it inserts `{name}text` as `{name}` and checks the
     suffix itself, so suffix-only alternatives remain conflicts, and no fallback catches a
     missing suffix. Hand-written paths with parameter prefixes meet 0.9.2's conflict rules;

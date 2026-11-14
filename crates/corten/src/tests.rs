@@ -11390,7 +11390,8 @@ async fn serves_agrees_with_the_router() {
         ("/items//edit", true),
         ("/items/7/", true),
         ("/x/1/y", false),
-        ("/x//y", false),
+        // The POST-only parameter does not match an empty value, so the catch-all page does.
+        ("/x//y", true),
         ("/x/1/z", true),
         ("/shop/cart", true),
         ("/shop/list", true),

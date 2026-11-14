@@ -6,8 +6,9 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - **Breaking:** Pin the router to matchit 0.9.2 so fresh apps use the same matching rules as
-  Corten's tests. Empty path parameters now return 404 even between segments, and typed links
-  refuse those values. Hand-written routes meet 0.9's stricter prefix/suffix conflict rules;
+  Corten's tests. Empty segments no longer match path parameters, even between segments: the
+  path returns 404 unless another route, such as a catch-all, matches. Typed links refuse those
+  values. Hand-written routes meet 0.9's stricter prefix/suffix conflict rules;
   Corten's whole-segment suffix convention is unchanged.
 
 - Reweigh HTTP/2 in design Choice 25 and keep the proxy requirement for now. The browser cap
