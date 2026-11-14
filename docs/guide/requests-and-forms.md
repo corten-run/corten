@@ -1492,10 +1492,18 @@ filter as soon as it changes, a handler submits the form (`form.requestSubmit()`
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
 position stays, and focus returns to the control the user is on when the form goes (by id, else
 by its name inside its nearest ancestor with an id, falling back to `<main>`, and its value for
-a checkbox or radio). Among repeated matches there, it keeps the same index, not counting hidden
-inputs or controls disabled, hidden or inert in the markup. Give the filter form or rail a
-`#[derive(Id)]` id so visible copies in other forms cannot move that index. Focus returns with
-its caret to the one they changed, or for
+a checkbox or radio). Among repeated matches there, it keeps the same index, including controls
+that are disabled, hidden or inert, so changing a preceding control's eligibility does not move
+focus. It restores only an eligible control. For a control without its own id, if the indexed
+match is absent or ineligible (including when the ancestor loses its id), it falls back only
+to a single eligible match under `<main>`; hidden inputs and controls disabled, hidden or inert
+in the markup are not eligible.
+Give the filter form or rail a `#[derive(Id)]` id to separate other forms' visible copies.
+**Limit:** Without the control's own stable id, correspondence still depends on matching controls
+keeping their order inside that ancestor. Inserting, removing or reordering matches can redirect focus;
+losing the ancestor with several eligible matches under `<main>` leaves focus unrestored.
+Give a control its own `#[derive(Id)]` id when its matches or ancestor can change
+([Limit 28](../design.md#limit-keep-place-identity)). Focus returns with its caret to the one they changed, or for
 a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
 while one they closed stays closed, so the control is in view and can take focus even when the

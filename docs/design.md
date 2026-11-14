@@ -3853,3 +3853,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `80dbd7db`'s own runs.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
+28. <a id="limit-keep-place-identity"></a>A `data-keep-place` navigation restores focus by the
+    control's own id, else its name (and value for a checkbox or radio) and index among all matches
+    inside the nearest ancestor with an id, falling back to `<main>`. Eligibility is checked only
+    after matching, so disabling or enabling preceding controls does not change correspondence.
+    Without the control's own stable id, inserting, removing or reordering matching controls can
+    redirect focus: an index does not identify an item through an order change. For a control
+    without its own id, an absent or ineligible match, including one whose ancestor lost its id,
+    falls back only when exactly one eligible match remains under `<main>`; several candidates
+    leave focus unrestored rather than
+    guessing across forms. Give such a control its own stable `#[derive(Id)]` id.
+    This limit is deliberate: inferring an identity from changing markup would
+    still guess where the app's id can state it.

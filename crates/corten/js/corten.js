@@ -2542,7 +2542,7 @@ navigation?.addEventListener("navigate", (event) => {
   const after = () => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
-    const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
+    const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? placeAt(place) : undefined);
     if (!el || !place) return;
     focusOn(el);
     try {
@@ -2789,18 +2789,19 @@ function fieldsAt(root, wanted) {
 
 /**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by
- * its name inside the nearest ancestor with an id (else <main>), and which eligible control
- * with that name it is), and its caret. Null when
+ * its name inside the nearest ancestor with an id (else <main>), and which control
+ * with that name it is), a unique eligible fallback in <main>, and its caret. Null when
  * nothing is focused.
  * @param {Element | null} el
- * @returns {{ at: string, nth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
+ * @returns {{ at: string, nth: number, fallback: string, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
  */
 function placeOf(el) {
   const name = el && attrOf(el, "name");
   const id = el && idOf(el);
   const root = el && closestOf(el, "main");
   const anchor = !id && name && root && el && idOf(anchorOf(root, el));
-  const at = id ? `#${CSS.escape(id)}` : name && el ? `${anchor ? `#${CSS.escape(anchor)}` : "main"} ${named(el, name)}:not([type=hidden i], :disabled, [hidden], [hidden] *, [inert], [inert] *)` : "";
+  const control = name && el ? named(el, name) : "";
+  const at = id ? `#${CSS.escape(id)}` : control ? `${anchor ? `#${CSS.escape(anchor)}` : "main"} ${control}` : "";
   if (!at) return null;
   const f = /** @type {HTMLInputElement} */ (el);
   /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
@@ -2808,7 +2809,18 @@ function placeOf(el) {
   try {
     caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
-  return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), caret };
+  return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), fallback: !id && control ? `main ${control}${FOCUSABLE}` : "", caret };
+}
+
+/** Eligibility is checked after correspondence, never used to number matching controls. */
+const FOCUSABLE = ":not([type=hidden i], :disabled, [hidden], [hidden] *, [inert], [inert] *)";
+
+/** Find the same control, or an unambiguous eligible fallback. @param {NonNullable<ReturnType<typeof placeOf>>} place */
+function placeAt(place) {
+  const el = document.querySelectorAll(place.at)[place.nth];
+  if (el && matchesOf(el, FOCUSABLE)) return el;
+  const fallback = place.fallback && document.querySelectorAll(place.fallback);
+  return fallback && fallback.length === 1 ? fallback[0] : undefined;
 }
 
 /** The nearest ancestor with an id, bounded by `root`. @param {Element} root @param {Element} el */

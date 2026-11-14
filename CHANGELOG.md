@@ -20,6 +20,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Keep navigation focus inside the control's nearest identified ancestor, excluding hidden,
   disabled and inert controls, so repeated filter fields in other forms do not steal its place.
+  Keep correspondence independent of eligibility changes, and recover a missing ancestor only
+  when the matching eligible control under main is unambiguous.
 
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run

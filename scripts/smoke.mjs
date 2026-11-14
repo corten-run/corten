@@ -4847,6 +4847,57 @@ async function run(browser) {
       check(label, after.before && after.swapped && after.matches === 3 && after.focused, JSON.stringify(after));
       await duplicatePage.context().close();
     }
+    // Focus correspondence does not change when a preceding duplicate's eligibility changes.
+    // A lost ancestor may fall back to a unique control, never to one of several candidates.
+    for (const kind of ["enable preceding", "disable preceding", "lose ancestor", "lose ancestor with duplicates"]) {
+      const label = kind === "lose ancestor with duplicates" ? "a data-keep-place swap declines ambiguous focus after losing its ancestor" : `a data-keep-place swap keeps focus and caret when it must ${kind}`;
+      const correspondencePage = await (await browser.newContext()).newPage();
+      await correspondencePage.goto(`${base}/news`);
+      if (!(await correspondencePage.evaluate(() => "navigation" in window))) {
+        skip(label, noSwaps);
+        await correspondencePage.context().close();
+        continue;
+      }
+      await correspondencePage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const applied = new URL(route.request().url()).searchParams.has("mine");
+          const losing = kind.startsWith("lose ancestor");
+          const preceding = losing ? "" : `<input name="q" value="abcdef" ${applied === (kind === "disable preceding") ? "disabled" : ""}>`;
+          const other = kind === "lose ancestor with duplicates" && applied ? '<form><input name="q" value="abcdef"></form>' : "";
+          const body = (await res.text()).replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${other}${!losing || !applied ? form.replace("<form", '<form id="smoke-filter"') : form}${preceding}<input name="q" value="abcdef" data-smoke-focused>`);
+          await route.fulfill({ status: res.status(), headers, body });
+        },
+      );
+      await correspondencePage.goto(`${base}/news`);
+      const after = await correspondencePage.evaluate(async () => {
+        const input = /** @type {HTMLInputElement} */ (document.querySelector("[data-smoke-focused]"));
+        input.focus();
+        input.setSelectionRange(1, 4, "backward");
+        const before = document.activeElement === input;
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main form[data-keep-place] input[name=mine]"));
+        mine.click();
+        const done = () => new URL(location.href).searchParams.has("mine") && document.getElementById("stories-title")?.textContent === "Stories about your stocks" && !document.querySelector("main[aria-busy]");
+        for (let i = 0; i < 100 && !done(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const fresh = /** @type {HTMLInputElement} */ (document.querySelector("[data-smoke-focused]"));
+        return {
+          before,
+          swapped: done() && !input.isConnected,
+          focused: document.activeElement === fresh,
+          caret: [fresh.selectionStart, fresh.selectionEnd, fresh.selectionDirection],
+          body: document.activeElement === document.body,
+          active: document.activeElement?.outerHTML.slice(0, 150),
+        };
+      });
+      const ambiguous = kind === "lose ancestor with duplicates";
+      check(label, after.before && after.swapped && (ambiguous ? after.body : after.focused && after.caret.join() === "1,4,backward"), JSON.stringify(after));
+      await correspondencePage.context().close();
+    }
     // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it
     // closed though the new page draws it open too, which takes what the load recorded of it.
     const loadedGroupCheck = "a data-keep-place swap keeps closed a group the loaded page drew open and the user closed";
