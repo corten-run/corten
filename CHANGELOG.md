@@ -19,6 +19,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Run grouped benchmark evidence, isolated adapters and browser proof controls in
+  dedicated serial CI suites. These replay checks do not stand in for native
+  framework qualification or an official benchmark run.
+
 - Preserve native passed-but-comparison-ineligible outcomes during grouped collection,
   including dependency-policy and whole-group timing gates. Failed and unsupported
   outcomes remain ineligible; host ownership, evidence and cleanup checks are unchanged.
