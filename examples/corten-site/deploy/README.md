@@ -342,7 +342,12 @@ bytes in a zstd stream; the page went from 147,854 bytes to about 149,000 before
 before and 391 to 427 µs after, which these runs cannot tell apart. The page's prose has been
 cut since: at `ff2fca828` the page is 147,328 bytes (25,229 as zstd) and a reading 1,513. Each
 tile of the wall then became a keyed ref, 13 bytes more a tile: at `783941a55` the page is
-162,531 bytes (25,565 as zstd).
+162,531 bytes (25,565 as zstd). Each tile's reading, each seam and each header then moved to a
+ref value (`data-ref-value='817'` in place of `data-key="817"`, 6 bytes more a tile), which the
+page's script reads with a `JSON.parse` of each: at `d1cb28f91` the page is about 161,500 bytes
+(25,532 as zstd, 27,049 as Brotli, 30,974 as gzip) and with that change merged onto it about
+168,150 (25,371, 26,819 and 30,836), the median of five pages in the same container, its readout's
+digits moving the size by a few dozen bytes. It is larger as it is and smaller compressed.
 
 ## What one address can do
 

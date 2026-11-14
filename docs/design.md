@@ -3072,6 +3072,119 @@ rules something out.
     five with main first and three with the change first); 2026-11-11, the CSP in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2.
 
+46. <a id="choice-ref-values"></a>**A value an element gives its script is its ref's,
+    `ref={row.with(cents)}`, written as JSON in `data-ref-value` and read as a `Map` from each
+    element to its value.** A script that reorders or filters rows the server drew compares
+    something each row carries (a price in cents, a count in stock). A `data-` attribute read
+    through `dataset` named it as text twice, in the markup and in the script, so a misspelled or
+    renamed name compiled, passed `tsc` and read `undefined`, and the value reached the script as a
+    string to convert. A ref already ties a handler's parameter to the elements it names, checked
+    when the crate compiles ([Choice 5](#choice-handlers-checked-where-called)), so the value goes
+    on the ref: `row.with(x)` fixes the ref's third type parameter from `x`'s Rust type (a number,
+    text or a `bool`: `ts::Number`, `ts::String`, `ts::Boolean`), every element given the ref gives
+    a value of that one type, and a parameter typed `Map<El, number>` (or `string`, `boolean`) takes
+    only such a ref, as `El` takes only a ref on that tag. A ref given a value on some elements and
+    none on others, or text where the handler takes `number`, does not compile (`compile_fail`
+    doctests on `Ref::with`). The call names it `=row`, and the runtime gives the handler every
+    element with the ref, in the page's order, with `JSON.parse` of its `data-ref-value`. The server
+    writes the value with the writers a handler's arguments use, single-quoted
+    ([Choice 45](#choice-data-on-single-quoted)), so a number is a number in the script, and an
+    integer past 2^53 stops debug builds as an argument's does. The one name the markup and the
+    script share is the ref's, which the compiler already holds them to; `data-ref-value` is the
+    runtime's own, written only by `ref=`.
+
+    Not chosen: the row's key (`ref={rows} key={..}` and a `Map<string, El>`). A key is a row's
+    identity, which two rows with the same price cannot share, and it is text, so taking it for the
+    value would change what a keyed ref means and still convert in the script. A typed `dataset`
+    (a declaration generated from the component): the attribute's name stays text in the markup,
+    and it is a second way to hand a script data beside its arguments and refs (Value 5). A
+    `#[component(view)]`'s holes: they type rows a script makes, and would bring the views module
+    to a page that only reorders. A handler argument with the values in the rows' order: the list
+    and the rows are tied only by position, which a reorder or a patch to one row breaks. A value is
+    one number, text or `bool` an element gives, not a record: a script that needs more about a row
+    reads the row it has, or takes the records as a `ToJson` argument. `data-` is HTML's place
+    for a page's private data and `data-ref-value` is read only by Corten's runtime, so it needs no
+    standard ([Rule 10](#rule-standard-formats)); a `data-` attribute written for CSS or for the
+    runtime (`data-selected`, `data-reload`) is unchanged.
+
+    What it costs every user is the runtime's reader, the `=` kind in `on.js` and its case in
+    `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
+    (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
+    `immutable`, and nothing on a load: the value is read only when a handler that takes it runs.
+    What it costs a page that uses it is the value written on each element: card-market's item page,
+    whose listings each give their ref their cents (22 rows a page on average), is 418 bytes larger
+    (8,818 to 9,236), since each row now carries its ref's name beside its value (`data-ref="row"
+    data-ref-value='1250'` where it had `data-cents="1250"`), and 21 bytes larger with zstd (2,181
+    to 2,202), 11 with brotli (2,364 to 2,375) and 1 smaller with gzip (2,512 to 2,511), the bytes a
+    user receives. Rendering its main part costs about 930 instructions more a page, about 42 a row,
+    2.4% (callgrind: `ItemDetail`'s render took 2,363.8 and 2,368.9 million instructions over the
+    test's 60,000 renders before, 2,424.5 and 2,419.7 million after); the whole test, compression of
+    the larger pages included, is 0.8% more (28,332.8 and 28,354.7 million to 28,576.2 and 28,575.3
+    million). An integer value is written as markup writes a number (`Render`), not through
+    `Display`'s formatter, which had made the same render 13.5% more. A page whose elements give no
+    value costs nothing: seller-desk's desk took 2,080,520,197 instructions to render in every run
+    of both builds.
+
+    Value 1 comes first. It says no to features that cost every user to help a few, and on it
+    [Choice 45](#choice-data-on-single-quoted) refused a 41-byte reader whose help went only to the
+    few pages that hand a script tens of kilobytes. This reader's help does not go to a few: under
+    the bet in Stands on, it goes to every app whose script reads back a value its markup wrote,
+    which a script that reorders, filters or follows rows the server drew does. Its cost, in
+    [Choice 45](#choice-data-on-single-quoted)'s terms, is 21 bytes with gzip, 168 bits, about 0.1
+    ms at 1.6 Mbit/s, downloaded once a release and cached after, since the runtime's URL is
+    versioned and `immutable`; the render cost falls only on a page whose elements give values, and
+    a page that gives none is unchanged to the instruction. So Value 1 does not refuse it, and Value
+    4, mistakes failing at compile time, decides: a value a script reads back is checked when the
+    crate compiles, where with a `data-` attribute a misspelled or renamed name compiled, passed
+    `tsc` and gave the script `undefined` with no error anywhere (a sort that subtracts gets NaN,
+    which `sort` takes as equal, and leaves the rows as they were), and a number came as text the
+    script had to convert (one compared with `<` orders `"999"` after `"1250"`). No change without a
+    reader in the runtime does that: a value read through `dataset` is text the compiler cannot see,
+    and the ways not chosen above each give up a row's identity or its order. One way for a script
+    to get what an element carries, its ref, is Value 5's. If the bet fails, the help goes to a few
+    after all, and the Revisit-when reopens the 21 bytes on Value 1.
+
+    Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
+    brotli at quality 11, once each build; the item page's bytes from `render_cost` in
+    `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
+    card-market and seller-desk, two runs of each build alternated, the base first); platform (a
+    `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
+    script its decoded value); reasoned (the runtime already finds a ref's elements in the page's
+    order for `*` and `#`, so a value is one attribute read per element when the handler runs and
+    nothing on a load; the ref's third type parameter is one type wherever the component uses the
+    ref, so a ref given text on one element and a number on another, or a value on one and none on
+    another, is a type error); bet (values are given today in five places: card-market's listing
+    sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
+    `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
+    `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
+    `quoted.js`. Apps beyond these five places hand their scripts values on elements the scripts
+    reorder, filter or follow, so the reader helps every such app, not a few); value (that help, at
+    a cost every user pays of 21 bytes with gzip once a release, which Value 1 does not refuse; a
+    mistake in a value a script reads fails when the crate compiles, and no name is text at a seam,
+    Values 4; one way for a script to get what an element carries, its ref, Values 5; a value on a
+    ref, not a new concept, Values 6).
+
+    Revisit when: an app's script needs a record per element rather than one number, text or `bool`
+    (then the value might be any `ToJson` with its generated declaration), or the platform gives
+    elements typed custom data a script can read without a name as text, or something outside Corten
+    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal. The bet
+    fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
+    each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
+    things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value
+    (`ref={name.with(..)}`, on one line or split over several) beyond the five places named in
+    Stands on, and their tests and docs; a search for `.with(` lists the candidates, and each is
+    read, since a search alone misses markup split over lines. Second,
+    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving corten-ui's
+    `data-sort` and the attributes beside it onto ref values. If that issue is still open on
+    2027-11-13, the first condition alone decides on that date.
+
+    Last checked: 2026-11-13, the runtime's size on `f12d3daa3` against the change, `09a61616c`;
+    2026-11-13, callgrind (valgrind 3.19.0) on card-market's and seller-desk's `render_cost` on
+    `f12d3daa3` against `09a61616c` and against `bf3ce25bb`, which writes an integer as markup does,
+    and the item page's bytes on `c3d455a1` against `3ae633f34`; 2026-11-13, the value read back by
+    card-market's smoke on `bf3ce25bb`, sorted by the script in Chromium and read with
+    `getAttribute` without scripts in Chromium, Firefox and WebKit (Playwright 1.64.1).
+
 47. <a id="choice-patch-brings-area-styles"></a>**A patch ends with the section stylesheet links of its handler's path, and the
     runtime loads the ones the page lacks before it puts the patch in place; the server is not
     told the page the patch lands on.** A page links the stylesheets of the areas its path is
@@ -3110,7 +3223,7 @@ rules something out.
     counts of one run of each. A patch outside every area of the same app costs 18,709.4
     against 18,614.3, the area check alone (95.1, the same functions). A patch in an app whose
     areas have no stylesheets costs 18,559.0 against 18,562.5, nothing measurable: the check
-    returns at once. The runtime is 52 bytes larger with gzip and 50 with brotli. Sizing a
+    returns at once. The runtime is 53 bytes larger with gzip and 49 with brotli. Sizing a
     patch's buffer from the last one's, which an earlier version of this change did and which
     saves every patch more than the links cost, is a change of its own.
 
@@ -3140,7 +3253,7 @@ rules something out.
     1,200 requests with jemalloc, its three `PATCH_WHERE` cases, three runs of each build
     alternated, before at `d1cb28f9` (main) with the test as at `43e7e8a1` added and after at
     `43e7e8a1`, every run of a build within 1.6 instructions of the others; the runtime's
-    minified size with Node's gzip and brotli at their defaults, once, against `d1cb28f9`; the
+    minified size with Node's gzip and brotli at their defaults, once, against main `0ff569c6`; the
     patch's and the stylesheet's bytes from the watchlist, once); platform (a
     `<link rel="stylesheet">` added to `<head>` fires `load` once its rules apply and `error` when
     it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
@@ -3165,10 +3278,10 @@ rules something out.
     fragment is found drawing an area's component unstyled on a page outside it.
 
     Last checked: 2026-11-13, the callgrind runs on `d1cb28f9` against `43e7e8a1`, with valgrind
-    3.19.0; 2026-11-13, the runtime's size on `43e7e8a1` against `d1cb28f9`; 2026-11-13, the
-    patch's link and `sections/smoke.css` from the watchlist at `43e7e8a1`; 2026-11-13, the
-    patch's link loaded, failed, kept and waited for in Chromium 156.0.8078.4, Firefox 157.0 and
-    WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`.
+    3.19.0; 2026-11-13, the runtime's size with this change merged onto main `0ff569c6` against
+    it; 2026-11-13, the patch's link and `sections/smoke.css` from the watchlist at `43e7e8a1`;
+    2026-11-13, the patch's link loaded, failed, kept and waited for in Chromium 156.0.8078.4,
+    Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`.
 
 ## Rules
 

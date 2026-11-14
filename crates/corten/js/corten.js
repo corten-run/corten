@@ -494,6 +494,9 @@ function resolve(arg, el, event, binding) {
       return findRefs(el, arg.owner, arg.name);
     case "#":
       return new Map(findRefs(el, arg.owner, arg.name).map((found) => [attrOf(found, "data-key"), found]));
+    case "=":
+      // `ref={row.with(cents)}`: the value as the server wrote it, JSON, so a number is one.
+      return new Map(findRefs(el, arg.owner, arg.name).map((found) => [found, JSON.parse(attrOf(found, "data-ref-value") ?? "null")]));
     case "^":
       return closestRef(el, arg.owner, arg.name, event) ?? SKIP;
     case "{": {
