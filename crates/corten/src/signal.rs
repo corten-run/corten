@@ -147,7 +147,18 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
+    /// A write the runtime sent in an app with layout reads (`ACTION_WRITE`), whose route kept its
+    /// head for a page it may answer with (`HEAD_KEPT`), here for the same reason
+    /// ([`crate::layout::kept_for_its_page`]).
+    action_write: AtomicU8,
+    /// When that write's reads stop: the request's deadline.
+    until: std::sync::OnceLock<tokio::time::Instant>,
 }
+
+/// [`Inner::action_write`]: a write the runtime sent, in an app with layout reads.
+const ACTION_WRITE: u8 = 1;
+/// [`Inner::action_write`]: its route kept the head, so its page's places are written.
+const HEAD_KEPT: u8 = 2;
 
 impl Signal {
     /// A request's signal in an app.
@@ -225,6 +236,34 @@ impl Signal {
     /// The app's shared state, for a request an app serves.
     pub(crate) fn shared(&self) -> Option<&Arc<crate::page::Shared>> {
         self.0.shared.as_ref()
+    }
+
+    /// The request is a write the runtime sent, in an app with layout reads: its own page starts
+    /// them after the handler, no later than `until` ([`crate::layout::kept_for_its_page`]).
+    pub(crate) fn mark_action_write(&self, until: Option<tokio::time::Instant>) {
+        if let Some(until) = until {
+            let _ = self.0.until.set(until);
+        }
+        self.0.action_write.store(ACTION_WRITE, Ordering::Relaxed);
+    }
+
+    /// For such a write, whether its route keeps the head for its page (`kept`), and so whether
+    /// that page writes its places. Nothing for any other request.
+    pub(crate) fn keep_head(&self, kept: bool) {
+        // The request's own task alone marks it.
+        if self.0.action_write.load(Ordering::Relaxed) != 0 {
+            self.0.action_write.store(if kept { HEAD_KEPT } else { ACTION_WRITE }, Ordering::Relaxed);
+        }
+    }
+
+    /// A write the runtime sent, in an app with layout reads, with the deadline its reads stop at.
+    pub(crate) fn action_write(&self) -> Option<Option<tokio::time::Instant>> {
+        (self.0.action_write.load(Ordering::Relaxed) != 0).then(|| self.0.until.get().copied())
+    }
+
+    /// Its route kept the head for its page ([`Signal::keep_head`]).
+    pub(crate) fn head_kept(&self) -> bool {
+        self.0.action_write.load(Ordering::Relaxed) == HEAD_KEPT
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

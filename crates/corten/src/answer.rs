@@ -1886,10 +1886,10 @@ where
             here.arrive(&mut req, O::PAGE, self.shared);
         }
         // A write the runtime sent whose answer is `Public` or not a page draws no read
-        // (`crate::layout::ActionWrite`), as no read is started for such a `GET`.
+        // (`crate::layout::kept_for_its_page`), as no read is started for such a `GET`.
         if (!O::PAGE || self.shared) && !matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
-            if let Some(write) = req.extensions_mut().get_mut::<crate::layout::ActionWrite>() {
-                write.kept = false;
+            if let Some(signal) = req.extensions().get::<crate::Signal>() {
+                signal.keep_head(false);
             }
         }
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not

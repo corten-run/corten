@@ -245,7 +245,7 @@ impl Next for Handle {
 fn handle(route: Option<crate::router::Route>, mut req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it. A write the runtime sent keeps the head for its own page instead, whose
-    // reads start after the handler (`layout::ActionWrite`).
+    // reads start after the handler (`layout::kept_for_its_page`).
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let late = if here.is_none() { crate::layout::kept_for_its_page(&mut req) } else { None };
     let answer = match route {

@@ -517,21 +517,9 @@ struct Here {
     given: Vec<Gift>,
 }
 
-/// On a write the runtime sent (`Mode::Action`) in an app with layout reads, whose own page is
-/// whole (#1370). Nothing runs beside its handler: the reads must see what it wrote. Its page route
-/// keeps the request's head (`kept`, so [`crate::Req`] writes the page's places), and only a page
-/// it answers with starts the reads that page draws and is filled ([`fill_after`]); a patch, a
-/// redirect or an error starts none and pays for no read state. A `Public` or JSON route keeps
-/// none, so its page draws no read.
-#[derive(Clone, Copy)]
-pub(crate) struct ActionWrite {
-    pub(crate) until: Option<tokio::time::Instant>,
-    pub(crate) kept: bool,
-}
-
-/// A page route's answer to a write the runtime sent ([`ActionWrite`]), filled when it is a page
-/// with places: the reads it draws start now, after the handler, from the request's head `kept`
-/// as the route was called, and are waited for as a whole document's are. Anything else (a
+/// A page route's answer to a write the runtime sent ([`kept_for_its_page`]), filled when it is a
+/// page with places: the reads it draws start now, after the handler, from the request's head
+/// `kept` as the route was called, and are waited for as a whole document's are. Anything else (a
 /// patch, a redirect, an error) is returned as it is.
 pub(crate) async fn fill_after(
     (shared, until, kept): (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts),
@@ -546,9 +534,14 @@ pub(crate) async fn fill_after(
     here.fill(res).await
 }
 
-/// On a write the runtime sent in an app with layout reads ([`ActionWrite`]), as its route is
-/// called: the request's head, kept for the page the handler may answer with, and the app and
-/// deadline its reads need. None for any other request, which pays one look at its method.
+/// On a write the runtime sent (`Mode::Action`) in an app with layout reads, whose own page is
+/// whole (#1370), as its route is called: the request's head, kept for the page the handler may
+/// answer with, and the app and deadline its reads need. Nothing runs beside the handler, whose
+/// reads must see what it wrote, and nothing is started for a patch, a redirect or an error, which
+/// answer with no page; the route keeps the head only because `HtmlResult` does not say which it
+/// answers. A `Public` or JSON route's page draws no read (`Signal::keep_head`). None for any
+/// other request, which pays one look at its method; the mark is the request's `Signal`, so its
+/// extensions stay within their first allocation.
 #[inline]
 pub(crate) fn kept_for_its_page(
     req: &mut crate::http::Request,
@@ -561,11 +554,10 @@ pub(crate) fn kept_for_its_page(
 
 #[inline(never)]
 fn keep(req: &mut crate::http::Request) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
-    req.extensions().get::<ActionWrite>()?;
-    let shared = req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared)?.clone();
-    let write = req.extensions_mut().get_mut::<ActionWrite>()?;
-    write.kept = true;
-    let until = write.until;
+    let signal = req.extensions().get::<crate::Signal>()?;
+    let until = signal.action_write()?;
+    let shared = signal.shared()?.clone();
+    signal.keep_head(true);
     let (parts, body) = std::mem::take(req).into_parts();
     let kept = parts.clone();
     *req = crate::http::Request::from_parts(parts, body);
