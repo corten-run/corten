@@ -723,9 +723,9 @@ mod tests {
         (0..rounds).map(|_| std::hint::black_box(KeyedMarkup { ids }.to_html()).len()).sum()
     }
 
-    /// What the debug key check (design Choice 46) costs a release render, which should be
-    /// nothing: `LivePrices` with 50 rows, each with two keyed cells, and `KeyedMarkup`, rendered
-    /// 1,000 times each. Instructions, from the release test binary under callgrind:
+    /// What the debug key check (`docs/design.md#choice-ref-values`) costs a release render, which
+    /// should be nothing: `LivePrices` with 50 rows, each with two keyed cells, and `KeyedMarkup`,
+    /// rendered 1,000 times each. Instructions, from the release test binary under callgrind:
     /// `cargo test --release -p watchlist --no-run`, then
     /// `valgrind --tool=callgrind <test binary> --ignored --exact home::tests::key_check_cost`
     /// and `callgrind_annotate --inclusive=yes` for `render_live_prices` and `render_keyed_markup`.

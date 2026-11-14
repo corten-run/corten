@@ -679,9 +679,9 @@ fn OuterSvgKeys() -> impl Render {
     }
 }
 
-/// A limit design Choice 46 states: a component's markup does not see the `<svg>` its parent
-/// writes it into, so it takes its `<template>` for HTML's and its keys are not checked. The
-/// check misses the duplicate rather than stop a render it cannot be sure of.
+/// A limit `docs/design.md#choice-ref-values` states: a component's markup does not see the
+/// `<svg>` its parent writes it into, so it takes its `<template>` for HTML's and its keys are not
+/// checked. The check misses the duplicate rather than stop a render it cannot be sure of.
 #[test]
 fn a_key_in_a_template_a_component_writes_into_an_outer_svg_is_not_checked() {
     let html = OuterSvgKeys {}.to_html();
