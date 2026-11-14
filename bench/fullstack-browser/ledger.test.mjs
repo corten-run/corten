@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { performance } from "node:perf_hooks";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "@playwright/test";
 import { reconcileRequests } from "./ledger.mjs";
@@ -39,6 +40,44 @@ test("all final IDs and outcomes reconcile once, with no abort or capture-error 
 
 async function listen(server) { server.listen(0, "127.0.0.1"); await once(server, "listening"); return `http://127.0.0.1:${server.address().port}`; }
 async function close(server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
+
+async function finishAfterObservation(audit, observationMs, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  const deadline = audit.ledger.phases.at(-1).after.finishedAt + observationMs;
+  // Timer delays can round down; the reconciler requires actual elapsed time.
+  while (performance.now() < deadline) await wait(deadline - performance.now());
+  await audit.finish();
+}
+
+test("upstream fixture waits for its measured deadline after an early timer wake", async () => {
+  const upstream = createUpstream({}), base = await listen(upstream);
+  try {
+    const audit = new UpstreamAudit(async () => (await fetch(base + "/__browser/counters")).json());
+    await audit.start();
+    for (const phase of ["initial-store", "mutation-probes", "cleanup"]) await audit.end(await audit.begin(phase));
+    const observationMs = 25, options = { source: "fixture", actions: [], observationMs };
+    const deadline = audit.ledger.phases.at(-1).after.finishedAt + observationMs;
+    let wakes = 0, earlyLedger;
+    await finishAfterObservation(audit, observationMs, async (ms) => {
+      if (wakes++ === 0) {
+        // Model an early timer wake, but retain only actual monotonic samples.
+        await audit.finish(); earlyLedger = structuredClone(audit.ledger);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+    assert.ok(audit.ledger.terminal.startedAt >= deadline, "Timer completion alone did not cover the measured interval");
+    assert.equal(reconcileUpstream(audit.ledger, options).outcome, "reconciled");
+    assert.deepEqual(reconcileUpstream(earlyLedger, options).reasons, ["Upstream terminal observation interval incomplete"]);
+    for (const mutate of [
+      (l) => { l.terminal = null; },
+      (l) => { l.terminal.error = "counter endpoint unavailable"; },
+      (l) => { l.phases.pop(); },
+    ]) {
+      const altered = structuredClone(audit.ledger); mutate(altered);
+      assert.equal(reconcileUpstream(altered, options).outcome, "unknown");
+    }
+  } finally { await close(upstream); }
+});
 
 test("unavailable upstream counters retain errors, not invented zero outcomes", async () => {
   const audit = new UpstreamAudit(async () => { throw new Error("counter endpoint unavailable"); });
@@ -95,7 +134,7 @@ test("browser cleanup and mutation probes retain real final request and upstream
       assert.equal(cleanup.outcome, "observed", JSON.stringify(cleanup.failures));
       assert.equal((await audit.end(cleanupPhase)).completed, 1);
       assert.ok(cleanup.requests.some((r) => r.path === "/cleanup" && r.completed));
-      await new Promise((resolve) => setTimeout(resolve, 25)); await audit.finish();
+      await finishAfterObservation(audit, 25);
       const options = { source: "api", actions: ["arrival"], observationMs: 25 };
       const proof = reconcileUpstream(audit.ledger, options);
       assert.equal(proof.outcome, "reconciled", JSON.stringify(proof.reasons)); assert.equal(proof.final.completed, 5);
