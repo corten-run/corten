@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Retry entire host-lifetime snapshots for comm-only bookend changes within the
+  existing three-attempt budget. Every accepted identity must still match in full;
+  PID/start changes, retry exhaustion and the one-second continuity gate stay strict.
+  This repairs a demonstrated local native churn race, not an established r21 cause.
+
 - Retain bounded first/last host-lifetime observer failures with fixed operation and
   allowlisted error codes, without saving raw errors or weakening identity, retry,
   continuity or cleanup proof. This adds diagnostics; it does not establish or repair

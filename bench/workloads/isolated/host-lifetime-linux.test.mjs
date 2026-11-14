@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { beginLifetime, inspectLifetime } from "./host-lifetime.mjs";
+import { beginLifetime, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
 import { supervise } from "./process.mjs";
 let unit;
 if (process.platform === "linux") unit = /\/corten-bench-groups-(r[1-9]\d*)-[a-f0-9]{16}\.service\/supervisor\n?$/.exec(readFileSync("/proc/self/cgroup", "utf8"));
@@ -120,8 +120,8 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
       assert.equal(entry.code, code === "private-code" ? "unknown" : code);
       assert.equal(entry.samples, 2); assert.ok(Number.isSafeInteger(entry.at) && entry.at >= entry.lastSampleAt);
     }
-    assert.equal(reads, code === "ENOENT" ? 60 : code === "ERR_ASSERTION" ? 40 : 20,
-      "existing racing-exit retries are unchanged; identity assertions are not retried or relaxed");
+    assert.equal(reads, code === "ENOENT" ? 60 : code === "ERR_ASSERTION" ? 120 : 20,
+      "comm-only failures exhaust the same three attempts; read-error retry bounds are unchanged");
     assert.ok(JSON.stringify(failures).length < 1000); assert.ok(!JSON.stringify(terminal).includes(marker));
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 2, pid, result });
     assert.equal(proof.status, "blocked"); assert.equal(proof.checks.observer, false);
@@ -220,5 +220,112 @@ test("an actual observer stall beyond one second remains blocked after clean nat
     console.log(JSON.stringify({ actualGapMs: maxGap, continuityLimitMs: 1000, status: proof.status }));
   } finally {
     assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
+  }
+});
+
+for (const scenario of [
+  { name: "permanent one-shot comm change", races: 1, attempts: 2, accepted: true },
+  { name: "two comm changes", races: 2, attempts: 3, accepted: true },
+  { name: "three comm changes", races: 3, attempts: 3, operation: "process-name-recheck" },
+  { name: "ENOENT followed by two comm changes", races: 3, missingFirst: true, attempts: 3, operation: "process-name-recheck" },
+  { name: "PID change", change: "pid", attempts: 1, operation: "process-pid-changed" },
+  { name: "start-tick change", change: "start", attempts: 1, operation: "process-start-changed" },
+  { name: "PID and comm change", change: "pid", races: 3, attempts: 1, operation: "process-pid-changed" },
+  { name: "start-tick and comm change", change: "start", races: 3, attempts: 1, operation: "process-start-changed" },
+  ...["ENOENT", "ESRCH", "EIO", "EACCES"].map((code) => ({ name: `${code} read error`, code,
+    attempts: ["ENOENT", "ESRCH"].includes(code) ? 3 : 1, operation: "process-stat" })),
+]) test(`whole-snapshot bookends: ${scenario.name}`, {
+  skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
+}, async (t) => {
+  const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-bookends-")), directory = join(temporary, "command-host"), gate = join(temporary, "finish");
+  const campaign = `${unit[1]}-0000000000000007`, binding = { request: { group: "client-heavy", round: "observer-bookends", commit: "a".repeat(40) } };
+  const invocation = { executable: "node", argv: ["bench/workloads/isolated/test-fixtures/host-lifetime-bookends.mjs", gate], shell: false };
+  let observer, pid, tick, output = "", capture;
+  const originalInterval = globalThis.setInterval;
+  const interval = t.mock.method(globalThis, "setInterval", (callback, ...args) => {
+    tick = callback; return originalInterval(callback, ...args);
+  });
+  try {
+    const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env,
+      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 6, pid }); observer.attach(pid); },
+      log(bytes) {
+        output += bytes;
+        const ready = /^BOOKENDS_READY (\d+) (\d+)$/m.exec(output);
+        if (!ready || capture) return;
+        capture = { attempts: [], cpu: [] };
+        const context = JSON.parse(readFileSync(join(directory, "binding.json"))), scope = `/sys/fs/cgroup${context.path}`;
+        const members = readFileSync(`${scope}/cgroup.procs`, "utf8").trim().split("\n").map(Number);
+        assert.deepEqual([...members].sort((a, b) => a - b), ready.slice(1).map(Number).sort((a, b) => a - b));
+        const [first, raced] = members; Object.assign(capture, { first, raced });
+        const samples = () => readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+        capture.before = samples().length;
+        const original = fs.readFileSync;
+        const fault = t.mock.method(fs, "readFileSync", function (path, ...args) {
+          if (path === `${scope}/cgroup.procs`) capture.attempts.push({ stats: new Map(), cmdlines: new Map() });
+          const attempt = capture.attempts.at(-1), number = capture.attempts.length;
+          const member = [first, raced].find((p) => path === `/proc/${p}/stat`);
+          if (member) {
+            const seen = attempt.stats.get(member) ?? []; attempt.stats.set(member, seen);
+            if (member === raced && (scenario.code || scenario.missingFirst && number === 1)) {
+              seen.push(null); throw Object.assign(new Error("PRIVATE_BOOKEND_READ_ERROR"), { code: scenario.code ?? "ENOENT" });
+            }
+            let raw = original.call(this, path, ...args);
+            const version = number <= (scenario.races ?? 0) ? number - (seen.length === 0 ? 1 : 0) : (scenario.races ?? 0);
+            raw = raw.replace(/^\d+ \(.*\) /, `${member} (${member === first ? `snap-${number}` : `name-v${version}`}) `);
+            if (member === raced && seen.length === 1) {
+              if (scenario.change === "pid") raw = raw.replace(/^\d+/, String(member + 1));
+              if (scenario.change === "start") raw = raw.replace(/^(\d+ \(.*\) [A-Za-z] )(.*)$/s, (_, prefix, rest) => {
+                const fields = rest.split(" "); fields[18] = String(BigInt(fields[18]) + 1n); return prefix + fields.join(" ");
+              });
+            }
+            seen.push(raw); return raw;
+          }
+          if (path === `/proc/${first}/cmdline`) {
+            attempt.cmdlines.set(first, (attempt.cmdlines.get(first) ?? 0) + 1);
+            return Buffer.from(`--type=${number === 1 ? "utility" : "renderer"}\0`);
+          }
+          const value = original.call(this, path, ...args);
+          if (path === `${scope}/cpu.stat`) capture.cpu.push(value);
+          return value;
+        });
+        syncBuiltinESMExports();
+        try { tick(); capture.after = samples(); }
+        finally { fault.mock.restore(); syncBuiltinESMExports(); fs.writeFileSync(gate, "finish"); }
+      } });
+    assert.equal(result.success, true, JSON.stringify({ result, output })); observer.finish(result); assert.ok(capture);
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    const detail = JSON.stringify({ scenario: scenario.name, attempts: capture.attempts.length, before: capture.before,
+      after: capture.after.length, failures: terminal.observerFailures });
+    assert.equal(capture.after.length, capture.before + (scenario.accepted ? 1 : 0), detail);
+    assert.equal(capture.attempts.length, scenario.attempts, detail); assert.equal(capture.cpu.length, scenario.attempts);
+    for (const [index, attempt] of capture.attempts.entries()) {
+      assert.equal(attempt.stats.get(capture.first).length, 2, "even previously completed members are reread from scratch");
+      assert.equal(attempt.cmdlines.get(capture.first), 1, "earlier member metadata is reread, not carried between attempts");
+      assert.equal(attempt.stats.get(capture.raced).length, scenario.code || scenario.missingFirst && index === 0 ? 1 : 2);
+    }
+    const records = fs.readdirSync(join(directory, "processes")).map((name) => JSON.parse(readFileSync(join(directory, "processes", name))));
+    for (let i = 1; i <= (scenario.accepted ? scenario.attempts - 1 : scenario.attempts); i++)
+      assert.ok(!records.some((p) => processIdentity(p.stat).comm === `snap-${i}`), "failed attempt records must not be saved");
+    assert.ok(!records.some((p) => processIdentity(p.stat).comm === "name-v0"), "pre-change identity must not escape a failed snapshot");
+    const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 6, pid, result });
+    assert.equal(terminal.empty, true); assert.equal(existsSync(`/sys/fs/cgroup${proof.context.path}`), false);
+    if (scenario.accepted) {
+      const sample = capture.after.at(-1), attempt = capture.attempts.at(-1);
+      const accepted = sample.processes.map((key) => JSON.parse(readFileSync(join(directory, "processes", `${key}.json`))));
+      assert.equal(accepted.length, 2); assert.equal(sample.groups[0].files["cpu.stat"], capture.cpu.at(-1));
+      for (const p of accepted) {
+        const identity = processIdentity(p.stat), pair = attempt.stats.get(identity.pid);
+        assert.equal(p.stat, pair[0]); assert.deepEqual(processIdentity(pair[1]), identity);
+        assert.equal(identity.comm, identity.pid === capture.first ? `snap-${scenario.attempts}` : `name-v${scenario.races}`);
+      }
+      assert.equal(accepted.find((p) => processIdentity(p.stat).pid === capture.first).type, "--type=renderer");
+      assert.equal(proof.status, "verified", detail); assert.equal(terminal.observerFailures.count, 0);
+    } else {
+      assert.equal(proof.status, "blocked"); assert.equal(proof.checks.observer, false);
+      assert.equal(terminal.observerFailures.count, 1, detail); assert.equal(terminal.observerFailures.first.operation, scenario.operation);
+      assert.equal(terminal.observerFailures.first.code, scenario.code ?? "ERR_ASSERTION");
+    }
+  } finally {
+    interval.mock.restore(); assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
   }
 });

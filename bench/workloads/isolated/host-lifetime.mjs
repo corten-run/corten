@@ -201,7 +201,12 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     let observed;
     for (let attempt = 0; ; attempt++) {
       try { observed = snapshot(path, executables, pending); break; }
-      catch (error) { if (attempt >= 2 || !["ENOENT", "ESRCH"].includes(error.code)) throw error; }
+      catch (error) {
+        // This tag is set only by the full bookend assertion after PID and
+        // start ticks matched. Discard the entire snapshot, not just that PID.
+        const changedName = error.code === "ERR_ASSERTION" && observationOperations.get(error) === "process-name-recheck";
+        if (attempt >= 2 || (!changedName && !["ENOENT", "ESRCH"].includes(error.code))) throw error;
+      }
     }
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;

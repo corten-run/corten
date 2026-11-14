@@ -1,7 +1,8 @@
 # Host lifetime failure diagnostics
 
-`host-lifetime.mjs` samples actual delegated command scopes. A caught sampling failure
-sets the sticky `host-observation-gap` terminal error even when the next sample recovers
+`host-lifetime.mjs` samples actual delegated command scopes. An exhausted or
+nonretryable sampling failure sets the sticky `host-observation-gap` terminal error
+even when the next sample recovers
 and all retained timestamp gaps are below one second. The continuity gate and the
 no-observer-error gate are independent. A clean native exit or an empty final scope
 cannot clear either gate.
@@ -23,8 +24,21 @@ Legacy terminal files without these diagnostics remain readable but cannot revea
 the cause of a swallowed exception. Successful samples describe only completed
 observations, not the failed attempt. Do not infer a specific exit race, permission
 failure, identity change or latency cause from a generic `host-observation-gap` alone.
-The existing three-attempt ENOENT/ESRCH policy, identity checks, one-second continuity
-bound and positive empty-scope requirement are unchanged.
+
+## Snapshot Retries
+
+The existing three-attempt snapshot budget also covers a process-name-only bookend
+change when PID and kernel start ticks are unchanged. The full identity assertion
+still rejects that attempt. The collector discards every group and process from it,
+rereads the entire recursive scope, and saves only a fresh, fully coherent snapshot.
+It never accepts mixed names or skips a member. This repairs the demonstrated local
+native churn name race; it does not establish the cause of the historical r21 error.
+
+PID or start-tick changes fail immediately, including changes accompanied by a new
+name. ENOENT/ESRCH and name races share one three-attempt budget; other read errors
+still fail immediately. Three racing attempts remain an observer gap. Retries do
+not reset timestamps, extend the one-second continuity gate, clear a prior observer
+failure or replace positive empty-scope proof.
 
 ## Checks
 
@@ -42,10 +56,13 @@ node --test --test-concurrency=1 bench/workloads/isolated/host-lifetime-linux.te
 ```
 
 The Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
-repeated interval errors, existing retry exhaustion, strict process-name bookends,
+repeated interval errors, shared retry exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
 that cannot claim an empty scope. Native descendant churn must retain all eight observed children and
 positive empty cleanup. An actual 1,250 ms sampler stall must fail the unchanged
 one-second continuity gate despite a clean native exit. These are collector tests,
-not benchmark qualification or proof of a historical failure's cause. Churn that
-triggers an identity or read race still fails closed; diagnostics do not repair it.
+not benchmark qualification or proof of a historical failure's cause. The two-member
+bookend fixture proves that one or two name races discard earlier member records,
+metadata and accounting reads, and that the accepted retry has complete fresh
+bookends. PID/start changes, three name races, mixed retry exhaustion and read-error
+controls remain blocked.
