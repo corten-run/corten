@@ -20,8 +20,8 @@ if (mode === "worker-new-debug") process.env.NODE_DEBUG = "https";
 if (mode === "worker-new-report") process.report.reportOnSignal = true;
 const server = createServer((socket) => socket.destroy());
 server.listen(0, "127.0.0.1"); await once(server, "listening");
-let created;
-const syntheticRequest = ["success", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure", "first-action-http-failure", "zero-resource-create"].includes(mode) ? async ({ method, path, body, credential }) => {
+let created, clock = 0;
+const syntheticRequest = ["success", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure", "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure"].includes(mode) ? async ({ method, path, body, credential }) => {
   state.requests++; state.calls.push({ method, path, originalCredential: credential === "SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL" }); save();
   if (mode === "hang" || mode === "hang-create" && method === "POST") return new Promise(() => {});
   if (mode === "reflect") return { status: 200, value: { account: { uuid: credential } } };
@@ -29,15 +29,19 @@ const syntheticRequest = ["success", "hang", "hang-create", "withhold-close", "r
   if (path.startsWith("/v2/droplets?")) return { status: 200, value: { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} } };
   if (method === "DELETE") { created = undefined; return { status: 204, value: null }; }
   if (method === "POST") {
+    if (mode === "create-http-failure") return { status: 422, value: { raw: credential } };
     created = { id: 123, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
     return { status: 202, value: { droplet: created, links: { actions: [{ id: 456, rel: "create", href: mode === "post-link-failure" ? "https://synthetic.invalid/v2/actions/456" : "https://api.digitalocean.com/v2/actions/456" }] } } };
   }
   if (mode === "first-action-http-failure") return { status: 403, value: { raw: credential } };
+  if (mode === "first-action-invalid") return { status: 200, value: { action: { id: 456, type: credential, resource_type: "droplet", resource_id: 123, status: "completed" } } };
+  if (mode === "pending-create") return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 0, status: "in-progress" } } };
   if (mode === "zero-resource-create" && state.calls.filter((call) => call.path === "/v2/actions/456").length === 1)
     return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 0, status: "in-progress" } } };
   return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: "completed" } } };
 } : undefined;
-serveProviderWorker({ ...(syntheticRequest ? { request: syntheticRequest } : {}), spawn() {
+serveProviderWorker({ ...(syntheticRequest ? { request: syntheticRequest } : {}),
+  ...(mode === "pending-create" ? { now: () => clock, sleep: async (ms) => { clock += ms; } } : {}), spawn() {
   state.consumes++; save();
   if (mode === "worker-late-debug") process.env.NODE_DEBUG = "https";
   if (mode === "worker-late-report") process.report.reportOnSignal = true;

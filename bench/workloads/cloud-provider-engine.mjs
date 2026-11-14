@@ -8,9 +8,11 @@ import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
 import { host } from "./cloud-contract.mjs";
+import { providerDiagnostic, providerFailure } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
-const stopped = (uncertain = false) => Object.assign(new Error("provider control failed; preserve state/evidence/host"), uncertain ? { controlUncertain: true } : {});
+const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
+  uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
@@ -110,7 +112,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       // Boolean assertion only: a failure must never echo a credential.
       assert.ok(value.length >= 20 && value.length <= 4096 && /^[A-Za-z0-9._~+/-]+=*$/.test(value));
       credential = value;
-    } catch (error) { throw stopped(error?.controlUncertain === true); }
+    } catch (error) { throw stopped(error?.controlUncertain === true, { code: "provider-credential" }); }
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
   return async (args, timeout = 60000, allowFail = false) => {
@@ -118,27 +120,33 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     consume(args.at(-1));
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2), deadline = now() + timeout;
-    const call = async (method, path, body, expected = 200) => {
+    let code = "provider-command";
+    const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
       const remaining = Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
+      code = `${phase}-request`;
       let response;
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted }); }
       catch { throw stopped(true); }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
-      if (response?.status !== expected) throw Object.assign(stopped(), { httpFailure: true });
+      if (response?.status !== expected) {
+        const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
+        throw Object.assign(stopped(false, diagnostic), { httpFailure: true });
+      }
       return response.value;
     };
     try {
       let value;
       if (command[0] === "account") {
         assert.deepEqual(command, ["account", "get", "--output", "json"]);
-        value = (await call("GET", "/v2/account"))?.account ?? null;
+        value = (await call("account", "GET", "/v2/account"))?.account ?? null;
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         value = []; const seen = new Set(); let total;
         for (let page = 1; page <= 100; page++) {
-          const result = await call("GET", `/v2/droplets?page=${page}&per_page=200`);
+          const result = await call("list", "GET", `/v2/droplets?page=${page}&per_page=200`);
+          code = "list-response";
           assert.ok(Array.isArray(result.droplets) && result.droplets.length <= 200);
           assert.ok(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0 && result.meta.total <= 20000);
           total ??= result.meta.total; assert.equal(result.meta.total, total, "provider census changed");
@@ -160,35 +168,42 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(/^corten-bench,corten-bench-groups,corten-bench-groups-run-[a-f0-9]{16}$/.test(command[13]));
         assert.equal(command[13], `corten-bench,corten-bench-groups,corten-bench-groups-run-${command[3].slice(-16)}`);
         const sshKey = Number(command[11]); assert.ok(positive(sshKey), "bounded numeric SSH key ID required");
-        const result = await call("POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
+        const result = await call("create", "POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
           ssh_keys: [sshKey], tags: command[13].split(",") }, 202);
+        code = "create-response";
         assert.ok(positive(result.droplet?.id));
+        code = "create-link";
         const actions = result.links?.actions;
         assert.ok(Array.isArray(actions) && actions.length === 1 && actions[0].rel === "create" && positive(actions[0].id));
         assert.equal(actions[0].href, `${origin}/v2/actions/${actions[0].id}`);
         for (;;) {
-          const { action } = await call("GET", `/v2/actions/${actions[0].id}`);
+          const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
+          code = "create-action-response";
+          const { action } = response;
           assert.ok(action?.id === actions[0].id && action.resource_type === "droplet" && action.type === "create");
           // The action model permits integer zero as well as null. Neither is
           // completion proof: only a completed action bound to this droplet is.
           assert.ok(action.resource_id === result.droplet.id || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0));
           if (action.status === "completed") { assert.equal(action.resource_id, result.droplet.id); break; }
           assert.equal(action.status, "in-progress", "provider create action failed");
+          code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
         }
         value = [result.droplet];
       } else {
         assert.equal(command.length, 5); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "delete"]); assert.equal(command[4], "--force");
         assert.ok(/^[1-9]\d*$/.test(command[3]));
-        await call("DELETE", `/v2/droplets/${command[3]}`, undefined, 204); value = null;
+        await call("delete", "DELETE", `/v2/droplets/${command[3]}`, undefined, 204); value = null;
       }
+      code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
-      if (error?.controlUncertain) throw stopped(true);
-      if (allowFail && error?.httpFailure) return { status: 1, stdout: "", stderr: "", error: stopped() };
-      throw stopped();
+      const diagnostic = providerFailure(error) ?? { code };
+      if (error?.controlUncertain) throw stopped(true, diagnostic);
+      if (allowFail && error?.httpFailure) return { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) };
+      throw stopped(false, diagnostic);
     }
   };
 }

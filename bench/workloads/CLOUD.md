@@ -306,6 +306,18 @@ before releasing its operation lock, including early-return and error paths. For
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
+Provider failures may append a bounded phase code to the generic CLI error. The
+closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
+account/list/create/delete requests, create response/link validation, action
+request/response validation, pending-action deadline, and output filtering.
+Unexpected HTTP responses use a `-http` code and optionally a numeric status from
+that module's closed status table; unlisted statuses are omitted, not accepted or
+retried. Only those validated data fields cross the worker failure boundary or a
+permitted HTTP-failure result, never native exceptions, raw bodies or credentials.
+Classification survives cached teardown and failed create reconciliation; it is
+diagnostic only and changes no action schema, ownership proof, retry, deadline,
+approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
+generic errors, not evidence about the provider's response.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
