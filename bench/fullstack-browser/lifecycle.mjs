@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { createHash } from "node:crypto";
 import { intentionalDisabledPreload, isScriptPreload } from "../catalog/check.mjs";
+import { responseDateHash } from "./cancellations.mjs";
 
 function address(value) {
   try { const url = new URL(value); return { scheme: url.protocol, path: ["http:", "https:", "ws:", "wss:"].includes(url.protocol) ? url.pathname : null }; }
@@ -66,7 +67,7 @@ export class PlatformLifecycle {
     });
     cdp.on("Network.requestWillBeSentExtraInfo", (e) => record("Network.requestWillBeSentExtraInfo", { request: e.requestId, at: e.connectTiming?.requestTime ?? null }));
     cdp.on("Network.responseReceived", (e) => record("Network.responseReceived", { request: e.requestId, frame: e.frameId ?? null, loader: e.loaderId, type: e.type, status: e.response.status, at: e.timestamp,
-      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
+      mime: e.response.mimeType ?? null, timing: responseTiming(e.response), dateSha256: responseDateHash(e.response.headers), hasCsp: Object.keys(e.response.headers ?? {}).some((key) => key.toLowerCase() === "content-security-policy") }));
     cdp.on("Network.loadingFinished", (e) => record("Network.loadingFinished", { request: e.requestId, at: e.timestamp }));
     cdp.on("Network.loadingFailed", (e) => record("Network.loadingFailed", { request: e.requestId, at: e.timestamp, canceled: e.canceled === true, errorText: e.errorText, blockedReason: e.blockedReason ?? null }));
     for (const event of ["Target.targetCreated", "Target.targetInfoChanged"]) targets?.on(event, ({ targetInfo: t }) => record(event, targetInfo(t)));

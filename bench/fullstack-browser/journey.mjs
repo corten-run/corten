@@ -120,7 +120,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.bindingArtifact = bindingArtifact ? { sha256: bindingArtifact.sha256, imageId: bindingArtifact.imageId, sourceCommit: bindingArtifact.sourceCommit } : null;
     }
     lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
-    network.attachCDP(cdp);
+    network.attachCDP(cdp, lifecycle);
     const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
     await lifecycle.enableDomains(); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);

@@ -429,6 +429,12 @@ Live, independent parser and missing-item DOM observations use the installed fix
 projection API. Each typed read binds its unique observer, action/context, native resource scope,
 bounded read interval and originating document response. The response is reconciled with native
 frame/loader/dispatch/terminal observations; a live read is not claimed to reproduce earlier HTML.
+An independently bounded CDP document-body read retains only its byte hash/length and response
+Date-header hash. Native and browser response tuples must be mutually unique, including complete-URL
+hash, method and status; repeated URLs never use an ordinal or approximate start-time match to
+attest a DOM response. Missing Date/body receipts, failed reads, documents exceeding the bounded
+16 MiB body-string observation or indistinguishable response tuples remain unproved. Retained
+projection bytes with missing linkage are conserved but cannot attest their saved semantic model.
 Independent parser contexts retain their actual script-disabled configuration. Missing/ambiguous
 linkage or incomplete/privacy-filtered extraction remains proof-missing, not an observed target
 failure. Native v2 never falls back to body/error text or original secret-bearing HTML. The strict

@@ -6,7 +6,7 @@ import { discoverReactEndpoint } from "./bindings.mjs";
 import { observeBindingLinks } from "./binding-links.mjs";
 import { inspectScopedBinding } from "./scopes.mjs";
 import { singleFetchData } from "./navigation.mjs";
-import { NativeNetworkAudit } from "./cancellations.mjs";
+import { NativeNetworkAudit, responseDateHash } from "./cancellations.mjs";
 import { performance } from "node:perf_hooks";
 import { installResourceObserver } from "./resources.mjs";
 import { collectBrowserDOM } from "./native-browser-dom.mjs";
@@ -67,6 +67,7 @@ export function observeNetwork(page) {
     row.status = response.status();
     const headers = response.headers(); row.type = headers["content-type"] ?? null; row.encoding = headers["content-encoding"] ?? "identity";
     row.hasCsp = Boolean(headers["content-security-policy"]);
+    if (row.resource === "document") row.dateSha256 = responseDateHash(headers);
   });
   page.on("requestfinished", (request) => { track((async () => {
     const row = byRequest.get(request), response = await request.response();
@@ -97,11 +98,12 @@ export function observeNetwork(page) {
       } catch { /* A malformed native payload is retained, never normalized. */ }
     }
   })().finally(notify)); });
-  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); };
+  const drain = async () => { while (pending.size) await Promise.allSettled([...pending]); await native?.drain(); };
   let native;
   return { rows, failures,
     requestId(request) { return byRequest.get(request)?.id ?? null; },
-    attachCDP(cdp) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; }); },
+    attachCDP(cdp, lifecycle) { native = new NativeNetworkAudit(cdp, (id) => { const request = byId.get(id); return request ? { url: request.url(), startTime: request.timing().startTime } : null; },
+      (receipt) => lifecycle?.events.push(receipt)); },
     annotate() { native?.annotate(rows); },
     originatingDocument(binding) {
       native?.annotate(rows);

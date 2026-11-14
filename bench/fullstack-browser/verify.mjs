@@ -722,11 +722,6 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
   need(dispatches.length === 1, "Missing/ambiguous native document dispatch");
   const d = dispatches[0];
   same([n.frame, n.loader, n.wall, n.urlSha256, r.method, r.path, p.urlSha256], [d.frame, d.loader, d.wall, d.urlSha256, d.method, d.path, d.urlSha256], "Document/native dispatch identity differs");
-  const sameNativeURL = j.events.filter((e) => e.event === "Network.requestWillBeSent" && e.type === "Document" && e.urlSha256 === p.urlSha256 && e.method === r.method);
-  const sameBrowserURL = evidence.requestLedger.filter((q) => q.resource === "document" && q.documentIdentity?.urlSha256 === p.urlSha256 && q.method === r.method);
-  need(finite(p.startedAt) && finite(d.wall) && (sameNativeURL.length === 1 && sameBrowserURL.length === 1
-    || Math.abs(p.startedAt - d.wall) <= 1 && sameNativeURL.filter((e) => Math.abs(e.wall - p.startedAt) <= 1).length === 1
-      && sameBrowserURL.filter((q) => Math.abs(q.documentIdentity.startedAt - d.wall) <= 1).length === 1), "Ambiguous repeated native document URL");
   const next = j.events.find((e) => e.event === "Network.requestWillBeSent" && e.request === d.request && e.at > d.at);
   const replies = j.events.filter((e) => e.event === "Network.responseReceived" && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
   const terminals = j.events.filter((e) => ["Network.loadingFinished", "Network.loadingFailed"].includes(e.event) && e.request === d.request && e.receivedAt >= d.receivedAt && (!next || e.receivedAt < next.receivedAt));
@@ -735,6 +730,20 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
     && terminals.length === 1 && terminals[0].event === "Network.loadingFinished"
     && finite(terminals[0].at) && terminals[0].at >= d.at
     && replies[0].receivedAt <= terminals[0].receivedAt && epoch(terminals[0].receivedAt) <= times[2] + 1, "Native document response/terminal differs or follows DOM read");
+  const bodies = j.events.filter((e) => e.event === "native-document-body" && e.request === d.request && e.dispatchAt === d.at);
+  need(bodies.length === 1, "Missing/ambiguous native document body receipt");
+  const body = bodies[0];
+  same([body.frame, body.loader, body.urlSha256, body.method, body.status, body.bodySha256, body.bytes, body.dateSha256],
+    [d.frame, d.loader, d.urlSha256, d.method, r.status, r.bodySha256, r.bytes?.decodedBody, r.dateSha256], "Native document response bytes/identity differ");
+  same([p.dateSha256, replies[0].dateSha256], [body.dateSha256, body.dateSha256], "Native/browser response date identity differs");
+  need(hash.test(body.dateSha256 ?? "") && integer(body.bytes) && finite(p.startedAt)
+    && finite(body.startedAt) && finite(body.receivedAt) && terminals[0].receivedAt <= body.startedAt
+    && body.startedAt <= body.receivedAt && epoch(body.receivedAt) <= times[2] + 1, "Native document body read outside pre-DOM window");
+  const nativeTuple = j.events.filter((e) => e.event === "native-document-body" && e.urlSha256 === body.urlSha256 && e.method === body.method
+    && e.status === body.status && e.bodySha256 === body.bodySha256 && e.bytes === body.bytes && e.dateSha256 === body.dateSha256);
+  const browserTuple = evidence.requestLedger.filter((q) => q.resource === "document" && q.documentIdentity?.urlSha256 === body.urlSha256 && q.method === body.method
+    && q.status === body.status && q.bodySha256 === body.bodySha256 && q.bytes?.decodedBody === body.bytes && q.dateSha256 === body.dateSha256);
+  need(nativeTuple.length === 1 && browserTuple.length === 1, "Ambiguous native document response identity");
   const commits = j.events.filter((e) => e.event === "Page.frameNavigated" && e.frame === d.frame && e.loader === d.loader && e.path === d.path);
   need(commits.length === 1 && d.receivedAt <= commits[0].receivedAt && commits[0].receivedAt <= terminals[0].receivedAt, "Document lacks unique native commit");
   const realms = j.realms.filter((v) => v.realm === row.resourcesAtDOM.realm);
@@ -758,7 +767,12 @@ export function validateDOMIdentity(dom, row, evidence, context, caseKey, observ
 
 export function replayDOMObservation(reader, dom, row, evidence, context, caseKey, observers, parser = false) {
   const identity = validateDOMIdentity(dom, row, evidence, context, caseKey, observers, parser);
-  if (!identity) return null;
+  if (!identity) {
+    // Retained bytes still belong to the attempt, but without the native link
+    // they cannot attest a DOM model or qualify this cell.
+    if (dom?.responseEvidence?.body) reader.read(dom.responseEvidence.body);
+    return null;
+  }
   const response = replayResponse(reader, dom.responseEvidence, identity);
   same(response.type, "public-browser-dom-observation", "Native DOM requires installed browser projection");
   same([response.page, response.error?.text ?? null, response.articleCount, response.extractionComplete],

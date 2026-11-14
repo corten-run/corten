@@ -23,6 +23,7 @@ import { missingAction } from "./probes.mjs";
 import { discoverReactEndpoint } from "./bindings.mjs";
 import { ExecutionLedger, replayExecution, participantSnapshot } from "./native-execution.mjs";
 import { OwnedDocker } from "./run.mjs";
+import { NativeNetworkAudit } from "./cancellations.mjs";
 
 // Explicit local Docker/Chromium integration, separate from portable units.
 // A witnessed failed prerequisite is a complete selected attempt, not a pass
@@ -113,6 +114,47 @@ test("native host tool identities require complete canonical lock proof", () => 
     assert.throws(() => nativeToolIdentities(changed, tools.lockSha256));
 });
 
+test("native document correlation conserves repeated URLs without timestamp guesses", async () => {
+  const cdp = new EventEmitter(), receipts = [], url = "http://127.0.0.1/marketplace/en-US/item_2", body = "document bytes";
+  cdp.send = async (method) => { assert.equal(method, "Network.getResponseBody"); return { body, base64Encoded: false }; };
+  const identities = new Map(), rows = [], audit = new NativeNetworkAudit(cdp, (id) => identities.get(id), (r) => receipts.push(r));
+  for (let i = 0; i < 2; i++) {
+    const date = new Date(100000 + i * 4000).toUTCString(), requestId = `native-${i}`;
+    identities.set(`browser-${i}`, { url, startTime: 100005 + i * 4000 });
+    rows.push({ id: `browser-${i}`, resource: "document", method: "GET", completed: true, status: 200,
+      bodySha256: sha256(body), dateSha256: sha256(date), bytes: { decodedBody: Buffer.byteLength(body) } });
+    cdp.emit("Network.requestWillBeSent", { requestId, frameId: "frame", loaderId: `loader-${i}`, timestamp: 10 + i * 4, wallTime: 100 + i * 4,
+      type: "Document", request: { url, method: "GET" } });
+    cdp.emit("Network.responseReceived", { requestId, response: { status: 200, headers: { Date: date } } });
+    cdp.emit("Network.loadingFinished", { requestId });
+    if (audit.drain) await audit.drain();
+    audit.annotate(rows);
+  }
+  assert.deepEqual(rows.map((r) => r.nativeDocument?.request), ["native-0", "native-1"]);
+  assert.equal(receipts.length, 2);
+  assert.ok(!JSON.stringify(receipts).includes(body));
+  rows[1].dateSha256 = rows[0].dateSha256;
+  audit.annotate(rows);
+  assert.deepEqual(rows.map((r) => r.nativeDocument), [null, null], "An indistinguishable browser response cannot borrow the earlier receipt");
+});
+
+test("native document correlation refuses absent or indistinguishable native response bytes", async (t) => {
+  for (const kind of ["missing-body", "missing-date", "duplicate-native"]) await t.test(kind, async () => {
+    const cdp = new EventEmitter(), body = "bounded document", url = "http://127.0.0.1/page", date = new Date(100000).toUTCString();
+    cdp.send = async () => { if (kind === "missing-body") throw new Error("Unrecorded private diagnostic"); return { body, base64Encoded: false }; };
+    const audit = new NativeNetworkAudit(cdp, () => ({ url, startTime: 100005 }));
+    for (let i = 0; i < (kind === "duplicate-native" ? 2 : 1); i++) {
+      cdp.emit("Network.requestWillBeSent", { requestId: String(i), frameId: "frame", loaderId: String(i), timestamp: i + 1, wallTime: 100 + i,
+        type: "Document", request: { url, method: "GET" } });
+      cdp.emit("Network.responseReceived", { requestId: String(i), response: { status: 200, headers: kind === "missing-date" ? {} : { date } } });
+      cdp.emit("Network.loadingFinished", { requestId: String(i) });
+    }
+    await audit.drain();
+    const rows = [{ id: "browser", resource: "document", method: "GET", status: 200, completed: true, bodySha256: sha256(body), dateSha256: sha256(date), bytes: { decodedBody: Buffer.byteLength(body) } }];
+    audit.annotate(rows); assert.equal(rows[0].nativeDocument, null);
+  });
+});
+
 // Actual HTTP/Chromium/CDP plus the real caller and installed leaf. This is
 // apparatus wiring, not a native marketplace contender or qualification.
 test("native DOM consumer binds actual document scope and interval for page Alice and 404", { timeout: 60000 }, async (t) => {
@@ -121,9 +163,12 @@ test("native DOM consumer binds actual document scope and interval for page Alic
   const { referenceHtml } = await import("../marketplace/reference.mjs"), { snapshotPage } = await import("../marketplace/check.mjs");
   const profile = plan.cases.find((p) => p.js && p.locale === "en-US" && p.source === "fixture");
   const bodies = new Map(), store = { blob(body) { const ref = { path: `native-evidence/blobs/${sha256(body)}`, sha256: sha256(body), bytes: body.length }; bodies.set(ref.path, Buffer.from(body)); return ref; } };
-  const reader = { json: (ref) => JSON.parse(bodies.get(ref.path)) };
-  let body = referenceHtml(records().item_1, "en-US");
-  const server = createServer((req, res) => { res.writeHead(req.url.includes("item_missing") ? 404 : 200, { "content-type": "text/html" }); res.end(body.replaceAll("http://localhost", `http://127.0.0.1:${server.address().port}`)); });
+  const reader = { read: (ref) => bodies.get(ref.path), json: (ref) => JSON.parse(bodies.get(ref.path)) };
+  let body = referenceHtml(records().item_1, "en-US"), responseNumber = 0;
+  const server = createServer((req, res) => {
+    res.writeHead(req.url.includes("item_missing") ? 404 : 200, { "content-type": "text/html", date: new Date(1700000000000 + responseNumber++ * 4000).toUTCString() });
+    res.end(body.replaceAll("http://localhost", `http://127.0.0.1:${server.address().port}`));
+  });
   await listening(server, async (base) => {
     const browser = await chromium.launch({ headless: true });
     let lifecycle, context;
@@ -133,10 +178,10 @@ test("native DOM consumer binds actual document scope and interval for page Alic
       await context.addInitScript(installResourceObserver);
       const page = await context.newPage(), cdp = await context.newCDPSession(page), network = observeNetwork(page);
       lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: true });
-      await lifecycle.enable(); network.attachCDP(cdp); await lifecycle.enableDomains(); await lifecycle.startObservation(); lifecycle.markApplicationStart();
+      await lifecycle.enable(); network.attachCDP(cdp, lifecycle); await lifecycle.enableDomains(); await lifecycle.startObservation(); lifecycle.markApplicationStart();
       const resources = new ResourceAudit(page, cdp, true, lifecycle), rows = [];
-      for (const kind of ["ordinary", "Alice", "missing"]) {
-        const action = profile.steps[kind === "ordinary" ? 0 : kind === "Alice" ? 3 : 9];
+      for (const kind of ["ordinary", "Alice", "ordinary-repeat", "missing"]) {
+        const action = profile.steps[kind.startsWith("ordinary") ? 0 : kind === "Alice" ? 3 : 9];
         body = kind === "missing" ? '<!doctype html><html lang="en-US"><body><h1>Not found</h1></body></html>' : referenceHtml(records()[action.itemId], "en-US");
         if (kind === "Alice") body = body.replace("seller=&amp;sort=asc", "seller=Alice&amp;sort=desc");
         const url = base + action.path + (kind === "Alice" ? "?seller=Alice&sort=desc" : "");
@@ -201,12 +246,23 @@ test("native DOM consumer binds actual document scope and interval for page Alic
         assert.throws(() => replayDOMObservation(reader, row.dom, row, evidence, observation.contexts[0], profile.key, new Set()));
       });
       await t.test("rejects missing native terminal", () => negative((v) => { v.evidence.platformLifecycle.events = v.evidence.platformLifecycle.events.filter((e) => e.event !== "Network.loadingFinished"); }));
+      await t.test("rejects missing native body read", () => negative((v) => { v.evidence.platformLifecycle.events = v.evidence.platformLifecycle.events.filter((e) => e.event !== "native-document-body"); }));
+      await t.test("rejects altered native response bytes", () => negative((v) => { v.evidence.platformLifecycle.events.find((e) => e.event === "native-document-body").bodySha256 = "f".repeat(64); }));
+      await t.test("rejects altered native date identity", () => negative((v) => { v.evidence.platformLifecycle.events.find((e) => e.event === "Network.responseReceived").dateSha256 = "f".repeat(64); }));
+      await t.test("rejects duplicated native body receipt", () => negative((v) => { v.evidence.platformLifecycle.events.push(v.evidence.platformLifecycle.events.find((e) => e.event === "native-document-body")); }));
+      await t.test("rejects post-DOM native body read", () => negative((v) => { v.evidence.platformLifecycle.events.find((e) => e.event === "native-document-body").receivedAt = v.row.resources.at + 10; }));
       await t.test("rejects script-enabled independent parser", () => {
         const c = { ...observation.contexts.find((c) => c.id === rows[0].document.context), javaScriptEnabled: true };
         assert.throws(() => replayDOMObservation(reader, rows[0].document, rows[0], evidence, c, profile.key, new Set(), true));
       });
       const missing = structuredClone(original); missing.row.dom.responseEvidence = null;
       assert.equal(replayDOMObservation(reader, missing.row.dom, missing.row, missing.evidence, missing.context, profile.key, new Set()), null);
+      await t.test("missing linkage retains byte ownership without attesting the saved DOM", () => {
+        const value = structuredClone(original); value.evidence.requestLedger[0].nativeDocument = null;
+        const consumed = [], unqualifiedReader = { read: (ref) => { consumed.push(ref); return reader.read(ref); }, json: () => assert.fail("Unbound DOM must not be replayed as native proof") };
+        assert.equal(replayDOMObservation(unqualifiedReader, value.row.dom, value.row, value.evidence, value.context, profile.key, new Set()), null);
+        assert.deepEqual(consumed, [value.row.dom.responseEvidence.body]);
+      });
     } finally {
       if (context) await closeObservedContext(browser, context, observation);
       await lifecycle?.close(); await browser.close();
