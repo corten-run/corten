@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { bindExecution } from "./contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -52,9 +53,12 @@ function bindNativeCampaign(input, order, schema) {
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
 export function validateCampaign(plan) {
+  assert.ok([campaignSchema, groupCampaignSchema].includes(plan?.schema), "campaign differs from fixed native bindings");
   const request = { round: plan?.round, commit: plan?.commit };
   const expected = plan?.schema === groupCampaignSchema ? bindGroupCampaign({ ...request, group: plan.order?.[0] }) : bindCampaign(request);
-  assert.deepEqual(plan, expected, "campaign differs from fixed native bindings");
+  // A full plan includes every group's source manifest. Keep exact comparison
+  // without constructing a potentially enormous assertion diff on rejection.
+  assert.ok(isDeepStrictEqual(plan, expected), "campaign differs from fixed native bindings");
 }
 
 // These are operational phases, not arbitrary overrides or a replacement native parser.

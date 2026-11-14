@@ -89,6 +89,10 @@ test("group campaigns bind the entire exact native group with stable all-group p
   ]) {
     const edited = structuredClone(original); change(edited);
     const { campaignSha256, ...body } = edited; edited.campaignSha256 = deploymentSha256(body);
-    assert.throws(() => validateCampaign(edited));
+    assert.throws(() => validateCampaign(edited), (error) => {
+      assert.match(error.message, /campaign differs from fixed native bindings/);
+      assert.ok(error.message.length < 256, "refusal must not render the complete campaign source manifests");
+      return true;
+    });
   }
 });
