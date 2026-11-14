@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -14,50 +14,135 @@ import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
 import { bindingArtifactFromImage } from "./binding-image.mjs";
+import { EvidenceStore } from "./native-evidence.mjs";
+import { captureSource, captureBuildContext, captureTools } from "./native-source.mjs";
+import { ExecutionLedger, participantSnapshot, collectDockerInventory } from "./native-execution.mjs";
+import { readRegular } from "../workloads/isolated/evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
-export async function command(binary, args, timeout = 30000, log = null) {
-  const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "", stderr = "", timedOut = false;
+export async function commandResult(binary, args, { timeout = 30000, log = null, input = null } = {}) {
+  const child = spawn(binary, args, { cwd: repo, windowsHide: true, stdio: [input === null ? "ignore" : "pipe", "pipe", "pipe"] });
+  let stdout = "", stderr = "", timedOut = false, spawnError = false;
   child.stdout.on("data", (s) => { if (log) appendFileSync(log, s); stdout = (stdout + s).slice(-8 * 1024 * 1024); });
   child.stderr.on("data", (s) => { if (log) appendFileSync(log, s); stderr = (stderr + s).slice(-8192); });
   const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeout);
   try {
-    const code = await new Promise((accept, reject) => { child.on("error", reject); child.on("close", accept); });
-    if (timedOut || code !== 0) throw new Error(`${binary} ${args[0]}: ${timedOut ? "timed out" : `exit ${code}`} ${stderr}`);
-    return stdout.trim();
+    if (input !== null) { child.stdin.on("error", () => {}); child.stdin.end(input); }
+    const { code, signal } = await new Promise((accept) => {
+      child.on("error", () => { spawnError = true; }); child.on("close", (code, signal) => accept({ code, signal }));
+    });
+    return { code, signal, timedOut, spawnError, stdout: stdout.trim(), stderr };
   } finally { clearTimeout(timer); }
+}
+export async function command(binary, args, timeout = 30000, log = null, input = null) {
+  const result = await commandResult(binary, args, { timeout, log, input });
+  if (result.timedOut || result.spawnError || result.signal || result.code !== 0) {
+    const error = new Error(`${binary} ${args[0]}: ${result.timedOut ? "timed out" : `exit ${result.code}`} ${result.stderr}`);
+    error.receipt = result; throw error;
+  }
+  return result.stdout;
 }
 const docker = (args) => command("docker", args);
 const inspect = async (id) => JSON.parse(await docker(["inspect", id]))[0];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export function captureLiveInputs(store, source) {
+  return source.files.map((file) => {
+    const body = readRegular(join(repo, file.path)), text = body.toString("utf8");
+    assert.ok(sha256(body) === file.sha256 || Buffer.from(text).equals(body)
+      && sha256(text.replaceAll("\r\n", "\n")) === file.sha256, "Live executable input differs from immutable source");
+    return { path: file.path, body: store.blob(body), canonicalSha256: file.sha256 };
+  });
+}
 export function imageEvidence(info, commit) {
   const labels = info.Config?.Labels ?? {};
   const builtCommit = labels["run.corten.browser.commit"] ?? labels["run.corten.marketplace.commit"] ?? null;
   const builtDirty = labels["run.corten.browser.dirty"] ?? labels["run.corten.marketplace.dirty"] ?? null;
   return { id: info.Id, repoDigests: info.RepoDigests ?? [], created: info.Created, architecture: info.Architecture, os: info.Os,
-    builtCommit, builtDirty, imageSourceVerified: builtCommit === commit && builtDirty === "false" };
+    builtCommit, builtDirty, imageSourceVerified: builtCommit === commit && builtDirty === "false",
+    buildContextSha256: labels["run.corten.browser.context-sha256"] ?? null };
 }
 export class OwnedDocker {
-  constructor(task) { this.task = task; this.containers = new Set(); this.images = new Set(); this.network = null; }
+  constructor(task, ledger = null) {
+    this.task = task; this.ledger = ledger; this.containers = new Set(); this.images = new Set(); this.network = null;
+    this.participants = new Map(); this.volumes = new Map(); this.imageIds = new Map();
+  }
+  record(event) { return this.ledger?.append({ ...event, at: Date.now() }); }
+  async acknowledged(operation, meta, args) {
+    const retainCreateId = (stdout) => {
+      if (operation !== "create" || !/^[a-f0-9]{64}$/.test(stdout ?? "")) return null;
+      this.containers.add(stdout); this.participants.set(stdout, { role: meta.role, app: meta.app, case: meta.case });
+      return stdout;
+    };
+    try {
+      const stdout = await docker(args);
+      if (operation === "create") {
+        assert.match(stdout, /^[a-f0-9]{64}$/);
+        retainCreateId(stdout);
+      }
+      this.record({ event: "command", operation, ...meta, id: operation === "create" ? stdout : meta.id, code: 0 });
+      return stdout;
+    } catch (error) {
+      const r = error.receipt;
+      // A failed/interrupting create can still return the original full ID.
+      // Register it before interpreting the exit or attempting any readback.
+      const createdId = retainCreateId(r?.stdout);
+      if (r && !r.timedOut && !r.spawnError && !r.signal && Number.isInteger(r.code))
+        this.record({ event: "command", operation, ...meta, id: createdId ?? meta.id ?? null, code: r.code });
+      throw error;
+    }
+  }
+  async participant(id, phase) {
+    const meta = this.participants.get(id), info = await inspect(id);
+    const image = JSON.parse(await docker(["image", "inspect", info.Image]))[0];
+    const snapshot = participantSnapshot(info, image);
+    this.record({ event: "participant", phase, ...meta, snapshot });
+    this.volumes.set(id, snapshot.mounts.filter((m) => m.type === "volume").map((m) => m.volume));
+    return info;
+  }
   get labels() { return ["--label", "agent.owner=codex", "--label", `agent.task=${this.task}`]; }
   async createNetwork() {
     const name = `${this.task}-net`;
     this.network = await docker(["network", "create", ...this.labels, name]);
+    this.record({ event: "created", kind: "network", id: this.network, owned: true });
     return name;
   }
-  async start(name, args, image, commandArgs = []) {
+  async create(name, args, image, commandArgs = [], meta = { role: "upstream", app: null, case: null }) {
     // Register the ID before start. A failed start is still cleaned up; a name
     // collision never registers someone else's container for removal.
-    const id = await docker(["create", "--pull=never", "--name", name, ...this.labels, ...args, image, ...commandArgs]);
-    this.containers.add(id); await docker(["start", id]); return id;
+    const id = await this.acknowledged("create", { ...meta, id: null }, ["create", "--pull=never", "--name", name, ...this.labels, ...args, image, ...commandArgs]);
+    if (this.ledger) await this.participant(id, "created");
+    return id;
+  }
+  async start(name, args, image, commandArgs = [], meta) {
+    const id = await this.create(name, args, image, commandArgs, meta);
+    await this.acknowledged("start", { ...this.participants.get(id), id }, ["start", id]);
+    if (this.ledger) await this.participant(id, "running");
+    return id;
+  }
+  async copy(id, destination) {
+    return this.acknowledged("copy", { ...this.participants.get(id), id }, ["cp", `${id}:/app/.next/static`, destination]);
+  }
+  async inventories(scope) {
+    if (!this.ledger) return;
+    for (const kind of ["container", "network", "image", "volume"])
+      this.record({ event: "inventory", ...await collectDockerInventory((args) => commandResult("docker", args), kind, this.task, scope) });
   }
   async remove(id) {
     assert.ok(this.containers.has(id), "refusing cleanup of an unowned container");
-    const info = await inspect(id);
-    assert.equal(info.Config.Labels["agent.task"], this.task); assert.equal(info.Config.Labels["agent.owner"], "codex");
-    await docker(["rm", "-f", "-v", id]); this.containers.delete(id);
+    let info, observationError;
+    try { info = await inspect(id); } catch (error) { observationError = error; }
+    if (info) {
+      assert.equal(info.Config.Labels["agent.task"], this.task); assert.equal(info.Config.Labels["agent.owner"], "codex");
+      try { if (this.ledger) await this.participant(id, "terminal"); } catch (error) { observationError = error; }
+    }
+    // An own create registered any returned original full ID before inspect.
+    // Lost terminal evidence blocks replay, but must not strand that resource.
+    const removed = await commandResult("docker", ["rm", "-f", "-v", id]);
+    if (!removed.timedOut && !removed.spawnError && !removed.signal && Number.isInteger(removed.code)) this.record({ event: "remove", kind: "container", id, code: removed.code });
+    assert.ok(!removed.timedOut && !removed.spawnError && !removed.signal && removed.code === 0, "Owned Docker removal not acknowledged");
+    this.containers.delete(id); await this.inventories("all");
+    if (observationError) throw observationError;
   }
   async cleanup() {
     const errors = [];
@@ -65,16 +150,27 @@ export class OwnedDocker {
     if (this.network) try {
       const info = JSON.parse(await docker(["network", "inspect", this.network]))[0];
       assert.equal(info.Labels["agent.task"], this.task);
-      await docker(["network", "rm", this.network]); this.network = null;
+      await docker(["network", "rm", this.network]);
+      this.record({ event: "remove", kind: "network", id: this.network, code: 0 }); this.network = null;
     } catch (e) { errors.push(e.message); }
     for (const tag of this.images) try {
+      const originalId = this.imageIds.get(tag);
+      if (originalId) {
+        const removed = await commandResult("docker", ["image", "rm", originalId]);
+        if (!removed.timedOut && !removed.spawnError && !removed.signal && Number.isInteger(removed.code))
+          this.record({ event: "remove", kind: "image", id: originalId, code: removed.code });
+        assert.ok(!removed.timedOut && !removed.spawnError && !removed.signal && removed.code === 0, "Owned image removal not acknowledged");
+        continue;
+      }
       const found = await docker(["image", "ls", "--quiet", "--filter", `reference=${tag}`]);
       if (found) {
         const image = JSON.parse(await docker(["image", "inspect", tag]))[0];
         assert.equal(image.Config.Labels["agent.task"], this.task);
         await docker(["image", "rm", tag]);
+        this.record({ event: "remove", kind: "image", id: image.Id, code: 0 });
       }
     } catch (e) { errors.push(e.message); }
+    try { await this.inventories("all"); await this.inventories("owned"); } catch (error) { errors.push(error.message); }
     return errors;
   }
 }
@@ -140,7 +236,6 @@ export async function run(args) {
   mkdirSync(dirname(folder), { recursive: true });
   mkdirSync(folder, { recursive: false });
   const task = `browser-${randomUUID().slice(0, 12)}`;
-  const owned = new OwnedDocker(task);
   const commit = await command("git", ["rev-parse", "HEAD"]);
   const dirty = await command("git", ["status", "--porcelain", "--untracked-files=normal"]);
   const summary = { schema, group: "fullstack-browser", startedAt: new Date().toISOString(), task, effectivePlan: plan, settings,
@@ -156,10 +251,20 @@ export async function run(args) {
       "No load, production HTTP, repeated timing, build, CPU, memory or instruction qualification"], cleanupFailures: [], failures: [] };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2) + "\n"); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   save();
+  const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() });
+  const owned = new OwnedDocker(task, ledger);
+  const native = summary.native = { schema: "native-browser-run/v2", source: null, sourceBinding: null, inputsBefore: null, inputsAfter: null,
+    toolsBefore: null, toolsAfter: null, execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
+  const observation = { store, contexts: native.contexts, byContext: new Map(), byRequest: new Map(), round: options.round };
+  let source;
   let browser, interrupted = false;
   const interrupt = () => { interrupted = true; };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   try {
+    const narrow = captureSource(store, commit); native.source = store.record("source", narrow);
+    const { captureSources } = await import("../workloads/isolated/contract.mjs");
+    source = captureSources(commit); native.sourceBinding = store.record("source-binding", source);
+    native.inputsBefore = store.record("inputs-before", captureLiveInputs(store, source));
     writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
     if (options.build) for (const app of options.apps) {
       if (interrupted) throw new Error("interrupted");
@@ -170,11 +275,35 @@ export async function run(args) {
       owned.images.add(build.tag);
       const entry = summary.builds[app] = { image: build.tag, dockerfile: build.dockerfile, context: build.context, commit, dirty: Boolean(dirty), sourceSnapshot: before, passed: false };
       try {
+        const context = captureBuildContext(store, commit, app);
+        entry.nativeContext = store.record(`build-${app}`, context);
+        const input = readFileSync(join(folder, context.body.path));
+        const identityPath = join(folder, `build-${app}.iid`);
+        assert.ok(!existsSync(identityPath), "Build identity path already exists");
+        const archiveArgs = [...build.args.slice(0, -3), "--label", `run.corten.browser.context-sha256=${context.body.sha256}`, "--iidfile", identityPath, "-f", context.dockerfile, "-"];
         console.log(`building native ${app}`);
-        await command("docker", build.args, 60 * 60 * 1000, join(folder, `build-${app}.log`));
+        const built = await commandResult("docker", archiveArgs, { timeout: 60 * 60 * 1000, log: join(folder, `build-${app}.log`), input });
+        let originalId = null, identityError = null;
+        if (existsSync(identityPath)) {
+          try {
+            assert.ok(lstatSync(identityPath).size <= 80, "Unbounded Docker image identity");
+            originalId = readRegular(identityPath).toString("utf8").trim(); assert.match(originalId, /^sha256:[a-f0-9]{64}$/);
+          } catch (error) { identityError = error; originalId = null; }
+          finally { unlinkSync(identityPath); }
+        }
+        entry.originalImageId = originalId;
+        if (originalId) owned.imageIds.set(build.tag, originalId);
+        if (!built.timedOut && !built.spawnError && !built.signal && Number.isInteger(built.code))
+          owned.record({ event: "command", operation: "build", role: "artifact", app, case: null, id: originalId, code: built.code });
+        if (identityError) throw identityError;
+        assert.ok(!built.timedOut && !built.spawnError && !built.signal && built.code === 0, "Native immutable-context build not acknowledged");
+        assert.ok(originalId, "Successful build original image ID unavailable");
+        owned.record({ event: "created", kind: "image", id: originalId, owned: true });
         assert.equal(await command("git", ["rev-parse", "HEAD"]), commit, "HEAD changed during native image build");
         assert.equal(await sourceSnapshot(), before, "source changed during native image build");
         targets[app] = { ...targets[app], image: build.tag };
+        const builtImage = JSON.parse(await docker(["image", "inspect", build.tag]))[0];
+        assert.equal(builtImage.Id, originalId, "Built tag no longer names the original image");
         entry.passed = true;
       } catch (e) {
         entry.error = e.message;
@@ -184,6 +313,7 @@ export async function run(args) {
     }
     const network = await owned.createNetwork();
     const upstreamImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0];
+    owned.record({ event: "created", kind: "image", id: upstreamImage.Id, owned: false });
     summary.upstreamImage = imageEvidence(upstreamImage, commit);
     const upstreamName = `${task}-upstream`;
     const upstream = await owned.start(upstreamName, ["--network", network, "--cpus", "1", "--memory", "256m", "-p", "127.0.0.1::8080",
@@ -196,6 +326,8 @@ export async function run(args) {
     const { chromium } = await import("@playwright/test");
     browser = await chromium.launch({ headless: true });
     const executable = chromium.executablePath();
+    native.toolsBefore = store.record("tools-before", captureTools(store, { browserExecutable: executable }));
+    browser.on("disconnected", () => { if (native.browserTerminal) native.browserTerminal.disconnectedAt = Date.now(); });
     summary.browser = { engine: "chromium", version: browser.version(), playwright: JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@playwright/test/package.json"))).version,
       executable, executableSha256: sha256(readFileSync(executable)), launch: { headless: true }, scope: "Local Playwright Chromium, no external browser service" };
     for (const app of candidates) {
@@ -206,7 +338,7 @@ export async function run(args) {
         image = JSON.parse(await docker(["image", "inspect", targets[app].image]))[0];
         summary.images[app] = { ...imageEvidence(image, commit), sourceTreeSha256: sha256(await command("git", ["ls-tree", "-r", "HEAD", "--", app === "corten" ? "bench/marketplace/corten" : `bench/fullstack/apps/${app}`])) };
         if (app === "nextjs") {
-          try { summary.bindingArtifacts[app] = await bindingArtifactFromImage(command, { imageId: image.Id, sourceCommit: commit, task }); }
+          try { summary.bindingArtifacts[app] = await bindingArtifactFromImage(command, { imageId: image.Id, sourceCommit: commit, task, owned }); }
           catch (error) { summary.images[app].bindingArtifactError = error.message; }
         }
       } catch (e) {
@@ -222,11 +354,14 @@ export async function run(args) {
           const name = `${task}-${app}-${plan.cases.indexOf(profile)}`;
           id = await owned.start(name, ["--network", network, "--cpus", "1", "--memory", "1g", "-p", publishPort(app),
             "-v", `${folder}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${profile.source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
-            "-e", `API_BASE=http://${upstreamName}:8080`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`], image.Id);
+            "-e", `API_BASE=http://${upstreamName}:8080`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`], image.Id, [], { role: "application", app, case: profile.key });
           const base = await address(id);
           const before = await inspect(id);
           await ready(base, profile.steps[0].path, () => interrupted);
-          const cell = await runJourney({ browser, app, base, profile, records, readback: targets[app].readback, counters, bindingArtifact: summary.bindingArtifacts[app] ?? null });
+          const caseStartedAt = Date.now();
+          const cell = await runJourney({ browser, app, base, profile, records, readback: targets[app].readback, counters,
+            bindingArtifact: summary.bindingArtifacts[app] ?? null, observation: { ...observation, app, case: profile.key, source: profile.source } });
+          owned.record({ event: "browser-window", app, case: profile.key, startedAt: caseStartedAt, endedAt: Date.now() });
           const after = await inspect(id);
           cell.evidence.provenance = { containerId: id, imageId: before.Image, startedAt: before.State.StartedAt, source: profile.source,
             stillSameProcess: after.State.Running && before.State.StartedAt === after.State.StartedAt && before.RestartCount === after.RestartCount,
@@ -249,7 +384,10 @@ export async function run(args) {
     summary.complete = true;
   } catch (e) { summary.failures.push(e.message); }
   finally {
-    if (browser) try { await browser.close(); } catch (e) { summary.cleanupFailures.push(e.message); }
+    if (browser) try {
+      native.browserTerminal = { closeStartedAt: Date.now(), contextsBefore: browser.contexts().map((c) => observation.byContext.get(c)?.id ?? null), disconnectedAt: null, closeCompletedAt: null, connectedAfter: null };
+      await browser.close(); native.browserTerminal.closeCompletedAt = Date.now(); native.browserTerminal.connectedAfter = browser.isConnected();
+    } catch (e) { summary.cleanupFailures.push(e.message); }
     summary.cleanupFailures.push(...await owned.cleanup());
     let qualificationReports;
     try {
@@ -261,6 +399,11 @@ export async function run(args) {
     } catch (error) { summary.failures.push(`Strict capture export: ${error.message}`); }
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
     summary.qualificationPassed = groupQualificationPassed(summary, qualificationReports);
+    try {
+      if (source) native.inputsAfter = store.record("inputs-after", captureLiveInputs(store, source));
+      if (summary.browser) native.toolsAfter = store.record("tools-after", captureTools(store, { browserExecutable: summary.browser.executable }));
+      native.execution = ledger.finish({ endedAt: Date.now() }); native.manifest = store.seal();
+    } catch (error) { summary.failures.push(`Native evidence seal: ${error.message}`); summary.qualificationPassed = false; }
     summary.finishedAt = new Date().toISOString(); save();
   }
   return summary;

@@ -1,11 +1,11 @@
 // Offline, read-only replay of saved native diagnostics. Never a qualification waiver.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256 } from "./contract.mjs";
+import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256, validateTargets } from "./contract.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
@@ -17,6 +17,12 @@ import { labels } from "../marketplace/records.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
 import { replayActionBinding, validateBindingWindow, validateBindingClockPhase } from "./binding-window.mjs";
+import { openEvidence, encoded } from "./native-evidence.mjs";
+import { replaySource, replayBuildContext, replayTools } from "./native-source.mjs";
+import { replayExecution } from "./native-execution.mjs";
+import { replayWorkerAbsence, replayPeerApplicability, expectedNativeExitCode } from "./native-lifetimes.mjs";
+import { replayResponse } from "./native-responses.mjs";
+import { definition } from "../workloads/registry.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), repo = resolve(here, "../..");
 const hash = /^[a-f0-9]{64}$/, commitId = /^[a-f0-9]{40}$/;
@@ -30,6 +36,7 @@ const same = (a, b, message) => need(isDeepStrictEqual(a, b), message);
 const need = (ok, message) => assert.ok(ok, message);
 const exactKeys = (v, names, message) => same(object(v) ? Object.keys(v).sort() : null, [...names].sort(), message);
 const cleanSnapshot = sha256(JSON.stringify({ diff: "", untracked: [] }));
+const nativeCaseSources = new Map(definition("fullstack-browser").cases.map((p) => [p.key, p.source]));
 
 function localPath(value) {
   need(text(value) && !/[\x00-\x1f\x7f]/.test(value) && !/^[\\/]{2}/.test(value), "Local filesystem path required; no network/device paths");
@@ -39,7 +46,7 @@ function localPath(value) {
   return value;
 }
 
-function savedFiles(folder) {
+function savedFiles(folder, native = false) {
   localPath(folder);
   const root = resolve(repo, folder), entries = new Map();
   const identity = (s) => [s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.nlink];
@@ -63,15 +70,15 @@ function savedFiles(folder) {
       "$drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($inputPaths.root)); if($drive.DriveType -in @([IO.DriveType]::Network,[IO.DriveType]::Unknown,[IO.DriveType]::NoRootDirectory)){throw 'Local evidence drive required'}; " +
       "function Attributes($p){$a=[IO.File]::GetAttributes($p); if(($a -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'Reparse evidence path forbidden'}; return $a}; " +
       "foreach($p in $inputPaths.ancestors){$null=Attributes $p}; $script:nodes=0; " +
-      "function Walk($p,$depth){$script:nodes++; if($depth -gt 3 -or $script:nodes -gt 100){throw 'Evidence inventory exceeds bounds'}; " +
+      "function Walk($p,$depth){$script:nodes++; if($depth -gt 3 -or $script:nodes -gt $inputPaths.maxNodes){throw 'Evidence inventory exceeds bounds'}; " +
       "$a=Attributes $p; if(($a -band [IO.FileAttributes]::Directory) -ne 0){foreach($child in [IO.Directory]::GetFileSystemEntries($p)){Walk $child ($depth+1)}}}; Walk $inputPaths.root 0"],
-    { input: JSON.stringify({ root, ancestors }), windowsHide: true, stdio: ["pipe", "pipe", "pipe"], timeout: 15000 });
+    { input: JSON.stringify({ root, ancestors, maxNodes: native ? 50100 : 100 }), windowsHide: true, stdio: ["pipe", "pipe", "pipe"], timeout: 15000 });
   };
   checkReparse();
   ancestors.forEach(inspect);
   let bytes = 0;
   const walk = (path, depth = 0) => {
-    need(depth <= 3 && entries.size < 100, "Evidence tree exceeds bounded inventory");
+    need(depth <= 3 && entries.size < (native ? 50100 : 100), "Evidence tree exceeds bounded inventory");
     const stat = inspect(path), name = relative(root, path).split(sep).join("/");
     entries.set(name, { path, stat: identity(stat), directory: stat.isDirectory() });
     if (stat.isDirectory()) for (const child of readdirSync(path).sort()) { localPath(child); walk(join(path, child), depth + 1); }
@@ -172,7 +179,7 @@ function ssrResponse(row, block) {
   if (!native.completed || native.failure || native.captureError || !present(native.bodySha256)) block("SSR native browser response body/completion proof unavailable");
 }
 
-function storeReads(e, profile, summary, app, endpoints, block) {
+function storeReads(e, profile, summary, app, endpoints, block, nativeProof) {
   const m = e.mutationProbes, entries = [[e.storeBefore, e.failures, "initial"]];
   for (const row of e.steps.filter((r) => r.action?.input)) entries.push([row.readback, row.failures, "write"]);
   if (m) entries.push([m.before, m.failures, "mutation baseline"], [m.otherContext?.before, m.failures, "other session initial"],
@@ -208,7 +215,7 @@ function storeReads(e, profile, summary, app, endpoints, block) {
     if (r.alerts === null || r.alerts === undefined) block("Independent readback store contents unavailable");
     else { need(Array.isArray(r.alerts), "Malformed independent readback contents"); alertsFromReadback(r.alerts); }
   }
-  block("Independent readback endpoint/context/source binding is not independently bundled; custom target paths are never opened");
+  if (!nativeProof?.readbacks) block("Independent readback endpoint/context/source binding is not independently bundled; custom target paths are never opened");
 }
 
 function observationTiming(e, block, caseKey) {
@@ -401,11 +408,13 @@ function receiptChronology(e, windows, block, caseKey) {
   return latest;
 }
 
-function replayCell(cell, profile, app, summary, records, block, endpoints) {
+function replayCell(cell, profile, app, summary, records, block, endpoints, nativeProof = null) {
   need(object(cell) && ["not-run", "failed", "unsupported", "captured"].includes(cell.outcome) && typeof cell.qualificationPassed === "boolean", "Malformed native cell outcome");
   if (cell.evidence === null) {
     need(cell.outcome === "not-run" || cell.outcome === "failed", "Missing native evidence cannot support a positive/unsupported cell");
     need(cell.qualificationPassed === false && text(cell.reason), "Unavailable cell lacks honest outcome/reason");
+    const prerequisite = nativeProof?.prerequisites.get(`${app}/${profile.key}`);
+    if (prerequisite) return prerequisite;
     block("Native cell not executed or failed before observations"); return null;
   }
   const e = cell.evidence;
@@ -416,7 +425,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
   same(e.environment, { ...settings.profiles[profile.device], js: profile.js }, "Native environment differs from profile");
   need(e.clock?.origin === "node.performance.now" && finite(e.clock.startedAt), "Native observation clock missing/malformed");
   const latestObservation = observationTiming(e, block, profile.key);
-  storeReads(e, profile, summary, app, endpoints, block);
+  storeReads(e, profile, summary, app, endpoints, block, nativeProof);
   if (e.resourceBaseline) { resource(e.resourceBaseline); same(e.resourceBaseline.scriptExecutionEnabled, profile.js, "Baseline JS configuration differs from profile"); }
   else block("Native resource baseline missing");
   if (e.storeBefore?.outcome === "read") {
@@ -575,9 +584,10 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
     }
     if (!profile.js) { noJS = classifyNoJSRequests(j); if (e.noJSRequestProof !== undefined) same(e.noJSRequestProof, noJS, "Stored no-JS proof differs from native receipts"); else block("Native no-JS classification unavailable"); if (noJS.outcome !== "classified") block("Native no-JS coverage remains unknown"); }
     if (retirement.some((r) => r.proof.outcome !== "proved")) block("Native realm retirement remains unknown/failed");
-    if (profile.js && !retirement.length && !e.platformCleanupProof) block("No native realm-retirement network replay boundary retained for this JS cell");
-    if (j.coverage?.workerNetwork !== true || j.coverage?.sharedWorkerOwnership !== true) block("Native worker-network/ownership coverage unproved; no zero inferred");
-    if (j.coverage?.serverSocketPeerClosure !== true) block("Native server-peer closure unproved");
+    const lifetime = nativeProof?.lifetimes.get(`${app}/${profile.key}`);
+    if (profile.js && !retirement.length && !e.platformCleanupProof && lifetime?.peer.status !== "verified") block("No native realm-retirement network replay boundary retained for this JS cell");
+    if (lifetime?.workers.status !== "verified" && (j.coverage?.workerNetwork !== true || j.coverage?.sharedWorkerOwnership !== true)) block("Native worker-network/ownership coverage unproved; no zero inferred");
+    if (lifetime?.peer.status !== "verified" && j.coverage?.serverSocketPeerClosure !== true) block("Native server-peer closure unproved");
   } else block("Native platform lifecycle journal unavailable");
   const p = e.provenance, image = summary.images[app];
   if (!p) block("Native process provenance unavailable");
@@ -592,19 +602,269 @@ function replayCell(cell, profile, app, summary, records, block, endpoints) {
   same(cell.outcome, outcome, "Cell outcome differs from native failures/gaps/cleanup");
   // Runner can downgrade a captured case when clean image labels are unavailable.
   same(cell.qualificationPassed, qualified && image?.imageSourceVerified === true, "Cell qualification flag differs from raw outcome/image");
-  if (e.failures.length || e.gaps.length) block("Native case retains failures or evidence gaps");
-  return { requestOutcome: requestProof.outcome, upstreamOutcome: upstream.outcome, retirement: retirement.map((r) => ({ action: r.action, outcome: r.proof.outcome })), noJS: noJS?.outcome ?? null };
+  if (e.gaps.length || e.failures.length && (!nativeProof || !semanticFailures.length)) block("Native case retains failures or evidence gaps");
+  return { requestOutcome: requestProof.outcome, upstreamOutcome: upstream.outcome, retirement: retirement.map((r) => ({ action: r.action, outcome: r.proof.outcome })), noJS: noJS?.outcome ?? null,
+    ...(nativeProof ? { semanticFailures, completeActions: e.steps.length === profile.steps.length } : {}) };
 }
 
 /** folder is repo-relative or an absolute local folder, never relative to caller cwd. */
 export function validateSaved(input = {}) {
+  try {
+    exactKeys(input, ["folder", "round", "commit"], "Exactly folder, round and commit are required");
+    const folder = resolve(repo, localPath(input.folder));
+    if (existsSync(join(folder, "native-evidence"))) return validateNativeV2(input);
+  } catch { /* The legacy parser returns its established invalid diagnostic. */ }
+  return replaySaved(input);
+}
+
+export function validateContextReceipts(contexts, terminal, execution) {
+  need(Array.isArray(contexts) && contexts.length <= 1000, "Malformed native context inventory");
+  const ids = new Set(); let complete = true;
+  for (const c of contexts) {
+    exactKeys(c, ["id", "role", "app", "case", "source", "createStartedAt", "createdAt", "closeStartedAt", "closeEventAt", "closeCompletedAt", "absentAfter"], "Unknown context receipt");
+    need(text(c.id) && !ids.has(c.id), "Duplicate/missing native context identity"); ids.add(c.id);
+    need(["application", "ssr-parser", "mutation-other"].includes(c.role) && candidates.includes(c.app) && [null, "api", "fixture"].includes(c.source), "Unknown native context role/source");
+    need(nativeCaseSources.has(c.case), "Unknown native context case");
+    if (c.source === null) complete = false;
+    else same(c.source, nativeCaseSources.get(c.case), "Native context source differs from fixed case");
+    const windows = execution.processWindows.filter((w) => w.app === c.app && w.case === c.case);
+    if (windows.length !== 1) { complete = false; continue; }
+    const times = [windows[0].startedAt, c.createStartedAt, c.createdAt, c.closeStartedAt, c.closeEventAt, c.closeCompletedAt, windows[0].endedAt];
+    if (!times.every(finite) || !times.every((v, i) => !i || times[i - 1] <= v) || c.absentAfter !== true) complete = false;
+  }
+  if (!terminal) return false;
+  exactKeys(terminal, ["closeStartedAt", "contextsBefore", "disconnectedAt", "closeCompletedAt", "connectedAfter"], "Unknown native browser terminal receipt");
+  const times = [execution.executionWindow.startedAt, terminal.closeStartedAt, terminal.disconnectedAt, terminal.closeCompletedAt, execution.executionWindow.endedAt];
+  return complete && Array.isArray(terminal.contextsBefore) && terminal.contextsBefore.length === 0 && terminal.connectedAfter === false
+    && times.every(finite) && times.every((v, i) => !i || times[i - 1] <= v);
+}
+
+function participantSource(snapshot, caseKey) {
+  need(nativeCaseSources.has(caseKey), "Unknown native application case");
+  const actualSource = snapshot?.env?.filter(([key]) => key === "MARKETPLACE_SOURCE") ?? [];
+  if (!actualSource.length) return false;
+  need(actualSource.length === 1, "Ambiguous native workload source");
+  if (typeof actualSource[0][1] !== "string") return false;
+  same(actualSource[0][1], nativeCaseSources.get(caseKey), "Native workload source differs from fixed case");
+  return true;
+}
+
+export function validateExecutionSources(events) {
+  let complete = true;
+  for (const e of events) if (e.event === "participant" && e.role === "application")
+    if (!participantSource(e.snapshot, e.case)) complete = false;
+  return complete;
+}
+
+export function validateCaseParticipant(app, caseKey, evidence, execution) {
+  const participants = execution.participants.filter((p) => p.role === "application" && p.app === app && p.case === caseKey);
+  const windows = execution.processWindows.filter((w) => w.app === app && w.case === caseKey);
+  if (!participants.length || !windows.length || !evidence.provenance) return false;
+  need(participants.length === 1 && windows.length === 1, "Ambiguous application participant/window");
+  const participant = participants[0], window = windows[0], p = evidence.provenance;
+  need(nativeCaseSources.has(caseKey), "Unknown native application case");
+  const expectedSource = nativeCaseSources.get(caseKey);
+  if (p.source === undefined || p.source === null) return false;
+  same(p.source, expectedSource, "Journey source differs from fixed case");
+  same([p.containerId, p.imageId], [participant.id, participant.imageId], "Journey differs from original execution participant");
+  if (!participant.terminal || !participant.window) return false;
+  if (!participantSource(participant.terminal, caseKey)) return false;
+  need(participant.window.startedAt <= window.startedAt && window.endedAt <= participant.window.endedAt, "Browser window outside application participant");
+  if (p.stillSameProcess) need(participant.terminal.state.Running === true && participant.terminal.state.StartedAt === p.startedAt
+    && participant.terminal.restartCount === 0, "Journey process continuity contradicts native terminal participant");
+  return true;
+}
+
+function readbackEntries(e) {
+  const m = e.mutationProbes;
+  return [[e.storeBefore, "initial-store", "application"], ...e.steps.filter((r) => r.action.input).map((r) => [r.readback, r.action.id, "application"]),
+    [m?.before, "mutation-baseline", "application"], [m?.otherContext?.before, "other-initial", "mutation-other"],
+    [m?.otherContext?.after, "other-final", "mutation-other"], ...(m?.attempts ?? []).map((r) => [r.readback, `rejection-${r.kind}`, "application"])];
+}
+
+export function replayLiveInputs(reader, ref, sourceReceipt) {
+  const rows = reader.json(ref), expected = sourceReceipt.files;
+  need(Array.isArray(rows) && rows.length === expected.length, "Incomplete executable source inventory");
+  rows.forEach((r, i) => {
+    exactKeys(r, ["path", "body", "canonicalSha256"], "Unknown live executable source receipt");
+    same([r.path, r.canonicalSha256], [expected[i].path, expected[i].sha256], "Executable input/source identity mismatch");
+    const body = reader.read(r.body), text = body.toString("utf8");
+    need(sha256(body) === expected[i].sha256 || Buffer.from(text).equals(body)
+      && sha256(text.replaceAll("\r\n", "\n")) === expected[i].sha256, "Executed source bytes differ from canonical source");
+  });
+  return rows;
+}
+
+// Only a fixed failed prerequisite with an acknowledged native command can
+// explain why no journey was run. A saved reason string is never a witness.
+export function replayPrerequisite(cell, app, summary, execution, buildContexts) {
+  if (cell.outcome !== "failed" || cell.evidence !== null || cell.qualificationPassed !== false) return null;
+  const commands = execution.commands, application = commands.filter((c) => c.role === "application" && c.app === app && c.case === cell.case);
+  const builds = commands.filter((c) => c.operation === "build" && c.role === "artifact" && c.app === app && c.case === null);
+  if (summary.options.build && summary.builds[app]?.passed === false && buildContexts.has(app)
+    && builds.length === 1 && builds[0].code > 0 && application.length === 0)
+    return { prerequisite: "native-build-rejected", command: builds[0].seq };
+  const create = application.filter((c) => c.operation === "create"), start = application.filter((c) => c.operation === "start");
+  if (create.length === 1 && create[0].code > 0 && create[0].id === null && start.length === 0)
+    return { prerequisite: "native-create-rejected", command: create[0].seq };
+  if (create.length === 1 && create[0].code === 0 && start.length === 1 && start[0].id === create[0].id && start[0].code > 0) {
+    const participant = execution.participants.find((p) => p.id === create[0].id && p.role === "application" && p.app === app && p.case === cell.case);
+    if (participant?.terminal?.state.Status === "created" && participant.window === null && participant.imageId === summary.images[app]?.id
+      && participantSource(participant.terminal, cell.case))
+      return { prerequisite: "native-start-rejected", command: start[0].seq };
+  }
+  return null;
+}
+
+export function nativeAttemptCells(replayed, summary) {
+  return replayed.map((c) => {
+    const selected = summary.options.apps.includes(c.app) && (!summary.options.cases || summary.options.cases.includes(c.case));
+    const derived = c.derived, complete = selected && c.blocked.length === 0 && Boolean(derived?.prerequisite || derived?.completeActions);
+    const qualified = complete && !derived.prerequisite && summary.cells[c.app].find((r) => r.case === c.case).qualificationPassed === true;
+    return { ...c, selected, attemptComplete: complete, qualificationPassed: qualified,
+      disposition: !selected ? "not-selected" : !complete ? "proof-missing" : derived.prerequisite ? "observed-prerequisite-failure"
+        : qualified ? "qualified" : "observed-target-failure" };
+  });
+}
+
+async function validateNativeV2(input) {
+  const result = { schema: "native-browser-saved-validation/v2", status: "invalid", attemptComplete: false, selectedComplete: false,
+    qualificationPassed: false, cleanupComplete: false, expectedExitCode: 1, invalid: [], blocked: [], sources: null, cells: [], inventory: null, hostSubject: null,
+    intrinsic: { valid: false, complete: false, passed: false, cleanupPassed: false }, readyForLoad: false };
+  const block = (code) => { if (!result.blocked.includes(code)) result.blocked.push(code); };
+  try {
+    exactKeys(input, ["folder", "round", "commit"], "Exactly folder, round and commit are required");
+    need(/^w[1-9]\d*$/.test(input.round) && commitId.test(input.commit), "Explicit native round and commit required");
+    const files = savedFiles(input.folder, true), summary = files.json("summary.json"), n = summary.native, reader = openEvidence(files.root);
+    need(n?.schema === "native-browser-run/v2", "Missing v2 producer envelope");
+    exactKeys(n, ["schema", "source", "sourceBinding", "inputsBefore", "inputsAfter", "toolsBefore", "toolsAfter", "execution", "targets", "contexts", "browserTerminal", "manifest"], "Unknown native producer envelope field");
+    same(n.manifest, reader.manifest, "Producer native manifest differs from sealed namespace");
+    same(Object.keys(reader.manifest.records).sort(), ["source", "source-binding", "inputs-before", "inputs-after", "tools-before", "tools-after", "execution", "targets",
+      ...Object.keys(summary.builds).filter((app) => summary.builds[app].nativeContext).map((app) => `build-${app}`)].sort(), "Unknown/missing native record roots");
+    const root = (key, record) => { same(n[key], reader.manifest.records[record], `Native root binding differs: ${record}`); return reader.json(n[key]); };
+    const sourceReceipt = root("source", "source"), narrow = replaySource(reader, sourceReceipt, input.commit);
+    // The core binding covers imported helpers as well as browser/build roots.
+    // This fixed local module is never selected by saved input. Like an isolated
+    // binding, it requires the exact clean measured HEAD; no historical upgrade.
+    const { captureSources } = await import("../workloads/isolated/contract.mjs");
+    const binding = captureSources(input.commit); same(root("sourceBinding", "source-binding"), binding, "Canonical execution-source binding differs");
+    const sources = { commit: binding.commit, files: binding.files };
+    result.sources = sources;
+    const sourceMap = new Map(sources.files.map((f) => [f.path, f]));
+    for (const file of narrow.files) same(sourceMap.get(file.path), file, "Leaf source differs from broad immutable binding");
+    root("inputsBefore", "inputs-before"); root("inputsAfter", "inputs-after");
+    const before = replayLiveInputs(reader, n.inputsBefore, binding), after = replayLiveInputs(reader, n.inputsAfter, binding);
+    same(before, after, "Executable source inputs changed during native execution");
+    const toolsBefore = root("toolsBefore", "tools-before"), toolsAfter = root("toolsAfter", "tools-after");
+    const tools = replayTools(reader, toolsBefore); same(replayTools(reader, toolsAfter), tools, "Native tools changed during execution");
+    same(toolsBefore, toolsAfter, "Native installed tool/package bytes changed");
+    same(tools.lockSha256, sourceMap.get("package-lock.json")?.sha256, "Native tool lock differs from immutable source");
+    same(tools.browser, summary.browser?.executableSha256, "Native browser executable identity differs");
+    const targets = root("targets", "targets"); validateTargets({ schema: "native-fullstack-browser-targets/v1", targets });
+    same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");
+    const executionValue = root("execution", "execution"), execution = replayExecution(reader, n.execution);
+    same([executionValue.task, executionValue.commit], [summary.task, input.commit], "Native execution identity differs");
+    need(Date.parse(summary.startedAt) <= execution.executionWindow.startedAt && execution.executionWindow.endedAt <= Date.parse(summary.finishedAt), "Native execution outside producer run");
+    for (const reason of execution.blocked) block(`execution:${reason}`);
+    const sourcesComplete = validateExecutionSources(executionValue.events);
+    if (!sourcesComplete) block("application-source-proof-missing");
+    const buildContexts = new Set();
+    for (const [app, build] of Object.entries(summary.builds)) {
+      if (!build.nativeContext) { block("immutable-build-context-missing"); continue; }
+      same(build.nativeContext, reader.manifest.records[`build-${app}`], "Native build root differs");
+      replayBuildContext(reader, reader.json(build.nativeContext), input.commit, app);
+      buildContexts.add(app);
+      if (build.passed) {
+        const commands = execution.commands.filter((c) => c.operation === "build" && c.app === app && c.role === "artifact" && c.case === null);
+        need(commands.length === 1 && commands[0].code === 0 && commands[0].id === build.originalImageId, "Successful native build lacks original image acknowledgement");
+        const image = summary.images[app];
+        if (!image || image.id !== build.originalImageId || image.buildContextSha256 !== reader.json(build.nativeContext).body.sha256
+          || !image.imageSourceVerified) block("built-image-source-context-unbound");
+      }
+    }
+    const contextsComplete = validateContextReceipts(n.contexts, n.browserTerminal, execution);
+    if (!contextsComplete) block("native-context-terminal-incomplete");
+    const proof = { files, manifest: reader.manifest, sources, tools, targets, execution, readbacks: true, responses: true, lifetimes: new Map(), prerequisites: new Map() };
+    const contextIds = new Set(), readIds = new Set();
+    for (const app of candidates) for (const cell of summary.cells[app]) {
+      const e = cell.evidence;
+      if (!e) {
+        const prerequisite = replayPrerequisite(cell, app, summary, execution, buildContexts);
+        if (prerequisite) proof.prerequisites.set(`${app}/${cell.case}`, prerequisite);
+        continue;
+      }
+      if (!buildContexts.has(app) || summary.builds[app]?.passed !== true) block("immutable-image-build-proof-missing");
+      if (!validateCaseParticipant(app, cell.case, e, execution)) block("application-process-binding-missing");
+      const context = n.contexts.find((c) => c.id === e.context && c.role === "application" && c.app === app && c.case === cell.case);
+      if (!context || contextIds.has(e.context)) { block("application-context-binding-missing"); proof.readbacks = false; } else contextIds.add(e.context);
+      const windows = execution.processWindows.filter((w) => w.app === app && w.case === cell.case), j = e.platformLifecycle;
+      if (windows.length !== 1 || !finite(e.clock?.timeOrigin) || !j || Math.floor(e.clock.timeOrigin + j.boundaries.startedAt) < windows[0].startedAt
+        || Math.ceil(e.clock.timeOrigin + j.boundaries.endedAt) > windows[0].endedAt + 1) block("native-case-process-window-unbound");
+      const workers = replayWorkerAbsence(j), peer = replayPeerApplicability(j, workers); proof.lifetimes.set(`${app}/${cell.case}`, { workers, peer });
+      if (workers.status !== "verified" || peer.status !== "verified") block("native-worker-or-peer-proof-missing");
+      for (const [r, phase, role] of readbackEntries(e)) {
+        if (!r?.responseEvidence) { proof.readbacks = false; block("independent-readback-response-missing"); continue; }
+        need(!readIds.has(r.requestId), "Reused independent native read identity"); readIds.add(r.requestId);
+        const c = n.contexts.find((c) => c.id === r.context);
+        need(context && c && c.role === role && c.app === app && c.case === cell.case && c.source === context.source, "Independent readback/context identity differs");
+        same([r.app, r.case, r.source, r.round, r.phase, r.path], [app, cell.case, nativeCaseSources.get(cell.case), summary.options.round, phase, targets[app]?.readback?.path], "Independent readback source/phase/endpoint differs");
+        need(c.createdAt <= r.startedAt && r.startedAt <= r.finishedAt && r.finishedAt <= c.closeStartedAt, "Independent read outside native context window");
+        const response = replayResponse(reader, r.responseEvidence, { requestId: r.requestId, responseSha256: r.responseSha256, path: r.path, status: r.status });
+        same(response.value, r.alerts, "Independent public readback differs from retained bytes");
+        contextIds.add(c.id);
+      }
+      for (const row of e.steps) {
+        const doc = row.document;
+        if (doc?.responseEvidence) {
+          const response = replayResponse(reader, doc.responseEvidence, { requestId: doc.requestId, responseSha256: doc.responseSha256, path: doc.url.path, status: doc.status });
+          const c = n.contexts.find((c) => c.id === doc.context);
+          need(c?.role === "ssr-parser" && c.app === app && c.case === cell.case && c.id !== context?.id, "Independent parser context differs");
+          need(!contextIds.has(c.id), "Reused independent parser context");
+          contextIds.add(c.id);
+          same(response.page, doc.page, "Independent parser model differs from public transcript");
+          if (!response.extractionComplete) { proof.responses = false; block("public-response-extraction-incomplete"); }
+        } else if (doc) { proof.responses = false; block("public-response-projection-missing"); }
+        // Live same-page updates and native error pages need their own typed
+        // observation, not a claim that an earlier HTML body reproduced them.
+        proof.responses = false; block("public-live-dom-projection-missing");
+      }
+    }
+    const replayed = replaySaved(input, proof); result.inventory = replayed.inventory;
+    need(replayed.outcome !== "invalid", replayed.invalid.join("; "));
+    for (const reason of replayed.blocked) if (!["Native matrix contains unqualified or missing proof", "Native image build failed"].includes(reason)) block(`capture:${reason}`);
+    if (n.contexts.some((c) => !contextIds.has(c.id))) block("unbound-native-context");
+    result.cells = nativeAttemptCells(replayed.cells, summary);
+    const selected = result.cells.filter((c) => c.selected);
+    result.selectedComplete = !result.blocked.length && selected.length > 0 && selected.every((c) => c.attemptComplete);
+    result.attemptComplete = result.selectedComplete && result.cells.length === candidates.length * summary.effectivePlan.cases.length && result.cells.every((c) => c.attemptComplete);
+    result.cleanupComplete = contextsComplete && execution.cleanupComplete && !summary.cleanupFailures.length;
+    const manifest = reader.finish(); same(manifest, n.manifest, "Native store changed during replay");
+    files.unchanged();
+    const outer = [...files.entries].filter(([, f]) => !f.directory).map(([path, f]) => ({ path, sha256: sha256(readFileSync(f.path)) }));
+    if (!execution.blocked.length && sourcesComplete && result.cleanupComplete && execution.participants.every((p) => p.imageId && p.terminal)) result.hostSubject = {
+      schema: "native-browser-host-subject/v2", executionWindow: execution.executionWindow, processWindows: execution.processWindows,
+      toolIdentities: { node: tools.node, browser: tools.browser }, participants: execution.participants,
+      subjectSha256: execution.subjectSha256, filesSha256: sha256(encoded(outer)) };
+    if (!summary.complete || summary.failures.length) block("producer-incomplete");
+    if (!result.cleanupComplete) block("apparatus-cleanup-incomplete");
+    if (!result.selectedComplete) block("selected-proof-incomplete");
+    if (!result.attemptComplete) block("matrix-incomplete");
+    result.qualificationPassed = result.attemptComplete && !result.blocked.length && summary.qualificationPassed === true;
+    result.status = result.blocked.length ? "blocked" : result.qualificationPassed ? "verified" : "failed";
+    result.intrinsic = { valid: true, complete: result.attemptComplete && !result.blocked.length, passed: result.qualificationPassed, cleanupPassed: result.cleanupComplete };
+    result.expectedExitCode = expectedNativeExitCode(result.qualificationPassed);
+  } catch (error) { result.invalid.push(String(error.message).split("\n")[0]); }
+  return result;
+}
+
+function replaySaved(input = {}, nativeProof = null) {
   const result = { schema: "native-browser-saved-validation/v1", outcome: "invalid", qualificationPassed: false, readyForLoad: false, invalid: [], blocked: [], inventory: null, cells: [] };
   const block = (reason) => { if (!result.blocked.includes(reason)) result.blocked.push(reason); };
   try {
     exactKeys(input, ["folder", "round", "commit"], "Exactly folder, round and commit are required");
     const { folder, round, commit } = input;
     need(text(round) && /^w[1-9]\d*$/.test(round) && text(commit) && commitId.test(commit), "Explicit round wN and full lowercase producer commit ID required");
-    const files = savedFiles(folder), summary = files.json("summary.json"), records = files.json("marketplace.json", false);
+    const files = nativeProof?.files ?? savedFiles(folder), summary = files.json("summary.json"), records = files.json("marketplace.json", false);
     same(summary.schema, schema, "Unknown raw summary schema"); same(summary.group, "fullstack-browser", "Wrong benchmark group");
     same(records, fixtureRecords(), "Saved numeric fixture differs from current canonical fixture");
     same(summary.fixtureSha256, sha256(JSON.stringify(records)), "Fixture hash mismatch");
@@ -619,7 +879,7 @@ export function validateSaved(input = {}) {
     need(options.cases === null || options.cases.every((key) => plan.cases.some((p) => p.key === key)), "Unknown selected profile");
     need(hash.test(summary.targetsSha256), "Missing/malformed target manifest hash");
     if (options.targets === null) same(summary.targetsSha256, sha256(JSON.stringify(Object.fromEntries(candidates.map((a) => [a, { image: `cb-marketplace-${a}`, readback: { path: "/api/alerts" } }])))), "Default target manifest hash mismatch");
-    else block("Custom target manifest not bundled; recorded external path is never opened");
+    else if (!nativeProof?.targets) block("Custom target manifest not bundled; recorded external path is never opened");
     need(text(summary.task) && /^browser-[a-f0-9-]+$/.test(summary.task) && finite(Date.parse(summary.startedAt)) && finite(Date.parse(summary.finishedAt)) && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "Malformed run identity/timestamps");
     need(typeof summary.complete === "boolean" && list(summary.failures) && list(summary.cleanupFailures), "Malformed completion/failure summary");
     need(object(summary.host) && ["hostname", "platform", "release", "node"].every((k) => text(summary.host[k])) && list(summary.limits), "Malformed host/limits provenance");
@@ -632,13 +892,14 @@ export function validateSaved(input = {}) {
     for (const [name, value] of Object.entries(code.runnerFiles)) need(currentFiles.includes(name) && hash.test(value), "Unknown runner file or malformed source hash");
     if (!isDeepStrictEqual(Object.keys(code.runnerFiles).sort(), currentFiles)
       || currentFiles.some((name) => code.runnerFiles[name] !== sha256(readFileSync(join(here, name))))) block("Producer runner hashes differ from current validator sources; historical evidence is not upgraded");
-    block("Commit/source-tree authenticity is not independently bundled; no Git, replacements, grafts or remote lookup is consulted");
+    if (!nativeProof?.sources) block("Commit/source-tree authenticity is not independently bundled; no Git, replacements, grafts or remote lookup is consulted");
     same(summary.retainedFamilies, retainedFamilies.map((f) => ({ ...f, outcome: "not-run", reason: "Retained; not replaced by native browser diagnostics" })), "Retained benchmark family inventory differs");
     exactKeys(summary.cells, candidates, "Missing/extra native candidate");
     need(object(summary.images) && object(summary.builds) && Object.keys(summary.images).every((a) => candidates.includes(a)) && Object.keys(summary.builds).every((a) => candidates.includes(a)), "Unknown native image/build candidate");
-    const expectedFiles = ["summary.json", "marketplace.json", "captures/manifest.json", ...candidates.map((a) => `captures/${a}.json`), ...Object.keys(summary.builds).map((a) => `build-${a}.log`)];
+    const expectedFiles = ["summary.json", "marketplace.json", "captures/manifest.json", ...candidates.map((a) => `captures/${a}.json`), ...Object.keys(summary.builds).map((a) => `build-${a}.log`),
+      ...(nativeProof ? ["native-evidence/manifest.json", ...nativeProof.manifest.files.map((f) => f.path)] : [])];
     same([...files.entries].filter(([, e]) => !e.directory).map(([p]) => p).sort(), expectedFiles.sort(), "Missing/extra saved native evidence files");
-    same([...files.entries].filter(([, e]) => e.directory).map(([p]) => p).sort(), ["", "captures"], "Unknown saved evidence directory");
+    same([...files.entries].filter(([, e]) => e.directory).map(([p]) => p).sort(), nativeProof ? ["", "captures", "native-evidence", "native-evidence/blobs"] : ["", "captures"], "Unknown saved evidence directory");
     for (const [app, image] of Object.entries(summary.images)) {
       need(/^sha256:[a-f0-9]{64}$/.test(image.id) && list(image.repoDigests) && image.repoDigests.every((d) => /^[a-zA-Z0-9._/:\-]+@sha256:[a-f0-9]{64}$/.test(d))
         && finite(Date.parse(image.created)) && text(image.architecture) && image.os === "linux"
@@ -646,7 +907,9 @@ export function validateSaved(input = {}) {
         && typeof image.imageSourceVerified === "boolean", "Malformed immutable native image provenance");
       same(image.imageSourceVerified, image.builtCommit === commit && image.builtDirty === "false", "Image clean-source flag contradicts labels");
       need(hash.test(image.sourceTreeSha256), "Malformed native image source tree hash");
-      if (!image.imageSourceVerified || code.dirty) block("Clean exact-image source correspondence unavailable");
+      const failedPrerequisites = nativeProof && options.apps.includes(app) && summary.cells[app]
+        .filter((cell) => !options.cases || options.cases.includes(cell.case)).every((cell) => nativeProof.prerequisites.has(`${app}/${cell.case}`));
+      if ((!image.imageSourceVerified || code.dirty) && !failedPrerequisites) block("Clean exact-image source correspondence unavailable");
     }
     if (summary.bindingArtifacts !== undefined) {
       need(object(summary.bindingArtifacts) && Object.keys(summary.bindingArtifacts).every((app) => app === "nextjs"), "Unknown emitted binding artifact candidate");
@@ -675,7 +938,7 @@ export function validateSaved(input = {}) {
       for (const profile of plan.cases) {
         const cell = cells.find((c) => c.case === profile.key);
         if (cell.outcome !== "not-run") need(options.apps.includes(app) && (!options.cases || options.cases.includes(profile.key)), "Native evidence outside selected run options");
-        const reasons = [], derived = replayCell(cell, profile, app, summary, records, (r) => { if (!reasons.includes(r)) reasons.push(r); }, endpoints);
+        const reasons = [], derived = replayCell(cell, profile, app, summary, records, (r) => { if (!reasons.includes(r)) reasons.push(r); }, endpoints, nativeProof);
         if (reasons.length) block("Native matrix contains unqualified or missing proof");
         result.cells.push({ app, case: profile.key, outcome: cell.outcome, derived, blocked: reasons });
       }
@@ -695,9 +958,9 @@ export function validateSaved(input = {}) {
     same(summary.readyForLoad, false, "Saved native diagnostics cannot claim load readiness");
     if (!summary.complete || summary.failures.length || summary.cleanupFailures.length) block("Run incomplete or retains run/cleanup failures");
     result.inventory = { candidates: candidates.length, profiles: plan.cases.length, cells: result.cells.length, captureFiles: candidates.length };
-    block("Producer lacks independently retained container-isolation/configuration and process-inspection receipts");
-    block("Producer lacks an approved native closed-peer/complete worker proof contract; flags do not supply observations");
-    block("Browser executable and response bodies are hashed but not bundled for independent byte rehashing; external recorded paths are never opened");
+    if (!nativeProof?.execution) block("Producer lacks independently retained container-isolation/configuration and process-inspection receipts");
+    if (!nativeProof?.lifetimes) block("Producer lacks an approved native closed-peer/complete worker proof contract; flags do not supply observations");
+    if (!nativeProof?.tools || !nativeProof?.responses) block("Browser executable and response bodies are hashed but not bundled for independent byte rehashing; external recorded paths are never opened");
     files.unchanged(); result.outcome = "blocked";
   } catch (error) { result.invalid.push(String(error.message).split("\n")[0]); }
   return result;
@@ -708,6 +971,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     need(args.length === 6, "Usage: node bench/fullstack-browser/verify.mjs --folder directory --round wN --commit full-sha");
     for (let i = 0; i < args.length; i += 2) { const key = args[i].slice(2); need(args[i].startsWith("--") && ["folder", "round", "commit"].includes(key) && !Object.hasOwn(options, key), "Unknown/duplicate validator option"); options[key] = args[i + 1]; }
-    const report = validateSaved(options); console.log(JSON.stringify(report, null, 2)); process.exitCode = report.outcome === "invalid" ? 2 : 1;
+    const report = await validateSaved(options); console.log(JSON.stringify(report, null, 2));
+    process.exitCode = report.schema === "native-browser-saved-validation/v2" ? report.expectedExitCode : report.outcome === "invalid" ? 2 : 1;
   } catch (error) { console.error(error.message); process.exitCode = 2; }
 }
