@@ -408,9 +408,9 @@ Corten is pre-1.0, so any minor version may change the API.
   address moves first, as it did. The workflow asks the site once a second while it applies
   and says how many went unanswered, and `gh workflow run site-machine.yml -f replace=true`
   makes a new machine where nothing has changed (`-f without_handover=true` makes one that
-  is handed nothing). Rehearsed in containers, and run once for corten.run, where the site
-  answered each of 174 requests a second apart while its machine was replaced: the deploy
-  README says what that leaves untried. `provision.sh`, when it runs a second time, writes
+  is handed nothing). Rehearsed in containers, and run for corten.run, where on the one
+  replacement that was handed anything the site answered each of 174 requests a second
+  apart: the deploy README says what that leaves untried. `provision.sh`, when it runs a second time, writes
   in the deploy user's directories as that user: as root it made whatever a link there
   pointed at that user's, so the holder of the deploy key could become root. It stops for a
   key's file that is not there. The workflow's check runs the handover's command, those lines of
