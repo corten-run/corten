@@ -541,7 +541,7 @@ let app = app().test();
 let home = app.get(&url::Home).await;
 assert_eq!(home.status(), 200);
 let greeting = app
-    .post(&url::Greet)
+    .post(&url::Home)
     .mode(Mode::Action)
     .field(GreetForm::FIELDS.name, "Ada")
     .await;
@@ -2791,7 +2791,9 @@ format writes the message alone. Each source's message is its library's own and 
 read (a JSON error names the value it could not parse, so part of an upstream answer), as the
 message above it could already (an HTTP client's names the URL); none of it reaches the client.
 A debug build's error about the app's own code (a component it
-does not serve, a `Refresh` header, a write redirected outside `form-action`) is the exception:
+does not serve, a `Refresh` header, a write redirected outside `form-action`, a page answering
+a post to a path with no `GET` ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
+is the exception:
 it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
 app stops compiling instead of showing the wrong text. A JSON route's failures, a data

@@ -499,8 +499,8 @@ async function run(browser) {
 
   // CheckboxGroup: no region checked stops the form at the group's first box.
   const lastResult = await page.textContent("#result");
-  const sellValid = () => page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).checkValidity());
-  const shipsValid = () => page.evaluate(() => Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')).every((box) => /** @type {HTMLInputElement} */ (box).checkValidity()));
+  const sellValid = () => page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).checkValidity());
+  const shipsValid = () => page.evaluate(() => Array.from(document.querySelectorAll('form[method=post][action="/"] fieldset input[type="checkbox"]')).every((box) => /** @type {HTMLInputElement} */ (box).checkValidity()));
   const us = page.getByRole("checkbox", { name: "United States" });
   // A kit Checkbox draws its input as a checkbox, and not one a role makes a switch.
   const drawnBox = await us.evaluate((box) => {
@@ -519,7 +519,7 @@ async function run(browser) {
   // dispatches input and change on each box it set, as the CheckboxGroup doc says. The filled step
   // sets only the last box, so the group answers a change from a box other than its first.
   const scripted = await page.evaluate(() => {
-    const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+    const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[method=post][action="/"] fieldset input[type="checkbox"]')));
     const was = boxes.map((b) => b.checked);
     const valid = () => boxes.every((b) => b.checkValidity());
     /** @param {HTMLInputElement[]} set */
@@ -561,7 +561,7 @@ async function run(browser) {
   const backCheck = "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn";
   if (await nav.evaluate(() => "navigation" in window)) {
     const set = await nav.evaluate(() => {
-      const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+      const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[method=post][action="/"] fieldset input[type="checkbox"]')));
       const [told, untold] = boxes.filter((b) => !b.defaultChecked);
       told.checked = true;
       told.dispatchEvent(new Event("input", { bubbles: true }));
@@ -581,7 +581,7 @@ async function run(browser) {
     await nav.evaluate(() => history.back());
     const back = left && (await nav.waitForFunction(drawn, galleryTitle, { timeout: 10000 }).then(() => true, () => false));
     const after = await nav.evaluate(({ told, untold }) => {
-      const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
+      const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[method=post][action="/"] fieldset input[type="checkbox"][value="${value}"]`));
       return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
     }, set);
     check(backCheck, left && back && after.swapped && after.told === true && after.untold === false, JSON.stringify({ left, back, set, after }));
@@ -774,7 +774,7 @@ async function run(browser) {
     marked: await page.locator('[data-scope=ui-combo-box] [role="option"][aria-selected="true"]').allTextContents(),
   });
   const beforeReset = await resetWidgets();
-  await page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).reset());
+  await page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).reset());
   await page.waitForTimeout(100);
   check("a form reset checks the group again", unchecked === "Choose where you ship." && (await us.isChecked()) && (await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage)) === "" && (await shipsValid()), unchecked);
   const afterReset = await resetWidgets();
@@ -4834,14 +4834,24 @@ async function run(browser) {
   });
   check("no script: in a column narrower than its select, a ComboBox stays inside its field", plainNarrow <= 0, String(plainNarrow));
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
-  // The post loads a new page; waitForLoadState alone can return for the page it left.
-  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
-  check("no script: the form posts the page", (await plain.textContent("#result")) === "Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.", await plain.textContent("#result"));
+  /** Presses List for sale and waits for the page its post answers with: the listing form posts to the draft's own address, so the address alone does not say the page is new. */
+  const listForSale = () =>
+    Promise.all([
+      plain.waitForResponse((r) => new URL(r.url()).pathname === "/" && r.request().method() === "POST"),
+      plain.waitForEvent("load"),
+      plain.getByRole("button", { name: "List for sale" }).click(),
+    ]).then(([answer]) => answer);
+  const listing = await listForSale();
+  check(
+    "no script: the form posts the page, at the draft's own address",
+    (await plain.textContent("#result")) === "Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship." && listing.status() === 200 && new URL(plain.url()).pathname === "/",
+    `${listing.status()} ${plain.url()} ${await plain.textContent("#result")}`,
+  );
   // A client that skips the inputs' min, max and step is refused by the handler with the same bounds.
   await plain.goto(`${base}/`);
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   const pastBounds = await plain.evaluate(() => {
-    const form = /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]'));
+    const form = /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]'));
     form.noValidate = true;
     for (const [id, value] of [["qty", "11"], ["weight", "0.55"]]) {
       const input = /** @type {HTMLInputElement} */ (document.getElementById(id));
@@ -4851,7 +4861,7 @@ async function run(browser) {
     }
     return [form.checkValidity(), document.getElementById("qty")?.getAttribute("min")].join(" ");
   });
-  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
+  await listForSale();
   const refusedBounds = (await plain.textContent("#result")) ?? "";
   check("no script: a quantity past the input's bounds is refused by the handler with them", pastBounds === "true 1" && refusedBounds === "List from 1 to 10 copies.", `${pastBounds} ${refusedBounds}`);
   check("no script: the refused form is drawn again with the numbers as sent", (await plain.inputValue("#qty")) === "11" && (await plain.inputValue("#weight")) === "0.55", `${await plain.inputValue("#qty")} ${await plain.inputValue("#weight")}`);
@@ -4862,17 +4872,12 @@ async function run(browser) {
     await plain.goto(`${base}/`);
     await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
     await plain.evaluate((qty) => {
-      /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).noValidate = true;
+      /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).noValidate = true;
       const input = /** @type {HTMLInputElement} */ (document.getElementById("qty"));
       input.type = "text";
       input.value = qty;
     }, qty);
-    const [answer] = await Promise.all([
-      plain.waitForResponse((r) => r.url().endsWith("/sell") && r.request().method() === "POST"),
-      plain.waitForURL("**/sell"),
-      plain.getByRole("button", { name: "List for sale" }).click(),
-    ]);
-    await plain.waitForLoadState();
+    const answer = await listForSale();
     // The text as sent is the input's value attribute; a number input shows text that is no number as empty.
     return `${answer.status()} ${(await plain.textContent("#result")) ?? ""} ${await plain.getAttribute("#qty", "value")}`;
   };
@@ -4884,12 +4889,12 @@ async function run(browser) {
   await plain.goto(`${base}/`);
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   await plain.evaluate(() => {
-    /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).noValidate = true;
+    /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).noValidate = true;
     const weight = /** @type {HTMLInputElement} */ (document.getElementById("weight"));
     weight.step = "any";
     weight.value = "0.55";
   });
-  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
+  await listForSale();
   const offStep = (await plain.textContent("#result")) ?? "";
   check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
   await plain.goto(`${base}/`);
@@ -4900,9 +4905,19 @@ async function run(browser) {
   check("no script: a tab is a link to its page", (await plain.getByRole("tabpanel").textContent()) === "Two offers, the best at $10.00.");
   await plain.getByRole("button", { name: "More actions" }).click();
   check("no script: the menu opens (popover)", await plain.getByRole("menuitem", { name: "Help" }).isVisible());
+  // Saving has a path of its own, so it sends the browser back to the draft, whose toaster says it.
   await plain.goto(`${base}/`);
-  await Promise.all([plain.waitForURL("**/save"), plain.getByRole("button", { name: "Save draft" }).click()]);
-  check("no script: the page the post answers with shows the toast", (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()));
+  const saved = await Promise.all([
+    plain.waitForResponse((r) => new URL(r.url()).pathname === "/save" && r.request().method() === "POST"),
+    plain.waitForEvent("load"),
+    plain.getByRole("button", { name: "Save draft" }).click(),
+  ]).then(([answer]) => answer);
+  check("no script: a save sends the browser back to the draft", saved.status() === 303 && saved.headers().location === "/" && new URL(plain.url()).pathname === "/", `${saved.status()} ${plain.url()}`);
+  // The notice rides in a `__Host-` cookie, which must be Secure, and Playwright's WebKit never sends
+  // a Secure cookie back over http, so it cannot be given back as a plain one either.
+  const savedToast = "no script: the draft a save goes back to shows its toast";
+  if (engine !== "webkit") check(savedToast, (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()), await plain.locator("#ui-toast").textContent());
+  else skip(savedToast, "the notice's __Host- cookie must be Secure, and Playwright's WebKit never sends a Secure cookie back over http");
   await plain.goto(`${base}/`);
   await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
   {

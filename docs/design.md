@@ -3313,7 +3313,10 @@ rules something out.
    handler's `Message<"count">` (`docs/guide/scripts.md`, Text a script computes).
 5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
-   instant (filtering the rows on the page as you type) keeps the form that does it without.
+   instant (filtering the rows on the page as you type) keeps the form that does it without. A
+   form that belongs to one page posts to that page's route, and a write with a path of its own
+   redirects once done and draws a page only to refuse, so the page a browser is left at answers
+   a `GET` ([Where a form posts](guide/requests-and-forms.md#where-a-form-posts)).
 6. <a id="rule-page-view-model"></a>A page another surface reads derives `ToJson`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
 7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
