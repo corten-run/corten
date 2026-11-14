@@ -327,6 +327,13 @@ Corten is pre-1.0, so any minor version may change the API.
   needs: a 4 KiB component's is 4,628 bytes where it grew to 8,192, and a small one's 256 where it
   grew to 32, as an `html!` patch's already was (the new sizes asserted by a test, the old ones
   reasoned from `String`'s doubling from empty).
+  Wall time, the same harness at 200,000 requests, three runs of each build alternated, median
+  [range] in seconds, main `9c867b5e` with the harness added against this change, in a 4-CPU
+  container: a small component 1.06 [1.05-1.32] against 0.99 [0.84-1.28], a bare `html!` 0.85
+  [0.74-0.89] against 0.90 [0.72-0.91], a 4 KiB component 1.34 [1.22-1.64] against 1.09
+  [1.04-1.30], and the mixed sequence 1.20 [1.15-1.31] against 1.17 [1.13-1.34]. Every range
+  overlaps the other build's, so no wall-time gain is established beyond the noise on that host;
+  the instruction counts are the evidence.
 
 - The app `corten new` writes posts its form to the page's own route
   (`#[route("/", get = home, post = greet)]`, `action={url::Home}`) instead of `/greet`, a path

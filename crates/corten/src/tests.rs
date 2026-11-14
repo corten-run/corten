@@ -4548,6 +4548,40 @@ fn a_component_renders_into_a_string_sized_by_its_last_render() {
     assert_eq!(CostNote {}.to_html().capacity(), 256);
 }
 
+/// A component behind a reference, a `Box` or an `Option` keeps its own size: each forwards
+/// `to_html` to the view inside, where the trait's default would render into an empty string and
+/// grow it. Called through the wrapper's own impl (`<W as Render>::to_html`), which method syntax
+/// would skip by dereferencing to the component.
+#[test]
+fn a_wrapped_component_renders_into_a_string_sized_by_its_last_render() {
+    let sized = CostList {}.to_html();
+    let size = sized.len() + sized.len() / 8;
+    let large = [
+        ("&T", <&CostList as Render>::to_html(&&CostList {})),
+        ("Box<T>", <Box<CostList> as Render>::to_html(&Box::new(CostList {}))),
+        ("Some", <Option<CostList> as Render>::to_html(&Some(CostList {}))),
+    ];
+    // A small component's string is never below 256 bytes behind a wrapper either.
+    let small = [
+        ("&T", <&CostNote as Render>::to_html(&&CostNote {})),
+        ("Box<T>", <Box<CostNote> as Render>::to_html(&Box::new(CostNote {}))),
+        ("Some", <Option<CostNote> as Render>::to_html(&Some(CostNote {}))),
+    ];
+    for (wrapper, html) in &large {
+        assert_eq!(*html, sized, "{wrapper}");
+    }
+    let missed: Vec<_> = large
+        .iter()
+        .map(|(wrapper, html)| (*wrapper, html.capacity(), size))
+        .chain(small.iter().map(|(wrapper, html)| (*wrapper, html.capacity(), 256)))
+        .filter(|(_, capacity, wanted)| capacity != wanted)
+        .collect();
+    assert!(missed.is_empty(), "(wrapper, capacity, wanted): {missed:?}");
+    // None renders nothing and allocates nothing.
+    let none = <Option<CostList> as Render>::to_html(&None);
+    assert_eq!((none.as_str(), none.capacity()), ("", 0));
+}
+
 /// What a patch costs: `PATCH_REQUESTS` (200) action requests in process, one at a time, of the
 /// patch `PATCH_KIND` names: `component` (the default), a small `#[component]`; `html`, the
 /// same markup as a bare `html!`; `large`, a component of about 4 KiB; `mixed`, a bare
