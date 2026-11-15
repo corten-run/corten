@@ -4750,8 +4750,82 @@ async function run(browser) {
         page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && pageBack.at === "/smoke/scope?scope=day" && pageBack.shown === "day" && pageBack.asked.join() === "nav ?scope=day",
         JSON.stringify({ page, pageBack }),
       );
+      // An error status is no entry's patch, even one that carries a patch: the page is read.
+      const refused = await backFrom("Week", "?scope=day", {
+        status: 500,
+        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
+        body: '<section id="smoke-scope"><p>Scope: <output>refused</output></p></section>',
+      });
+      check(
+        "Back to a data-address form's entry whose patch read is a 500 with a patch reads the page instead",
+        refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day",
+        JSON.stringify(refused),
+      );
+      // A patch whose body is cut off after its headers: the page is read. The body's read is made
+      // to fail once, as a dropped connection fails it.
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      await scope.evaluate(() => {
+        const text = Response.prototype.text;
+        Response.prototype.text = function () {
+          Response.prototype.text = text;
+          return Promise.reject(new TypeError("cut off"));
+        };
+      });
+      asked.length = 0;
+      const cut = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+      check(
+        "Back to a data-address form's entry whose patch body is cut off reads the page instead",
+        cut.at === "/smoke/scope?scope=day" && cut.shown === "day" && cut.asked.join() === "action ?scope=day,nav ?scope=day",
+        JSON.stringify(cut),
+      );
+      // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
+      // keeps it for the form without JavaScript; Back between them reads the patch.
+      const whole = () => scope.evaluate(() => location.pathname + location.search + location.hash);
+      await answered(() => scope.getByRole("button", { name: "Month", exact: true }).click());
+      const month = { at: await whole(), shown: await shown() };
+      await answered(() => scope.getByRole("button", { name: "Quarter", exact: true }).click());
+      const quarter = { at: await whole(), shown: await shown() };
+      asked.length = 0;
+      await traverse("back");
+      const placeBack = { at: await whole(), shown: await shown(), asked: asked.splice(0) };
+      check(
+        "a data-address form's address keeps the #fragment of its formaction or action",
+        month.at === "/smoke/scope?scope=month#smoke-scope" && month.shown === "month" &&
+          quarter.at === "/smoke/scope?scope=quarter#smoke-scope" && quarter.shown === "quarter" &&
+          placeBack.at === "/smoke/scope?scope=month#smoke-scope" && placeBack.shown === "month" && placeBack.asked.join() === "action ?scope=month",
+        JSON.stringify({ month, quarter, placeBack }),
+      );
     }
     await scope.close();
+  }
+  // Without the Navigation API, which Back to its address needs, the browser sends a data-address
+  // form itself: a full load of the page at that address, as without JavaScript
+  // (docs/design.md#limit-navigation-api).
+  {
+    const plain = await browser.newPage();
+    plain.on("pageerror", (e) => errors.push(`plain scope: ${e.message}`));
+    await plain.addInitScript(() => {
+      delete (/** @type {any} */ (Window.prototype)).navigation;
+      delete (/** @type {any} */ (window)).navigation;
+    });
+    await plain.goto(`${base}/smoke/scope`);
+    await plain.evaluate(() => Object.assign(window, { __marker: 1 }));
+    await Promise.all([
+      plain.waitForURL((url) => url.search === "?scope=week", { timeout: 5000 }).catch(() => {}),
+      plain.getByRole("button", { name: "Week", exact: true }).click(),
+    ]);
+    const sent = await plain.evaluate(() => ({
+      api: "navigation" in window,
+      at: location.pathname + location.search,
+      shown: document.querySelector("#smoke-scope output")?.textContent,
+      loaded: /** @type {any} */ (window).__marker === undefined,
+    }));
+    check(
+      "without the Navigation API the browser sends a data-address form itself, loading the page at its address",
+      !sent.api && sent.at === "/smoke/scope?scope=week" && sent.shown === "week" && sent.loaded,
+      JSON.stringify(sent),
+    );
+    await plain.close();
   }
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {

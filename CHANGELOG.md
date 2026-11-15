@@ -12,8 +12,8 @@ Corten is pre-1.0, so any minor version may change the API.
   shared link. Back and Forward between the entries such forms made read the patch again
   (`corten: action`, which the HTTP cache can answer) rather than the page, and an answer that
   is not a patch is read as a page. `html!` refuses the mark on anything but a `<form>`, on a form
-  without `data-patch` and on one that posts. It needs the Navigation API; without it the address
-  stays as before
+  without `data-patch` and on one that posts. Without the Navigation API the browser sends the
+  form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:

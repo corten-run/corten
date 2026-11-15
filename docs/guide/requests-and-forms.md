@@ -1692,14 +1692,14 @@ A filter or scope whose answer is one part of the screen (a panel's period, a ch
 be a GET `data-patch` form too, so a change reads only what that part shows, not the rest of the
 screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
 once the patch is drawn, that address is in the address bar, in a new history entry (none when it
-is the address already), as the browser leaves it after the same form without JavaScript. A
-reload, a bookmark and a shared link then reach what the screen shows, and a form that posts
-without an `action` sends to it. Back and Forward between the entries such forms made on the
-screen, and the one the first was sent from, read the entry's address as the form did
-(`corten: action`, which the browser's HTTP cache can answer) and draw its patch, leaving the rest
-of the screen as it is. An answer that is not a patch (a page, a redirect, an error) is read as a
-page, as any other entry is; so is every entry once another page has been swapped in or the page
-reloaded.
+is the address already), as the browser leaves it after the same form without JavaScript, a
+`#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
+reach what the screen shows, and a form that posts without an `action` sends to it. Back and
+Forward between the entries such forms made on the screen, and the one the first was sent from,
+read the entry's address as the form did (`corten: action`, which the browser's HTTP cache can
+answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
+patch (a page, a redirect, an error) is read as a page, as any other entry is; so is every entry
+once another page has been swapped in or the page reloaded.
 
 ```rust,ignore
 #[component]
@@ -1724,10 +1724,11 @@ then show the scope the part does. A route whose patch adds to the page (`view::
 more's) is not one to mark: Back would add the rows again. The page's other links and forms keep
 the address they were drawn with; one that should carry the scope is drawn by the same patch, or
 keeps the address's query (`keep_query`). The mark needs the Navigation API
-([Limit 1](../design.md#limit-navigation-api)); without it the address stays, as it does for an
-unmarked form. `html!` refuses `data-address` on anything but a `<form>`, on a form without
-`data-patch`, and on one whose `method` posts; a `formmethod="post"` button in a marked form posts
-as it would in any other, and leaves the address.
+([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
+loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything
+but a `<form>`, on a form without `data-patch`, and on one whose `method` posts; a
+`formmethod="post"` button in a marked form posts as it would in any other, and leaves the
+address.
 
 ## Redirects
 

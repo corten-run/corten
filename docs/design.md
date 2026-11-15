@@ -3967,15 +3967,19 @@ rules something out.
     screen, which the patch was there to avoid (22.6 KB and 0.5 to 1 s in the issue's port, its
     numbers, not measured here). The mark says what the form already is: its answer is the page at
     the address it asked for. Once the patch (or a page, when the handler answers one) is drawn,
-    the runtime pushes the request's URL, the redirect's when there was one, as the browser does
-    for the form without JavaScript; the same address again adds no entry. The runtime keeps, in
-    memory, the entries of the screen such forms made and the one each was sent from, and a
-    traversal between two of them reads the destination as the form did (`corten: action`, which
-    the HTTP cache can answer) and applies its patch, the rest of the screen and the focus
-    staying. Any other answer (a page, Corten's redirect, an error, no answer) is read as a page,
-    as every other entry is, and so is every entry once another page is swapped in or the page
-    reloads. So the route at each of those addresses answers its part with `req.patch_or`, drawing
-    all the address changes; a route whose patch appends (Load more) is not one to mark.
+    the runtime pushes the request's URL, the redirect's when there was one, with the `#fragment`
+    of the form's `action` or `formaction`, as the browser does for the form without JavaScript;
+    the same address again adds no entry. The runtime keeps, in memory, the entries of the screen
+    such forms made and the one each was sent from, and a traversal between two of them reads the
+    destination as the form did (`corten: action`, which the HTTP cache can answer) and applies
+    its patch, the rest of the screen and the focus staying. Any other answer (a page, Corten's
+    redirect, an error status even with a patch, no answer, a body cut off) is read as a page, as
+    every other entry is, and so is every entry once
+    another page is swapped in or the page reloads. So the route at each of those addresses
+    answers its part with `req.patch_or`, drawing all the address changes; a route whose patch
+    appends (Load more) is not one to mark. Without the Navigation API
+    ([Limit 1](#limit-navigation-api)) the runtime leaves a marked GET form to the browser, which
+    loads the page at its address, as without JavaScript.
 
     Not chosen: a header on the patch's answer that names its address (`corten-location` with
     replace semantics, as the issue suggested), since the same `patch_or` answers Load more and a
@@ -3986,10 +3990,13 @@ rules something out.
     rather than push one, which no app has asked for and the browser's own form does not do; a
     hook for a script to push the address and answer the traversal, a second way to do what the
     mark does, with URLs written in scripts (README Value 5); and keeping each patch in memory to
-    draw on Back, which the HTTP cache does already and would show a stale part.
+    draw on Back, which the HTTP cache does already and would show a stale part. Without the
+    Navigation API, patching and leaving the address as an unmarked form does (this Choice's first
+    draft) was not chosen either: a reload would show another scope than the screen did, the error
+    the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 666 bytes larger raw, 212 with gzip (15,341 to 15,553) and 181
-    with brotli (13,846 to 14,027), paid once a release by every user. A GET `data-patch` submit
+    What it costs: the runtime is 801 bytes larger raw, 273 with gzip (15,341 to 15,614) and 217
+    with brotli (13,846 to 14,063), paid once a release by every user. A GET `data-patch` submit
     reads one attribute, a marked one's answer pushes an entry, and a traversal looks two keys up
     in a set. Nothing changes on the server: `html!`'s output and the request path are as they
     were, and the check that refuses a misplaced mark runs when the markup compiles. The request
@@ -4022,11 +4029,11 @@ rules something out.
     back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
     mark goes.
 
-    Last checked: 2026-11-15, the runtime's size on `307d00bca` against `c9ed56785`; 2026-11-15,
-    the smoke's eight checks of the mark passing with `307d00bca`'s runtime in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), and the traversals' bytes
-    and times measured on it in Chromium 156.0.8078.4; 2026-11-15, the request path's count on
-    `307d00bca` against `c9ed56785`.
+    Last checked: 2026-11-15, the runtime's size on this Choice's commit against `c9ed56785`;
+    2026-11-15, the smoke's twelve checks of the mark passing with this Choice's runtime in
+    Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-15, the
+    traversals' bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4,
+    and the request path's count on `307d00bca` against `c9ed56785`.
 
 ## Rules
 
@@ -4121,9 +4128,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
 1. <a id="limit-navigation-api"></a>Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
    browsers do full page loads, and forms, patches and handlers still work.
-   There a `data-address` form's patch leaves the address as it is, as an unmarked form's does:
-   the runtime could put the address in, but not answer Back to it, which would show the address
-   over the screen it left.
+   There the browser sends a GET `data-address` form itself, a full load of the page at its
+   address, as without JavaScript: the runtime could patch and put the address in, but not
+   answer Back to it, which would show the address over the screen it left.
 2. <a id="limit-whole-element-patches"></a>Patches replace whole elements: the server's markup wins, except for what the user is doing.
    A field they edited keeps its value (for the form that was sent, edited after it was sent),
    and focus and the caret move to the matching element (same id; else, inside the nearest

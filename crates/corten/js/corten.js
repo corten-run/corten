@@ -2720,16 +2720,21 @@ function address(to, patched) {
 /**
  * Back or forward between entries of this page that `data-address` forms' patches drew
  * ({@link addressed}): the entry's address is read as the form read it (`corten: action`), so the
- * HTTP cache can answer it, and its patch is drawn. An answer that is not a patch from here (a
- * page, a redirect, an error, none) is read again as a page, as for any other entry.
+ * HTTP cache can answer it, and its patch is drawn. An answer that is not a whole 2xx patch from
+ * here (a page, a redirect, an error, even one that carries a patch, none, a body cut off) is
+ * read again as a page, as for any other entry. The traversal's signal ends it, as a newer
+ * navigation does any visit; the screen stays, so the fields outside the patch keep what the user
+ * typed, and the patch keeps a field they are editing as any patch does.
  * @param {URL} url @param {AbortSignal} signal
  */
 async function readAddress(url, signal) {
+  const page = () => visit(url, signal, undefined, false, undefined, undefined, stale);
   const res = await fetch(url, { headers: { corten: "action" }, signal }).catch(() => null);
   signal.throwIfAborted();
-  if (!res?.headers.has("corten-patch") || res.redirected || !fromHere(res.url)) return visit(url, signal, undefined, false, undefined, undefined, stale);
-  const html = await res.text();
+  if (!res?.ok || !res.headers.has("corten-patch") || res.redirected || !fromHere(res.url)) return page();
+  const html = await res.text().catch(() => null);
   signal.throwIfAborted();
+  if (html === null) return page();
   await apply(html, signal, null);
   drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 }
@@ -2979,6 +2984,9 @@ function patchSubmit(event) {
   const sends = sendsAs(form, submitter);
   // A dialog's form closes the dialog and sends nothing: the browser's to do.
   if (sends.method === "dialog") return;
+  // A GET form whose answer is the page at its address (`data-address`), without the Navigation
+  // API Back to that address needs: the browser loads the page there, as it does with no script.
+  if (!navigation && sends.method === "get" && hasAttr(form, "data-address")) return;
   event.preventDefault();
   send(form, submitter, sends);
 }
@@ -3042,9 +3050,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
   const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
-  // Its answer is the page at the address it asks for: the address follows once it is drawn. Only
-  // with the Navigation API, which Back and Forward to that address need.
-  const addressing = method === "GET" && !!navigation && hasAttr(form, "data-address");
+  // Its answer is the page at the address it asks for: the address follows once it is drawn.
+  // Without the Navigation API, which Back and Forward to that address need, the browser sent it
+  // ({@link patchSubmit}).
+  const addressing = method === "GET" && hasAttr(form, "data-address");
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3121,7 +3130,13 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         announce(notice);
       }
       signal.throwIfAborted();
-      if (addressing && drawn) address(res.url, patched);
+      if (addressing && drawn) {
+        // The address the form asked for, its `#fragment` too, which the browser keeps for the
+        // form without JavaScript (and across a redirect, whose `Location` fetch does not show).
+        const to = new URL(res.url);
+        to.hash = url.hash;
+        address(to.href, patched);
+      }
       if (res.status === 422) focusInvalid(form);
       // Sent after an answer that took the write (2xx) or refused only its input (422). Not after a
       // refusal of the state it was made against (a 409 or 410, "someone saved first"): the user

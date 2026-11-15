@@ -147,7 +147,8 @@ division: end statements with `;` and keep a division on the line it continues.
    the address is the one it asked for (a new history entry), and Back and Forward between those
    entries read the patch again. The patch draws everything the address changes, the form
    included; never mark a form whose patch appends (Load more), and never call
-   `history.pushState` for it yourself (Back to such an entry reads the whole page).
+   `history.pushState` for it yourself (Back to such an entry reads the whole page). Without the
+   Navigation API the browser sends the form itself, a full load at its address.
 
 ## Text a script computes
 

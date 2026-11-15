@@ -167,15 +167,21 @@ struct SmokeScopeId;
 
 /// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
 /// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
-/// for, and Back and Forward read this patch again.
+/// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
+/// form's `action`, name a place on the page, which the address keeps.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
+    let here = url::Scope::default();
     html! {
         <section id={SmokeScopeId}>
-            <form method="get" action={url::Scope::default()} data-patch data-address>
+            <form method="get" action={&here} data-patch data-address>
                 <button name={f.scope} value="day">"Day"</button>
                 <button name={f.scope} value="week">"Week"</button>
+                <button name={f.scope} value="month" formaction={here.at(SmokeScopeId)}>"Month"</button>
+            </form>
+            <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
+                <button name={f.scope} value="quarter">"Quarter"</button>
             </form>
             <p>"Scope: "<output>{scope}</output></p>
         </section>
