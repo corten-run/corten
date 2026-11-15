@@ -1047,6 +1047,10 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
     if (beside) beside.replaceWith(again);
+    // A part's answer whose tag it replaced with the part (one inside the element it waited for):
+    // its own goes beside what it drew, so the page knows the part is read again
+    // ({@link readAgainLater}) and its next read finds it.
+    else if (asked) put.find(inPage)?.after(again);
     readPatchAgain(again, put);
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
@@ -1086,26 +1090,32 @@ function readPatchAgain(tag, put) {
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.
   readLater(Math.max(1, Number(tag.getAttribute("data-corten-read-again")) || 0), here, async () => {
-    for (;;) {
-      // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
-      // part's order in it).
-      const from = /** @type {string} */ (tag.getAttribute("data-from"));
-      // Counted before the read: a part its answer draws waiting follows no redirect past a
-      // navigation started since.
-      const visited = visits;
-      // Offline or unreachable: the part stays as it is.
-      const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-      if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
-        // A success that is not a patch is the app's mistake (the route answered its page).
-        if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+    // Counted before the first read, and kept by one made again: a part its answer draws waiting
+    // follows no redirect past a navigation started since.
+    const visited = visits;
+    const reading = new AbortController();
+    countLeaving(reading.signal);
+    try {
+      for (;;) {
+        // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
+        // part's order in it).
+        const from = /** @type {string} */ (tag.getAttribute("data-from"));
+        // Offline or unreachable: the part stays as it is.
+        const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
+        if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
+          // A success that is not a patch is the app's mistake (the route answered its page).
+          if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+          return;
+        }
+        const html = await res.text();
+        if (!here()) return;
+        // Changed while the read was on its way: its answer is drawn for what was, so read again.
+        if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
+        await apply(html, undefined, null, undefined, true, tag, undefined, visited);
         return;
       }
-      const html = await res.text();
-      if (!here()) return;
-      // Changed while the read was on its way: its answer is drawn for what was, so read again.
-      if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
-      await apply(html, undefined, null, undefined, true, tag, undefined, visited);
-      return;
+    } finally {
+      reading.abort();
     }
   });
 }
@@ -1219,34 +1229,53 @@ function readTags(tags, visited = visits) {
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {number} visited
  */
 async function readPart(from, tags, waiting, visited) {
-  partReads += 1;
-  // Its listeners on the tags and parts go when it ends, so a tag read again does not gather them.
-  // It stops putting the page's reads off then, or as soon as it can no longer draw (its fetch
-  // stopped): an answer waiting for a stylesheet that never loads holds nothing up.
+  // Over when it ends, or as soon as it can no longer draw (its fetch stopped), even while its
+  // answer waits for a stylesheet that never loads: then its listeners go, so a tag read again does
+  // not gather them, and it stops putting the page's reads off.
   const done = new AbortController();
-  let counted = true;
-  const release = () => {
-    if (counted) partReads -= 1;
-    counted = false;
-  };
+  partReads += 1;
+  done.signal.addEventListener("abort", () => (partReads -= 1), { once: true });
+  countLeaving(done.signal);
   try {
-    await readPartOnce(from, tags, waiting, visited, done.signal, release);
+    await readPartOnce(from, tags, waiting, visited, done);
   } finally {
-    release();
     done.abort();
   }
+}
+
+/**
+ * How many reads whose answer may send the page elsewhere (a part's, {@link countLeaving}) are on
+ * their way.
+ */
+let leaving = 0;
+/** Ends the `beforeunload` listener {@link countLeaving} adds. */
+let leavingStop = new AbortController();
+/**
+ * Without the Navigation API a link the user follows is a full load, which starts with
+ * `beforeunload`: counted as a navigation while a read lasts (until `signal` aborts), so its
+ * redirect, or one of a part its answer draws waiting, does not take the link's place. Only then,
+ * as a browser may keep a page with that listener out of its back-forward cache.
+ * @param {AbortSignal} signal
+ */
+function countLeaving(signal) {
+  if (navigation || signal.aborted) return;
+  if (!leaving++) {
+    leavingStop = new AbortController();
+    addEventListener("beforeunload", () => void (visits += 1), { signal: leavingStop.signal });
+  }
+  signal.addEventListener("abort", () => --leaving || leavingStop.abort(), { once: true });
 }
 
 /** How many of {@link readPart}'s reads are on their way: the page is not read whole meanwhile. */
 let partReads = 0;
 
 /**
- * {@link readPart}'s read, whose listeners last while `done` does; `release` says it can no
- * longer draw.
+ * {@link readPart}'s read, whose listeners last until `done` aborts, which it does itself once it
+ * can no longer draw.
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {number} visited
- * @param {AbortSignal} done @param {() => void} release
+ * @param {AbortController} done
  */
-async function readPartOnce(from, tags, waiting, visited, done, release) {
+async function readPartOnce(from, tags, waiting, visited, done) {
   const page = swapped;
   // A script may change a tag's address while the read is on its way (corten-ui's rows::sort puts
   // a table's order in it): the answer is drawn for what was, so it is read again.
@@ -1271,19 +1300,15 @@ async function readPartOnce(from, tags, waiting, visited, done, release) {
   // Stopped before it drew: its answer, even one waiting for a stylesheet, is never drawn (a part
   // it waits for has left), so its other parts are settled now, not when that wait ends.
   stop.signal.addEventListener("abort", () => {
-    release();
+    done.abort();
     if (drew || ended) return;
     ended = true;
     for (const el of waiting) unmarkBusy(el, mine);
     if (page === swapped) for (const el of waiting) if (inPage(el)) markFailed(el);
   });
   let holding = tags.length + waiting.length;
-  for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
-  for (const el of waiting) signalOf(el).addEventListener("abort", () => stop.abort(), { signal: done });
-  // Without the Navigation API a link the user follows is a full load, which starts with
-  // `beforeunload`: counted as a visit, so the read's redirect does not take its place. Only while
-  // the read is on its way, as a browser may keep a page with that listener out of its cache.
-  if (!navigation) addEventListener("beforeunload", () => void (visits += 1), { signal: done });
+  for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done.signal });
+  for (const el of waiting) signalOf(el).addEventListener("abort", () => stop.abort(), { signal: done.signal });
   for (const el of waiting) markBusy(el, mine);
   const leftAt = left;
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
