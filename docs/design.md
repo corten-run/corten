@@ -1631,9 +1631,13 @@ rules something out.
     Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
-    the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
-    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over 1,000,
-    three runs each, `form::de::tests::what_reading_a_form_costs`; reading the item benchmark's 500
+    the deserializer; and rustc reporting a cycle error (E0391) naming `SHAPE` when a `Fields`
+    type's rows reach that type through another type, which is all that refuses such rows at compile
+    time, so the reader never follows keys deeper than the types go; the `compile_fail,E0391`
+    doctests in `crates/corten/src/form.rs` hold it); measured (reading a seven-field form costs
+    9,241 instructions before, on `62eb57f7`, and after, on `8cd5934e`: callgrind, release build,
+    1,200 reads less 200 over 1,000, three runs each,
+    `form::de::tests::what_reading_a_form_costs`; reading the item benchmark's 500
     API responses costs 265,550,044 instructions through `FromJson` and 438,766,522 through
     serde_json alone, before, on `c65c10ec` with serde's derive, and after, on `a791d9ba` with this
     one and again on `58b8c2f8`: callgrind, release build, `read_cost` in `examples/card-market`,
@@ -1645,7 +1649,9 @@ rules something out.
     twin tests would show; or apps need an attribute this refuses often enough that a type of their
     own is the second way; or generic `Fields` or `UrlValue` types, or `#[serde(other)]` enums, are
     common enough that their serde_json read shows in a measured page or API, which would ask for a
-    reader that repeats serde's inferred bounds or reads past a word it does not know.
+    reader that repeats serde's inferred bounds or reads past a word it does not know; or rustc stops
+    reporting that `SHAPE` cycle, or those doctests stop failing on a new toolchain, which would ask
+    for another refusal of rows that reach their own type, or a depth the reader keeps to.
 
     Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
     at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
@@ -1654,7 +1660,12 @@ rules something out.
     (beside a defaulted field), on the branch from `24062789`; 2026-11-13, serde_derive 1.0.229's
     `allow_transparent` (a path type whose last segment is `PhantomData`), with the twins `Count`
     (a tuple), `Scored` (a `default = "path"` field), `Wrapped<T>` and `Qualified`
-    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`.
+    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`; 2026-11-14, the form read
+    again at `4674d1d3` and with rows in rows at `16525bc5`: 9,222 instructions a read in both
+    (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within 174
+    instructions of each other over the 1,000 reads); 2026-11-15, rustc's E0391 for rows that reach
+    their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
+    `1e0bcd58`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

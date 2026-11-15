@@ -344,6 +344,7 @@ fn fields(input: TokenStream) -> Result<String, String> {
             }
             Kind::Rows => {
                 let (key, row) = map_types(&ident, &ty)?;
+                rows_of_itself(&ident, &name, &row)?;
                 Shape::Rows(key, row)
             }
             Kind::Map => Shape::Map(map_types(&ident, &ty)?.0),
@@ -353,11 +354,14 @@ fn fields(input: TokenStream) -> Result<String, String> {
     let fields_type = format!("{name}Fields");
     // One struct of names per place the struct can be: the form's top, a group, a row, a group in
     // a row. Each field's name is a `FieldName` of that place, so a form's own field is a name alone.
+    // A row's names are generic over where its rows are (`__At`: the form, or the row holding them),
+    // so rows in a row are named through every row they are in.
+    let in_row = "<'k, __At: ::corten::form::Place = ::corten::form::Root>";
     let places: [(&str, &str, &str, &str); 4] = [
         ("", "", "::corten::form::Root", "FIELDS"),
         ("Group", "", "::corten::form::Group", "group"),
-        ("Row", "<'k>", "::corten::form::Row<'k>", "row"),
-        ("RowGroup", "<'k>", "::corten::form::RowGroup<'k>", "row_group"),
+        ("Row", in_row, "::corten::form::Row<'k, __At>", "row"),
+        ("RowGroup", in_row, "::corten::form::RowGroup<'k, __At>", "row_group"),
     ];
     let mut out = String::new();
     let mut shape = String::from("let shape = 0u8;");
@@ -371,12 +375,11 @@ fn fields(input: TokenStream) -> Result<String, String> {
                 );
             }
             Shape::Rows(_, row) => {
-                shape += &format!(
-                    " if <{row} as ::corten::form::Fields>::SHAPE > 1 {{ ::core::panic!({:?}) }} let shape = 2;",
-                    format!("corten: `{ident}` is rows, and a row's fields are plain fields and groups, not rows")
-                );
+                // Any shape: a row holds plain fields, groups, rows and maps. Read so the row's own
+                // refusals hold, and so a row of its own type is a cycle, which does not compile.
+                shape += &format!(" let _ = <{row} as ::corten::form::Fields>::SHAPE; let shape = 2;");
             }
-            // Keyed like rows, so only at a form's top.
+            // Keyed like rows, so at a form's top or in a row.
             Shape::Map(_) => shape += " let shape = 2;",
         }
     }
@@ -391,7 +394,9 @@ fn fields(input: TokenStream) -> Result<String, String> {
         let place_doc = match suffix {
             "" => "",
             "Group" => " as a group of another form (`#[fields(group)]`), what a component that draws the group takes",
-            "Row" => " in a row of another form (`#[fields(rows)]`)",
+            "Row" => {
+                " in a row of another form (`#[fields(rows)]`), whose rows are at `__At` (the form, or a row that holds them)"
+            }
             _ => " as a group in a row of another form, what a component that draws the group in a row takes",
         };
         out += &format!(
@@ -401,17 +406,19 @@ fn fields(input: TokenStream) -> Result<String, String> {
             let field_ty = match (kind, suffix) {
                 (Shape::Plain(value), _) => format!("::corten::form::FieldName<{value}, {place}>"),
                 (Shape::Group(g), "") => format!("<{g} as ::corten::form::Fields>::InGroup"),
-                (Shape::Group(g), "Row") => format!("<{g} as ::corten::form::Fields>::InRowGroup<'k>"),
+                (Shape::Group(g), "Row") => format!("<{g} as ::corten::form::Fields>::InRowGroup<'k, __At>"),
                 // A group in a group or in a row's group: its names exist, but taking them is refused.
                 (Shape::Group(_), _) => "::corten::form::Refused".to_string(),
                 (Shape::Rows(k, r), "") => format!("::corten::form::Rows<{k}, {r}>"),
                 (Shape::Map(k), "") => format!("::corten::form::Keyed<{k}>"),
+                (Shape::Rows(k, r), "Row") => format!("::corten::form::Rows<{k}, {r}, {place}>"),
+                (Shape::Map(k), "Row") => format!("::corten::form::Keyed<{k}, {place}>"),
                 (Shape::Rows(..) | Shape::Map(_), _) => "::corten::form::Refused".to_string(),
             };
             out += &format!("    pub {ident}: {field_ty},\n");
         }
         if !lifetime.is_empty() {
-            out += "    #[doc(hidden)]\n    pub __k: ::core::marker::PhantomData<&'k ()>,\n";
+            out += "    #[doc(hidden)]\n    pub __k: ::core::marker::PhantomData<(&'k (), __At)>,\n";
         }
         out += "}\n";
     }
@@ -425,7 +432,9 @@ fn fields(input: TokenStream) -> Result<String, String> {
                 (Shape::Group(g), "Row") => {
                     format!("<{g}>::__in_row_group(::corten::form::__private::row_group({at}, {wire:?}))")
                 }
-                (Shape::Group(_), _) | (Shape::Rows(..) | Shape::Map(_), "Group" | "Row" | "RowGroup") => {
+                (Shape::Rows(..), "Row") => format!("::corten::form::Rows::__at({at}, {wire:?})"),
+                (Shape::Map(_), "Row") => format!("::corten::form::Keyed::__at({at}, {wire:?})"),
+                (Shape::Group(_), _) | (Shape::Rows(..) | Shape::Map(_), "Group" | "RowGroup") => {
                     "::corten::form::Refused".to_string()
                 }
                 (Shape::Rows(..), _) => format!("::corten::form::Rows::__new({wire:?})"),
@@ -448,20 +457,19 @@ fn fields(input: TokenStream) -> Result<String, String> {
         {name}GroupFields {{ {group_fields} }}
     }}
     #[doc(hidden)]
-    pub const fn __in_row_group(at: ::corten::form::RowGroup<'_>) -> {name}RowGroupFields<'_> {{
+    pub const fn __in_row_group<__At: ::corten::form::Place>(at: ::corten::form::RowGroup<'_, __At>) -> {name}RowGroupFields<'_, __At> {{
         {name}RowGroupFields {{ {row_group_fields} __k: ::core::marker::PhantomData }}
     }}
 }}
 impl {impl_generics} ::corten::form::Fields for {name} {type_generics} {where_clause} {{
     type Names = {fields_type};
     type InGroup = {name}GroupFields;
-    type InRow<'k> = {name}RowFields<'k>;
-    type InRowGroup<'k> = {name}RowGroupFields<'k>;
+    type InRow<'k, __At: ::corten::form::Place> = {name}RowFields<'k, __At>;
+    type InRowGroup<'k, __At: ::corten::form::Place> = {name}RowGroupFields<'k, __At>;
     const SHAPE: u8 = {{ {shape} shape }};
     const LEAVE_OUT: bool = {leave_out};
-    fn in_row<'k>(rows: &'static str, key: &'k (dyn ::corten::form::RowKey + ::core::marker::Sync)) -> {name}RowFields<'k> {{
+    fn in_row<'k, __At: ::corten::form::Place>(at: ::corten::form::Row<'k, __At>) -> {name}RowFields<'k, __At> {{
         let _ = <Self as ::corten::form::Fields>::SHAPE;
-        let at = ::corten::form::__private::row(rows, key);
         {name}RowFields {{ {row_fields} __k: ::core::marker::PhantomData }}
     }}
 }}
@@ -615,6 +623,23 @@ fn no_option(field: &str, ty: &[TokenTree], what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rows of the struct itself, which would let a client choose how deep the form is read, a level
+/// for each `[key]` it sends. `row` is the rows' type as [`nested_type`] writes it: the struct's
+/// own name or `Self`, with any generics, is refused; a path is not, since it may name another type
+/// of that name (a rows type written as a path does not compile today for another reason: the type
+/// is written back with its tokens spaced apart). Rows that reach the struct through another type,
+/// named without a path, are refused when the derive reads that type's `SHAPE`, which is then a
+/// cycle (E0391).
+fn rows_of_itself(field: &str, name: &str, row: &str) -> Result<(), String> {
+    let own = row.split('<').next().unwrap_or_default().trim();
+    if own == name || own == "Self" {
+        return Err(format!(
+            "Fields: `{field}` is rows of `{name}` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs"
+        ));
+    }
+    Ok(())
+}
+
 /// The key and row types of a rows field: `BTreeMap<Domain, DomainLimits>`.
 fn map_types(field: &str, ty: &[TokenTree]) -> Result<(String, String), String> {
     let usage =
@@ -736,4 +761,23 @@ pub(crate) fn apply_rule(field: &str, rule: &str) -> Result<String, String> {
         }
         other => return Err(format!("unknown rename_all rule {other:?}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rows of the struct itself are refused in the derive's own words, by the struct's name or
+    /// `Self`, with generics as `nested_type` writes them; another type, a longer name and a path
+    /// (which may name another type of that name) are not.
+    #[test]
+    fn rows_of_the_struct_itself_are_refused_by_its_name_or_self() {
+        let refused = "Fields: `then` is rows of `Step` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs";
+        for row in ["Step", "Self", "Step < u8 >", "Self < T >"] {
+            assert_eq!(rows_of_itself("then", "Step", row), Err(refused.to_string()), "{row}");
+        }
+        for row in ["Rule", "Steps", "StepRow", "other :: Step", "Rule < Step >"] {
+            assert_eq!(rows_of_itself("then", "Step", row), Ok(()), "{row}");
+        }
+    }
 }
