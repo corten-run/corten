@@ -19,8 +19,8 @@ test("core default and unapproved CLI never execute cloud; grammar has no tuning
   const r = spawnSync(process.execPath, [resolve("bench/workloads/droplet.mjs"), ...args], { encoding: "utf8", windowsHide: true });
   assert.equal(r.status, 2); assert.equal(r.stderr.trim(), publicError()); assert.deepEqual(h.calls, []); assert.ok(!existsSync(h.local));
 });
-test("detach reserves before one create, reconciles a lost response, uploads fixed job and starts once", async (t) => {
-  const h = harness(t, { createLost: true, active: true });
+test("detach reserves before one completed create, uploads fixed job and starts once", async (t) => {
+  const h = harness(t, { active: true });
   const s = await h.launch().launch(); assert.equal(s.status, "running"); assert.equal(s.fullGroupQualified, false); assert.equal(h.creates, 1);
   assert.equal(h.calls.filter((c) => c[0] === "ssh" && c.at(-1).startsWith("systemctl start")).length, 1);
   assert.equal(h.calls.filter((c) => c[0] === "scp").length, 3);

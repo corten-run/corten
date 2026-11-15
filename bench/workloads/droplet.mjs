@@ -6,11 +6,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSy
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
-import { remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -22,7 +23,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main" } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now() } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
@@ -67,8 +68,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return result;
   }
   const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
+  const exactHost = async () => {
+    const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true);
+    if (result.status === 1 && providerFailure(result)?.code === "get-http" && providerFailure(result)?.httpStatus === 404) return undefined;
+    assert.equal(result.status, 0, "exact host observation failed; preserve state");
+    const rows = JSON.parse(result.stdout);
+    assert.ok(Array.isArray(rows) && rows.length === 1 && String(rows[0]?.id) === state.id, "exact host identity differs");
+    return rows[0];
+  };
   const own = async () => {
-    const d = ownedDroplet(await list(), state), ips = d.networks?.v4?.filter((n) => n.type === "public");
+    const found = state.id ? await exactHost() : undefined;
+    const d = ownedDroplet(state.id ? found ? [found] : [] : await list(), state), ips = d.networks?.v4?.filter((n) => n.type === "public");
     assert.equal(ips?.length, 1, "ambiguous public host address");
     if (state.ip) assert.equal(ips[0].ip_address, state.ip);
     return d;
@@ -88,6 +98,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
   const unit = async () => terminalUnit((await ssh(`systemctl show ${state.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`)).stdout, state);
+  async function commonBootstrap() {
+    const deadline = now() + 45 * 60000; let previous = deadline - 45 * 60000;
+    const remaining = () => {
+      const current = now();
+      assert.ok(Number.isFinite(current) && Number.isFinite(deadline) && current >= previous && current < deadline, "common bootstrap observation expired; preserve running host");
+      previous = current; check(); return deadline - current;
+    };
+    for (;;) {
+      remaining();
+      assert.equal(await unit(), false, "first group ended before common bootstrap admission; collect its evidence");
+      const result = await ssh(bootstrapReadScript, Math.min(30000, remaining()), true);
+      remaining();
+      if (result.status === 0 && !result.error) {
+        assert.ok(Buffer.byteLength(result.stdout) <= 1024, "bounded bootstrap marker required");
+        assert.deepEqual(JSON.parse(result.stdout), bootstrapMarker(state), "common bootstrap identity differs");
+        state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save(); return;
+      }
+      assert.equal(result.status, 3, "common bootstrap marker observation failed");
+      await sleep(Math.min(30000, remaining()));
+    }
+  }
   async function locked(fn) {
     boundary(); const lock = join(local, "operation.lock");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
@@ -130,6 +161,65 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
+  const setupExit = () => {
+    verifyArchive(); const extracted = join(local, state.evidence); physical(extracted);
+    assert.equal(treeHash(extracted), state.evidenceSha256, "failed setup archive extraction changed");
+    const campaign = join(extracted, "campaign");
+    if (existsSync(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "native data cannot use setup retirement"); }
+    const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
+    full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit required");
+    const exit = Number(marker.trim()); assert.ok(exit <= 255); return exit;
+  };
+  const retirementFile = (kind) => kind === "setup-failed" ? "failed-setup-host.json" : "unused-host.json";
+  const verifyRetirementRecord = (bytes, kind) => {
+    const setup = kind === "setup-failed";
+    const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
+    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit()), setupExit(), record.startedAtMs, record.finishedAtMs)
+      : unusedEvidence(raw, state, unusedHostScript(state), record.startedAtMs, record.finishedAtMs);
+    assert.deepEqual(record, expected, "retirement evidence differs");
+  };
+  const verifyRetirement = () => {
+    const bytes = regular(join(local, retirementFile(state.retirement.kind)), 4096);
+    assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
+    verifyRetirementRecord(bytes, state.retirement.kind);
+  };
+  const retire = async (kind, evidence, finishedAtMs) => {
+    await own(); check();
+    assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "retirement proof expired before deletion");
+    const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
+    const path = join(local, retirementFile(kind));
+    if (existsSync(path)) {
+      // A crash between receipt and state writes is recoverable. Preserve the
+      // exact old record, but only this operation's fresh probe authorizes intent.
+      assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
+      const prior = regular(path, 4096), hash = digest(prior); verifyRetirementRecord(prior, kind);
+      const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
+      if (existsSync(retained)) assert.equal(digest(regular(retained, 4096)), hash, "interrupted retirement history differs");
+      else durable(retained, prior);
+      assert.equal(digest(regular(path, 4096)), hash, "interrupted retirement receipt changed");
+      unlinkSync(path); syncDirectory(local);
+    }
+    durable(path, bytes);
+    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    verifyRetirement();
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
+    assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
+    state.destroyedAt = new Date().toISOString(); save(); return 1;
+  };
+  const retireUnused = async () => {
+    assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
+    const script = unusedHostScript(state), startedAtMs = Date.now();
+    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
+    const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs);
+    return retire("unused", evidence, finishedAtMs);
+  };
+  const retireFailedSetup = async () => {
+    assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
+    const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
+    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs);
+    return retire("setup-failed", evidence, finishedAtMs);
+  };
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
     async launch() {
@@ -177,6 +267,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             if (diagnostic && !providerFailure(error)) error.providerDiagnostic = diagnostic;
             throw error;
           }
+          if (created.error || created.status !== 0) {
+            const diagnostic = providerFailure(created);
+            throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
+          }
           let ready = false;
           for (let i = 0; i < 40; i++) {
             if ((await ssh("true", 30000, true)).status === 0) { ready = true; break; }
@@ -190,16 +284,23 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           await ssh(`bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${state.unit} /etc/systemd/system/${state.unit} && systemd-analyze verify /etc/systemd/system/${state.unit} && systemctl daemon-reload`);
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
-          await unit(); state.status = "running"; save(); return structuredClone(state);
+          await unit(); state.status = "running"; save();
+          if (state.group !== undefined && state.group === state.fleet.jobs[0].group) await commonBootstrap();
+          return structuredClone(state);
         });
       } finally { if (!preserveOperationLock) { unlinkSync(launchLock); syncDirectory(base); } }
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
       return locked(async () => {
+        if (state.status === "retired") {
+          verifyRetirement();
+          assert.equal(await exactHost(), undefined, "delete outcome uncertain; no automatic repeated deletion");
+          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+        }
         if (state.deletionIntentAt) {
           verifyArchive(); await validateEvidence();
-          if (!(await list()).some((d) => String(d.id) === state.id)) {
+          if (await exactHost() === undefined) {
             state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
           }
           assert.ok(!state.destroyedAt, "deleted host still listed; preserve identity");
@@ -207,6 +308,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
+        if (state.status === "preparing") return retireUnused();
         if (!await unit()) return 3; // Exactly one look, never waits for a live campaign.
         if (!state.archiveSha256) {
           assert.ok(!existsSync(archive) && !existsSync(`${archive}.download`), "unrecorded download/archive retained; inspect before retry");
@@ -227,12 +329,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const hash = await extractArchive(archive, extracted, state.archiveSha256); check();
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
-        await validateEvidence(); state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
+        try { await validateEvidence(); }
+        catch (error) {
+          // No native report can exist before entry. Only a separate fresh,
+          // terminal pre-entry proof permits failed-setup cleanup, never success.
+          try { setupExit(); } catch { throw error; }
+          return retireFailedSetup();
+        }
+        state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         verifyArchive(); await validateEvidence();
         assert.ok(await unit(), "unit became active; preserve host"); await own(); check();
         state.deletionIntentAt = new Date().toISOString(); save();
         await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-        assert.ok(!(await list()).some((d) => String(d.id) === state.id), "deletion not confirmed; host state uncertain");
+        assert.equal(await exactHost(), undefined, "deletion not confirmed; host state uncertain");
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
       });
     },
