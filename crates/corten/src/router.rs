@@ -154,13 +154,17 @@ enum Named<'q> {
 fn named(query: Option<&str>) -> Named<'_> {
     let mut found = Named::None;
     for pair in query.unwrap_or("").split('&') {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if key == crate::route::ACTION_KEY {
-            if !matches!(found, Named::None) {
-                return Named::Twice;
-            }
-            found = Named::One(value);
+        // The key is `do` when the pair starts with it and ends there or at its `=`.
+        let Some(rest) = pair.strip_prefix(crate::route::ACTION_KEY) else { continue };
+        let value = match rest.as_bytes().first() {
+            None => "",
+            Some(b'=') => &rest[1..],
+            Some(_) => continue,
+        };
+        if !matches!(found, Named::None) {
+            return Named::Twice;
         }
+        found = Named::One(value);
     }
     found
 }
