@@ -9,6 +9,11 @@ Corten is pre-1.0, so any minor version may change the API.
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.
 
+- Document a bounded read-only export of live JSON/mixed audit subjects and
+  immutable snapshots for independent review, followed by the existing exact-
+  subject delivery and terminal collection. No active-campaign collection or
+  automatic approval is added; target-host transport still needs qualification.
+
 - Replay live group phases using the saved campaign's exact scope and group order,
   including ordinal zero on a dedicated host. Require the matching campaign plan,
   selected binding and host reservation without relaxing native/lifetime seals.
