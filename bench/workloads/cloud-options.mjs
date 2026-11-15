@@ -36,6 +36,13 @@ export function providerFailure(error) {
   return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
 }
 
+const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
+  "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-checkpoint", "provider-settlement"];
+export function controllerFailure(error) {
+  const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
+  return controllerStages.includes(stage) ? stage : undefined;
+}
+
 export function full(value, pattern, label) {
   assert.equal(typeof value, "string", label);
   const match = pattern.exec(value); assert.ok(match && match[0] === value, label); return value;

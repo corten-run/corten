@@ -170,7 +170,8 @@ mod sealed {
     pub trait Value<T> {}
 }
 
-/// Where a test can send a request: a route, or a [`Local`] path.
+/// Where a test can send a request: a route, one of a page's posts ([`crate::route::Action`]), or a
+/// [`Local`] path.
 pub trait Address: sealed::Sealed {
     #[doc(hidden)]
     fn write_address(&self, out: &mut String);
@@ -180,6 +181,16 @@ impl<R: Route> sealed::Sealed for R {}
 impl<R: Route> Address for R {
     fn write_address(&self, out: &mut String) {
         self.write_link(out, false);
+    }
+}
+
+/// One of a page's posts ([`crate::route::Action`]): `app.post(&page.hold())`, urlencoded, or
+/// `app.call(Method::POST, &page.hold()).body(..)` for a multipart upload.
+impl<R: Route + ?Sized> sealed::Sealed for crate::route::Action<'_, R> {}
+impl<R: Route + ?Sized> Address for crate::route::Action<'_, R> {
+    fn write_address(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{self}");
     }
 }
 

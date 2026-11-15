@@ -449,7 +449,7 @@ rules something out.
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
    same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
-   write, the page it redirects to and its own ([Choice 53](#choice-write-own-page-whole)), so what
+   write, the page it redirects to and its own ([Choice 54](#choice-write-own-page-whole)), so what
    the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
@@ -484,7 +484,7 @@ rules something out.
    standard header that says "part of a page" and that a script may set.
 
    A write the runtime sends also says that it draws its own page whole
-   ([Choice 53](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   ([Choice 54](#choice-write-own-page-whole)), and says it in the standard header for that, as an
    HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
    server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
    deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
@@ -503,7 +503,7 @@ rules something out.
    not know; the server reads it only for a write the runtime sent, splitting the `Prefer` lines at
    the commas and semicolons outside quotes (`cache::split_unquoted`, as `Cache-Control` is read),
    which costs a write about 210 instructions more than looking up a header of its own
-   ([Choice 53](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   ([Choice 54](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
    7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
    answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
    every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
@@ -534,7 +534,8 @@ rules something out.
    against a header of Corten's own, RFC 7240's text and its registry of preferences (`respond-async`,
    `return`, `wait`, `handling` and others, none about what a client draws) read, the CORS
    safelist (`Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, `Range`) checked,
-   and the cost of reading it measured.
+   and the cost of reading it measured on `914f4781e` against `5d0bf7599` (callgrind, three
+   alternating rounds).
 
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
@@ -4000,7 +4001,89 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
-53. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
+53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
+    in the address each form posts to, not by the pressed button's name in the body or a route per
+    write.** A path takes one `POST`, so a screen with several writes gave each a route of its
+    own, and each such route declared the page's query set again so its handler could redirect
+    back to the view it was sent from: 53 times in one port of a marketplace's seller screens
+    ([#1403](https://github.com/corten-run/corten/issues/1403)). A route now names its writes
+    beside its plain `post`, `post(price) = set_price`, and the routes module gives the route a
+    method per name, `at.price()`: an `Action` whose address is the page's own with `do=price`,
+    which renders as an attribute value (`action={at.price()}`, `formaction={at.price()}`) and is
+    not an `Href`, so nothing links or redirects to it. At a route with named posts, and only
+    there, the router's `POST` handler reads `do` from the request's query and calls the handler
+    it names, or the plain `post` when it names none, and answers 400 with the names the page has
+    otherwise; a `GET` or `HEAD` of the same address draws the page. Each handler takes the
+    page's `Params`, so the query set is said once and reaches every write and its redirect.
+
+    The address carries the name because a browser sends a form to the pressed button's
+    `formaction`, else the form's `action`, query kept, in both of a post's encodings, with or
+    without JavaScript, and the runtime's `data-patch` send reads the same two attributes, so the
+    runtime did not change. The query is read before the body, so a multipart upload is chosen as
+    a urlencoded form is, and the chosen handler's extractor keeps the body: its limit, its
+    streaming and its errors. Enter in a field presses the form's first submit button, so it
+    sends where that button does, and `requestSubmit()` with no submitter sends to the form's
+    `action`: each goes where the markup says, as a click does.
+
+    Not chosen: the pressed button's `name` and `value` in the body, HTML's own way to say which
+    control submitted a form (Rails' `commit`, Django's submit names). Routing on it reads the
+    body before routing: a urlencoded body is buffered, parsed and handed on, and a multipart one
+    is read until the submitter's part, which a browser writes in tree order among the others
+    (after a file input above it), so the router would hold the files ahead of it under a limit of
+    its own or take the body from the handler's `Upload`, and every post to such a route would pay
+    that read. A route per write with a shared query set, what apps wrote: correct, and still a
+    route and a `Params` per write that each say the page's query, the duplication the issue
+    counts. A `back` parameter or the `Referer` to redirect to: the handler would redirect wherever
+    a request says, an open redirect to guard, and still could not read the page's view as typed
+    `Params`. A path per write under the page (`/inventory/price`): a route of its own again.
+
+    `do` is a query parameter of Corten's own on an address users see
+    ([Rule 10](#rule-standard-formats)). The standard way to name the pressed control is its name
+    and value in the body, which does not fit for the reasons above; what carries Corten's
+    parameter, a `formaction` or an `action` with a query, is HTML's own, and Corten moves to the
+    submitter if a browser ever sends it where a server can read it before the body. A route with
+    a query parameter of its own named `do` does not compile, nor does a post named for one of a
+    route's own methods (`href`, `at`) or with a name that is not ASCII, which a browser would send
+    percent-encoded. What it leaves open is a form with no `action` on a page drawn at a post's
+    address, which posts there again ([Limit 29](#limit-page-action-address)).
+
+    What it costs, in instructions per request on the request path (the release test
+    `what_a_page_with_posts_costs`, callgrind, the difference between 1,200 and 200 requests):
+    a write that is a named post, `/desk?page=3&do=price`, is 22,928 where the same write at a
+    route of its own, `/desk/price?page=3`, was 21,882 before this change, 1,046 (4.8%) more: the
+    router finding and reading `do` (about 190 of it when the name was compared undecoded, 78 more
+    to decode it as `Params` does) and the rest the handler's `Params` decoding one more query
+    pair, which it reads and drops. The page's plain `post` beside named posts is 22,010 against
+    21,805 (205 more, the router reading the query), and drawing the page, whose forms now write
+    `/desk?page=3&amp;do=price` where they wrote `/desk/price?page=3`, 22,321 against 22,230 (91
+    more). A post to a route with no named post, mounted as before, is 21,893 against 21,882 (11
+    more, with none of this change's code on its path). The runtime is unchanged.
+
+    Stands on: measured (instructions per request under callgrind, three runs of each case alternating between the
+    two builds, every run within 2 of the others); platform (a form's submission goes to its submitter's
+    `formaction`, else its `action`, query kept, for `application/x-www-form-urlencoded` and
+    `multipart/form-data`, where only a `GET` replaces the query (HTML's form submission
+    algorithm); the smoke's urlencoded and multipart named posts with and without JavaScript, and
+    a `data-patch` one, in Chromium, Firefox and WebKit); reasoned (the router reads the request's
+    query, which it already holds, and no body, and a route with no named post is mounted as before;
+    the `do` key and its name are percent-decoded as `Params` reads the query's other keys, so an
+    address names one post however it is spelled, and only a pair with a `%` pays to decode); value (a
+    screen's view is said once and every write goes back to it, and a post a page does not have is
+    a compile error, README Value 4; it works without JavaScript and in both encodings, Value 3; a
+    page's writes are its route's, one concept rather than a route per write, Values 5 and 6).
+
+    Revisit when: a browser sends the submitter where a server can read it before the body (a
+    header), when routing on the standard submitter would cost no body read; an app needs one of a
+    page's named posts sent from another page's form, which a path of its own still serves; or an
+    app needs a query parameter named `do` on a page with posts.
+
+    Last checked: 2026-11-15, instructions per request on `e69833f2c` against `dea1788d2`, three
+    runs of each case alternating between the two; 2026-11-15, three runs of each case on
+    `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
+    others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
+    Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
+
+54. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
     redirects to; a patch does not fill a layout read.** A `data-patch` write that answers with its
     own result (a form drawn again with what it refused, a bulk add whose failed lines the page
     lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
@@ -4179,9 +4262,10 @@ rules something out.
 5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
    instant (filtering the rows on the page as you type) keeps the form that does it without. A
-   form that belongs to one page posts to that page's route, and a write with a path of its own
-   redirects once done and draws a page only to refuse, so the page a browser is left at answers
-   a `GET` ([Where a form posts](guide/requests-and-forms.md#where-a-form-posts)).
+   form that belongs to one page posts to that page's route, a page's several writes are named
+   posts of it ([Choice 53](#choice-page-actions)), and a write with a path of its own redirects
+   once done and draws a page only to refuse, so the page a browser is left at answers a `GET`
+   ([Where a form posts](guide/requests-and-forms.md#where-a-form-posts)).
 6. <a id="rule-page-view-model"></a>A page another surface reads derives `ToJson`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
 7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
@@ -4217,7 +4301,7 @@ rules something out.
     resolver's rule, the later wins, would drop one side's tokens without a word; the token goes
     in the group as its `$root`). Where Corten defines its own instead, a Choice above names the standard it considered, why it does not fit, and what
     would let Corten move to it ([Choice 11](#choice-corten-request-header), [Choice 12](#choice-own-prefetch),
-    [Choice 14](#choice-feed-patch-rows), [Choice 15](#choice-corten-answer-headers), [Choice 18](#choice-custom-media-breakpoints); [Choice 24](#choice-openapi)
+    [Choice 14](#choice-feed-patch-rows), [Choice 15](#choice-corten-answer-headers), [Choice 18](#choice-custom-media-breakpoints), [Choice 53](#choice-page-actions); [Choice 24](#choice-openapi)
     extends one where it cannot say something). A format only Corten's own
     server and runtime read (the `data-on` wire format) needs no standard, but stays internal:
     nothing outside the framework may depend on it.
@@ -4578,3 +4662,20 @@ by design; where it is known, a limit says what would lift it or why it is so.
     of the count.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.
+29. <a id="limit-page-action-address"></a>A page drawn at one of its posts' addresses
+    (`/inventory?page=3&do=price`: a write it refused, drawn without JavaScript, or the address
+    opened by hand) stays at that address, so a post form in it with no `action` sends to that
+    post again, whatever the form is for: a browser resolves a missing `action` to the document's
+    address, query included (HTML's form submission), and nothing Corten sends can change where a
+    browser without JavaScript posts. A page with named posts writes every post form's `action`,
+    `action={at}` for its plain `post` ([Choice 53](#choice-page-actions)). A debug build answers
+    a page of a route with named posts, drawn at an address whose query has a `do` key, whose
+    markup has a `<form method="post">` with no `action`, or an empty one, with a 500 that names
+    the form; the router marks such a route's requests, so a route without named posts may use a
+    `do` of its own unread, and it reads only those pages, after they are written. A release build
+    compiles none of it, so it costs nothing in production and never runs in a smoke test against a
+    production image. It reads
+    the form's own attributes: a form whose every button carries a `formaction` is flagged though
+    it posts nowhere wrong (give it an `action` too), and a `formmethod="post"` button in a `GET`
+    form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
+    address the browser was already at.
