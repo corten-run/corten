@@ -3105,9 +3105,10 @@ rules something out.
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside the part
     it was in, as drawn again, when the tag it answered was inside the part it replaced, never in place of another part's
     (inside it when that part is `<main>` or one of the layout's elements that are the page's).
-    A part read again stops its read, and its listener, when its part leaves the page (or its tag,
-    when its answer was that tag alone), and its
-    answer is checked again once its stylesheets have loaded, as a slow part's is. A read is over, and stops putting
+    A part read again stops its read, and its listener, when its part leaves the page (an answer
+    that was its tag alone reads for the part the tag it answered read for, and lasts while both
+    are there), and its answer is checked again once its stylesheets have loaded, as a slow
+    part's is: one whose address a script moved meanwhile is read again there. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
     stops, its listeners go, and its other parts lose their busy mark and show their link at once,
     so neither a read the server never answers nor an answer waiting for a stylesheet that never

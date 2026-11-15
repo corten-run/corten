@@ -1055,13 +1055,15 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
     if (beside) beside.replaceWith(again);
     else if (inside) {
       // The element the tag was in, drawn again under its id: not whatever else the answer drew.
+      // Read through Node's own, as a form's controls may shadow both.
       let was = /** @type {Element} */ (asked);
-      while (was.parentElement) was = was.parentElement;
-      const drawn = put.find((el) => inPage(el) && !!was.id && el.id === was.id) ?? put.find(inPage);
-      if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) drawn.append(again);
-      else drawn?.after(again);
+      for (let up; (up = Reflect.get(Node.prototype, "parentElement", was)); ) was = up;
+      const id = idOf(was);
+      const drawn = put.find((el) => inPage(el) && !!id && idOf(el) === id) ?? put.find(inPage);
+      if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) elementOwn.append.call(drawn, again);
+      else if (drawn) elementOwn.after.call(drawn, again);
     }
-    readPatchAgain(again, put);
+    readPatchAgain(again, put, asked);
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
   // except one for the address this patch answers, which would ask for itself again. Looked for in
@@ -1092,12 +1094,16 @@ function partTagBeside(put) {
  * again, whatever its status (a handler that cannot read says so as a patch). It lasts while the
  * page and the elements the patch put on it are there: a later patch of them or a page swapped in
  * stops it, and so does a read that fails without a patch (the server logged it) or offline.
- * @param {Element} tag @param {Element[]} put
+ * `asked`: the tag whose read answered with this one, if any.
+ * @param {Element} tag @param {Element[]} put @param {Element | null} [asked]
  */
-function readPatchAgain(tag, put) {
+function readPatchAgain(tag, put, asked) {
   const page = swapped;
-  // An answer that is only its tag (a part with nothing new) lasts while that tag is there.
-  const held = put.length ? put : [tag];
+  // An answer that is only its tag (a part with nothing new) reads for the same part as the tag it
+  // answered (that tag's own part, for a slow part's), and lasts while both are there.
+  const parts = (put.length ? put : (asked && (readFor.get(asked) ?? (hasAttr(asked, "data-part") ? partOf(asked) : null))) || []).filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
+  readFor.set(tag, parts);
+  const held = put.length ? put : [tag, ...parts];
   const here = () => page === swapped && held.every(inPage);
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.
@@ -1129,8 +1135,17 @@ function readPatchAgain(tag, put) {
         // Changed while the read was on its way: its answer is drawn for what was, so read again.
         if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
         // Checked again once the answer's modules and stylesheets have loaded, right before it is
-        // drawn: one stopped meanwhile (its part replaced, a page swapped in) is not.
-        await apply(html, { get aborted() { return reading.signal.aborted || !here(); } }, null, undefined, true, tag, undefined, visited);
+        // drawn: one stopped meanwhile (its part replaced, a page swapped in) is not, and one whose
+        // address a script changed meanwhile is read again there.
+        let moved = false;
+        const ask = {
+          get aborted() {
+            moved = inPage(tag) && attrOf(tag, "data-from") !== from;
+            return reading.signal.aborted || !here() || moved;
+          },
+        };
+        await apply(html, ask, null, undefined, true, tag, undefined, visited);
+        if (moved && !reading.signal.aborted && here()) continue;
         return;
       }
     } finally {
@@ -1139,6 +1154,8 @@ function readPatchAgain(tag, put) {
   });
 }
 
+/** The parts a part read again's tag reads for, which a tag answering it alone keeps. */
+const readFor = /** @type {WeakMap<Element, Element[]>} */ (new WeakMap());
 /** A page's request to read one of its parts again (`ReadAgain::from` in the page). */
 const PART_AGAIN = "template[data-corten-read-again][data-from]";
 /** A part the page waits for, read at once (`ReadAgain::now`). */

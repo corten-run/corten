@@ -1619,8 +1619,9 @@ async function run(browser) {
       pollAsked && pollListening === 1 && pollLeft === 0 && polledStopped,
       `asked ${pollAsked}, ${pollListening} listening while it waited, ${pollLeft} after, fetch stopped ${polledStopped}`,
     );
-    // And one whose answer was only its tag to read it again (nothing new), which lasts while that
-    // tag is on the page: once a form's answer takes it away, its stalled read stops.
+    // And one whose answer was only its tag to read it again (nothing new), which still reads for
+    // the part the first answer drew: once a form's answer replaces that part alone, its stalled
+    // read stops.
     let tagOnlyStopped = false;
     shared.on("requestfailed", (r) => r.url().endsWith("/smoke/tag-only-stalled") && (tagOnlyStopped = true));
     let tagOnlyAsked = false;
@@ -1637,12 +1638,12 @@ async function run(browser) {
     const tagOnlyListening = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
     await shared.evaluate(async () => {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<div id="tag-only-0"><p id="tag-only-a">Drawn by a form</p></div>'));
+      await corten.patch(__html('<p id="tag-only-a">Drawn by a form</p>'));
     });
     for (let waited = 0; !tagOnlyStopped && waited < 2000; waited += 50) await shared.waitForTimeout(50);
     const tagOnlyLeft = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
     check(
-      "a part read again whose answer was only its tag stops its read and its listener once that tag is taken away",
+      "a part read again whose answer was only its tag stops its read and its listener once a form's answer replaces its part",
       tagOnlyAsked && tagOnlyListening === 1 && tagOnlyLeft === 0 && tagOnlyStopped,
       `asked ${tagOnlyAsked}, ${tagOnlyListening} listening while it waited, ${tagOnlyLeft} after, fetch stopped ${tagOnlyStopped}`,
     );
@@ -1765,6 +1766,46 @@ async function run(browser) {
     );
     await later.unrouteAll({ behavior: "ignoreErrors" });
     await later.context().close();
+  }
+  // A part read again whose answer waits for its stylesheet while a script moves the tag's address
+  // (corten-ui's rows::sort): the old order is not drawn over the new, and it is read again at the
+  // address now on the page (#1400).
+  {
+    const sorted = await (await browser.newContext()).newPage();
+    let releaseSortStyle = () => {};
+    let sortStyleAsked = false;
+    await sorted.route("**/smoke/sort.css", async (route) => {
+      sortStyleAsked = true;
+      await new Promise((resolve) => (releaseSortStyle = () => resolve(undefined)));
+      await route.fulfill({ status: 200, headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+    });
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    /** @type {string[]} */
+    const sortAsked = [];
+    await sorted.route("**/smoke/sort-first", (route) => route.fulfill(patchOf('<p id="sort-a">First</p><template data-corten-read-again="1" data-from="/smoke/sort?o=1"></template>')));
+    await sorted.route((url) => url.pathname === "/smoke/sort", (route) => {
+      const order = new URL(route.request().url()).searchParams.get("o") ?? "";
+      sortAsked.push(order);
+      return route.fulfill(patchOf(order === "1" ? '<link rel="stylesheet" href="/smoke/sort.css" data-corten-style><p id="sort-a">Order 1</p>' : `<p id="sort-a">Order ${order}</p>`));
+    });
+    await sorted.goto(`${base}/`);
+    await sorted.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="sort-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="sort-0"><p id="sort-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/sort-first" data-part="sort-a"></template></div>'));
+    });
+    for (let waited = 0; !sortStyleAsked && waited < 5000; waited += 50) await sorted.waitForTimeout(50);
+    await sorted.evaluate(() => document.querySelector('#sort-0 > template[data-from="/smoke/sort?o=1"]')?.setAttribute("data-from", "/smoke/sort?o=2"));
+    releaseSortStyle();
+    await sorted.waitForFunction(() => document.getElementById("sort-a")?.textContent === "Order 2", null, { timeout: 5000 }).catch(() => {});
+    const sortText = await sorted.evaluate(() => document.getElementById("sort-a")?.textContent);
+    check(
+      "a part read again whose answer waited for its stylesheet while a sort moved its address is read again there, not drawn",
+      sortStyleAsked && sortText === "Order 2" && sortAsked.join() === "1,2",
+      `${sortText}, asked ${sortAsked.join()}`,
+    );
+    await sorted.unrouteAll({ behavior: "ignoreErrors" });
+    await sorted.context().close();
   }
   // A link to another site the browser does not leave for (it answers 204): the runtime's next
   // navigation shows the page stayed, so a part's redirect after it is followed (#1400).
@@ -2022,6 +2063,63 @@ async function run(browser) {
     await restored.unrouteAll({ behavior: "ignoreErrors" });
     await restored.context().close();
   } else skip("a page shown again after it began to leave follows the redirect its part's read made again is answered with", swaps ? "the app is not at localhost" : noSwaps);
+  // A read cut as the page began to be left (Firefox ends a page's fetches then, before it knows
+  // the link is answered with 204; the test cuts it in every engine) is made again a second later,
+  // and is still on its way meanwhile: the page's head ReadAgain does not read it whole over the
+  // part (#1400).
+  if (swaps && crossBase) {
+    const cut = await (await browser.newContext()).newPage();
+    let first = true;
+    await cut.route(`${base}/`, async (route) => {
+      if (route.request().headers().corten || !first) return route.continue();
+      first = false;
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    let cutAsked = 0;
+    let cutFirst = () => {};
+    await cut.route("**/smoke/cut-part", async (route) => {
+      cutAsked += 1;
+      if (cutAsked === 1) {
+        await new Promise((resolve) => (cutFirst = () => resolve(undefined)));
+        return route.abort().catch(() => {});
+      }
+      await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="cut-a">Read again</p>' }).catch(() => {});
+    });
+    await cut.route(`${crossBase}/smoke/no-content`, (route) => route.fulfill({ status: 204 }));
+    let [loaded, wholeReads] = [false, 0];
+    cut.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
+    await cut.goto(`${base}/`);
+    await cut.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    await cut.evaluate(async (href) => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="cut-0"></div><a id="cut-away" href="${href}">Away</a>`));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="cut-0"><p id="cut-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/cut-part" data-part="cut-a"></template></div>'));
+    }, `${crossBase}/smoke/no-content`);
+    for (let waited = 0; !cutAsked && waited < 5000; waited += 50) await cut.waitForTimeout(50);
+    loaded = true;
+    await cut.click("#cut-away", { noWaitAfter: true });
+    await cut.waitForTimeout(300);
+    cutFirst();
+    for (let waited = 0; cutAsked < 2 && waited < 5000; waited += 50) await cut.waitForTimeout(50);
+    const wholeBefore = wholeReads;
+    await cut.waitForTimeout(300);
+    const part = await cut.evaluate(() => {
+      const el = document.getElementById("cut-a");
+      return [el?.textContent ?? null, el?.hasAttribute("data-corten-read-failed") ?? null];
+    });
+    check(
+      "a read cut as the page began to be left is made again, and the page's head ReadAgain waits for it",
+      cutAsked === 2 && wholeBefore === 0 && part[0] === "Read again" && part[1] === false,
+      `${cutAsked} reads, page read whole ${wholeBefore} times before, part ${JSON.stringify(part)}`,
+    );
+    await cut.unrouteAll({ behavior: "ignoreErrors" });
+    await cut.context().close();
+  } else skip("a read cut as the page began to be left is made again, and the page's head ReadAgain waits for it", swaps ? "the app is not at localhost" : noSwaps);
   // A page the browser prerenders reads its parts once it is shown, not before: the server's slow
   // read is for a page someone sees (#1400). Playwright's headless Chromium did not prerender a
   // Speculation Rules page when this was written, so the browser's state is stood in for:
@@ -2079,9 +2177,11 @@ async function run(browser) {
   // Such an element that is the part itself, its tag inside it, whose answer asks to be read again:
   // the answer's tag goes inside what it drew, where the page's tags are read, so the page whose head
   // asks to be read again is not read whole after it (#1400).
-  // So does `<main>` when it is the part.
-  for (const shell of ["aside", "main"]) {
-    const id = shell === "main" ? "main-root" : "layout-root";
+  // So does `<main>` when it is the part, and a form whose controls shadow `id` and
+  // `parentElement`.
+  for (const shell of ["aside", "main", "form"]) {
+    const id = shell === "main" ? "main-root" : shell === "form" ? "form-root" : "layout-root";
+    const controls = shell === "form" ? '<input name="id"><input name="parentElement">' : "";
     const root = await (await browser.newContext()).newPage();
     await root.route(`${base}/`, async (route) => {
       if (route.request().headers().corten) return route.continue();
@@ -2089,11 +2189,11 @@ async function run(browser) {
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const waiting = `<p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/${id}" data-part="${id}"></template>`;
+      const waiting = `${controls}<p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/${id}" data-part="${id}"></template>`;
       const page = await res.text();
       // With an element outside it the answer also draws, before the part.
       const note = `<p id="${id}-note">Old</p>`;
-      const body = (shell === "main" ? page.replace(/<main([^>]*)>/, `${note}<main id="${id}"$1>${waiting}`) : page.replace("<main", `${note}<aside id="${id}" data-corten-page>${waiting}</aside><main`))
+      const body = (shell === "main" ? page.replace(/<main([^>]*)>/, `${note}<main id="${id}"$1>${waiting}`) : page.replace("<main", `${note}<${shell} id="${id}" data-corten-page>${waiting}</${shell}><main`))
         .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
@@ -2103,7 +2203,7 @@ async function run(browser) {
         .fulfill({
           status: 200,
           headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
-          body: `<p id="${id}-note">New</p><${shell} id="${id}"${shell === "aside" ? " data-corten-page" : ""}><p id="${id}-p">Root drawn</p></${shell}><template data-corten-read-again="30" data-from="/smoke/${id}"></template>`,
+          body: `<p id="${id}-note">New</p><${shell} id="${id}"${shell === "main" ? "" : " data-corten-page"}>${controls}<p id="${id}-p">Root drawn</p></${shell}><template data-corten-read-again="30" data-from="/smoke/${id}"></template>`,
         })
         .catch(() => {});
     });
@@ -2115,7 +2215,7 @@ async function run(browser) {
     await root.waitForTimeout(2500);
     const inside = await root.$(`#${id} > template[data-corten-read-again="30"]`);
     check(
-      shell === "main" ? "and so does <main> when it is the part" : "a layout element that is the part itself keeps the tag its answer brings to read it again",
+      shell === "form" ? "and so does a form whose controls are named id and parentElement" : shell === "main" ? "and so does <main> when it is the part" : "a layout element that is the part itself keeps the tag its answer brings to read it again",
       drawn && inside !== null && wholeAfter === 0,
       `drawn ${drawn}, tag inside ${inside !== null}, page read whole ${wholeAfter} times after`,
     );
