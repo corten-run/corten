@@ -3694,13 +3694,14 @@ rules something out.
     0.52 fixes that; 0.51 also fixes spurious missing heartbeats and pull-consumer hot loops
     and bounds JetStream API requests. These affect the cluster's feed path. Both releases
     require Rust 1.89. There is no claim that 0.50 is abandoned: its missing fixes suffice.
-    SQLx stays on 0.8.6: 0.9.0 requires Rust 1.94 and fixes nothing Corten's Postgres feed
-    needs.
+    SQLx stays on 0.8.6: 0.9.0 requires Rust 1.94, and none of the Postgres, pool or TLS fixes
+    its changelog lists is on a path corten-cluster uses (Stands on, reasoned).
 
     auction-room keeps SQLx's bundled SQLite, which RUSTSEC-2026-0459 reports: SQLite before
     3.54.0 can return stale process memory when a process opens a database file together with
-    a `-wal` file that a less trusted party wrote. auction-room opens only its own data
-    directory, so it is not exposed, and its README says not to copy it to open such files.
+    a `-wal` file that a less trusted party wrote. auction-room opens only the file its
+    operator names in `DATABASE_URL`, never one a user supplies, so it is not exposed, and its
+    README says not to copy it to open such files.
     The fixed bundled libsqlite3-sys 0.39 is out of reach: sqlx-sqlite 0.8.6 requires 0.30 and
     0.9.0 allows only `<0.38`. Linking a system SQLite 3.54.1 built from sqlite.org was tried
     and rejected: it cost libclang, a C build and a download in every CI job and a patched
@@ -3718,13 +3719,29 @@ rules something out.
     move to a compiler about six months old at little cost but should not be forced onto a
     just-released one by a routine dependency refresh; nothing here measured that);
     reasoned (requiring a named fix keeps the build promise useful without making it a
-    reason to retain a known failure; auction-room's only database is the file
-    `DATABASE_URL` names in its own data directory, `src/main.rs` and its Dockerfile);
+    reason to retain a known failure; auction-room's only database is the file its operator
+    names in `DATABASE_URL`, `src/main.rs` and its Dockerfile; corten-cluster needs none of
+    the Postgres, pool or TLS fixes in the [SQLx 0.9.0 changelog](https://github.com/launchbadge/sqlx/blob/v0.9.0/CHANGELOG.md)
+    (numbers are SQLx pull requests): it takes the app's `PgPool` and never calls `Pool::close` (#3952, close returning before its
+    connections closed), builds no connect options (#3800, escaping `PgConnectOptions::options`),
+    decodes no `rust_decimal` or JSON (#3919 and #4158, panics on an overflowing decimal and a
+    bad JSONB version byte), takes no `PgAdvisoryLock` (#4199; its migration lock is
+    `pg_advisory_xact_lock` in a transaction) and prepares only persistent statements
+    (#3863); #4006 (SCRAM's SHA-256 moved off the async executor) and #4201 (SASLprep, so some
+    non-ASCII passwords are accepted) touch only opening a connection, which it does at start,
+    on relay election and when the pool grows: without them a runtime worker is held for one
+    hash, and such a password is refused at start, where its operator sees it; it enables no TLS feature, so #4251 (a TLS socket that could wait on one
+    direction forever, reported on MySQL over TLS on macOS) is not in its build, but an app
+    that reaches Postgres over TLS enables that feature itself and, because `Cluster::start`
+    takes SQLx 0.8's `PgPool`, stays on 0.8 without it; the remaining Postgres entries cover
+    geometric types, `.pgpass` handling and query macros, which it does not use);
     value (small surface and deliberate dependencies, verified rather than assumed: Values 6
     and 9).
 
     Revisit when: a SQLx release allows libsqlite3-sys 0.39 or later, any Corten crate or
-    example opens a database another party could write, a held dependency line needs a
+    example opens a database another party could write, another advisory is published against
+    the bundled SQLite auction-room builds, SQLx's TLS hang (#4251) is reported on Postgres or
+    an app on corten-cluster needs a SQLx 0.9 fix, a held dependency line needs a
     correctness or security fix or loses maintenance, the Rust floor moves for another needed
     dependency, or an urgent fix requires a compiler less than about six months old. Re-read
     release notes, compiler requirements and advisories before moving either driver, and
@@ -3732,7 +3749,8 @@ rules something out.
 
     Last checked: 2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
     and 0.9.0 and async-nats 0.51.0 and 0.52.0, their release notes, Rust 1.89.0's release
-    date and RUSTSEC-2026-0459, against `7d232f93d`.
+    date and RUSTSEC-2026-0459, against `7d232f93d`; 2026-11-14, the SQLx 0.9.0 changelog's
+    Postgres, pool and TLS fixes against corten-cluster's SQLx use, on `f776b350d`.
 
 ## Rules
 

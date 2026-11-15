@@ -11,10 +11,11 @@ what it already has, with no request. The server answers writes and data the pag
 live data arrives as patches over server-sent events. One request handler answers a full page,
 a client navigation, a form patch and a JSON data request.
 
-## Rules
+Use Rust 1.89 or later; the
+[MSRV policy](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-msrv) records
+the floor and the dependency fixes that can move it.
 
-Use Rust 1.89 or later; the [MSRV policy](../../docs/design.md#choice-msrv) records the floor
-and the dependency fixes that can move it.
+## Rules
 
 These are what the framework is built around. Code that breaks them fights the framework.
 

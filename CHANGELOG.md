@@ -14,11 +14,17 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
   `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
   `From<String>` for `HeaderValue`; use `HeaderValue::try_from`, `from_lossy` or the
-  `insert`/`append` methods that take a string.
+  `insert`/`append` methods that take a string. Such an app also takes 0.51's changes: new
+  error-kind variants, new public consumer fields, websocket errors as tokio-websockets 0.13
+  types, recreated ordered consumers named `{name}_{n}` and the JetStream context timeout as
+  the only bound on its API requests (upstream's breaking changes for
+  [0.52](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes) and [0.51](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes-1), and 0.51's
+  [behaviour changes](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#behaviour-changes-1)).
 
 - Record RUSTSEC-2026-0459 in auction-room's bundled SQLite as an explained exception
   ([Choice 51](docs/design.md#choice-msrv)): it needs a database file a less trusted party
-  wrote, and the example opens only its own data directory.
+  wrote, and the example opens only the file its operator names in `DATABASE_URL`, never a
+  user-supplied one.
 
 - Bind dedicated workload-group hosts to a complete current-registry fleet roster,
   exact source and provider identity. Preserve native group defaults and complete

@@ -34,7 +34,8 @@ docker run --rm -p 3000:8080 -e HOUSE_KEY=<a long random key> -v auction-data:/a
 SQLx's `sqlite` feature builds its own SQLite into the server, a release affected by
 [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html): a database file and
 its `-wal` file crafted by someone else can make queries return stale memory. This example opens
-only its own data directory, so it is not exposed. Do not copy it to open a database a user
+only the database file its operator names in `DATABASE_URL`, never one a user supplies, so it is
+not exposed. Do not copy it to open a database a user
 uploads or another party could write; [Choice 51](../../docs/design.md#choice-msrv) records the
 exception and when it is revisited.
 
