@@ -32,7 +32,7 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
   so a page works before its scripts load, and without them.
 - **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
   component, called from the markup by name. No WASM, no virtual DOM, no hydration.
-  A 15.2 KB (gzip) runtime.
+  A 15.3 KB (gzip) runtime.
 - **Partial updates from the same handler.** A form marked `data-patch` gets back only the
   elements that changed; without JavaScript the same handler answers with the whole page.
 - **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
@@ -54,7 +54,7 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
 
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
-npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
+npm install --global typescript    # needs Node.js; corten check needs TypeScript 6.0 or later
 corten new my-app
 cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save

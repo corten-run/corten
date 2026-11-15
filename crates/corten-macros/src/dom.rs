@@ -176,8 +176,9 @@ pub fn event(name: &str) -> &'static str {
         "compositionstart" | "compositionupdate" | "compositionend" => "CompositionEvent",
         // lib.dom types these as the window's (`ErrorEvent`, `UIEvent`) or as XMLHttpRequest's
         // (`ProgressEvent`), but an image, media or other element fires a plain `Event` for
-        // each, and no `on:` hears the window.
-        "error" | "abort" | "progress" | "resize" => "Event",
+        // each, and no `on:` hears the window. Text edits fire InputEvent, but selects and
+        // checkboxes fire a plain Event, so `input` must accept both.
+        "error" | "abort" | "progress" | "resize" | "input" => "Event",
         // The runtime's own, each a `CustomEvent` whose `detail` corten.js declares.
         "corten:error" => "CortenError",
         "corten:notice" => "CortenNotice",
