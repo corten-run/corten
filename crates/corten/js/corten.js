@@ -1048,14 +1048,14 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
     // A part's answer whose tag it replaced with the part (one that was inside the element it drew,
     // so it still has a parent) puts its own beside what it drew, never in place of another part's
     // tag there: the page knows the part is read again ({@link readAgainLater}) and its next read
-    // finds it. Inside it when that is one of the layout's elements that are the page's, which the
-    // page's tags are read in. A tag that never reached the page takes that of the part beside it.
+    // finds it. Inside it when that is `<main>` or one of the layout's elements that are the page's,
+    // which the page's tags are read in. A tag that never reached the page takes that of the part beside it.
     const inside = !!asked && !asked.isConnected && !!asked.parentElement;
     const beside = asked?.isConnected ? asked : inside ? null : partTagBeside(put);
     if (beside) beside.replaceWith(again);
     else if (inside) {
       const drawn = put.find(inPage);
-      if (drawn && matchesOf(drawn, PAGE_PARTS)) drawn.append(again);
+      if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) drawn.append(again);
       else drawn?.after(again);
     }
     readPatchAgain(again, put);
@@ -1346,6 +1346,17 @@ async function readPartOnce(from, tags, waiting, visited, done) {
     for (const el of waiting) unmarkBusy(el, mine);
     if (away) addEventListener("pageshow", () => retry(true), { once: true });
     else retry(true);
+    return;
+  }
+  // Firefox ends a page's fetches once a navigation to another document begins, before it knows
+  // the page stays (a 204, a download): read again a second later, when a page that left no longer
+  // runs (a timer waits in the back-forward cache too). The read again counts from then, so one cut
+  // with no navigation since is a failure.
+  if (cut && leavingPage && visits !== visited && !stop.signal.aborted) {
+    setTimeout(() => {
+      for (const el of waiting) unmarkBusy(el, mine);
+      retry(true);
+    }, 1000);
     return;
   }
   // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the

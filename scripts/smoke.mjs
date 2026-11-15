@@ -1524,7 +1524,8 @@ async function run(browser) {
       await corten.patch(__html('<p id="orphan-a">Drawn by a form</p>'));
     });
     loaded = true;
-    for (let waited = 0; !wholeReads && waited < 5000; waited += 100) await orphan.waitForTimeout(100);
+    // Firefox may report the stopped fetch after the page's read has begun: wait for both.
+    for (let waited = 0; !(wholeReads && (stalled || orphanStopped)) && waited < 5000; waited += 100) await orphan.waitForTimeout(100);
     check(
       stalled
         ? "and so does one whose answer waits for a stylesheet that never loads"
@@ -1745,17 +1746,25 @@ async function run(browser) {
     await stayed.route(`${crossBase}/smoke/no-content`, (route) => route.fulfill({ status: 204 }));
     await stayed.route("**/smoke/after-cancel", (route) => route.fulfill({ status: 204, headers: { "corten-location": "/news?after=1", vary: "corten" } }));
     await stayed.goto(`${base}/`);
-    await stayed.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="stayed-away" href="${href}">Away</a>`)), `${crossBase}/smoke/no-content`);
+    // Playwright waits for the link to the other site to finish before it acts or evaluates in the
+    // page again, and a 204 never does: the page follows its own link and draws the part itself.
+    await stayed.evaluate((href) => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="stayed-away" href="${href}">Away</a>`));
+      document.getElementById("stayed-away")?.addEventListener("click", () =>
+        setTimeout(() => {
+          /** @type {HTMLAnchorElement | null} */ (document.querySelector('header nav a[href="/news"]'))?.click();
+          const drawn = setInterval(async () => {
+            if (document.title !== "News | Watchlist") return;
+            clearInterval(drawn);
+            document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="stayed-0"></div>'));
+            const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+            await corten.patch(__html('<div id="stayed-0"><p id="stayed-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/after-cancel" data-part="stayed-a"></template></div>'));
+          }, 50);
+        }, 500),
+      );
+    }, `${crossBase}/smoke/no-content`);
     await stayed.click("#stayed-away", { noWaitAfter: true });
-    await stayed.waitForTimeout(500);
-    await stayed.click('header nav a[href="/news"]');
-    await stayed.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }).catch(() => {});
-    await stayed.evaluate(async () => {
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="stayed-0"></div>'));
-      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<div id="stayed-0"><p id="stayed-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/after-cancel" data-part="stayed-a"></template></div>'));
-    });
-    await stayed.waitForFunction(() => location.search === "?after=1", null, { timeout: 5000 }).catch(() => {});
+    for (let waited = 0; new URL(stayed.url()).search !== "?after=1" && waited < 8000; waited += 100) await stayed.waitForTimeout(100);
     check("a part's redirect after a link the browser did not leave for, and a navigation since, is followed", new URL(stayed.url()).search === "?after=1", stayed.url());
     await stayed.unrouteAll({ behavior: "ignoreErrors" });
     await stayed.context().close();
@@ -1978,7 +1987,11 @@ async function run(browser) {
     await restored.waitForTimeout(300);
     await restored.evaluate(() => dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
     await restored.waitForFunction(() => location.search === "?restored=1", null, { timeout: 5000 }).catch(() => {});
-    check("a page shown again after it began to leave follows the redirect its part's read made again is answered with", new URL(restored.url()).search === "?restored=1", `${restored.url()} (${restoredAsked} reads)`);
+    check(
+      "a page shown again after it began to leave follows the redirect its part's read made again is answered with",
+      new URL(restored.url()).search === "?restored=1" && restoredAsked === 2,
+      `${restored.url()} (${restoredAsked} reads)`,
+    );
     await restored.unrouteAll({ behavior: "ignoreErrors" });
     await restored.context().close();
   } else skip("a page shown again after it began to leave follows the redirect its part's read made again is answered with", swaps ? "the app is not at localhost" : noSwaps);
@@ -2039,7 +2052,9 @@ async function run(browser) {
   // Such an element that is the part itself, its tag inside it, whose answer asks to be read again:
   // the answer's tag goes inside what it drew, where the page's tags are read, so the page whose head
   // asks to be read again is not read whole after it (#1400).
-  {
+  // So does `<main>` when it is the part.
+  for (const shell of ["aside", "main"]) {
+    const id = shell === "main" ? "main-root" : "layout-root";
     const root = await (await browser.newContext()).newPage();
     await root.route(`${base}/`, async (route) => {
       if (route.request().headers().corten) return route.continue();
@@ -2047,31 +2062,31 @@ async function run(browser) {
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const part = '<aside id="layout-root" data-corten-page><p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/layout-root" data-part="layout-root"></template></aside>';
-      const body = (await res.text())
-        .replace("<main", `${part}<main`)
+      const waiting = `<p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/${id}" data-part="${id}"></template>`;
+      const page = await res.text();
+      const body = (shell === "main" ? page.replace(/<main([^>]*)>/, `<main id="${id}"$1>${waiting}`) : page.replace("<main", `<aside id="${id}" data-corten-page>${waiting}</aside><main`))
         .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
-    await root.route("**/smoke/layout-root", async (route) => {
+    await root.route(`**/smoke/${id}`, async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await route
         .fulfill({
           status: 200,
           headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
-          body: '<aside id="layout-root" data-corten-page><p id="layout-root-p">Root drawn</p></aside><template data-corten-read-again="30" data-from="/smoke/layout-root"></template>',
+          body: `<${shell} id="${id}"${shell === "aside" ? " data-corten-page" : ""}><p id="${id}-p">Root drawn</p></${shell}><template data-corten-read-again="30" data-from="/smoke/${id}"></template>`,
         })
         .catch(() => {});
     });
     let [drawn, wholeAfter] = [false, 0];
     root.on("request", (r) => drawn && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeAfter++);
     await root.goto(`${base}/`);
-    await root.waitForSelector("#layout-root-p", { state: "attached", timeout: 5000 }).catch(() => {});
-    drawn = (await root.$("#layout-root-p")) !== null;
+    await root.waitForSelector(`#${id}-p`, { state: "attached", timeout: 5000 }).catch(() => {});
+    drawn = (await root.$(`#${id}-p`)) !== null;
     await root.waitForTimeout(2500);
-    const inside = await root.$('#layout-root > template[data-corten-read-again="30"]');
+    const inside = await root.$(`#${id} > template[data-corten-read-again="30"]`);
     check(
-      "a layout element that is the part itself keeps the tag its answer brings to read it again",
+      shell === "main" ? "and so does <main> when it is the part" : "a layout element that is the part itself keeps the tag its answer brings to read it again",
       drawn && inside !== null && wholeAfter === 0,
       `drawn ${drawn}, tag inside ${inside !== null}, page read whole ${wholeAfter} times after`,
     );

@@ -19,14 +19,15 @@ Corten is pre-1.0, so any minor version may change the API.
   whose parts were not all still there to draw over, marks them `data-corten-read-failed`, where
   the app's CSS shows its link to the page with the part read in (a browser without JavaScript
   shows it already). A read the server redirects takes the page there, one the back-forward cache
-  ended is made again when the page is shown, a prerendered page reads once it is shown, and tags
+  ended (or Firefox, as the page began to be left for a link answered with 204) is made again when
+  the page is shown, a prerendered page reads once it is shown, and tags
   are read in `<main>` and the layout's `page` elements. A part's answer may draw another part
   waiting, except one for its own address, which is marked failed. A read again's own tag waits a
   second at least. An element two of a navigation, a submit and a part's read mark busy stays busy
   until the last has ended. An app with such a stream moves to this shape: drop the stream's route
   and handler, put `ReadAgain::now` naming the part where the `<corten-live>` was, and key the
   link's CSS on `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The
-  runtime grows by 1,038 bytes gzipped (15,341 on main, 16,379 with this). Choices 7 and 44 are
+  runtime grows by 1,069 bytes gzipped (15,341 on main, 16,410 with this). Choices 7 and 44 are
   rewritten: declarative shadow DOM places a part streamed later without a script only at a slot
   of a shadow tree around the page, as a child of a host still open, and `scripts/dsd-probe.mjs`
   checks it again

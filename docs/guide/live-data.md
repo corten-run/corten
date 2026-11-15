@@ -287,8 +287,9 @@ failed. Tags are read in `<main>` and in the layout's elements that are the page
 `html!`). A read the server redirects (a sign-in) takes the page there, as a form's does, unless
 its part was replaced or a navigation started meanwhile (the user's link wins, whether the
 runtime or the browser loads its page); a read the browser
-cut short by keeping the page in its back-forward cache is made again when the page is shown, if
-its part is still the one it waited for; a page the browser prerenders reads its parts once it is
+cut short by keeping the page in its back-forward cache, or by beginning to leave it (Firefox ends
+a page's fetches before it knows a link's answer is a 204 or a download), is made again when the
+page is shown, if its part is still the one it waited for; a page the browser prerenders reads its parts once it is
 shown. A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's
 read is on its way, since its answer would replace the part and the read with it: a part slower
 than the page's interval still comes, and the page is read once it has (unless the part's answer

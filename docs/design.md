@@ -3094,13 +3094,17 @@ rules something out.
     back-forward caches), and a
     read whose fetch or body the browser ended by hiding the page (its back-forward cache) is made
     again when the page is shown, not marked failed, if its parts are still the ones it waited for;
-    the page shown is the one the user is on, so that read counts navigations from then.
+    the page shown is the one the user is on, so that read counts navigations from then. Firefox
+    ends a page's fetches as soon as a navigation to another document begins, before it knows
+    whether the page stays (a link answered with 204, a download): a read cut while the page was
+    being left is made again a second later, on the page that stayed or, once shown, on the one the
+    back-forward cache restored, instead of marked failed.
     A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's read is
     on its way: each whole read would replace the part and its read, so a part slower than the
     page's interval would never come, and not once a part's answer has asked for it to be read
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside what it
     drew when the tag it answered was inside the part it replaced, never in place of another part's
-    (inside it when that part is one of the layout's elements that are the page's).
+    (inside it when that part is `<main>` or one of the layout's elements that are the page's).
     A part read again stops its read, and its listener, when its part leaves the page, and its
     answer is checked again once its stylesheets have loaded, as a slow part's is. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
