@@ -398,21 +398,50 @@ macro_rules! float {
                     return None;
                 }
                 let (from, to, by) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
-                // A step finer than the float tells apart at the end reads as the end until it
-                // passes half the float's spacing there: start a step short of that.
+                // A step finer than the float tells apart at the end reads as the end for a while:
+                // within the float's spacing there, and the decimal `min` is written as (the
+                // steps' origin) is within half of it. What a step reads as only grows with it, so
+                // the step wanted is found by halving that span.
                 let spacing = if last { max - max.next_down() } else { min.next_up() - min };
-                let skip = (spacing as f64 / 2.0 / step as f64).floor();
-                if !skip.is_finite() || skip >= 1e30 {
+                let span = (spacing as f64 / step as f64).ceil() + 1.0;
+                if !span.is_finite() || span >= 1e30 {
                     return None;
                 }
-                let skip = (skip as i128 - 1).max(0);
-                let nearest = if last { to.steps_below(from, by)? } else { 1 };
-                (0..4).find_map(|extra| {
-                    let k = if last { nearest - skip - extra } else { nearest + skip + extra };
-                    let (digits, exponent) = from.plus_steps(by, k).filter(|_| k >= 0)?;
+                let span = span as i128;
+                // Whether the `k`th step from `min` reads inside the end: `None` past an i128.
+                let inside = |k: i128| {
+                    let (digits, exponent) = from.plus_steps(by, k)?;
                     let value = format!("{digits}e{exponent}").parse::<$t>().ok()?;
-                    (if last { value < max } else { value > min }).then_some((digits, exponent))
-                })
+                    Some(if last { value < max } else { value > min })
+                };
+                let (mut lo, mut hi) = if last {
+                    let nearest = to.steps_below(from, by)?;
+                    ((nearest - span).max(0), nearest)
+                } else {
+                    (1, span)
+                };
+                // The first step inside above `min`, or the last one below `max`.
+                if !inside(if last { lo } else { hi })? {
+                    return None;
+                }
+                while lo < hi {
+                    if last {
+                        let mid = lo + (hi - lo + 1) / 2;
+                        if inside(mid)? {
+                            lo = mid;
+                        } else {
+                            hi = mid - 1;
+                        }
+                    } else {
+                        let mid = lo + (hi - lo) / 2;
+                        if inside(mid)? {
+                            hi = mid;
+                        } else {
+                            lo = mid + 1;
+                        }
+                    }
+                }
+                from.plus_steps(by, lo)
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -719,7 +748,14 @@ mod tests {
         assert!(min > 1.0 && max < 2.0 && fine.holds(min) && fine.holds(max), "{out} {min} {max}");
         assert_eq!(out, r#" min="1.00000006" max="1.99999994" step="0.00000001""#);
         assert_eq!(min, "1.00000006".parse::<f32>().unwrap());
-        // A step 60 times finer than the float tells apart at 1: the same, found from the spacing.
+        // An end whose decimal (`1.2`, the steps' origin) is below the float it reads as: the
+        // first step that reads above that float, eleven steps on.
+        let offset = Bounds::new(1.2f32, 2.0).step(1e-8).exclusive_min();
+        let mut out = String::new();
+        offset.render_attrs(&mut out);
+        assert_eq!(out, r#" min="1.20000011" max="2" step="0.00000001""#);
+        assert!(offset.drawn().0 > 1.2 && offset.holds(offset.drawn().0) && !offset.holds(1.2));
+        // A step 60 times finer than the float tells apart at 1.
         let finer = Bounds::new(1.0f32, 2.0).step(1e-9).exclusive_min();
         let mut out = String::new();
         finer.render_attrs(&mut out);
