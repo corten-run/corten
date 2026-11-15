@@ -284,7 +284,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           await ssh(`bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${state.unit} /etc/systemd/system/${state.unit} && systemd-analyze verify /etc/systemd/system/${state.unit} && systemctl daemon-reload`);
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
-          await unit(); state.status = "running"; save();
+          const ended = await unit();
+          if (state.group !== undefined && state.group !== state.fleet.jobs[0].group)
+            assert.equal(ended, false, "group ended before running admission; collect its evidence");
+          state.status = "running"; save();
           if (state.group !== undefined && state.group === state.fleet.jobs[0].group) await commonBootstrap();
           return structuredClone(state);
         });

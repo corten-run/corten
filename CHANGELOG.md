@@ -20,6 +20,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `action` with a 500 (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and
   the ui-gallery's draft use them.
 
+- Preserve closed production-controller failure stages through fleet workers and
+  saved receipts, distinguishing pre-reservation source and Git failures from
+  launch, collection and teardown without forwarding raw errors or changing gates.
+  Refuse later-host admission when its service is already terminal; preserve its
+  started identity and evidence for collection instead of saving a false running state.
+
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
