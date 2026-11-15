@@ -1149,23 +1149,29 @@ function readNow(roots) {
  * One read of {@link readNow}: fetches `from` as a part read again is ({@link readPatchAgain}) and
  * applies the patch it answers. The parts it waits for are `aria-busy` until the read ends. The
  * patch is drawn only if, once its modules and stylesheets have loaded, the page is the one that
- * asked and every part it waits for is still there: a page left, or a part replaced (a form's
- * answer) or removed while it was on its way, is not drawn over. On the page that asked, every
+ * asked, every part it waits for is still there and every tag still names `from`: a page left, or
+ * a part replaced (a form's answer) or removed while it was on its way, is not drawn over, and a
+ * tag whose address changed (a sort) is read again at the new one. On the page that asked, every
  * waiting part still there when the read ends without drawing (offline, the server unreachable, an
- * error page, a page, or one of the parts gone) is marked `data-corten-read-failed`, where the app's CSS shows the link
- * a browser without JavaScript gets, so none is left waiting for nothing. The fetch stops once
- * every tag and part has left the page, so the server stops reading.
+ * error page, a page, or one of the parts gone) is marked `data-corten-read-failed`, where the
+ * app's CSS shows the link a browser without JavaScript gets, so none is left waiting for nothing.
+ * The fetch stops once every tag and part has left the page, so the server stops reading.
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting
  */
 async function readPart(from, tags, waiting) {
   const page = swapped;
-  const here = () => page === swapped && waiting.every(inPage);
+  // A script may change a tag's address while the read is on its way (corten-ui's rows::sort puts
+  // a table's order in it): the answer is drawn for what was, so it is read again.
+  const moved = () => tags.some((tag) => inPage(tag) && attrOf(tag, "data-from") !== from);
+  const here = () => page === swapped && waiting.every(inPage) && !moved();
+  // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.
+  const mine = {};
   // The fetch stops when the last of the tags and parts leaves (after it ends, that does nothing).
   const stop = new AbortController();
   const held = [...tags, ...waiting];
   let left = held.length;
   for (const el of held) signalOf(el).addEventListener("abort", () => --left || stop.abort());
-  for (const el of waiting) elementOwn.setAttribute.call(el, "aria-busy", "true");
+  for (const el of waiting) busyBy.set(el, mine), elementOwn.setAttribute.call(el, "aria-busy", "true");
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
   const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
   // A success that is not a patch is the app's mistake (the route answered its page).
@@ -1175,8 +1181,10 @@ async function readPart(from, tags, waiting) {
   // changes anything: the check is made then, and says whether it drew.
   const ask = { get aborted() { return !(drew = here()); } };
   if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0]).catch(reportError);
-  for (const el of waiting) elementOwn.removeAttribute.call(el, "aria-busy");
-  if (!drew && page === swapped) for (const el of waiting) if (inPage(el)) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
+  for (const el of waiting) if (busyBy.get(el) === mine) elementOwn.removeAttribute.call(el, "aria-busy");
+  if (drew || page !== swapped) return;
+  if (moved()) return readNow(tags.filter(inPage));
+  for (const el of waiting) if (inPage(el)) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
 }
 
 /**

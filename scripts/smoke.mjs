@@ -4061,6 +4061,69 @@ async function run(browser) {
   await page.evaluate(() => document.getElementById("appended-1")?.remove());
   await page.unroute("**/smoke/appended");
 
+  // A part's read and a form's submit both busy the form: each takes away only its own busy, in
+  // either order, and a tag whose address a script changed while its read was on its way is read
+  // again there, its old answer not drawn (#1400).
+  {
+    /** @type {Record<string, () => void>} */
+    const release = {};
+    /** @type {Record<string, Promise<void>>} */
+    const sent = {};
+    /** @type {string[]} */
+    const asked = [];
+    const hold = (/** @type {string} */ name) => new Promise((resolve) => (release[name] = () => resolve(undefined)));
+    for (const name of ["read", "post", "sorted"]) sent[name] = new Promise((resolve) => (release[`${name}-sent`] = () => resolve(undefined)));
+    const held = { read: hold("read"), post: hold("post") };
+    await page.route("**/smoke/busy-*", async (route) => {
+      const url = new URL(route.request().url());
+      const name = url.pathname === "/smoke/busy-post" ? "post" : url.search ? "sorted" : "read";
+      asked.push(`${name}${url.search}`);
+      release[`${name}-sent`]();
+      if (name !== "sorted") await held[name];
+      const body = name === "sorted" ? '<p id="busy-part">Sorted</p>' : name === "read" ? '<p id="busy-part">Old order</p>' : "";
+      await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body }).catch(() => {});
+    });
+    const busyOf = () => page.getAttribute("#busy-form", "aria-busy");
+    const placed = (/** @type {string} */ from) =>
+      page.evaluate(async (from) => {
+        document.getElementById("busy-1")?.remove();
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="busy-1"></div>'));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(
+          __html(
+            `<div id="busy-1"><form id="busy-form" method="post" action="/smoke/busy-post" data-patch><button id="busy-go">Go</button></form><p id="busy-part">Waiting</p><template data-corten-read-again="0" data-from="${from}"></template></div>`,
+          ),
+        );
+      }, from);
+    // The read ends first: the form stays busy for its submit, and the submit's answer ends it.
+    await placed("/smoke/busy-read");
+    await Promise.race([sent.read, page.waitForTimeout(5000)]);
+    await page.click("#busy-go");
+    await Promise.race([sent.post, page.waitForTimeout(5000)]);
+    release.read();
+    await page.waitForFunction(() => !document.querySelector("#busy-part[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const afterRead = await busyOf();
+    release.post();
+    await page.waitForFunction(() => !document.querySelector("#busy-form[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    check("a part's read that ends during a submit leaves the form busy for the submit", afterRead === "true" && (await busyOf()) === null, `after the read ${afterRead}, after the submit ${await busyOf()}`);
+    // A script changes the tag's address while the read is held: the old answer is not drawn, and
+    // the new address is read and drawn.
+    held.read = hold("read");
+    sent.read = new Promise((resolve) => (release["read-sent"] = () => resolve(undefined)));
+    await placed("/smoke/busy-read");
+    await Promise.race([sent.read, page.waitForTimeout(5000)]);
+    await page.evaluate(() => document.querySelector('#busy-1 template[data-corten-read-again]')?.setAttribute("data-from", "/smoke/busy-read?order=name"));
+    release.read();
+    await page.waitForFunction(() => document.getElementById("busy-part")?.textContent === "Sorted", null, { timeout: 5000 }).catch(() => {});
+    check(
+      "a waiting part whose address a script changed while it was read is read again there",
+      (await page.textContent("#busy-part")) === "Sorted" && asked.includes("sorted?order=name") && (await page.$("#busy-1 [aria-busy], #busy-1 [data-corten-read-failed]")) === null,
+      `${await page.textContent("#busy-part")}, asked ${asked.join(" ")}`,
+    );
+    await page.evaluate(() => document.getElementById("busy-1")?.remove());
+    await page.unroute("**/smoke/busy-*");
+  }
+
   // <corten-live> shows its connection: connecting, live once open, reconnecting (with when it
   // dropped) when the stream breaks, closed when the server answers it with no stream.
   let flaky = 0;
