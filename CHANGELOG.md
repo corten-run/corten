@@ -639,13 +639,13 @@ Corten is pre-1.0, so any minor version may change the API.
   alone, as before, and a server that does not know it ignores it. A write route whose handler
   answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
   `HtmlResult<Patches>`, which keeps no copy of the request's head for a page.
-  Measured against `main` with callgrind: such a write takes 62,214 instructions where its
-  `<main>` swap took 24,902 (two layout reads), and the same write without JavaScript 57,365; with
+  Measured against `main` with callgrind: such a write takes 62,007 instructions where its
+  `<main>` swap took 24,914 (two layout reads), and the same write without JavaScript 57,422; with
   a 20 ms read it answers in 21.3 ms where `<main>` took 0.04 ms. In an app with layout reads a
   route whose answer can be a page (`HtmlResult`) keeps a copy of the request's head, so its patch
-  takes 31,137 where it took 23,040; one that answers patches alone (`HtmlResult<Patches>`) keeps
-  none, 25,606 where it took 23,674. A navigation takes 22,297 where it took 22,206, a patch in an
-  app without layout reads 23,376 where it took 22,964. The runtime is 395 bytes larger with gzip. A read an `Ahead` starts
+  takes 31,017 where it took 23,034; one that answers patches alone (`HtmlResult<Patches>`) keeps
+  none, 25,553 where it took 23,667. A navigation takes 22,209 where it took 22,219, a patch in an
+  app without layout reads 23,289 where it took 22,890. The runtime is 431 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, so the next navigation reads the whole page; so does one
   after a write a navigation cut off before its answer, or one that failed in view (the network
