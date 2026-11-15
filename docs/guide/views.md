@@ -361,7 +361,8 @@ applied, and the navigation after that one, since the server may still have been
 when that page was read. A write that failed in view (the network failed, a 5xx) leaves the page as
 it is, with its failure shown, for the user to send again; the server may have applied it, so the
 next navigation reads the whole page, but the page reading itself again
-([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)) does not, as that would draw
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), or a navigation to its own
+address) does not, as that would draw
 the failure away. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
 within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is

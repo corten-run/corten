@@ -563,7 +563,7 @@ Corten is pre-1.0, so any minor version may change the API.
   last may be older than the other write, so the next navigation reads the whole page; so does one
   after a write a navigation cut off before its answer, or one that failed in view (the network
   failed, a 5xx), either of which the server may have applied; a page reading itself again
-  (`ReadAgain`) after such a failure reads only `<main>`, so the failure stays shown. A page the app's or an area's middleware makes with `Req` in the route's place is
+  (`ReadAgain`, or a navigation to its own address) after such a failure reads only `<main>`, so the failure stays shown. A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; make such a value a `LayoutRead`, which Corten starts only

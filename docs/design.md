@@ -3885,7 +3885,7 @@ rules something out.
     and after the writes that page draws: the server may still be running it as that page is read,
     so the navigation after reads the whole page again. One that failed in view (the network failed,
     a 5xx), which the server may have applied too, counts for the next navigation but not for the
-    page reading itself again (`ReadAgain`): the page says so (a toast in `<main>`) and the user
+    page reading itself again (`ReadAgain`, or a navigation to its own address): the page says so (a toast in `<main>`) and the user
     sends it again under the same key, and a read of the whole page would draw that failure away.
     The limit: a page reading itself again after such a failure keeps the layout as it was until the
     user leaves it or sends the write again, and a write the server applies after the navigation
