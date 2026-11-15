@@ -394,10 +394,11 @@ macro_rules! float {
                 <$t>::is_finite(self)
             }
             fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)> {
-                if !(step.is_finite() && min.is_finite() && max.is_finite()) || step <= 0.0 {
+                // The steps count from `min`; `max` matters only to the last one.
+                if !(step.is_finite() && min.is_finite() && (!last || max.is_finite())) || step <= 0.0 {
                     return None;
                 }
-                let (from, to, by) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
+                let (from, by) = (Decimal::of(min)?, Decimal::of(step)?);
                 // A step finer than the float tells apart at the end reads as the end for a while:
                 // within the float's spacing there, and the decimal `min` is written as (the
                 // steps' origin) is within half of it. What a step reads as only grows with it, so
@@ -415,7 +416,7 @@ macro_rules! float {
                     Some(if last { value < max } else { value > min })
                 };
                 let (mut lo, mut hi) = if last {
-                    let nearest = to.steps_below(from, by)?;
+                    let nearest = Decimal::of(max)?.steps_below(from, by)?;
                     ((nearest - span).max(0), nearest)
                 } else {
                     (1, span)
@@ -748,6 +749,10 @@ mod tests {
         assert!(min > 1.0 && max < 2.0 && fine.holds(min) && fine.holds(max), "{out} {min} {max}");
         assert_eq!(out, r#" min="1.00000006" max="1.99999994" step="0.00000001""#);
         assert_eq!(min, "1.00000006".parse::<f32>().unwrap());
+        // An exclusive min with no finite max: the first step is drawn all the same.
+        let open = Bounds::new(0.0, f64::INFINITY).step(0.01).exclusive_min();
+        assert_eq!(open.drawn().0, 0.01);
+        assert!(open.holds(0.01) && !open.holds(0.0));
         // An end whose decimal (`1.2`, the steps' origin) is below the float it reads as: the
         // first step that reads above that float, eleven steps on.
         let offset = Bounds::new(1.2f32, 2.0).step(1e-8).exclusive_min();
