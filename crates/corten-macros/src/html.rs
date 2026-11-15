@@ -993,21 +993,40 @@ const BREAKOUT: &[&str] = &[
     "var",
 ];
 
+/// The MathML elements whose children are HTML's: the HTML standard's MathML text integration
+/// points. An `<annotation-xml>` is an HTML integration point only with an `encoding` of
+/// `text/html` or `application/xhtml+xml` (`annotation_holds_html`).
+const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
+
 /// How a browser parses the content at a point of the markup, as far as this markup shows: an
 /// `html!` does not see where its view is written, so what it cannot show is `Unknown`, and a
 /// rule that depends on it does not act there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parsing {
     /// As HTML: under an element that is HTML's wherever it lands (one of `BREAKOUT`, which a
-    /// document's `<head>` and `<body>` are),
-    /// or in an `<svg>`'s `<foreignObject>`, `<desc>` or `<title>` (`SVG_HTML_POINTS`).
+    /// document's `<head>` and `<body>` are), in an `<svg>`'s `<foreignObject>`, `<desc>` or
+    /// `<title>` (`SVG_HTML_POINTS`), or in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` or
+    /// `<mtext>` (`MATH_HTML_POINTS`).
     Html,
     /// As SVG: in a literal `<svg>`, outside those.
     Svg,
+    /// As MathML: in a literal `<math>`, outside those. Nothing is refused here: the rules that
+    /// act on HTML or SVG do not apply, and an element a browser takes out of foreign content
+    /// shows HTML under it.
+    Math,
     /// Not known: at the top of an `html!` (a component's markup lands where its parent writes
     /// it, in an `<svg>` perhaps), among a component's children, which go where it writes them,
-    /// and in a `<math>`.
+    /// and in an `<annotation-xml>` without a literal HTML `encoding`.
     Unknown,
+}
+
+/// Whether an `<annotation-xml>` with `attrs` is an HTML integration point for certain: its
+/// `encoding` written as `text/html` or `application/xhtml+xml` (ASCII case-insensitive).
+fn annotation_holds_html(attrs: &[Attr]) -> bool {
+    attrs.iter().any(|a| {
+        matches!(a, Attr::Static(n, v) if n.eq_ignore_ascii_case("encoding")
+            && (v.eq_ignore_ascii_case("text/html") || v.eq_ignore_ascii_case("application/xhtml+xml")))
+    })
 }
 
 /// Whether the element `name` with `attrs` is HTML's wherever it is written: one a browser
@@ -1024,13 +1043,19 @@ fn breaks_out(name: &str, attrs: &[Attr]) -> bool {
 
 /// How the children of `name` with `attrs` are parsed, in content parsed as `outer`.
 fn parsing_within(outer: Parsing, name: &str, attrs: &[Attr]) -> Parsing {
-    if name.eq_ignore_ascii_case("svg") {
-        return Parsing::Svg;
-    }
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
     match outer {
-        Parsing::Svg if SVG_HTML_POINTS.iter().any(|point| name.eq_ignore_ascii_case(point)) => Parsing::Html,
+        Parsing::Svg if SVG_HTML_POINTS.iter().any(|point| is(point)) => Parsing::Html,
         Parsing::Svg => Parsing::Svg,
-        _ if name.eq_ignore_ascii_case("math") => Parsing::Unknown,
+        // Straight in a `<math>` an `<svg>` is MathML's (valid only in `<annotation-xml>` or a
+        // text integration point, where it is SVG's).
+        Parsing::Math if MATH_HTML_POINTS.iter().any(|point| is(point)) => Parsing::Html,
+        Parsing::Math if is("annotation-xml") && annotation_holds_html(attrs) => Parsing::Html,
+        Parsing::Math if is("annotation-xml") => Parsing::Unknown,
+        Parsing::Math if breaks_out(name, attrs) => Parsing::Html,
+        Parsing::Math => Parsing::Math,
+        _ if is("svg") => Parsing::Svg,
+        _ if is("math") => Parsing::Math,
         Parsing::Html => Parsing::Html,
         Parsing::Unknown if breaks_out(name, attrs) => Parsing::Html,
         Parsing::Unknown => Parsing::Unknown,
@@ -2283,7 +2308,10 @@ impl Gen {
                     let (outer, outer_context, outer_aria) = (self.svg, self.unknown_context, self.aria_svg);
                     self.svg = within_svg(outer, name);
                     self.aria_svg = within_aria_svg(outer_aria, name);
-                    // A literal `<svg>` is SVG's wherever its markup lands.
+                    // A literal `<svg>`'s content is foreign wherever its markup lands: SVG's, or,
+                    // straight in a `<math>` (which is not valid there), MathML's, whose
+                    // `<template>` the query finds too; and what its `<foreignObject>`, `<desc>` or
+                    // `<title>` holds is taken for HTML's, which at worst misses a key.
                     self.unknown_context = outer_context && !name.eq_ignore_ascii_case("svg");
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
@@ -2600,12 +2628,12 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 mod tests {
     use super::{
         breaks_out, local_path, parsing_within, reads_as_text, refused_path, svg_breakout, text_only_element, Attr, Parsing,
-        BREAKOUT, RAW_TEXT, TEXT_ONLY,
+        BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TEXT_ONLY,
     };
 
     /// Each element read as text, as each parse would read it: text in HTML, at an `<svg>`'s
-    /// integration points too, and an element in an `<svg>` or where the markup does not show
-    /// which (the top of a component's markup, its children, a `<math>`).
+    /// integration points too, and an element in an `<svg>`, a `<math>` or where the markup does
+    /// not show which (the top of a component's markup, its children).
     #[test]
     fn an_element_is_read_as_text_only_where_the_markup_shows_html() {
         let svg = parsing_within(Parsing::Unknown, "svg", &[]);
@@ -2619,6 +2647,7 @@ mod tests {
             assert!(reads_as_text(html, name), "{name} in a foreignObject");
             assert!(reads_as_text(parsing_within(svg, "desc", &[]), name), "{name} in a desc");
             assert!(!reads_as_text(Parsing::Svg, name), "{name} in an svg");
+            assert!(!reads_as_text(Parsing::Math, name), "{name} in a math");
             assert!(!reads_as_text(Parsing::Unknown, name), "{name} where it is not known");
             // What it holds is SVG's in an <svg> (but for a <title>, which holds HTML), so an
             // element there compiles.
@@ -2657,7 +2686,7 @@ mod tests {
             assert_eq!(parsing_within(Parsing::Unknown, name, &[]), Parsing::Unknown, "{name}");
         }
         assert_eq!(parsing_within(Parsing::Html, "section", &[]), Parsing::Html);
-        assert_eq!(parsing_within(Parsing::Html, "math", &[]), Parsing::Unknown);
+        assert_eq!(parsing_within(Parsing::Html, "math", &[]), Parsing::Math);
         assert_eq!(parsing_within(Parsing::Svg, "math", &[]), Parsing::Svg);
         assert_eq!(parsing_within(Parsing::Html, "svg", &[]), Parsing::Svg);
         assert_eq!(parsing_within(Parsing::Svg, "svg", &[]), Parsing::Svg);
@@ -2671,6 +2700,36 @@ mod tests {
         assert_eq!(parsing_within(Parsing::Unknown, "font", &[]), Parsing::Unknown);
     }
 
+    /// A `<math>`'s text integration points hold HTML, and an `<annotation-xml>` does only with an
+    /// HTML `encoding`; an `<svg>` straight in a `<math>` is MathML's.
+    #[test]
+    fn a_math_holds_html_at_its_text_integration_points() {
+        let math = parsing_within(Parsing::Unknown, "math", &[]);
+        assert_eq!(math, Parsing::Math);
+        for point in MATH_HTML_POINTS {
+            assert_eq!(parsing_within(math, point, &[]), Parsing::Html, "{point}");
+            assert_eq!(parsing_within(Parsing::Svg, point, &[]), Parsing::Svg, "{point} in an svg");
+            assert_eq!(parsing_within(Parsing::Unknown, point, &[]), Parsing::Unknown, "{point}");
+        }
+        assert!(reads_as_text(parsing_within(math, "mi", &[]), "title"));
+        assert!(text_only_element(None, Parsing::Math, "plaintext").is_none());
+        for name in ["mrow", "mfrac", "title", "textarea", "svg", "math", "template"] {
+            assert_eq!(parsing_within(math, name, &[]), Parsing::Math, "{name}");
+        }
+        for encoding in ["text/html", "Application/XHTML+XML"] {
+            let attrs = [Attr::Static("encoding".into(), encoding.into())];
+            assert_eq!(parsing_within(math, "annotation-xml", &attrs), Parsing::Html, "{encoding}");
+        }
+        let svg_encoding = [Attr::Static("encoding".into(), "image/svg+xml".into())];
+        assert_eq!(parsing_within(math, "annotation-xml", &svg_encoding), Parsing::Unknown);
+        assert_eq!(parsing_within(math, "annotation-xml", &[]), Parsing::Unknown);
+        // An element a browser takes out of foreign content is HTML's, and nothing is refused.
+        assert_eq!(parsing_within(math, "div", &[]), Parsing::Html);
+        assert_eq!(svg_breakout(Parsing::Math, "div", &[]), None);
+        // An <svg> where it is valid in a <math> is SVG's.
+        assert_eq!(parsing_within(parsing_within(math, "mi", &[]), "svg", &[]), Parsing::Svg);
+    }
+
     #[test]
     fn an_element_a_browser_takes_out_of_an_svg_is_refused_only_straight_in_one() {
         for name in BREAKOUT {
@@ -2679,6 +2738,7 @@ mod tests {
             assert!(why.contains("<foreignObject>"), "{why}");
             assert_eq!(svg_breakout(Parsing::Html, name, &[]), None, "{name}");
             assert_eq!(svg_breakout(Parsing::Unknown, name, &[]), None, "{name}");
+            assert_eq!(svg_breakout(Parsing::Math, name, &[]), None, "{name}");
         }
         assert!(svg_breakout(Parsing::Svg, "font", &[Attr::Bare("face".into())]).is_some());
         for name in ["font", "a", "title", "textarea", "style", "rect", "g", "foreignObject", "math"] {

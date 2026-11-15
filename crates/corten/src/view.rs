@@ -271,8 +271,10 @@ use std::{
 /// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
 /// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
 /// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
-/// `<div>`, a `<p>`, a document's `<head>`) and in an `<svg>`'s `<foreignObject>`, `<desc>` and
-/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included:
+/// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
+/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
+/// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (and an `<annotation-xml>` whose
+/// `encoding` is `text/html` or `application/xhtml+xml`), which hold HTML too:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -302,6 +304,11 @@ use std::{
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mi><title><b>"x"</b></title></mi></math></p> };
 /// ```
 ///
 /// ```compile_fail
@@ -360,10 +367,11 @@ use std::{
 /// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
 /// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
 /// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
-/// children are elements, and its `<title>` holds HTML. Where the markup does not show how it is
-/// parsed, at the top of a component's markup (whose parent may write it into an `<svg>`), among
-/// a component's children (which go where it writes them) and in a `<math>`, none of this is
-/// refused, so a component that draws an SVG fragment without its `<svg>` compiles:
+/// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
+/// integration points. Where the markup does not show how it is parsed, at the top of a
+/// component's markup (whose parent may write it into an `<svg>`) and among a component's
+/// children (which go where it writes them), none of this is refused, so a component that draws
+/// an SVG fragment without its `<svg>` compiles:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -393,9 +401,9 @@ use std::{
 /// ```
 ///
 /// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
-/// `<math>`, and a link named by `aria-label` in an `<svg>`'s `<title>` whose `href` may
-/// write nothing (the accessible-name checks leave an `<svg>` alone outside its
-/// `<foreignObject>`):
+/// `<math>` with text in its `<mi>`, and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// `href` may write nothing (the accessible-name checks leave an `<svg>` alone outside its
+/// `<foreignObject>`, as before they followed the HTML standard's integration points):
 ///
 /// ```
 /// use corten::prelude::*;
@@ -411,7 +419,7 @@ use std::{
 ///         <div>
 ///             <script type="text/x-template">"<b>Draft</b>"</script>
 ///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
-///             <math><mi><title><b>"x"</b></title></mi></math>
+///             <math><mrow><mi>"x"</mi></mrow></math>
 ///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
 ///         </div>
 ///     };
@@ -419,7 +427,7 @@ use std::{
 ///         view.to_html(),
 ///         concat!(
 ///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
-///             r#"<svg><title>a<b>b</b></title></svg><math><mi><title><b>x</b></title></mi></math>"#,
+///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
 ///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
 ///         )
 ///     );

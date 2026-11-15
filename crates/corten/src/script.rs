@@ -2308,6 +2308,77 @@ pub mod ts {
     /// }
     /// # fn main() {}
     /// ```
+    ///
+    /// The same holds where no handler takes the elements by key: a ref beside a handler that
+    /// takes one element (`pick(row)`, an `HTMLTableRowElement`) compiles with a key on every row,
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::script::event]
+    /// pub struct RowToggled {
+    ///     pub id: String,
+    ///     pub selected: bool,
+    /// }
+    ///
+    /// #[component(js)]
+    /// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+    ///     let row = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody>
+    ///                 for id in ids.iter() { <tr ref={row} key={*id} on:click={js::pick(row)}><td>{*id}</td></tr> }
+    ///                 <tr><td>"Total"</td></tr>
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// and not with a key on some and none on another, with that handler or with none:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::script::event]
+    /// pub struct RowToggled {
+    ///     pub id: String,
+    ///     pub selected: bool,
+    /// }
+    ///
+    /// #[component(js)]
+    /// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+    ///     let row = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody>
+    ///                 for id in ids.iter() { <tr ref={row} key={*id} on:click={js::pick(row)}><td>{*id}</td></tr> }
+    ///                 <tr ref={row}><td>"Total"</td></tr>
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[component]
+    /// fn StockGrid<'a>(ids: &'a [&'a str]) -> impl Render {
+    ///     let row = refs();
+    ///     html! {
+    ///         <table>
+    ///             <tbody>
+    ///                 for id in ids.iter() { <tr ref={row} key={*id}><td>{*id}</td></tr> }
+    ///                 <tr ref={row}><td>"Total"</td></tr>
+    ///             </tbody>
+    ///         </table>
+    ///     }
+    /// }
+    /// # fn main() {}
+    /// ```
     pub struct Map<T>(std::marker::PhantomData<T>);
     /// Elements with their values: `Map<HTMLTableRowElement, number>` (`K` is [`Number`],
     /// [`String`] or [`Boolean`]), a ref put with `ref={row.with(cents)}` on each element.
