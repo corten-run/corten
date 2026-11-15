@@ -25,6 +25,10 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
 
+- Distinguish five benchmark provider create-link refusal predicates with closed
+  diagnostic codes, without forwarding rejected values or changing completion,
+  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
   Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
@@ -42,6 +46,10 @@ Corten is pre-1.0, so any minor version may change the API.
 - Accept omitted optional `rel`/`href` fields on benchmark provider create links,
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.
+
+- Validate Django marketplace fixtures at startup and fetched records before every
+  JSON, page or write response, retaining complete numeric schema and requested-ID
+  checks without repeating validation on fixture reads or successful POSTs.
 
 - Permit one fresh complete benchmark provider census after a transient count or
   total mismatch, within the original deadline and global request limit. Partial
