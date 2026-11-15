@@ -267,9 +267,9 @@ mod tests {
             p: Entry<f64>,
         }
         #[derive(Id)]
-        struct ShareId;
+        struct QuarterId;
         let quarters = Bounds::new(0.0, 1.0).step(0.25).exclusive_min().exclusive_max();
-        let field = |value: f64| Number { value: value.into(), ..Number::new(ShareId, Form::FIELDS.p, quarters, "Less", "More") };
+        let field = |v: f64| Number { value: v.into(), ..Number::new(QuarterId, Form::FIELDS.p, quarters, "Less", "More") };
         let at_first = NumberField { field: &field(0.25) }.to_html();
         assert!(at_first.contains(r#"value="0.25" min="0.25" max="0.75" step="0.25""#), "{at_first}");
         assert!(

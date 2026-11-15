@@ -168,8 +168,10 @@ impl<T: Float> Bounds<T> {
     }
 
     /// Refuses `min` itself: "above 0". HTML has no exclusive end: with a step the input says the
-    /// first step above `min`; with [`any_step`](Bounds::any_step) it says `min`, which the
-    /// browser sends and the handler refuses.
+    /// first step above `min` that these bounds hold (a step finer than the float tells apart reads
+    /// as `min` for a few steps, which are passed over, up to 16); with
+    /// [`any_step`](Bounds::any_step), or no such step, it says `min`, which the browser sends and
+    /// the handler refuses.
     pub const fn exclusive_min(self) -> Self {
         Bounds { min: self.min, max: self.max, step: self.step, above: true, below: self.below }
     }
@@ -181,29 +183,35 @@ impl<T: Float> Bounds<T> {
     }
 }
 
+/// How many steps from an exclusive end the input's end is looked for: a step finer than the type
+/// tells apart near the end (`1e-8` from an `f32`'s `1`) reads as the end itself for a few.
+const STEPS_INSIDE: i128 = 16;
+
 impl<T: Numeric> Bounds<T> {
-    /// The step inside an exclusive end that the input says in its place, `None` for an end the
-    /// input says as it is (inclusive, with no step, or with no exact step inside it).
-    fn inside(&self, last: bool) -> Option<(i128, i32)> {
+    /// The step inside an exclusive end that the input says in its place, as text and as the
+    /// number it reads as: the nearest one these bounds hold. `None` for an end the input says as
+    /// it is: inclusive, with no step, or with no such step near it, where the digits do not line
+    /// up (the bounds then hold no value near the end either).
+    fn inside(&self, last: bool) -> Option<(String, T)> {
         let step = self.step?;
         if (last && !self.below) || (!last && !self.above) {
             return None;
         }
-        T::step_inside(self.min, self.max, step, last)
+        (1..=STEPS_INSIDE).find_map(|nth| {
+            let decimal = T::step_inside(self.min, self.max, step, last, nth)?;
+            let mut text = String::new();
+            write_decimal(decimal, &mut text);
+            let value = T::read(&text)?;
+            self.holds(value).then_some((text, value))
+        })
     }
 
     /// The `min` and `max` the input says, as numbers: what corten-ui's `NumberField` disables
     /// its buttons at.
     #[doc(hidden)]
     pub fn drawn(&self) -> (T, T) {
-        let at = |last: bool| {
-            self.inside(last).and_then(|decimal| {
-                let mut text = String::new();
-                write_decimal(decimal, &mut text);
-                T::read(&text)
-            })
-        };
-        (at(false).unwrap_or(self.min), at(true).unwrap_or(self.max))
+        let at = |last: bool, end: T| self.inside(last).map_or(end, |(_, value)| value);
+        (at(false, self.min), at(true, self.max))
     }
 }
 
@@ -211,10 +219,11 @@ impl<T: Numeric> Attrs for Bounds<T> {
     fn render_attrs(&self, out: &mut String) {
         for (name, end, last) in [(" min", &self.min, false), (" max", &self.max, true)] {
             match self.inside(last) {
-                Some(decimal) => {
+                // Digits and a point: nothing to escape.
+                Some((text, _)) => {
                     out.push_str(name);
                     out.push_str("=\"");
-                    write_decimal(decimal, out);
+                    out.push_str(&text);
                     out.push('"');
                 }
                 None => quoted(name, end, out),
@@ -279,11 +288,11 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     /// Not an infinity or NaN; every integer.
     #[doc(hidden)]
     fn is_finite(self) -> bool;
-    /// The first step above `min`, or (`last`) the last one below `max`, exactly, as digits and
-    /// an exponent: `None` where the digits do not line up, and for an integer, which has no
-    /// exclusive end.
+    /// The `nth` step above `min` (from 1), or (`last`) the `nth` from the last one below `max`,
+    /// exactly, as digits and an exponent: `None` where there is none or the digits do not line
+    /// up, and for an integer, which has no exclusive end.
     #[doc(hidden)]
-    fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)>;
+    fn step_inside(min: Self, max: Self, step: Self, last: bool, nth: i128) -> Option<(i128, i32)>;
     /// `self` as an input's value, with the decimals of `step`: `12.5` in steps of `0.01` is
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
@@ -329,7 +338,7 @@ macro_rules! whole {
             fn is_finite(self) -> bool {
                 true
             }
-            fn step_inside(_: Self, _: Self, _: Self, _: bool) -> Option<(i128, i32)> {
+            fn step_inside(_: Self, _: Self, _: Self, _: bool, _: i128) -> Option<(i128, i32)> {
                 None
             }
             fn shown(self, _: Self) -> String {
@@ -390,12 +399,12 @@ macro_rules! float {
             fn is_finite(self) -> bool {
                 <$t>::is_finite(self)
             }
-            fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)> {
+            fn step_inside(min: Self, max: Self, step: Self, last: bool, nth: i128) -> Option<(i128, i32)> {
                 if !step.is_finite() || step <= 0.0 {
                     return None;
                 }
                 let (min, max, step) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
-                let steps = if last { max.steps_below(min, step)? } else { 1 };
+                let steps = if last { max.steps_below(min, step)?.checked_sub(nth - 1)? } else { nth };
                 min.plus_steps(step, steps)
             }
             fn shown(self, step: Self) -> String {
@@ -685,8 +694,28 @@ mod tests {
         let none = Bounds::new(0.0, 0.25).step(0.25).exclusive_min().exclusive_max();
         assert_eq!(drawn(none).0, r#" min="0.25" max="0" step="0.25""#);
         assert!(!none.holds(0.0) && !none.holds(0.25));
-        // Digits that do not line up in an i128: the end itself.
-        assert_eq!(drawn(Bounds::new(1e30, 2e30).step(1e-9).exclusive_min()).1, (1e30, 2e30));
+        // Digits that do not line up in an i128: the end itself, which these bounds refuse even
+        // when it is inclusive, as they do every value near it (the 38-digit limit above).
+        let wide = Bounds::new(1e30, 2e30).step(1e-9);
+        assert_eq!(drawn(wide.exclusive_min()).1, (1e30, 2e30));
+        assert!(!wide.holds(1e30) && !wide.holds(1e30f64.next_up()));
+    }
+
+    #[test]
+    fn a_step_finer_than_the_type_near_an_exclusive_end_is_drawn_where_it_reads_inside() {
+        // 1.00000001 reads as 1.0 in an f32, the end refused: the first step that reads above it is
+        // drawn, and the bounds hold it.
+        let fine = Bounds::new(1.0f32, 2.0).step(1e-8).exclusive_min().exclusive_max();
+        let mut out = String::new();
+        fine.render_attrs(&mut out);
+        let (min, max) = fine.drawn();
+        assert!(min > 1.0 && max < 2.0 && fine.holds(min) && fine.holds(max), "{out} {min} {max}");
+        assert_eq!(out, r#" min="1.00000006" max="1.99999994" step="0.00000001""#);
+        assert_eq!(min, "1.00000006".parse::<f32>().unwrap());
+        // Every candidate reads as the end: none is drawn, and the end is.
+        let none = Bounds::new(1.0f32, 1.00000002).step(1e-8).exclusive_min();
+        assert_eq!(none.drawn().0, 1.0);
+        assert!(!none.holds(1.0));
     }
 
     #[test]
