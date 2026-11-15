@@ -1272,6 +1272,35 @@ async function run(browser) {
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
   }
+  // A page whose head asks to be read again (`ReadAgain`) and which waits for a slow part: the part
+  // is read once, so it does not stop the page's own reads as a part read again would (#1400).
+  {
+    const both = await browser.newPage();
+    let first = true;
+    await both.route(`${base}/`, async (route) => {
+      if (route.request().headers().corten || !first) return route.continue();
+      first = false;
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    // The page's read again, once it has loaded: a navigation's fetch of it, or a reload where there
+    // is no Navigation API.
+    let [loaded, wholeReads] = [false, 0];
+    both.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
+    await both.goto(`${base}/`);
+    loaded = true;
+    await both.waitForSelector("ul#picks", { state: "attached", timeout: 5000 }).catch(() => {});
+    const drawnFirst = (await both.$$("ul#picks li")).length === 2;
+    for (let waited = 0; !wholeReads && waited < 5000; waited += 100) await both.waitForTimeout(100);
+    const whole = wholeReads > 0;
+    check("a page that asks to be read again is, though it also waits for a slow part", drawnFirst && whole, `picks drawn ${drawnFirst}, read again ${whole}`);
+    await both.unrouteAll({ behavior: "ignoreErrors" });
+    await both.context().close();
+  }
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
   // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
   // arrives (#1131); its first event decodes while the stream is open.
@@ -4010,6 +4039,27 @@ async function run(browser) {
   });
   await page.unroute("**/smoke/late-part");
   await page.unroute("**/smoke/late-sheet.css");
+
+  // A waiting part a patch appends (`data-append`), its tag among what it appends: read as one the
+  // patch replaces is (#1400).
+  let appendedReads = 0;
+  await page.route("**/smoke/appended", (route) => {
+    appendedReads += 1;
+    return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="appended-a">Appended</p>' });
+  });
+  await page.evaluate(async () => {
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="appended-1"></div>'));
+    const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+    await corten.patch(__html('<template id="appended-1" data-append><p id="appended-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/appended"></template></template>'));
+  });
+  await page.waitForFunction(() => document.getElementById("appended-a")?.textContent === "Appended", null, { timeout: 5000 }).catch(() => {});
+  check(
+    "a waiting part a patch appends is read and drawn",
+    (await page.textContent("#appended-a")) === "Appended" && appendedReads === 1 && (await page.$("#appended-1 [aria-busy], #appended-1 [data-corten-read-failed]")) === null,
+    `${await page.evaluate(() => document.getElementById("appended-1")?.innerHTML)}, ${appendedReads} reads`,
+  );
+  await page.evaluate(() => document.getElementById("appended-1")?.remove());
+  await page.unroute("**/smoke/appended");
 
   // <corten-live> shows its connection: connecting, live once open, reconnecting (with when it
   // dropped) when the stream breaks, closed when the server answers it with no stream.

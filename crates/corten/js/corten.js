@@ -1107,6 +1107,8 @@ function readPatchAgain(tag, put) {
 const PART_AGAIN = "template[data-corten-read-again][data-from]";
 /** A part the page waits for, read at once (`ReadAgain::now`). */
 const PART_NOW = 'template[data-corten-read-again="0"][data-from]';
+/** A part read again after a while (`ReadAgain::from`), which a page's whole reads give way to. */
+const PART_LATER = `${PART_AGAIN}:not([data-corten-read-again="0"])`;
 
 /** The elements with an id beside `tag`: the part it reads. @param {Element} tag */
 const partOf = (tag) => Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el));
@@ -1120,20 +1122,20 @@ const partOf = (tag) => Array.from(childrenOf(/** @type {Element} */ (tag.parent
  * @param {Element} main
  */
 function readPartsAgain(main) {
-  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) if (attrOf(tag, "data-corten-read-again") !== "0") readPatchAgain(tag, [tag, ...partOf(tag)]);
+  for (const tag of Array.from(main.querySelectorAll(PART_LATER))) readPatchAgain(tag, [tag, ...partOf(tag)]);
   readNow([main]);
 }
 
 /**
  * Reads the parts `roots` wait for (`<template data-corten-read-again="0" data-from>`,
  * `ReadAgain::now`): each address once, so tags beside two parts that one read draws share it,
- * at once, whether the tab is shown or not.
+ * at once, whether the tab is shown or not. A root may be such a tag itself (one a patch appends).
  * @param {Element[]} roots
  */
 function readNow(roots) {
   /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
-  for (const root of roots) for (const tag of Array.from(queryAll(root, PART_NOW))) {
+  for (const root of roots) for (const tag of [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))]) {
     const from = /** @type {string} */ (attrOf(tag, "data-from"));
     let read = reads.get(from);
     if (!read) reads.set(from, (read = [[], []]));
@@ -2441,13 +2443,14 @@ const READ_AGAIN = Symbol("corten.readAgain");
  * a script put in it (`history.replaceState`, as corten-ui's `rows::sort` does) is read too. A
  * navigation to another history entry (or a page that no longer asks) stops it, and one on its
  * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
- * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
+ * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript. A
+ * part it waits for (`ReadAgain::now`) is read once, so it does not stop the page's reads.
  */
 function readAgainLater() {
   const page = ++readAgainPage;
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
-  if (!(seconds > 0) || document.querySelector(`main ${PART_AGAIN}`)) return;
+  if (!(seconds > 0) || document.querySelector(`main ${PART_LATER}`)) return;
   // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
   const entry = navigation?.currentEntry?.key;
   const path = location.pathname;

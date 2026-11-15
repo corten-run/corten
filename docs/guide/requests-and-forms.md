@@ -1897,7 +1897,8 @@ req.page(html! {
 A part the page does not wait for at all (a slow read, such as recommendations) is read the same
 way, once and with no delay: `ReadAgain::now(route)` beside the part drawn waiting, and the page's
 own handler answers both with `req.patch_or_with(part, page)`, whose sides are closures, so the
-part's read is not the page's and the page's is not the part's. The runtime marks the waiting
+part's read is not the page's and the page's is not the part's. It is read once, so a page that
+waits for one and asks in its head to be read again still is. The runtime marks the waiting
 elements `aria-busy="true"` while the read is on its way and `data-corten-read-failed` if it ends
 without a patch, where a stylesheet shows the link to the page with the part read in that a
 browser without JavaScript follows ([A slow part](live-data.md#a-slow-part)).
