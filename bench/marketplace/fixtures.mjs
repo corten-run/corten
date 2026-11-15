@@ -1,7 +1,15 @@
 // A deterministic rich application fixture, not preformatted display strings.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// Only the synthetic input is public. Some bind roots also hold private evidence:
+// allow exact-path traversal, not directory listing, and leave siblings untouched.
+export function writeFixture(file, bytes) {
+  writeFileSync(file, bytes);
+  chmodSync(file, 0o644);
+  chmodSync(dirname(file), 0o711);
+}
 
 export function records() {
   const prices = [0, 1, 10, 125, 123450, 123456789, -123450];
@@ -32,5 +40,5 @@ export function records() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const folder = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
   mkdirSync(folder, { recursive: true });
-  writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records()));
+  writeFixture(join(folder, "marketplace.json"), JSON.stringify(records()));
 }

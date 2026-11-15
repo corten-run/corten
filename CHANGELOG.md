@@ -5,6 +5,21 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Publish synthetic benchmark fixtures with explicit readable file permissions
+  and search-only bind roots, including under the private campaign umask. Keep
+  neighboring evidence private and contender users/read-only mounts unchanged.
+
+- Document a bounded read-only export of live JSON/mixed audit subjects and
+  immutable snapshots for independent review, followed by the existing exact-
+  subject delivery and terminal collection. Include quota-backed private workspace
+  setup, metadata-first preflight, fresh snapshot destinations and clean Node
+  startup. No active-campaign collection or automatic approval is added;
+  target-host transport still needs qualification.
+
+- Replay live group phases using the saved campaign's exact scope and group order,
+  including ordinal zero on a dedicated host. Require the matching campaign plan,
+  selected binding and host reservation without relaxing native/lifetime seals.
+
 - Project benchmark create responses onto the positive droplet/action IDs rather
   than gating on unused advisory link text. Fixed-origin action polling still
   proves exact create completion; explicitly join its droplet ID to the freshly
