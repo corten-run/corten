@@ -401,6 +401,11 @@ eligibility cannot grant comparison; complete observed failures still finish the
 Live and recovery still replay every native scenario/fanout through the fixed verifier.
 Standalone native folders cannot establish cleanup. In a current campaign phase, the adapter
 also replays the adjacent fixed command's kernel observations and before/after host boundary.
+Its phase ordinal comes from the saved, rebound campaign order: zero on a dedicated
+group host, or that group's index in the full campaign. The adapter requires the exact
+selected binding and a matching campaign-plan hash, reservation, commit and nonce;
+it does not accept either ordinal interchangeably. The plan and reservation must remain
+unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
 empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;

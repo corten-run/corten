@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Replay live group phases using the saved campaign's exact scope and group order,
+  including ordinal zero on a dedicated host. Require the matching campaign plan,
+  selected binding and host reservation without relaxing native/lifetime seals.
+
 - Project benchmark create responses onto the positive droplet/action IDs rather
   than gating on unused advisory link text. Fixed-origin action polling still
   proves exact create completion; explicitly join its droplet ID to the freshly
