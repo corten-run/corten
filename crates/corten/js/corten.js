@@ -2732,13 +2732,14 @@ function address(to, patched) {
  */
 async function readAddress(url, signal) {
   // A page read: the traversal kept focus for the patch, so focus the swap left where it was (outside
-  // `<main>`) goes where the browser puts it for a page, the document's start, which the next Tab
-  // starts from: the body takes it for the move. Focus the page gave a control as it was drawn stays.
+  // `<main>`, or the body, with Tab going on from where focus last was) goes where the browser puts
+  // it for a page, the document's start, which the next Tab starts from: the body takes it for the
+  // move. Focus the page gave a control as it was drawn stays.
   const page = async () => {
     const was = document.activeElement;
     await visit(url, signal, undefined, false, undefined, undefined, stale);
     const body = document.body;
-    if (signal.aborted || !was || was === body || document.activeElement !== was) return;
+    if (signal.aborted || document.activeElement !== was) return;
     const made = !hasAttr(body, "tabindex");
     if (made) body.tabIndex = -1;
     body.focus({ preventScroll: true });
@@ -3152,9 +3153,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       signal.throwIfAborted();
       if (addressing && drawn) {
         // The address the form asked for, its `#fragment` too, which the browser keeps for the
-        // form without JavaScript (and across a redirect, whose `Location` fetch does not show).
+        // form without JavaScript, across a redirect whose `Location` names none. `fetch` shows no
+        // fragment of a redirect's own, as a link's redirect does not ({@link interceptVisit}).
         const to = new URL(res.url);
-        to.hash = url.hash;
+        to.hash ||= url.hash;
         address(to.href, patched);
       }
       if (res.status === 422) focusInvalid(form);

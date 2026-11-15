@@ -4715,9 +4715,11 @@ async function run(browser) {
         JSON.stringify({ back, forward, kept }),
       );
       // A traversal superseded while its patch read is on its way (before its headers, then while
-      // its body is read) draws nothing and reads no page: the screen is the newer one's.
+      // its body is read) draws nothing and reads no page: from Day, Back to Week is held, Back
+      // again to the first entry draws its scope, and Week's answer, let go, does not replace it.
       /** @param {"headers" | "body"} phase */
       const superseded = async (phase) => {
+        await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
         const start = { at: await at(), shown: await shown() };
         const own = (/** @type {URL} */ url) => url.pathname === "/smoke/scope";
         /** @type {() => void} */
@@ -4750,12 +4752,16 @@ async function run(browser) {
         await scope.evaluate(() => void (/** @type {any} */ (window).navigation.back()));
         const out =
           phase === "headers" ? await sent : await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
-        const went = await traverse("forward");
+        await traverse("back");
+        const landed = { at: await at(), shown: await shown() };
         if (phase === "headers") release();
         else await scope.evaluate(() => /** @type {any} */ (window).__release());
         await scope.waitForTimeout(300);
         if (phase === "headers") await scope.unroute(own);
-        return { out, start, went, at: await at(), shown: await shown(), asked: asked.splice(0) };
+        const result = { out, start, landed, after: { at: await at(), shown: await shown() }, asked: asked.splice(0) };
+        // Forward to Week, where the checks below start.
+        await traverse("forward");
+        return result;
       };
       const early = await superseded("headers");
       const reading = await superseded("body");
@@ -4763,11 +4769,13 @@ async function run(browser) {
       // it with an AbortError too when it supersedes another traversal, with no runtime on the page,
       // though it lands.
       const stays = (/** @type {Awaited<ReturnType<typeof superseded>>} */ s) =>
-        s.out && s.at === s.start.at && s.shown === s.start.shown && s.asked.length === 2 && s.asked.every((a) => a.startsWith("action "));
+        s.out && s.start.at === "/smoke/scope?scope=day" && s.start.shown === "day" &&
+        s.landed.at === "/smoke/scope" && s.landed.shown === "all" && s.after.at === "/smoke/scope" && s.after.shown === "all" &&
+        s.asked.join() === "action ?scope=week,action ";
       check(
-        "a data-address traversal superseded before its patch's headers or during its body draws nothing and reads no page",
-        stays(early) && stays(reading),
-        JSON.stringify({ early, reading }),
+        "a data-address traversal superseded before its patch's headers or during its body draws nothing and reads no page, and the newer one draws",
+        stays(early) && stays(reading) && (await at()) === "/smoke/scope?scope=week",
+        JSON.stringify({ early, reading, at: await at() }),
       );
       // The same address again: its answer is asked and drawn, and no new entry is made.
       const before = await entries();
@@ -4800,9 +4808,10 @@ async function run(browser) {
        * takes focus for its unmarked form's button as its content is put in `<main>`, as a page's
        * own script may.
        * @param {string} button @param {string} search @param {import("@playwright/test").RouteFulfillOptions} answer
-       * @param {boolean} [claim]
+       * @param {boolean} [claim] @param {boolean} [blurred] focus left the header's link before
+       *   the traversal, so Tab would go on from it
        */
-      const backFrom = async (button, search, answer, claim = false) => {
+      const backFrom = async (button, search, answer, claim = false, blurred = false) => {
         await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
         const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
         await scope.route(from, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill(answer) : route.continue()));
@@ -4810,6 +4819,7 @@ async function run(browser) {
         // Focus outside the part, which a page read leaves at the document's start, as Back to any
         // other page does.
         await scope.focus("header a");
+        if (blurred) await scope.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
         if (claim)
           await scope.evaluate(() => {
             const panel = document.getElementById("smoke-scope");
@@ -4835,7 +4845,8 @@ async function run(browser) {
       );
       // The page read above began the screen again: the form's next entry is the first of it.
       await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } });
+      // Focus left the header's link before this one: Tab starts at the document's start after it.
+      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } }, false, true);
       check(
         "Back to a data-address form's entry whose patch read redirects reads the page instead",
         moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body" && moved.tab === firstTab,
