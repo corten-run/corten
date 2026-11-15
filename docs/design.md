@@ -1596,7 +1596,10 @@ rules something out.
     (beside a defaulted field), on the branch from `24062789`; 2026-11-13, serde_derive 1.0.229's
     `allow_transparent` (a path type whose last segment is `PhantomData`), with the twins `Count`
     (a tuple), `Scored` (a `default = "path"` field), `Wrapped<T>` and `Qualified`
-    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`.
+    (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`; 2026-11-14, the form read
+    again at `4674d1d3` and with rows in rows on the branch from it: 9,222 instructions a read in
+    both (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within
+    174 instructions of each other over the 1,000 reads).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

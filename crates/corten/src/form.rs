@@ -226,8 +226,7 @@
 //! }
 //! ```
 //!
-//! A group's fields are plain, so a group of a type with groups or rows does not compile, and a
-//! row holds plain fields and groups, not rows:
+//! A group's fields are plain, so a group of a type with groups or rows does not compile:
 //!
 //! ```compile_fail,E0080
 //! # use corten::prelude::*;
@@ -252,7 +251,11 @@
 //! let _ = Order::FIELDS;
 //! ```
 //!
-//! ```compile_fail,E0080
+//! A row holds plain fields, groups, rows and maps, so a list whose items each own a list (an
+//! order's lines and each line's parts) is rows in a row, each field named through every row it
+//! is in and read back into the maps inside the map:
+//!
+//! ```
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
 //! #[derive(Fields)]
@@ -261,7 +264,38 @@
 //! struct Line { #[fields(rows)] #[serde(default)] parts: BTreeMap<u32, Part> }
 //! #[derive(Fields)]
 //! struct Order { #[fields(rows)] #[serde(default)] lines: BTreeMap<u32, Line> }
-//! let _ = Order::FIELDS;
+//!
+//! let f = Order::FIELDS;
+//! assert_eq!(f.lines.at(&7).parts.at(&2).qty.to_string(), "lines[7].parts[2].qty");
+//!
+//! let order: Order = corten::form::from_bytes(b"lines%5B7%5D.parts%5B2%5D.qty=3&lines%5B7%5D.parts%5B5%5D.qty=1").unwrap();
+//! assert_eq!((order.lines[&7].parts[&2].qty, order.lines[&7].parts[&5].qty), (3, 1));
+//!
+//! let mut errors = Errors::new();
+//! errors.add(f.lines.at(&7).parts.at(&2).qty, "Only 2 left.");
+//! assert!(errors.has(f.lines.at(&7).parts.at(&2).qty) && !errors.has(f.lines.at(&8).parts.at(&2).qty));
+//! ```
+//!
+//! Rows go as deep as the types do, and the reader goes only as deep as the type it reads, however
+//! many brackets a client sends. A type whose rows are of its own type, directly or through
+//! another's, would let a client choose the depth, so it does not compile, even where only its
+//! values are read:
+//!
+//! ```compile_fail,E0391
+//! # use std::collections::BTreeMap;
+//! # use corten::prelude::*;
+//! #[derive(Fields)]
+//! struct Step { name: String, #[fields(rows)] #[serde(default)] then: BTreeMap<u32, Step> }
+//! let _: Result<Step, _> = corten::form::from_bytes(b"name=a");
+//! ```
+//!
+//! ```compile_fail,E0391
+//! # use std::collections::BTreeMap;
+//! # use corten::prelude::*;
+//! #[derive(Fields)]
+//! struct Rule { #[fields(rows)] #[serde(default)] groups: BTreeMap<u32, Group> }
+//! #[derive(Fields)]
+//! struct Group { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule> }
 //! ```
 //!
 //! A group whose fields a form can all leave out (checkboxes, `Option`s, file inputs, which are
@@ -708,7 +742,7 @@ impl<R: crate::Href + ?Sized, C: Render> Render for KeepQuery<'_, R, C> {
 
 /// Where a form struct's fields are, written in front of each field's name: implemented by
 /// [`Root`], [`Group`], [`Row`] and [`RowGroup`]. Sealed.
-pub trait Place: Copy + PartialEq + std::hash::Hash + private::Sealed {
+pub trait Place: Copy + PartialEq + std::hash::Hash + fmt::Debug + private::Sealed {
     /// The name `name` here, escaped for HTML.
     #[doc(hidden)]
     fn render(&self, name: &'static str, out: &mut String) {
@@ -739,7 +773,18 @@ pub trait Place: Copy + PartialEq + std::hash::Hash + private::Sealed {
     fn is_kept(&self, at: &At) -> bool {
         self.kept() == *at
     }
-    /// The rows and key of a row's field, which [`Errors`] finds by an index.
+    /// What an [`Errors`] keeps of it as the place of rows in it: nothing for the form's own.
+    #[doc(hidden)]
+    fn kept_outer(&self) -> Option<Box<At>> {
+        Some(Box::new(self.kept()))
+    }
+    /// Whether an [`Errors`] kept it as `at`, the place of rows in it.
+    #[doc(hidden)]
+    fn is_outer(&self, at: Option<&At>) -> bool {
+        at.is_some_and(|at| self.is_kept(at))
+    }
+    /// The rows and key of a row's field (of its outermost row, for rows in a row), which
+    /// [`Errors`] finds by an index.
     #[doc(hidden)]
     fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
         None
@@ -750,8 +795,8 @@ mod private {
     pub trait Sealed {}
     impl Sealed for super::Root {}
     impl Sealed for super::Group {}
-    impl Sealed for super::Row<'_> {}
-    impl Sealed for super::RowGroup<'_> {}
+    impl<P: super::Place> Sealed for super::Row<'_, P> {}
+    impl<P: super::Place> Sealed for super::RowGroup<'_, P> {}
 }
 
 /// A form's own fields: `email`.
@@ -780,6 +825,12 @@ impl Place for Root {
     fn is_kept(&self, at: &At) -> bool {
         matches!(at, At::Root)
     }
+    fn kept_outer(&self) -> Option<Box<At>> {
+        None
+    }
+    fn is_outer(&self, at: Option<&At>) -> bool {
+        at.is_none()
+    }
 }
 
 /// A group's fields (`#[fields(group)]`): `ship_to.street`.
@@ -805,87 +856,144 @@ impl Place for Group {
     }
 }
 
-/// A row's fields (`#[fields(rows)]`): `domains[seller-portal].max_concurrent`. `'k` borrows the key.
-#[derive(Clone, Copy)]
-pub struct Row<'k> {
+/// A row's fields (`#[fields(rows)]`): `domains[seller-portal].max_concurrent`. `'k` borrows the
+/// key, and `P` is where the rows are: the form ([`Root`]), or the row that holds them, for rows in
+/// a row (`rules[1].conditions[0].kind` is in a `Row<'k, Row<'k>>`).
+pub struct Row<'k, P = Root> {
+    outer: P,
     rows: &'static str,
     key: &'k (dyn RowKey + Sync),
 }
 
-impl PartialEq for Row<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        let (mut a, mut b) = (KeyBuf::new(), KeyBuf::new());
-        self.rows == other.rows && self.key.key_text(&mut a) == other.key.key_text(&mut b)
+impl<P: Copy> Clone for Row<'_, P> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-impl std::hash::Hash for Row<'_> {
+impl<P: Copy> Copy for Row<'_, P> {}
+
+impl<P: PartialEq> PartialEq for Row<'_, P> {
+    fn eq(&self, other: &Self) -> bool {
+        let (mut a, mut b) = (KeyBuf::new(), KeyBuf::new());
+        self.rows == other.rows && self.key.key_text(&mut a) == other.key.key_text(&mut b) && self.outer == other.outer
+    }
+}
+
+impl<P: std::hash::Hash> std::hash::Hash for Row<'_, P> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.outer.hash(state);
         (self.rows, self.key.key_text(&mut KeyBuf::new())).hash(state)
     }
 }
 
-impl Place for Row<'_> {
+impl<P: Place> fmt::Debug for Row<'_, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = String::new();
+        self.write("", &mut text);
+        write!(f, "Row({text})")
+    }
+}
+
+impl<P: Place> Row<'_, P> {
+    /// Whether an [`Errors`] kept a field of this row, or of its group `group`, as `at`.
+    fn is(&self, at: &At, group: &'static str) -> bool {
+        matches!(at, At::Row(outer, rows, key, kept) if *kept == group && *rows == self.rows
+            && **key == *self.key.key_text(&mut KeyBuf::new()) && self.outer.is_outer(outer.as_deref()))
+    }
+}
+
+impl<P: Place> Place for Row<'_, P> {
+    /// The rows' name where they are (`lines`, or `rules[1].conditions`), the key %-encoded (which
+    /// leaves only characters HTML takes as they are), then `.name`, with nothing allocated.
     fn render(&self, name: &'static str, out: &mut String) {
-        render_row(self.rows, self.key, "", name, out)
+        self.outer.render(self.rows, out);
+        out.push('[');
+        encode_key(self.key.key_text(&mut KeyBuf::new()), out);
+        out.push(']');
+        if !name.is_empty() {
+            out.push('.');
+            escape_into(name, out);
+        }
     }
     fn write(&self, name: &'static str, out: &mut String) {
-        write_row(self.rows, self.key.key_text(&mut KeyBuf::new()), out);
+        self.outer.write(self.rows, out);
+        write_key(self.key.key_text(&mut KeyBuf::new()), out);
         write_tail("", name, out);
     }
     fn kept(&self) -> At {
-        At::Row(self.rows, self.key.key_text(&mut KeyBuf::new()).into(), "")
+        At::Row(self.outer.kept_outer(), self.rows, self.key.key_text(&mut KeyBuf::new()).into(), "")
     }
     fn is_kept(&self, at: &At) -> bool {
-        matches!(at, At::Row(rows, key, "") if *rows == self.rows && **key == *self.key.key_text(&mut KeyBuf::new()))
+        self.is(at, "")
     }
     fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
-        Some((self.rows, self.key))
+        self.outer.row().or(Some((self.rows, self.key)))
     }
 }
 
-/// A group's fields in a row: `shipments[7].address.street`.
-#[derive(Clone, Copy)]
-pub struct RowGroup<'k> {
-    row: Row<'k>,
+/// A group's fields in a row: `shipments[7].address.street`. `P` is where the row's rows are, as
+/// for [`Row`].
+pub struct RowGroup<'k, P = Root> {
+    row: Row<'k, P>,
     group: &'static str,
 }
 
-impl PartialEq for RowGroup<'_> {
+impl<P: Copy> Clone for RowGroup<'_, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<P: Copy> Copy for RowGroup<'_, P> {}
+
+impl<P: PartialEq> PartialEq for RowGroup<'_, P> {
     fn eq(&self, other: &Self) -> bool {
         self.row == other.row && self.group == other.group
     }
 }
 
-impl std::hash::Hash for RowGroup<'_> {
+impl<P: std::hash::Hash> std::hash::Hash for RowGroup<'_, P> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.row.hash(state);
         self.group.hash(state);
     }
 }
 
-impl Place for RowGroup<'_> {
-    fn render(&self, name: &'static str, out: &mut String) {
-        render_row(self.row.rows, self.row.key, self.group, name, out)
-    }
-    fn write(&self, name: &'static str, out: &mut String) {
-        write_row(self.row.rows, self.row.key.key_text(&mut KeyBuf::new()), out);
-        write_tail(self.group, name, out);
-    }
-    fn kept(&self) -> At {
-        At::Row(self.row.rows, self.row.key.key_text(&mut KeyBuf::new()).into(), self.group)
-    }
-    fn is_kept(&self, at: &At) -> bool {
-        matches!(at, At::Row(rows, key, group) if *rows == self.row.rows && *group == self.group && **key == *self.row.key.key_text(&mut KeyBuf::new()))
-    }
-    fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
-        Some((self.row.rows, self.row.key))
+impl<P: Place> fmt::Debug for RowGroup<'_, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = String::new();
+        self.write("", &mut text);
+        write!(f, "RowGroup({text})")
     }
 }
 
-/// `rows[key]`, the key %-encoded.
-fn write_row(rows: &str, key: &str, out: &mut String) {
-    out.push_str(rows);
+impl<P: Place> Place for RowGroup<'_, P> {
+    fn render(&self, name: &'static str, out: &mut String) {
+        self.row.render(self.group, out);
+        if !name.is_empty() {
+            out.push('.');
+            escape_into(name, out);
+        }
+    }
+    fn write(&self, name: &'static str, out: &mut String) {
+        self.row.write(self.group, out);
+        write_tail("", name, out);
+    }
+    fn kept(&self) -> At {
+        let row = &self.row;
+        At::Row(row.outer.kept_outer(), row.rows, row.key.key_text(&mut KeyBuf::new()).into(), self.group)
+    }
+    fn is_kept(&self, at: &At) -> bool {
+        self.row.is(at, self.group)
+    }
+    fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
+        self.row.row()
+    }
+}
+
+/// `[key]` after a row's rows, the key %-encoded.
+fn write_key(key: &str, out: &mut String) {
     out.push('[');
     encode_key(key, out);
     out.push(']');
@@ -903,31 +1011,15 @@ fn write_tail(group: &str, name: &str, out: &mut String) {
     }
 }
 
-/// `rows[key].group.name` for HTML: the names escaped, the key %-encoded (which leaves only
-/// characters HTML takes as they are), with nothing allocated.
-fn render_row(rows: &'static str, key: &(dyn RowKey + Sync), group: &'static str, name: &'static str, out: &mut String) {
-    escape_into(rows, out);
-    out.push('[');
-    encode_key(key.key_text(&mut KeyBuf::new()), out);
-    out.push(']');
-    if !group.is_empty() {
-        out.push('.');
-        escape_into(group, out);
-    }
-    if !name.is_empty() {
-        out.push('.');
-        escape_into(name, out);
-    }
-}
-
 /// Where a field an [`Errors`] keeps is, its row's key copied.
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum At {
     Root,
     Group(&'static str),
-    /// The rows' field, the key and a group in the row (`""` for none).
-    Row(&'static str, Box<str>, &'static str),
+    /// The row the rows are in (none for the form's own rows), the rows' field, the key and a
+    /// group in the row (`""` for none).
+    Row(Option<Box<At>>, &'static str, Box<str>, &'static str),
 }
 
 impl At {
@@ -935,8 +1027,12 @@ impl At {
         match self {
             At::Root => out.push_str(name),
             At::Group(group) => Group(group).write(name, out),
-            At::Row(rows, key, group) => {
-                write_row(rows, key, out);
+            At::Row(outer, rows, key, group) => {
+                match outer {
+                    Some(outer) => outer.write(rows, out),
+                    None => out.push_str(rows),
+                }
+                write_key(key, out);
                 write_tail(group, name, out);
             }
         }
@@ -1069,13 +1165,13 @@ pub trait Fields {
     /// Its names as a group, `ship_to.street`.
     #[doc(hidden)]
     type InGroup: Copy + fmt::Debug;
-    /// Its names in a row, `lines[7].qty`.
+    /// Its names in a row, `lines[7].qty`, whose rows are at `P` (the form, or another row).
     #[doc(hidden)]
-    type InRow<'k>: Copy + fmt::Debug;
+    type InRow<'k, P: Place>: Copy + fmt::Debug;
     /// Its names as a group in a row, `lines[7].address.street`.
     #[doc(hidden)]
-    type InRowGroup<'k>: Copy + fmt::Debug;
-    /// 0 when it has no group and no rows, 1 when it has groups and no rows, 2 with rows.
+    type InRowGroup<'k, P: Place>: Copy + fmt::Debug;
+    /// 0 when it has no group and no rows, 1 when it has groups and no rows, 2 with rows (or a map).
     #[doc(hidden)]
     const SHAPE: u8;
     /// Whether a form can send none of its fields (each an `Option` or `#[serde(default)]`): such
@@ -1083,11 +1179,11 @@ pub trait Fields {
     #[doc(hidden)]
     const LEAVE_OUT: bool;
     #[doc(hidden)]
-    fn in_row<'k>(rows: &'static str, key: &'k (dyn RowKey + Sync)) -> Self::InRow<'k>;
+    fn in_row<'k, P: Place>(at: Row<'k, P>) -> Self::InRow<'k, P>;
 }
 
-/// What a group's or a row's names hold where another group or rows would be: nothing, since a
-/// group holds plain fields and a row plain fields and groups (refused when the app builds).
+/// What a group's names hold where another group or rows would be: nothing, since a group holds
+/// plain fields (refused when the app builds).
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub struct Refused;
@@ -1200,11 +1296,7 @@ pub mod __private {
         Group(name)
     }
 
-    pub const fn row<'k>(rows: &'static str, key: &'k (dyn RowKey + Sync)) -> Row<'k> {
-        Row { rows, key }
-    }
-
-    pub const fn row_group<'k>(row: Row<'k>, group: &'static str) -> RowGroup<'k> {
+    pub const fn row_group<'k, P: Place>(row: Row<'k, P>, group: &'static str) -> RowGroup<'k, P> {
         RowGroup { row, group }
     }
 }
@@ -1212,22 +1304,27 @@ pub mod __private {
 /// A form field that is a map from a key to a group of fields, one per row (`#[fields(rows)]`
 /// on `BTreeMap<K, V>`): a row's field is named by its key, `f.domains.at(&key).max_concurrent`,
 /// so each row's values are read into its own entry and each row's field has its own error.
-pub struct Rows<K, V> {
+/// `P` is where the rows are: the form ([`Root`]), or the row that holds them (rows in a row,
+/// `f.rules.at(&1).conditions.at(&0).kind`).
+pub struct Rows<K, V, P = Root> {
+    at: P,
     name: &'static str,
     row: std::marker::PhantomData<fn() -> (K, V)>,
 }
 
-impl<K, V> Clone for Rows<K, V> {
+impl<K, V, P: Copy> Clone for Rows<K, V, P> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<K, V> Copy for Rows<K, V> {}
+impl<K, V, P: Copy> Copy for Rows<K, V, P> {}
 
-impl<K, V> fmt::Debug for Rows<K, V> {
+impl<K, V, P: Place> fmt::Debug for Rows<K, V, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Rows({})", self.name)
+        let mut name = String::new();
+        self.at.write(self.name, &mut name);
+        write!(f, "Rows({name})")
     }
 }
 
@@ -1235,39 +1332,50 @@ impl<K, V: Fields> Rows<K, V> {
     /// Used by the code `#[derive(Fields)]` generates.
     #[doc(hidden)]
     pub const fn __new(name: &'static str) -> Self {
-        Rows { name, row: std::marker::PhantomData }
+        Rows { at: Root, name, row: std::marker::PhantomData }
+    }
+}
+
+impl<K, V: Fields, P: Place> Rows<K, V, P> {
+    /// Used by the code `#[derive(Fields)]` generates, for rows in a row.
+    #[doc(hidden)]
+    pub const fn __at(at: P, name: &'static str) -> Self {
+        Rows { at, name, row: std::marker::PhantomData }
     }
 
     /// The names of the row whose key is `key`: `f.domains.at(&Domain::SellerPortal).max_concurrent`
     /// is `domains[seller-portal].max_concurrent`. It takes a reference to the map's key type
     /// (`&row.domain`; for a `String` key, `&String`), so a key of another type does not compile.
-    pub fn at<'k>(&self, key: &'k K) -> V::InRow<'k>
+    pub fn at<'k>(&self, key: &'k K) -> V::InRow<'k, P>
     where
         K: RowKey + Sync,
     {
-        V::in_row(self.name, key)
+        V::in_row(Row { outer: self.at, rows: self.name, key })
     }
 }
 
 /// A form field that is a map from a key to one plain value (`#[fields(map)]` on
 /// `BTreeMap<K, V>`): each key's value is a field of its own, `f.counts.at(&sku)`, posted as
-/// `counts[sku]`, with its own error.
-pub struct Keyed<K> {
+/// `counts[sku]`, with its own error. `P` is where the map is, as for [`Rows`].
+pub struct Keyed<K, P = Root> {
+    at: P,
     name: &'static str,
     key: std::marker::PhantomData<fn() -> K>,
 }
 
-impl<K> Clone for Keyed<K> {
+impl<K, P: Copy> Clone for Keyed<K, P> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<K> Copy for Keyed<K> {}
+impl<K, P: Copy> Copy for Keyed<K, P> {}
 
-impl<K> fmt::Debug for Keyed<K> {
+impl<K, P: Place> fmt::Debug for Keyed<K, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Keyed({})", self.name)
+        let mut name = String::new();
+        self.at.write(self.name, &mut name);
+        write!(f, "Keyed({name})")
     }
 }
 
@@ -1275,16 +1383,24 @@ impl<K> Keyed<K> {
     /// Used by the code `#[derive(Fields)]` generates.
     #[doc(hidden)]
     pub const fn __new(name: &'static str) -> Self {
-        Keyed { name, key: std::marker::PhantomData }
+        Keyed { at: Root, name, key: std::marker::PhantomData }
+    }
+}
+
+impl<K, P: Place> Keyed<K, P> {
+    /// Used by the code `#[derive(Fields)]` generates, for a map in a row.
+    #[doc(hidden)]
+    pub const fn __at(at: P, name: &'static str) -> Self {
+        Keyed { at, name, key: std::marker::PhantomData }
     }
 
     /// The field of the key `key`: `f.counts.at(&sku)` is `counts[sku]`. It takes a reference to
     /// the map's key type, so a key of another type does not compile.
-    pub fn at<'k>(&self, key: &'k K) -> FieldName<Untyped, Row<'k>>
+    pub fn at<'k>(&self, key: &'k K) -> FieldName<Untyped, Row<'k, P>>
     where
         K: RowKey + Sync,
     {
-        FieldName { at: Row { rows: self.name, key }, name: "", value: std::marker::PhantomData }
+        FieldName { at: Row { outer: self.at, rows: self.name, key }, name: "", value: std::marker::PhantomData }
     }
 }
 

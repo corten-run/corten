@@ -643,9 +643,43 @@ One plain value per key (a count per SKU) is a map without a row struct:
 own, `f.counts.at(&sku)`, posted as `counts[sku]`, with its own error, and its keys follow the
 rules above.
 
-A row holds plain fields and groups. A group of groups, rows in a group and rows in a row
-do not compile, and neither does `#[serde(flatten)]`: a group is named under its field so two of
-one type cannot clash.
+A row holds plain fields, groups, rows and maps. A list whose items each own a list (a pricing
+policy's rules and each rule's conditions, an order's lines and each line's parts) is rows in a
+row: `Rule`, the type of `#[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule>`, has
+`#[fields(rows)] #[serde(default)] conditions: BTreeMap<u32, Condition>` of its own. Each field is
+named through every row it is in, `f.rules.at(&1).conditions.at(&0).kind`, posted as
+`rules[1].conditions[0].kind`, read into rule 1's conditions, and an error on it marks that one
+input. Each key is written in its own brackets by the rules above, so no app builds or splits a
+key that joins two. A component that draws one inner row takes its names as
+`ConditionRowFields<'_, Row<'_>>` (`corten::form::Row`: the rule's row it is in), and one that
+draws a row of the form's own rows `RuleRowFields<'_>`.
+
+```rust
+# use std::collections::BTreeMap;
+# use corten::prelude::*;
+#[derive(Fields)]
+struct Condition { kind: Option<String>, value: Option<String> }
+
+#[derive(Fields)]
+struct Rule { offset: Option<String>, #[fields(rows)] #[serde(default)] conditions: BTreeMap<u32, Condition> }
+
+#[derive(Fields)]
+struct Policy { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule> }
+
+let kind = Policy::FIELDS.rules.at(&1).conditions.at(&0).kind;
+assert_eq!(kind.to_string(), "rules[1].conditions[0].kind");
+let read: Policy = corten::form::from_bytes(b"rules%5B1%5D.offset=5&rules%5B1%5D.conditions%5B0%5D.kind=grade").unwrap();
+assert_eq!(read.rules[&1].conditions[&0].kind.as_deref(), Some("grade"));
+let mut errors = Errors::new();
+errors.add(kind, "Choose what the condition tests.");
+assert!(errors.has(kind) && !errors.has(Policy::FIELDS.rules.at(&2).conditions.at(&0).kind));
+```
+
+Rows go as deep as the types do, and the reader follows a key only as deep as the type it reads
+into, however many brackets a client sends. A type whose rows are of its own type would have no
+end, so naming its fields does not compile. A group of groups and rows in a group do not compile,
+and neither does `#[serde(flatten)]`: a group is named under its field so two of one type cannot
+clash.
 
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:

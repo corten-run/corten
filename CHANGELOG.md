@@ -5,6 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
+  BTreeMap<u32, Condition>` in the type of a form's rows names
+  `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
+  the maps inside the map and gives it its own error, so a list whose items own a list needs no
+  key the app joins and splits by hand. Rows go as deep as the types do; naming the fields of a
+  type whose rows are of its own type does not compile.
+
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
