@@ -1343,6 +1343,8 @@ async function run(browser) {
     probe.on("console", (m) => m.type() === "error" && said.push(m.text()));
     let opened = false;
     await probe.route(`${base}/`, async (route) => {
+      // The page's own load only: the runtime's read of its picks (`corten: action`) goes as it is.
+      if (route.request().headers().corten) return route.continue();
       // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
       const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
       const headers = response.headers();
@@ -1463,6 +1465,8 @@ async function run(browser) {
         return route.fulfill({ contentType: "text/javascript", body });
       });
       await early.route(`${base}/`, async (route) => {
+        // The page's own load only: the runtime's read of its picks goes as it is.
+        if (route.request().headers().corten) return route.continue();
         // Uncompressed, since Playwright's Firefox hands a zstd body over undecoded.
         const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
         return route.fulfill({ response, body: edit(await response.text()) });

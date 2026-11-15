@@ -2768,7 +2768,12 @@ fn what_a_slow_part_read_costs() {
     let requests: usize = std::env::var("SLOW_PART_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let stream = std::env::var("SLOW_PART").is_ok_and(|m| m == "stream");
     fn picks() -> impl Patch {
-        html! { <ul id={MsgId}><li>"Halcyon Health (HLTH) 0.00%"</li><li>"Northgate Rail (NRTH) 0.00%"</li></ul> }
+        html! {
+            <ul id={MsgId}>
+                <li>"Halcyon Health (HLTH) 0.00%"</li>
+                <li>"Northgate Rail (NRTH) 0.00%"</li>
+            </ul>
+        }
     }
     async fn send_part() -> LiveResponse {
         crate::live(futures_util::stream::once(async { picks().to_html() }))

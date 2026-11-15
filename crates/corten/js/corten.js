@@ -1047,8 +1047,9 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
   // except in the answer to a part's read, which would ask for itself again. Looked for in the
-  // text first, so a patch without one (a ticker's) queries nothing.
-  if (!asked && html.includes('read-again="0"')) readNow(put);
+  // text first, so a patch without one (a ticker's) queries nothing; a script's is `TrustedHTML`,
+  // whose text is its markup.
+  if (!asked && String(html).includes('read-again="0"')) readNow(put);
 }
 
 /**
