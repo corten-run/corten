@@ -55,8 +55,9 @@
 //! - Void elements (`<input>`, `<br>`, `<img>`, ...) need no closing tag; other elements close
 //!   with `</name>` or `/>`. `<>...</>` groups nodes. `<!DOCTYPE html>` is allowed.
 //! - Text inside `<script>` and `<style>` is written as is.
-//! - An element written inside one whose content a browser reads as text (`<textarea>`,
-//!   `<title>` outside an `<svg>`, `<script>`, `<style>`) does not compile: see [`html!`].
+//! - An element written inside one whose content a browser parsing HTML reads as text
+//!   (`<textarea>`, an HTML `<title>`, `<script>`, `<style>`), or one a browser takes out of an
+//!   `<svg>` (`<div>`, `<p>`) written straight into it, does not compile: see [`html!`].
 
 use std::{
     borrow::Cow,
@@ -264,20 +265,23 @@ use std::{
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 ///
-/// An element written inside one whose content a browser parsing HTML reads as text does not
-/// compile: the browser would show its tags as text, or put them in a field's value, rather than
-/// make an element. Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
-/// `<xmp>`, `<noembed>` and `<noframes>`, and `<plaintext>` itself does not compile (it makes the
-/// rest of the page text, its end tag included):
+/// Markup a browser would not keep as written does not compile, where the markup shows how the
+/// browser parses it. An element written inside one whose content a browser parsing HTML reads as
+/// text would show its tags as text, or put them in a field's value, rather than make an element.
+/// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
+/// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
+/// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
+/// `<div>`, a `<p>`, a document's `<head>`) and in an `<svg>`'s `<foreignObject>`, `<desc>` and
+/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <textarea name="note"><b>"Draft"</b></textarea> };
+/// let _ = html! { <div><textarea name="note"><b>"Draft"</b></textarea></div> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <title>"Shop "<span>"3"</span></title> };
+/// let _ = html! { <div><title>"Shop "<span>"3"</span></title></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -292,20 +296,68 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <plaintext>"Raw"</plaintext> };
+/// let _ = html! { <svg><title><title><span>"Chart"</span></title></title></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><plaintext>"Raw"</plaintext></p> };
+/// ```
+///
+/// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>`
+/// (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with
+/// `color`, `face` or `size`) written straight into one: the browser closes the `<svg>` before
+/// it, so it and what follows land outside the drawing. HTML in a drawing goes in a
+/// `<foreignObject>`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><rect width="4" height="4" /><p>"Total"</p></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
 /// ```
 ///
 /// Their text and expressions compile (written escaped, which a `<textarea>` and a `<title>`
-/// read back), and so does an element in an `<svg>`'s `<title>`, which is SVG's and holds HTML:
+/// read back), and so does what an `<svg>` holds: its `<textarea>` and `<style>` are SVG's
+/// elements, whose children are elements, and its `<title>` holds HTML. Where the markup does
+/// not show how it is parsed, at the top of a component's markup (whose parent may write it into
+/// an `<svg>`), among a component's children (which go where it writes them) and in a `<math>`,
+/// none of this is refused, so a component that draws an SVG fragment without its `<svg>`
+/// compiles:
 ///
 /// ```
 /// use corten::prelude::*;
-/// let draft = "<b>Draft</b>";
-/// let view = html! { <textarea name="note">{draft}</textarea><svg><title><span>"Chart"</span></title></svg> };
-/// assert_eq!(
-///     view.to_html(),
-///     r#"<textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea><svg><title><span>Chart</span></title></svg>"#
-/// );
+///
+/// #[component]
+/// fn Bar() -> impl Render {
+///     html! { <rect width="4" height="42"><title>"Sales "<b>"42"</b></title></rect> }
+/// }
+///
+/// fn main() {
+///     let draft = "<b>Draft</b>";
+///     let view = html! {
+///         <div>
+///             <textarea name="note">{draft}</textarea>
+///             <svg><title><span>"Chart"</span></title><style><g></g></style><textarea><g></g></textarea><Bar /></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea>"#,
+///             r#"<svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea>"#,
+///             r#"<rect width="4" height="42"><title>Sales <b>42</b></title></rect></svg></div>"#,
+///         )
+///     );
+/// }
 /// ```
 pub use corten_macros::html;
 

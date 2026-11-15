@@ -2280,7 +2280,9 @@ pub mod ts {
     /// # fn main() {}
     /// ```
     ///
-    /// Nor does a ref with a key on some elements and not on others:
+    /// A ref with a key on some elements and not on others does not compile whatever its handlers
+    /// take (`El`, `El[]` or a `Map`), since every element fixes the one type that says whether
+    /// its elements have keys; here, beside a `Map`:
     ///
     /// ```compile_fail,E0277
     /// use corten::prelude::*;

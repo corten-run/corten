@@ -494,38 +494,54 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Changed
 
 - A handler parameter typed `Map<string, El>` takes only a ref whose every element has a
-  `key={..}`: a ref without keys, on all its elements or on some, no longer compiles there, and
-  the error says to add `key={..}`, where it compiled and the handler got a one-entry `Map`. A ref
+  `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
+  where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
+  not on others does not compile, whatever its handlers take (`El`, `El[]` or a `Map`). A ref
   now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
-  fixed by the markup as its value's kind is. Debug builds stop a render in which two elements of a
-  ref in one render of its component have keys the browser reads as equal (`key={true}` and
-  `key=""` are one, and so are a carriage return and a line feed), or a `key={..}` writes none
-  (`None`), since the `Map` would hold one entry for them, counting the elements the runtime finds
-  (none in a `<template>`'s or a `<noscript>`'s content, or in what an expression or a component
-  writes into an element a browser reads as text, a `<textarea>`, `<title>`, `<iframe>`,
-  `<xmp>`, `<noembed>` or `<noframes>`, outside an `<svg>` or in its `<foreignObject>`,
-  `<desc>` or `<title>`), leaving out a key written with a reference Corten does
-  not write (an app's own `AttrValue`) and the keys in a `<template>` whose context the markup
-  cannot know: one a component writes into its parent's `<svg>`, and one among a component's
-  children, which the component may write in an `<svg>`'s `<desc>` (unless it is in an `<svg>` of
-  the children's own), and keys a view writes into a string of its own (`html! { .. }.to_html()` or
-  `children.to_html()` as an attribute's value), which are not its component's, or Corten writes
-  so (a document's head tags, each copied into the page, are not checked against each other or the
-  body); whether it runs is
-  `corten-run`'s debug-assertions setting, for every crate's markup, release builds do not check,
-  and the runtime is unchanged
+  fixed by the markup as its value's kind is
   ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
-  [design Choice 46](docs/design.md#choice-ref-values)). **Breaking:** a component that puts a
-  parent's ref on elements with a key names the ref's type
+  [design Choice 46](docs/design.md#choice-ref-values)).
+- Debug builds stop a render in which two elements of a ref in one render of its component have
+  keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
+  return and a line feed), or a `key={..}` writes none (`None`), since the `Map` would hold one
+  entry for them. Whether it runs is `corten-run`'s debug-assertions setting, for every crate's
+  markup. Release builds do not check, and the runtime is unchanged.
+- The check counts the elements the runtime finds. It leaves out a `<template>`'s or a
+  `<noscript>`'s content, and what an expression or a component writes into an element a browser
+  reads as text (a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>`
+  outside an `<svg>` or in its `<foreignObject>`, `<desc>` or `<title>`). It leaves out a key
+  written with a reference Corten does not write (an app's own `AttrValue`). Where the markup
+  cannot know how a browser parses it, it lets a duplicate pass: in a `<template>` or an element
+  read as text at the top of a component's markup, which its parent may write into an `<svg>`,
+  and among a component's children, which the component may write in an `<svg>`'s `<desc>`
+  (unless they are in an `<svg>` of the children's own). Keys a view writes into a string of its
+  own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value) are not its
+  component's. A document's head tags, each copied into the page, are not checked against each
+  other or the body.
+- A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
+  a key is `key={..}`'s to write.
+- **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
-  gets `key={..}` on each of its elements. A spread of attribute pairs now skips `data-key`, as it
-  skips `data-ref` and `data-ref-value`: a key is `key={..}`'s to write. **Breaking:** an element
-  written in `html!` inside an element whose content a browser reads as text no longer compiles
-  (`<textarea><b>..</b></textarea>`, `<title>` outside an `<svg>` or in its `<desc>`, `<iframe>`,
-  `<xmp>`, `<noembed>`, `<noframes>`, `<script>`, `<style>`), nor does `<plaintext>`, where it
-  compiled and the browser showed the tags as text: put the element beside it, or write text meant
-  to show tags as a string.
+  gets `key={..}` on each of its elements.
+- **Breaking:** `html!` checks the children of an `<svg>`'s `<desc>` and `<title>` as HTML, as it
+  did a `<foreignObject>`'s, since a browser parses them as HTML: the accessible-name check
+  applies there, and an `<a>` named by a written-out `aria-label` there needs an `href` that
+  always writes one.
+- **Breaking:** markup a browser would not keep as written no longer compiles where the markup
+  shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+  a `<p>`, a document's `<head>`), and in an `<svg>`, its `<foreignObject>`, `<desc>` and
+  `<title>` included. An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
+  put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
+  inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
+  component's CSS file. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
+  the HTML standard's rules for foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`,
+  `<span>`, `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`),
+  written straight into one, closed the `<svg>`: put it in a `<foreignObject>`. Inside an `<svg>`
+  a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements, and at the top of a
+  component's markup or among a component's children, where the markup does not show how they
+  are parsed, none of this is refused.
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

@@ -16,7 +16,8 @@ const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "inpu
 const RAW_TEXT: &[&str] = &["script", "style"];
 /// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
 /// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
-/// element written in one is text to the browser, so `html!` refuses it there, and the key
+/// element written in one is text to the browser, so `html!` refuses it there where the markup
+/// shows the content is parsed as HTML (`Parsing`), and the key
 /// check takes no key written in one (by an expression or a component) for the page's. Inside an
 /// `<svg>` they are SVG's elements (`<title>`) or unknown ones, whose children are elements.
 const TEXT_ONLY: &[&str] = &["textarea", "title", "xmp", "iframe", "noembed", "noframes"];
@@ -928,16 +929,111 @@ fn within_svg(outer: bool, name: &str) -> bool {
     }
 }
 
-/// Whether a browser reads the content of `name`, inside an `<svg>` when `svg`, as text:
-/// `<script>` and `<style>`, whose content `html!` holds to literal text everywhere, and outside
-/// an `<svg>` the elements of `TEXT_ONLY`.
-fn reads_as_text(svg: bool, name: &str) -> bool {
-    RAW_TEXT.iter().chain(if svg { &[][..] } else { TEXT_ONLY }).any(|t| name.eq_ignore_ascii_case(t))
+/// The start tags the HTML standard's rules for parsing tokens in foreign content take out of an
+/// `<svg>`: the parser closes the `<svg>` (up to an HTML integration point) and reads the tag
+/// as HTML's, so it and what follows land outside the drawing. A `<font>` does too when it has a
+/// `color`, `face` or `size` (`breaks_out`).
+const BREAKOUT: &[&str] = &[
+    "b",
+    "big",
+    "blockquote",
+    "body",
+    "br",
+    "center",
+    "code",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "listing",
+    "menu",
+    "meta",
+    "nobr",
+    "ol",
+    "p",
+    "pre",
+    "ruby",
+    "s",
+    "small",
+    "span",
+    "strong",
+    "strike",
+    "sub",
+    "sup",
+    "table",
+    "tt",
+    "u",
+    "ul",
+    "var",
+];
+
+/// How a browser parses the content at a point of the markup, as far as this markup shows: an
+/// `html!` does not see where its view is written, so what it cannot show is `Unknown`, and a
+/// rule that depends on it does not act there.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Parsing {
+    /// As HTML: under an element that is HTML's wherever it lands (one of `BREAKOUT`, `<html>`),
+    /// or in an `<svg>`'s `<foreignObject>`, `<desc>` or `<title>` (`SVG_HTML_POINTS`).
+    Html,
+    /// As SVG: in a literal `<svg>`, outside those.
+    Svg,
+    /// Not known: at the top of an `html!` (a component's markup lands where its parent writes
+    /// it, in an `<svg>` perhaps), among a component's children, which go where it writes them,
+    /// and in a `<math>`.
+    Unknown,
+}
+
+/// Whether the element `name` with `attrs` is HTML's wherever it is written: one a browser
+/// takes out of an `<svg>` (`BREAKOUT`). A `<font>` is only with a `color`, `face` or `size`
+/// the markup writes for certain (not one a spread or an expression may leave out).
+fn breaks_out(name: &str, attrs: &[Attr]) -> bool {
+    BREAKOUT.iter().any(|t| name.eq_ignore_ascii_case(t))
+        || (name.eq_ignore_ascii_case("font")
+            && attrs.iter().any(|a| {
+                matches!(a, Attr::Static(n, _) | Attr::Bare(n)
+                    if ["color", "face", "size"].iter().any(|f| n.eq_ignore_ascii_case(f)))
+            }))
+}
+
+/// How the children of `name` with `attrs` are parsed, in content parsed as `outer`.
+fn parsing_within(outer: Parsing, name: &str, attrs: &[Attr]) -> Parsing {
+    if name.eq_ignore_ascii_case("svg") {
+        return Parsing::Svg;
+    }
+    match outer {
+        Parsing::Svg if SVG_HTML_POINTS.iter().any(|point| name.eq_ignore_ascii_case(point)) => Parsing::Html,
+        Parsing::Svg => Parsing::Svg,
+        _ if name.eq_ignore_ascii_case("math") => Parsing::Unknown,
+        Parsing::Html => Parsing::Html,
+        Parsing::Unknown if name.eq_ignore_ascii_case("html") || breaks_out(name, attrs) => Parsing::Html,
+        Parsing::Unknown => Parsing::Unknown,
+    }
+}
+
+/// Whether a browser reads the content of `name`, in content parsed as `parsing`, as text: as
+/// HTML, `<script>` and `<style>` and the elements of `TEXT_ONLY`. In an `<svg>` they are
+/// elements whose children are elements, and where the markup does not show which it is, it is
+/// not taken for text.
+fn reads_as_text(parsing: Parsing, name: &str) -> bool {
+    parsing == Parsing::Html && RAW_TEXT.iter().chain(TEXT_ONLY).any(|t| name.eq_ignore_ascii_case(t))
 }
 
 /// Why the element `name` does not compile here: inside `holder`, whose content a browser reads
-/// as text, or a `<plaintext>` outside an `<svg>`, which makes the rest of the page text.
-fn text_only_element(holder: Option<&str>, svg: bool, name: &str) -> Option<String> {
+/// as text, or a `<plaintext>` parsed as HTML, which makes the rest of the page text.
+fn text_only_element(holder: Option<&str>, parsing: Parsing, name: &str) -> Option<String> {
     if let Some(holder) = holder {
         let instead = if RAW_TEXT.contains(&holder) {
             "behavior is a #[component(js)], styles a component's CSS file"
@@ -948,8 +1044,18 @@ fn text_only_element(holder: Option<&str>, svg: bool, name: &str) -> Option<Stri
             "<{holder}> holds only text: a browser reads a <{name}> written in it as text, not as an element; {instead}"
         ));
     }
-    (!svg && name.eq_ignore_ascii_case("plaintext"))
+    (parsing == Parsing::Html && name.eq_ignore_ascii_case("plaintext"))
         .then(|| "<plaintext> makes the rest of the page text, its end tag included: write <pre> for preformatted text".into())
+}
+
+/// Why the element `name` with `attrs` does not compile here: written straight into an `<svg>`,
+/// it is one a browser takes out of the drawing (`BREAKOUT`).
+fn svg_breakout(parsing: Parsing, name: &str, attrs: &[Attr]) -> Option<String> {
+    (parsing == Parsing::Svg && breaks_out(name, attrs)).then(|| {
+        format!(
+            "<{name}> is HTML's, and a browser that meets it in an <svg> closes the <svg> before it, so it and what follows land outside the drawing: put HTML in an <svg> inside a <foreignObject>"
+        )
+    })
 }
 
 struct Cursor {
@@ -962,21 +1068,37 @@ struct Cursor {
     /// Inside the content of an element a browser reads as text (`RAW_TEXT`, `TEXT_ONLY`), named
     /// here, where an element does not compile.
     text_only: Option<String>,
+    /// How a browser parses the content here, as far as this markup shows.
+    parsing: Parsing,
 }
 
 impl Cursor {
     fn new(stream: TokenStream) -> Self {
-        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site(), svg: false, text_only: None }
+        Cursor {
+            tokens: stream.into_iter().collect(),
+            i: 0,
+            end: Span::call_site(),
+            svg: false,
+            text_only: None,
+            parsing: Parsing::Unknown,
+        }
     }
 
     fn of(group: &Group) -> Self {
-        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close(), svg: false, text_only: None }
+        Cursor {
+            tokens: group.stream().into_iter().collect(),
+            i: 0,
+            end: group.span_close(),
+            svg: false,
+            text_only: None,
+            parsing: Parsing::Unknown,
+        }
     }
 
     /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
     /// when this is.
     fn inner(&self, group: &Group) -> Self {
-        Cursor { svg: self.svg, text_only: self.text_only.clone(), ..Cursor::of(group) }
+        Cursor { svg: self.svg, text_only: self.text_only.clone(), parsing: self.parsing, ..Cursor::of(group) }
     }
 
     fn peek(&self) -> Option<&TokenTree> {
@@ -1133,7 +1255,7 @@ impl Cursor {
             return err(name_span, "a component name is a Rust path; element names with - are lowercase");
         }
         if !component {
-            if let Some(why) = text_only_element(self.text_only.as_deref(), self.svg, &name) {
+            if let Some(why) = text_only_element(self.text_only.as_deref(), self.parsing, &name) {
                 return err(name_span, why);
             }
         }
@@ -1335,6 +1457,11 @@ impl Cursor {
                 _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
             }
         };
+        if !component {
+            if let Some(why) = svg_breakout(self.parsing, &name, &attrs) {
+                return err(name_span, why);
+            }
+        }
         if !component && !self.svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
                 return err(name_span, why);
@@ -1352,11 +1479,14 @@ impl Cursor {
             let outer = self.svg;
             self.svg = within_svg(outer, &name);
             // A component's children go where it writes them, which this markup does not see.
-            let holder = (!component && reads_as_text(outer, &name)).then(|| name.clone());
+            let holder = (!component && reads_as_text(self.parsing, &name)).then(|| name.clone());
             let outer_text = std::mem::replace(&mut self.text_only, holder);
+            let inner = if component { Parsing::Unknown } else { parsing_within(self.parsing, &name, &attrs) };
+            let outer_parsing = std::mem::replace(&mut self.parsing, inner);
             let children = self.nodes(Some(&name));
             self.svg = outer;
             self.text_only = outer_text;
+            self.parsing = outer_parsing;
             let children = children?;
             self.closing(&name, open)?;
             Some(children)
@@ -2116,7 +2246,8 @@ impl Gen {
                     // A `<template>`'s content and a `<noscript>`'s, which the runtime's query for a
                     // ref's elements does not reach (with scripts on, a `<noscript>` holds text),
                     // and the content of an element a browser reads as text (`TEXT_ONLY`: a
-                    // `<textarea>` holding a component or an expression that writes markup):
+                    // `<textarea>` holding a component or an expression that writes markup, or an
+                    // element where the markup does not show it is HTML's, `Parsing::Unknown`):
                     // debug builds record none of their keys. In an `<svg>` they are elements like
                     // any other, whose children the query finds, except in what an element whose
                     // children are HTML's holds (`SVG_HTML_POINTS`). A component's markup does
@@ -2446,7 +2577,90 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 
 #[cfg(test)]
 mod tests {
-    use super::{local_path, refused_path};
+    use super::{
+        breaks_out, local_path, parsing_within, reads_as_text, refused_path, svg_breakout, text_only_element, Attr, Parsing,
+        BREAKOUT, RAW_TEXT, TEXT_ONLY,
+    };
+
+    /// Each element read as text, as each parse would read it: text in HTML, at an `<svg>`'s
+    /// integration points too, and an element in an `<svg>` or where the markup does not show
+    /// which (the top of a component's markup, its children, a `<math>`).
+    #[test]
+    fn an_element_is_read_as_text_only_where_the_markup_shows_html() {
+        let svg = parsing_within(Parsing::Unknown, "svg", &[]);
+        assert_eq!(svg, Parsing::Svg);
+        for point in ["foreignObject", "desc", "title"] {
+            assert_eq!(parsing_within(svg, point, &[]), Parsing::Html, "{point}");
+        }
+        let html = parsing_within(svg, "foreignObject", &[]);
+        for name in RAW_TEXT.iter().chain(TEXT_ONLY) {
+            assert!(reads_as_text(Parsing::Html, name), "{name} as HTML");
+            assert!(reads_as_text(html, name), "{name} in a foreignObject");
+            assert!(reads_as_text(parsing_within(svg, "desc", &[]), name), "{name} in a desc");
+            assert!(!reads_as_text(Parsing::Svg, name), "{name} in an svg");
+            assert!(!reads_as_text(Parsing::Unknown, name), "{name} where it is not known");
+            // What it holds is SVG's in an <svg> (but for a <title>, which holds HTML), so an
+            // element there compiles.
+            if *name != "title" {
+                assert_eq!(parsing_within(svg, name, &[]), Parsing::Svg, "{name} in an svg");
+            }
+
+            let why = text_only_element(Some(name), Parsing::Html, "b").expect("refused");
+            assert!(why.starts_with(&format!("<{name}> holds only text: a browser reads a <b>")), "{why}");
+            let instead = if RAW_TEXT.contains(name) { "#[component(js)]" } else { "put the element beside it" };
+            assert!(why.contains(instead), "{why}");
+        }
+        assert_eq!(text_only_element(None, Parsing::Svg, "g"), None);
+        assert!(!reads_as_text(Parsing::Html, "div"));
+        assert!(!reads_as_text(Parsing::Html, "noscript"));
+
+        // <plaintext> where the markup shows HTML, and not in an <svg> or where it does not.
+        let why = text_only_element(None, Parsing::Html, "plaintext").expect("refused");
+        assert!(why.contains("write <pre>"), "{why}");
+        assert_eq!(text_only_element(None, Parsing::Svg, "plaintext"), None);
+        assert_eq!(text_only_element(None, Parsing::Unknown, "plaintext"), None);
+    }
+
+    #[test]
+    fn the_markup_shows_html_under_an_element_a_browser_keeps_out_of_an_svg() {
+        for name in BREAKOUT {
+            assert_eq!(parsing_within(Parsing::Unknown, name, &[]), Parsing::Html, "{name}");
+            assert!(breaks_out(name, &[]), "{name}");
+        }
+        assert_eq!(parsing_within(Parsing::Unknown, "html", &[]), Parsing::Html);
+        // Elements that are SVG's in an <svg> do not show it.
+        for name in ["title", "a", "textarea", "rect", "section", "template", "desc", "foreignObject"] {
+            assert_eq!(parsing_within(Parsing::Unknown, name, &[]), Parsing::Unknown, "{name}");
+        }
+        assert_eq!(parsing_within(Parsing::Html, "section", &[]), Parsing::Html);
+        assert_eq!(parsing_within(Parsing::Html, "math", &[]), Parsing::Unknown);
+        assert_eq!(parsing_within(Parsing::Svg, "math", &[]), Parsing::Svg);
+        assert_eq!(parsing_within(Parsing::Html, "svg", &[]), Parsing::Svg);
+        assert_eq!(parsing_within(Parsing::Svg, "svg", &[]), Parsing::Svg);
+
+        let color = [Attr::Static("color".into(), "red".into())];
+        assert!(breaks_out("font", &color));
+        assert!(breaks_out("FONT", &[Attr::Bare("SIZE".into())]));
+        assert!(!breaks_out("font", &[]));
+        assert!(!breaks_out("font", &[Attr::Static("class".into(), "x".into())]));
+        assert_eq!(parsing_within(Parsing::Unknown, "font", &color), Parsing::Html);
+        assert_eq!(parsing_within(Parsing::Unknown, "font", &[]), Parsing::Unknown);
+    }
+
+    #[test]
+    fn an_element_a_browser_takes_out_of_an_svg_is_refused_only_straight_in_one() {
+        for name in BREAKOUT {
+            let why = svg_breakout(Parsing::Svg, name, &[]).expect("refused");
+            assert!(why.starts_with(&format!("<{name}> is HTML's")), "{why}");
+            assert!(why.contains("<foreignObject>"), "{why}");
+            assert_eq!(svg_breakout(Parsing::Html, name, &[]), None, "{name}");
+            assert_eq!(svg_breakout(Parsing::Unknown, name, &[]), None, "{name}");
+        }
+        assert!(svg_breakout(Parsing::Svg, "font", &[Attr::Bare("face".into())]).is_some());
+        for name in ["font", "a", "title", "textarea", "style", "rect", "g", "foreignObject", "math"] {
+            assert_eq!(svg_breakout(Parsing::Svg, name, &[]), None, "{name}");
+        }
+    }
 
     #[test]
     fn a_path_in_the_app_is_found_in_each_url_attribute() {

@@ -977,6 +977,27 @@ fn a_key_among_children_a_component_writes_into_a_textarea_is_not_the_page_s() {
     assert!(html.contains(r#"<textarea name="note"><span data-ref="mark" data-key="a"></span></textarea>"#), "{html}");
 }
 
+/// A keyed mark in the page, and copies an expression writes as markup into an `<iframe>` and an
+/// `<xmp>`, whose content a browser reads as text: the ref has one element.
+#[component]
+fn FramedKeys() -> impl Render {
+    let mark = refs();
+    html! {
+        <div>
+            <span ref={mark} key="a"></span>
+            <iframe title="Preview">{html! { <span ref={mark} key="a"></span> }}</iframe>
+            <xmp>{html! { <span ref={mark} key="a"></span> }}</xmp>
+        </div>
+    }
+}
+
+#[test]
+fn a_key_an_expression_writes_into_an_iframe_or_xmp_is_not_one_of_the_page_s() {
+    let html = FramedKeys {}.to_html();
+    assert!(html.contains(r#"<iframe title="Preview"><span data-ref="mark" data-key="a"></span></iframe>"#), "{html}");
+    assert!(html.contains(r#"<xmp><span data-ref="mark" data-key="a"></span></xmp>"#), "{html}");
+}
+
 /// Two keyed marks, one in an `<svg>`'s `<title>`, which is SVG's: what it holds is HTML's
 /// elements, which the query finds.
 #[component]

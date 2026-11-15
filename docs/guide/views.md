@@ -26,6 +26,22 @@ render of that component reserves that size once (a 1-byte render right after a 
 | `<Card title="x" compact>children</Card>` | a component: a struct with those fields (`compact` is `true`), children in `children` |
 | `<>...</>`, `<!DOCTYPE html>`, `<input>` | fragments, the doctype, void elements without a closing tag |
 
+Markup a browser would not keep as written does not compile, where the markup shows how the
+browser parses it. An element inside one whose content a browser reads as text (`<textarea>`,
+`<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
+the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
+a `<style>` belongs in a `#[component(js)]` or the component's CSS file, and a `<plaintext>`,
+which makes the rest of the page text, is a `<pre>`. An element the HTML standard's rules for
+foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the
+others it lists, and a `<font>` with `color`, `face` or `size`), written straight into one,
+would close the drawing before it: HTML in a drawing goes in a `<foreignObject>`. The markup
+shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`, a document's
+`<head>`) and in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`; inside an `<svg>`
+a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements. At the top of a component's
+markup (its parent may write it into an `<svg>`), among a component's children (they go where the
+component writes them) and in a `<math>`, it does not show, and nothing here is refused, so a
+component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an `<svg>` compiles.
+
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns
 what it captures and renders once, so it can be returned from a function.
@@ -49,7 +65,8 @@ with no `href`, is refused, and so is a written-out name on an `<a>` whose `href
 may write one) exempts the element, as does a name that is itself an expression
 (`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
 in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
-component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
+component that draws an SVG fragment without its `<svg>` says `role="group"`). What an `<svg>`'s
+`<foreignObject>`, `<desc>` or `<title>` holds is HTML to a browser, and is checked. The check reads
 the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it.
 The rest of a page's accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
 

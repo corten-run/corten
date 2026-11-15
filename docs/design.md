@@ -3118,10 +3118,14 @@ rules something out.
     one in a `<template>`'s or a `<noscript>`'s content is not counted, nor one an expression or a
     component writes into an element whose content a browser reads as text (`<textarea>`, an HTML
     `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`); an element written in one of those
-    in the markup itself does not compile, nor in a `<script>` or a `<style>`, nor a `<plaintext>`
-    (in an `<svg>` they are elements like any other, and what they hold is, except in its
-    `<foreignObject>`, `<desc>` and `<title>`, the HTML standard's integration points, whose
-    children are HTML's). It counts an
+    in the markup itself does not compile where the markup shows it is parsed as HTML, nor in a
+    `<script>` or a `<style>`, nor a `<plaintext>` (in an `<svg>` they are elements like any
+    other, and what they hold is, except in its `<foreignObject>`, `<desc>` and `<title>`, the HTML
+    standard's integration points, whose children are HTML's). The same rule holds the refusals:
+    the markup shows HTML under an element that is HTML's wherever it lands (one the standard's
+    rules for foreign content take out of an `<svg>`, a document's `<head>`) and at the integration
+    points, and SVG in a literal `<svg>`; at the top of a component's markup, among a component's
+    children and in a `<math>` it shows neither, and nothing is refused there. It counts an
     element against its component's render only when the element is written into the string that
     render writes, so a view written into a string of its own (`html! { .. }.to_html()` or a
     component's `children.to_html()` as an attribute's value, which the browser reads as text) is
@@ -3133,16 +3137,23 @@ rules something out.
     storage and copies it into the page (`head_slot` in `crates/corten/src/view.rs`), so equal keys
     in two of them, or in one and the body, are not checked. Its limit is at a component's edge, where the markup on
     either side cannot know the other's context: a component's markup does not see an `<svg>` its
-    parent writes it into, so it takes its own `<template>` there for HTML's, and the keys in it,
-    which the runtime finds, are not checked; and a component's children do not see where the
+    parent writes it into, so it takes a `<template>`, `<noscript>`, `<textarea>` or `<title>` at
+    its top there for HTML's, and the keys in it, which the runtime finds, are not checked; and a
+    component's children do not see where the
     component writes them (in an `<svg>`'s `<desc>`, say, where a `<template>` is HTML's), so a
     `<template>`'s or a `<noscript>`'s content among them, or a `<textarea>`'s or a `<title>`'s, is
     not checked either, unless it is in
     an `<svg>` the children write themselves, which is SVG's wherever it lands. Following the
     namespace across components would have every element's markup report it to the check, for a
-    duplicate few apps can write. It follows
-    markup where `html!` writes it, not where a browser moves an HTML element written straight into
-    an `<svg>`. It decodes the five references Corten's escapers write and no others, and leaves
+    duplicate few apps can write. An element a browser moves out of an `<svg>` (`<div>`, `<p>`)
+    does not compile written straight into one, so the check follows the markup there as the
+    browser does, except where `html!` cannot see it: a component that writes such an element at
+    the top of its markup into a parent's `<svg>` closes the drawing, and the parent's check still
+    takes what follows for SVG's. Nor does it follow an element a browser moves out of a table (a
+    `<span>` written straight into a `<tr>`, put before the `<table>`): when the table is a
+    component's root, the moved element falls outside it, so the runtime does not find it there
+    while the check counts it, and may stop on a duplicate the runtime does not see. Both are
+    markup a browser does not keep as written, not a correct render. It decodes the five references Corten's escapers write and no others, and leaves
     out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
     at what a browser reads there would repeat HTML's character reference rules or stop correct
     markup. Whether it runs is `corten-run`'s own debug-assertions setting: the code `html!` writes
