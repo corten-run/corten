@@ -2073,8 +2073,8 @@ impl Req {
     /// the form works without JavaScript too. `page` only runs then, so an action never loads
     /// data for a page it does not send. A data client ([`Mode::Data`]) gets `page()` as well. A
     /// submit refused for its input is [`Req::invalid`] (or [`Req::invalid_with`] when the form needs
-    /// a read); a patch that needs a read of its own is [`Req::patch_or_with`], and one that needs
-    /// a status or headers of its own checks `req.mode == Mode::Action` itself.
+    /// a read); a patch that needs a read, a status or headers of its own is
+    /// [`Req::patch_or_with`], whose part side builds it only for the runtime's request.
     ///
     /// Its answer is a patch whenever the runtime asked, so it is the `HtmlResult<Patches>` of a
     /// route that says `patches` ([`crate::Patches`]) as well as any `HtmlResult`; `page()` is a
@@ -3342,7 +3342,8 @@ impl ReadAgain {
     /// let _ = ReadAgain::now(url::Home);
     /// ```
     ///
-    /// Nor is it a part of a patch: a patch draws the part from what its handler read.
+    /// Nor is it an element a patch replaces by id: in a patch it goes inside one, beside the part
+    /// it reads, as in a page.
     ///
     /// ```compile_fail,E0277
     /// use corten::{prelude::*, view::Patch};
