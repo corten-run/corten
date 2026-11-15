@@ -1,7 +1,7 @@
-/* The line saying the picks are on their way shows while a stream can still bring them, and the
-   link to the page with them read in where none will: without JavaScript, which opens no stream,
-   and once the stream has given up (`closed`: an error or a 204 answered it). A browser without
-   the `scripting` media feature matches neither query and shows both. */
+/* The line saying the picks are on their way shows while the runtime's read can still bring them,
+   and the link to the page with them read in where none will: without JavaScript, which reads
+   nothing, and once the read has failed (`data-corten-read-failed`: offline, or no patch came back).
+   A browser without the `scripting` media feature matches neither query and shows both. */
 @media (scripting: enabled) {
   .show {
     display: none;
@@ -12,9 +12,9 @@
     display: none;
   }
 }
-corten-live[status="closed"] .finding {
+[data-corten-read-failed] .finding {
   display: none;
 }
-corten-live[status="closed"] .show {
+[data-corten-read-failed] .show {
   display: inline;
 }

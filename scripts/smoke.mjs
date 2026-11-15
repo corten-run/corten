@@ -1200,51 +1200,71 @@ async function run(browser) {
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
-  // A slow part sent once (the picks): its stream brings it when it is ready.
+  // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
+  // page is on the screen (`ReadAgain::now`, answered by `req.patch_or_with`, #1400).
   await page.waitForSelector("ul#picks", { state: "attached", timeout: 4000 }).catch(() => {});
-  check("a slow part a <corten-live> stream sends once arrives", (await page.$$("ul#picks li")).length === 2);
-  // While the stream may still bring it, its placeholder says it is on its way and hides the link
-  // to the page with it read in: in the page loaded, and in one a client navigation drew. Held, so
-  // the placeholder is what is drawn. A stream that gives up (a 204: `closed`) shows the link
-  // instead, and the page it opens has the part read in (#1264).
+  check("a slow part the page waits for is read from its route and drawn", (await page.$$("ul#picks li")).length === 2 && (await page.$("#picks[aria-busy]")) === null);
+  // While the read may still bring it, the waiting part says it is on its way, is busy and hides
+  // the link to the page with it read in: in the page loaded, and in one a client navigation drew.
+  // Held, so the waiting part is what is drawn. A read that brings a patch is not a failure, even
+  // one that leaves the part as it was; a read that fails (offline) shows the link instead, and
+  // the page it opens has the part read in (#1264).
   {
     const held = await browser.newPage();
+    /** @type {"hold" | "empty" | "abort"} */
     let answer = "hold";
-    await held.route("**/live/picks", (route) => (answer === "hold" ? new Promise(() => {}) : route.fulfill({ status: 204, body: "" })));
-    const picksLive = "corten-live[src='/live/picks']";
+    let reads = 0;
+    // The runtime's read of the part is the page's own address, asked with `corten: action`.
+    await held.route(`${base}/`, (route) => {
+      if (route.request().headers().corten !== "action") return route.continue();
+      reads++;
+      if (answer === "hold") return new Promise(() => {});
+      if (answer === "abort") return route.abort("internetdisconnected");
+      return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
+    });
+    const read = () => held.waitForResponse((r) => r.request().headers().corten === "action", { timeout: 5000 }).catch(() => {});
     const placeholder = async () => ({
-      status: await held.getAttribute(picksLive, "status"),
+      reads,
+      busy: await held.getAttribute("#picks", "aria-busy"),
+      failed: await held.getAttribute("#picks", "data-corten-read-failed"),
       line: await held.isVisible("#picks span"),
       link: await held.isVisible("#picks a"),
     });
     await held.goto(`${base}/`);
-    await held.waitForSelector(`${picksLive}[status]`, { state: "attached", timeout: 5000 }).catch(() => {});
+    await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
     const loaded = await placeholder();
-    // `connecting`: the runtime ran and opened the stream, which the route holds unanswered.
-    check("with JavaScript a slow part's placeholder says it is on its way, with no link for it", loaded.line && !loaded.link && loaded.status === "connecting", JSON.stringify(loaded));
+    // Busy: the runtime ran and sent the read, which the route holds unanswered.
+    check("with JavaScript a slow part waiting says it is on its way and is busy, with no link for it", loaded.line && !loaded.link && loaded.busy === "true" && loaded.failed === null && loaded.reads === 1, JSON.stringify(loaded));
     if (swaps) {
       let documents = 0;
       held.on("request", (r) => r.resourceType() === "document" && documents++);
       await held.click('header nav a[href="/news"]');
       await held.waitForFunction(() => document.title === "News | Watchlist");
       await held.click('header nav a[href="/"]');
-      await held.waitForFunction((live) => location.pathname === "/" && !!document.querySelector(`${live}[status]`), picksLive, { timeout: 5000 }).catch(() => {});
+      await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
       const drawn = { ...(await placeholder()), documents };
-      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.status === "connecting" && documents === 0, JSON.stringify(drawn));
+      check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
     } else skip("and so does it in a page a client navigation drew", noSwaps);
-    answer = "none";
+    answer = "empty";
+    const emptyRead = read();
     await held.goto(`${base}/`);
-    await held.waitForSelector(`${picksLive}[status="closed"]`, { state: "attached", timeout: 5000 }).catch(() => {});
-    const closed = await placeholder();
-    check("a slow part whose stream gave up links to the page with it read in, in place of its line", closed.status === "closed" && !closed.line && closed.link, JSON.stringify(closed));
+    await emptyRead;
+    await held.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const kept = await placeholder();
+    check("a read that brings a patch is not marked failed, though the part it waits for stays", kept.busy === null && kept.failed === null && kept.line && !kept.link, JSON.stringify(kept));
+    answer = "abort";
+    await held.goto(`${base}/`);
+    await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+    const failed = await placeholder();
+    check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
     // Followed only when shown, so a link that is not fails the checks, not the run.
-    if (closed.link) {
+    if (failed.link) {
       await held.click("#picks a", { timeout: 3000 }).catch(() => {});
       await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
     }
     check(
       "the page it links to has the slow part read in, with JavaScript too",
-      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$(picksLive)) === null,
+      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$('template[data-corten-read-again="0"]')) === null,
       held.url(),
     );
     await held.unrouteAll({ behavior: "ignoreErrors" });
@@ -3098,9 +3118,11 @@ async function run(browser) {
       await more.click('header a[href="/"]');
       await more.waitForFunction(() => location.pathname === "/" && !document.querySelector("main[aria-busy]"));
       const linkBusy = await busyEnded(more);
+      // The picks the page waits for are busy while their own read is on its way (#1400), which
+      // the navigation did not mark.
       check(
         "the link that starts a navigation is busy with main until its page is in",
-        linkBusy.with && linkBusy.then?.path === "/" && linkBusy.then.stories === 0 && !(await more.$("[aria-busy]")),
+        linkBusy.with && linkBusy.then?.path === "/" && linkBusy.then.stories === 0 && !(await more.$("[aria-busy]:not(#picks)")),
         JSON.stringify(linkBusy),
       );
       // And a button outside its GET form (`form=`), in the header the swap keeps: it is busy
@@ -3877,6 +3899,32 @@ async function run(browser) {
     `${await page.textContent("#once")}, ${onceRequests} requests`,
   );
   await page.evaluate(() => document.querySelector("#once-live")?.remove());
+
+  // ReadAgain::now in markup a patch puts on the page (a form's answer that draws a part waiting):
+  // the parts it waits for are read at once, and two waiting parts that name one address share
+  // one read, whose patch draws both (#1400).
+  let duoReads = 0;
+  await page.route("**/smoke/duo", (route) => {
+    duoReads += 1;
+    return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="duo-a">A</p><p id="duo-b">B</p>' });
+  });
+  await page.evaluate(async () => {
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="duo-1"></div><div id="duo-2"></div>'));
+    const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+    const waiting = (/** @type {string} */ box, /** @type {string} */ part) =>
+      `<div id="${box}"><p id="${part}">Waiting</p><template data-corten-read-again="0" data-from="/smoke/duo"></template></div>`;
+    await corten.patch(__html(waiting("duo-1", "duo-a") + waiting("duo-2", "duo-b")));
+  });
+  await page.waitForFunction(() => document.getElementById("duo-b")?.textContent === "B", null, { timeout: 5000 }).catch(() => {});
+  check(
+    "two parts a patch draws waiting for one address are read once, at once, and drawn",
+    (await page.textContent("#duo-a")) === "A" && (await page.textContent("#duo-b")) === "B" && duoReads === 1 && (await page.$("#duo-1 [aria-busy], #duo-2 [aria-busy]")) === null,
+    `${await page.textContent("#duo-a")} ${await page.textContent("#duo-b")}, ${duoReads} reads`,
+  );
+  await page.evaluate(() => {
+    for (const id of ["duo-1", "duo-2"]) document.getElementById(id)?.remove();
+  });
+  await page.unroute("**/smoke/duo");
 
   // <corten-live> shows its connection: connecting, live once open, reconnecting (with when it
   // dropped) when the stream breaks, closed when the server answers it with no stream.
@@ -6724,15 +6772,15 @@ async function run(browser) {
   );
   check("the refused page shows the list as it was", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
   await plain.goto(base);
-  // A slow part a <corten-live> stream sends once: no stream opens, so the line saying it is on
-  // its way is hidden under @media (scripting: none), and the link to the same page with it read
-  // in is not (#1264). Followed only when shown, so a link that is not fails the checks, not the run.
+  // A slow part the page waits for: nothing reads it, so the line saying it is on its way is
+  // hidden under @media (scripting: none), and the link to the same page with it read in is not
+  // (#1264). Followed only when shown, so a link that is not fails the checks, not the run.
   const plainLink = await plain.isVisible("#picks a");
   check("without JavaScript a slow part's placeholder is a link, not a line that waits", !(await plain.isVisible("#picks span")) && plainLink);
   if (plainLink) await Promise.all([plain.waitForNavigation({ timeout: 5000 }), plain.click("#picks a", { timeout: 3000 })]).catch(() => {});
   check(
     "the page it links to has the slow part read in",
-    new URL(plain.url()).search === "?picks=true" && (await plain.$$("ul#picks li")).length === 2 && (await plain.$("corten-live[src='/live/picks']")) === null,
+    new URL(plain.url()).search === "?picks=true" && (await plain.$$("ul#picks li")).length === 2 && (await plain.$('template[data-corten-read-again="0"]')) === null,
     plain.url(),
   );
   await noJs.close();

@@ -1045,6 +1045,10 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
     if (beside) beside.replaceWith(again);
     readPatchAgain(again, put);
   }
+  // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
+  // except in the answer to a part's read, which would ask for itself again. Looked for in the
+  // text first, so a patch without one (a ticker's) queries nothing.
+  if (!asked && html.includes('read-again="0"')) readNow(put);
 }
 
 /**
@@ -1098,18 +1102,63 @@ function readPatchAgain(tag, put) {
 
 /** A page's request to read one of its parts again (`ReadAgain::from` in the page). */
 const PART_AGAIN = "template[data-corten-read-again][data-from]";
+/** A part the page waits for, read at once (`ReadAgain::now`). */
+const PART_NOW = 'template[data-corten-read-again="0"][data-from]';
+
+/** The elements with an id beside `tag`: the part it reads. @param {Element} tag */
+const partOf = (tag) => Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el));
 
 /**
  * The parts a page asks to have read again (`ReadAgain::from` in the page, as in a patch): each
  * such tag in `<main>` starts the same read a patch's does once the page is on the screen, and the
  * patch it answers may ask again. It lasts while the page, the tag and the elements with an id
  * beside it are there: a patch of one of them (a form's answer, which brings its own read) stops it.
+ * The parts it waits for are read at once ({@link readNow}).
  * @param {Element} main
  */
 function readPartsAgain(main) {
-  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el))]);
+  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) if (attrOf(tag, "data-corten-read-again") !== "0") readPatchAgain(tag, [tag, ...partOf(tag)]);
+  readNow([main]);
+}
+
+/**
+ * Reads the parts `roots` wait for (`<template data-corten-read-again="0" data-from>`,
+ * `ReadAgain::now`): each address once, so tags beside two parts that one read draws share it,
+ * at once, whether the tab is shown or not.
+ * @param {Element[]} roots
+ */
+function readNow(roots) {
+  /** @type {Map<string, [Element, Element[]]>} */
+  const reads = new Map();
+  for (const root of roots) for (const tag of Array.from(queryAll(root, PART_NOW))) {
+    const from = /** @type {string} */ (attrOf(tag, "data-from"));
+    let read = reads.get(from);
+    if (!read) reads.set(from, (read = [tag, []]));
+    read[1].push(...partOf(tag));
   }
+  for (const [from, [tag, waiting]] of reads) readPart(from, tag, waiting);
+}
+
+/**
+ * One read of {@link readNow}: fetches `from` as a part read again is ({@link readPatchAgain}) and
+ * applies the patch it answers. The parts it waits for are `aria-busy` until the read ends; one
+ * that brings no patch (offline, the server unreachable, an error page, a page) marks them
+ * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript gets.
+ * Nothing is drawn or marked once the page is left or one of them is replaced, and leaving the
+ * page (the tag with it) stops the fetch, so the server stops reading.
+ * @param {string} from @param {Element} tag @param {Element[]} waiting
+ */
+async function readPart(from, tag, waiting) {
+  const page = swapped;
+  for (const el of waiting) elementOwn.setAttribute.call(el, "aria-busy", "true");
+  const res = await fetch(from, { headers: { corten: "action" }, signal: signalOf(tag) }).catch(() => {});
+  const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
+  // A success that is not a patch is the app's mistake (the route answered its page).
+  if (html === undefined && res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+  const here = page === swapped && waiting.every(inPage);
+  if (html !== undefined && here) await apply(html, undefined, null, undefined, true, tag).catch(reportError);
+  for (const el of waiting) elementOwn.removeAttribute.call(el, "aria-busy");
+  if (html === undefined && here) for (const el of waiting) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
 }
 
 /**

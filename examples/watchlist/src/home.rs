@@ -33,15 +33,6 @@ pub(crate) async fn trades(State(market): State<Market>, since: LiveSince) -> Li
     corten::live_watch(market.trades.subscribe(), since, |(n, _)| *n, |(_, text)| LastTrade { text }.to_html())
 }
 
-/// Picks for the visitor, for `<corten-live src>`: one fragment, once the slow read is done, so the
-/// page is not held up by it.
-pub(crate) async fn picks(State(market): State<Market>, watching: Watching) -> LiveResponse {
-    corten::live(futures_util::stream::once(async move {
-        let picks = market.picks(&watching.ids).await;
-        PicksList { picks: &picks }.to_html()
-    }))
-}
-
 /// The watchlist screen's data: what the view shows, and what a data client gets.
 #[derive(ToJson)]
 struct Home {
@@ -56,7 +47,7 @@ struct Home {
     others: Vec<(&'static str, &'static str)>,
     message: String,
     /// The visitor's picks, when the address asks for them read in (`url::Home { picks }`);
-    /// otherwise the page draws a placeholder and `/live/picks` sends them.
+    /// otherwise the page draws them waiting and the runtime reads them from the same route.
     #[serde(skip_serializing_if = "Option::is_none")]
     picks: Option<Vec<Stock>>,
 }
@@ -96,7 +87,7 @@ fn home_view<'a>(home: &'a Home, t: Msg, notice: Option<&'a Notice>) -> impl Ren
                     <h2>"Picks for you"</h2>
                     match &home.picks {
                         Some(picks) => <PicksList picks={picks} />,
-                        None => <corten-live src={url::Picks}><PicksLoading /></corten-live>,
+                        None => <PicksLoading />,
                     }
                 </section>
             </aside>
@@ -257,16 +248,17 @@ fn LastTrade(text: &str) -> impl Render {
     html! { <p id={LastTradeId} aria-live="polite">{text}</p> }
 }
 
-/// The visitor's picks: a placeholder in the home page, replaced by the fragment `/live/picks`
-/// sends.
+/// The visitor's picks: drawn waiting in the home page, and replaced by the patch the runtime
+/// reads from the page's route.
 #[derive(Id)]
 struct PicksId;
 
-/// The picks' placeholder until `/live/picks` sends them. Its link goes to the same page with the
-/// picks read in, and shows where no stream will bring them (`picks_loading.css`): without
-/// JavaScript, which opens none, and once the stream has given up (`status="closed"`), when the
-/// line saying they are on their way is hidden instead. A browser without the `scripting` media
-/// feature shows both. `nofollow`, as the page it opens waits for the slow read.
+/// The picks waiting, with the runtime's read of them beside them (`ReadAgain::now`), which the
+/// page's own handler answers (`page`). Its link goes to the same page with the picks read in,
+/// and shows where no read will bring them (`picks_loading.css`): without JavaScript, which reads
+/// nothing, and once the read has failed (`data-corten-read-failed`), when the line saying they
+/// are on their way is hidden instead. A browser without the `scripting` media feature shows
+/// both. `nofollow`, as the page it opens waits for the slow read.
 #[component(css)]
 pub(crate) fn PicksLoading() -> impl Render {
     html! {
@@ -274,11 +266,13 @@ pub(crate) fn PicksLoading() -> impl Render {
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
         </p>
+        {ReadAgain::now(url::Home::default())}
     }
 }
 
+/// The picks, in the page that read them in and as the patch that answers the runtime's read.
 #[component]
-fn PicksList<'a>(picks: &'a [Stock]) -> impl Render {
+fn PicksList<'a>(picks: &'a [Stock]) -> impl Patch {
     html! {
         if picks.is_empty() {
             <p id={PicksId}>"You are watching every stock on the market."</p>
@@ -295,26 +289,40 @@ fn PicksList<'a>(picks: &'a [Stock]) -> impl Render {
 /// The whole watchlist screen, for a browser or a data client, with the list's cookie for a
 /// browser that had none.
 fn home_screen(req: &Req, viewer: Option<&Viewer>, watching: &mut Watching, home: &Home) -> HtmlResult {
-    let view = home_view(home, req.t(), req.notice());
-    let res = req.screen(home, html! { <Layout req={req} title="Stocks" viewer={viewer} head="">{view}</Layout> })?;
+    let res = home_document(req, viewer, home)?;
     Ok(watching.with_cookie(res))
 }
 
+/// The whole watchlist screen, for a browser or a data client.
+fn home_document(req: &Req, viewer: Option<&Viewer>, home: &Home) -> HtmlResult {
+    let view = home_view(home, req.t(), req.notice());
+    req.screen(home, html! { <Layout req={req} title="Stocks" viewer={viewer} head="">{view}</Layout> })
+}
+
+/// The watchlist, and its picks alone when the runtime reads them (`ReadAgain::now` in the page):
+/// one handler for the page and its slow part, each side reading only what it draws.
 pub(crate) async fn page(
     req: Req,
     viewer: Option<Caller<Viewer>>,
     State(market): State<Market>,
     mut watching: Watching,
     Params(at): Params<url::Home>,
-) -> HtmlResult {
-    // Read in only when the address asks: otherwise the page goes without them and its
-    // `<corten-live>` brings them once they are ready.
-    let picks = match at.picks {
-        Some(true) => Some(market.picks(&watching.ids).await),
-        _ => None,
-    };
-    let home = Home::new(&market, &watching, String::new(), picks);
-    home_screen(&req, viewer.as_deref(), &mut watching, &home)
+) -> HtmlResult<Patches> {
+    let res = req
+        .patch_or_with(
+            || async { req.patch(PicksList { picks: &market.picks(&watching.ids).await }) },
+            || async {
+                // Read in only when the address asks (the link where no read will bring them):
+                // otherwise the page goes without them and the runtime reads them.
+                let picks = match at.picks {
+                    Some(true) => Some(market.picks(&watching.ids).await),
+                    _ => None,
+                };
+                home_document(&req, viewer.as_deref(), &Home::new(&market, &watching, String::new(), picks))
+            },
+        )
+        .await?;
+    Ok(watching.with_cookie(res))
 }
 
 /// The stock a watch adds.
@@ -561,9 +569,10 @@ mod tests {
         assert!(!body.contains("HLTH") && !body.contains("trades_seen"), "only the watched stocks: {body}");
     }
 
-    /// A slow part sent once (#1264): the page goes without the picks and its `<corten-live>`
-    /// brings them; the placeholder links to the same page with them read in, for a browser
-    /// without JavaScript, which opens no stream, and for a stream that gives up.
+    /// A slow part (#1264, #1400): the page goes without the picks and draws them waiting with
+    /// the runtime's read of them beside them, which the same route answers with the picks alone;
+    /// the waiting part links to the same page with them read in, for a browser without
+    /// JavaScript, which reads nothing, and for a read that fails.
     #[tokio::test]
     async fn the_picks_come_later_or_read_in_for_a_browser_without_javascript() {
         let app = client();
@@ -571,16 +580,23 @@ mod tests {
         let page = page.text();
         assert!(
             page.contains(concat!(
-                r#"<corten-live src="/live/picks"><p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
-                r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a></p></corten-live>"#
+                r#"<p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
+                r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a></p>"#,
+                r#"<template data-corten-read-again="0" data-from="/"></template>"#
             )),
             "{page}"
         );
-        // The link's page reads them in, so it has no placeholder, stream or link for them.
+        // The runtime's read of the route gets the picks alone, as a patch: no page around them.
+        let part = app.get(&url::Home::default()).mode(Mode::Action).await;
+        assert!(part.headers().contains_key("corten-patch"), "{:?}", part.headers());
+        let part = part.text();
+        assert!(part.starts_with(r#"<ul id="picks""#) && part.contains("<li>Halcyon Health (HLTH) 0.00%</li>"), "{part}");
+        assert!(!part.contains("Watchlist") && !part.contains("<html"), "{part}");
+        // The link's page reads them in, so it has no waiting part, read or link for them.
         let read = app.get(&url::Home { picks: Some(true) }).await;
         let read = read.text();
         assert!(read.contains("<li>Halcyon Health (HLTH) 0.00%</li><li>Northgate Rail (NRTH) 0.00%</li></ul>"), "{read}");
-        assert!(!read.contains("/live/picks") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
+        assert!(!read.contains("read-again=\"0\"") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
         // A data client asks the same address for them; without it they are left out.
         let data = app.get(&url::Home { picks: Some(true) }).mode(Mode::Data).await;
         assert!(data.text().contains(r#""picks":[{"id":"HLTH","#), "{}", data.text());

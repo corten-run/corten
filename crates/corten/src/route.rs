@@ -721,11 +721,12 @@ pub use corten_macros::UrlValue;
 /// # fn main() {}
 /// ```
 ///
-/// A route a part of a page is read again from ([`crate::ReadAgain::from`]) says `patches`: the
+/// A route a part of a page is read from ([`crate::ReadAgain::from`], [`crate::ReadAgain::now`]) says `patches`: the
 /// runtime reads it with `corten: action` and can apply nothing but a patch, so its `get`
 /// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `req.patch`,
-/// `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the
-/// route is then one `ReadAgain::from` takes ([`PatchRoute`]):
+/// `req.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
+/// `req.invalid_with` make, and the route is then one `ReadAgain::from` and `ReadAgain::now`
+/// take ([`PatchRoute`]):
 ///
 /// ```
 /// use std::time::Duration;
