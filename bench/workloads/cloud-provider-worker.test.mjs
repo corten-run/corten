@@ -75,7 +75,11 @@ test("provider response reflecting a token never crosses IPC", async (t) => {
 
 test("bounded create classifications survive real worker IPC and cached teardown to public output", async (t) => {
   for (const [mode, diagnostic, requests] of [
-    ["post-link-failure", { code: "create-link" }, 1],
+    ["post-link-shape", { code: "create-link-shape" }, 1],
+    ["post-link-count", { code: "create-link-count" }, 1],
+    ["post-link-id", { code: "create-link-id" }, 1],
+    ["post-link-rel", { code: "create-link-rel" }, 1],
+    ["post-link-failure", { code: "create-link-href" }, 1],
     ["first-action-invalid", { code: "create-action-response" }, 2],
     ["pending-create", { code: "create-action-pending" }, 2],
     ["first-action-http-failure", { code: "create-action-http", httpStatus: 403 }, 2],
@@ -102,7 +106,8 @@ test("bounded create classifications survive real worker IPC and cached teardown
 test("unknown, extra or non-table IPC diagnostic values fail closed without public reflection", async (t) => {
   const raw = "SYNTHETIC_RAW_BODY";
   for (const result of [{ code: raw }, { code: "create-link", raw }, { code: "create-action-http", httpStatus: raw },
-    { code: "create-action-http", httpStatus: 499 }, { code: "create-link", httpStatus: 403 }, ["create-link"]]) {
+    { code: "create-action-http", httpStatus: 499 }, { code: "create-link", httpStatus: 403 }, ["create-link"],
+    { code: "create-link-href", raw }, { code: "create-link-id", httpStatus: 403 }, { code: "create-link-private" }]) {
     const h = harness(t, "reflect", undefined, undefined, (message) => message.ok === false ? { ...message, result } : message);
     await assert.rejects(h.run(account), (error) => {
       assert.equal(error.controlUncertain, true); assert.equal(error.providerDiagnostic, undefined);
@@ -207,8 +212,8 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   else await assert.rejects(launched, (error) => {
     assert.equal(error.controlTreeUncertain === true, mode !== "create-http-failure");
     if (mode === "post-link-failure") {
-      assert.deepEqual(error.providerDiagnostic, { code: "create-link" });
-      assert.ok(publicError(error).includes("Provider failure: create-link."));
+      assert.deepEqual(error.providerDiagnostic, { code: "create-link-href" });
+      assert.ok(publicError(error).includes("Provider failure: create-link-href."));
     }
     if (mode === "create-http-failure") {
       assert.deepEqual(error.providerDiagnostic, { code: "create-http", httpStatus: 422 });
