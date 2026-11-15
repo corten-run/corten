@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -50,7 +51,7 @@ function phaseProof(binding, folder, startedAt) {
   assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
   assert.equal(basename(phase), `${String(groupNames.indexOf(group)).padStart(2, "0")}-${group}-timing`);
   const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
-  assert.deepEqual(read("native-manifest.json"), tree(folder));
+  assert.ok(isDeepStrictEqual(read("native-manifest.json"), tree(folder)), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
   verifyHostBoundary(before, after);
   // The single fresh host has no participant containers outside the native run.
@@ -69,7 +70,7 @@ function phaseProof(binding, folder, startedAt) {
   assert.equal(result.error, null); assert.equal(result.signal, null);
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
   const browser = observation.identities.some((p) => p.type === "--type=renderer");
-  assert.deepEqual(tree(phase), beforeTree, "external phase evidence mutated");
+  assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
 
@@ -158,9 +159,9 @@ export async function inspectLiveSaved(binding, folder, group) {
         if (need(startup.provenance !== undefined, `startup-source-proof-missing:${app}`)) {
           assert.equal(startup.provenance.commit, commit); assert.equal(startup.provenance.round, round);
           assert.equal(startup.provenance.group, group);
-          assert.deepEqual(startup.provenance.code, plan.code);
+          assert.ok(isDeepStrictEqual(startup.provenance.code, plan.code), "startup code provenance differs");
           assert.equal(startup.provenance.diffSha256, plan.diffSha256);
-          assert.deepEqual(startup.provenance.sourceHashes, sourceHashes(sourceFiles, entry));
+          assert.ok(isDeepStrictEqual(startup.provenance.sourceHashes, sourceHashes(sourceFiles, entry)), "startup source hashes differ");
         }
       }
       const retained = [];
@@ -216,15 +217,15 @@ export async function inspectLiveSaved(binding, folder, group) {
           present(p[key], `native-provenance-fields-missing:${app}`);
         }
         assert.equal(p.commit, commit);
-        assert.deepEqual(p.code, plan.code); assert.equal(p.diffSha256, plan.diffSha256);
+        assert.ok(isDeepStrictEqual(p.code, plan.code), "native code provenance differs"); assert.equal(p.diffSha256, plan.diffSha256);
         assert.equal(p.contractSha256, plan.contractSha256);
-        assert.deepEqual(p.sourceHashes, sourceHashes(sourceFiles, entry), "native build input closure differs");
+        assert.ok(isDeepStrictEqual(p.sourceHashes, sourceHashes(sourceFiles, entry)), "native build input closure differs");
         assert.equal(p.sourceSha256, digest(JSON.stringify(p.sourceHashes))); assert.equal(p.imageSourceSha256, p.sourceSha256);
         sha(p.containerId); assert.match(p.imageId ?? "", /^sha256:[a-f0-9]{64}$/);
         assert.equal(p.nativePort, entry.transport);
         assert.equal(p.processTopology, entry.topology ?? "one application process; no broker, database or shared renderer");
         assert.ok(typeof p.processInventory === "string" && /^PID\s+PPID\s+COMMAND\r?\n/.test(p.processInventory));
-        if (provenance.has(app)) assert.deepEqual(p, provenance.get(app)); else provenance.set(app, p);
+        if (provenance.has(app)) assert.ok(isDeepStrictEqual(p, provenance.get(app)), "native build provenance differs"); else provenance.set(app, p);
       }
     }
     // Run the committed native validator over the entire tree, not only passing cells.

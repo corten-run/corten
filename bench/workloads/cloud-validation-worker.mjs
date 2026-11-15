@@ -1,8 +1,42 @@
+// Built-ins only until every captured source is checked and the deny-unlisted
+// loader is installed. No filesystem entry or package loader is evaluated.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { isBuiltin, registerHooks } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
 try {
-  const native = await import("./isolated/campaign-verify.mjs");
+  assert.deepEqual(Object.keys(workerData).sort(), ["input", "root", "sources"]);
+  const { input, root, sources } = workerData, base = new URL(root);
+  assert.equal(base.protocol, "file:"); assert.ok(base.href.endsWith("/"));
+  assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
+  assert.match(input.commit, /^[a-f0-9]{40}$/);
+  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= 200);
+  const approved = new Map(); let total = 0;
+  for (const row of sources) {
+    assert.deepEqual(Object.keys(row).sort(), ["path", "sha256", "source"]);
+    assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|node_modules\/typescript\/lib\/typescript\.js)$/.test(row.path));
+    assert.equal(typeof row.source, "string");
+    total += Buffer.byteLength(row.source); assert.ok(total <= 24 * 1024 * 1024);
+    assert.equal(createHash("sha256").update(row.source).digest("hex"), row.sha256);
+    const url = new URL(row.path, base).href;
+    assert.ok(!approved.has(url)); approved.set(url, row.source);
+  }
+  const self = approved.get(new URL("bench/workloads/cloud-validation-worker.mjs", base).href);
+  assert.equal(import.meta.url, "data:text/javascript;base64," + Buffer.from(self).toString("base64"));
+  const typescript = new URL("node_modules/typescript/lib/typescript.js", base).href;
+  registerHooks({ resolve(specifier, context, nextResolve) {
+    if (isBuiltin(specifier)) return nextResolve(specifier, context);
+    const url = specifier === "typescript" ? typescript : new URL(specifier, context.parentURL).href;
+    assert.ok(approved.has(url), "validation-unapproved-import");
+    return { url, shortCircuit: true };
+  }, load(url, context, nextLoad) {
+    if (isBuiltin(url)) return nextLoad(url, context);
+    assert.ok(approved.has(url), "validation-unapproved-import");
+    return { format: url === typescript ? "commonjs" : "module", source: approved.get(url), shortCircuit: true };
+  } });
+  const native = await import(new URL("bench/workloads/isolated/campaign-verify.mjs", base).href);
   if (typeof native.validateCampaign !== "function") throw new Error("validator unavailable");
-  const report = await native.validateCampaign(Object.freeze(workerData));
+  const report = await native.validateCampaign(Object.freeze(input));
   parentPort.postMessage({ ok: true, report });
 } catch { parentPort.postMessage({ ok: false }); }

@@ -1,6 +1,7 @@
 // The caller validates the binding and seals/checks the entire physical folder.
 // Only this committed native validator may replay evidence. Never import saved code.
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
@@ -77,7 +78,7 @@ export async function inspectSaved(binding, folder) {
       assert.equal(value.timeoutMs, effective.timeoutMs);
     }
     keys(output.cells, apps); keys(output.builds, apps); keys(native.cells, apps);
-    assert.deepEqual(read("native/build.json"), output.builds);
+    assert.ok(isDeepStrictEqual(read("native/build.json"), output.builds), "native build evidence differs");
     assert.deepEqual(read("native/workload.json"), binding.execution.settings);
     let contextsClosed = true;
     for (const row of result.outcomes) {
@@ -106,8 +107,8 @@ export async function inspectSaved(binding, folder) {
     if (!native.sources) { sourceComplete = false; block("source-byte-closure-missing"); }
     else {
       const before = read("evidence/source-before.json"), after = read("evidence/source-after.json");
-      assert.deepEqual(before.entries, after.entries);
-      assert.deepEqual(native.sources.files, before.entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })));
+      assert.ok(isDeepStrictEqual(before.entries, after.entries), "native source snapshot mutated");
+      assert.ok(isDeepStrictEqual(native.sources.files, before.entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }))), "native source files differ");
       const expected = new Map(binding.sources.files.map((f) => [f.path, f]));
       const seen = new Set();
       for (const file of native.sources.files) {

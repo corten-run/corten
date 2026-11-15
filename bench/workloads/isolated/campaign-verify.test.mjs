@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { mock, test } from "node:test";
 import * as contracts from "./campaign-contract.mjs";
 import * as evidence from "./evidence.mjs";
-import { groupNames } from "../registry.mjs";
+import { groupNames, selectedApps } from "../registry.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import { catalogResult } from "./test-fixtures/catalog.mjs";
@@ -20,6 +20,7 @@ const plan = { round, commit, campaignSha256: "fixed-unit-plan", order: [...grou
   validation: { artifactRoot: `bench/${group}/results/${round}` },
 })) };
 const catalog = plan.bindings[0], catalogGroup = groupDescriptor("catalog-page");
+let expectedPlan = plan;
 Object.assign(catalog.request, { round: "c77", commit }); catalog.selection = { apps: catalogGroup.apps };
 catalog.execution.effectiveOptions = catalogOptions(["c77", "--group", "catalog-page", "--build"], Object.fromEntries(catalogGroup.apps.map((a) => [a, {}])));
 catalog.resources = { expectedCpus: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }) };
@@ -29,7 +30,7 @@ function jsonPhase(p, phase) {
   binding.validation.artifactRoot += `-${phase}`; return binding;
 }
 mock.module("./campaign-contract.mjs", { namedExports: { ...contracts, jsonPhase,
-  validateCampaign(value) { assert.deepEqual(value, plan); },
+  validateCampaign(value) { assert.deepEqual(value, expectedPlan); },
 } });
 let nativeMode = "blocked";
 mock.module("./evidence.mjs", { namedExports: { ...evidence, inspectEvidence(binding, native) {
@@ -148,6 +149,52 @@ function mutateEvent(request, kind, update) {
   const path = evidence.tree(join(request.folder, id)).entries.find((e) => e.path.endsWith(`-${kind}.json`)).path;
   mutate(request, path, update);
 }
+test("saved group scope comes only from the rebound plan; foreign, missing, edited or downgraded groups are invalid", async () => {
+  const legacy = await validateCampaign(archive()); assert.equal(legacy.schema, "benchmark-isolated-campaign-inspection/v1");
+  function stoppedGroup(group, changePlan = () => {}, changeStatus = () => {}) {
+    expectedPlan = { ...plan, schema: contracts.groupCampaignSchema, order: [group], bindings: plan.bindings.filter((b) => b.request.group === group)
+      .map((b) => ({ ...b, selection: { apps: selectedApps(group), contractSha256: "synthetic-contract" } })) };
+    const folder = join(temporary, String(serial++)), directory = join(folder, id); mkdirSync(directory, { recursive: true });
+    const save = (path, value) => writeFileSync(join(folder, path), JSON.stringify(value));
+    const status = { schema: "benchmark-isolated-campaign-status/v1", campaign: id, round, campaignSha256: plan.campaignSha256,
+      executionVersion: 3, state: "preserved-uncertain", controllerReady: false, isolation: "unverified",
+      outcomes: [{ group, outcome: "not-run" }], uncollectedNativeRoots: [] };
+    changeStatus(status);
+    const savedPlan = structuredClone(expectedPlan); changePlan(savedPlan);
+    save(".host-attempt.json", { schema: "benchmark-isolated-campaign-reservation/v1", id, commit, campaignSha256: plan.campaignSha256 });
+    save(`${id}/plan.json`, savedPlan);
+    save(`${id}/campaign-result.json`, { status, deletionAuthorized: false, wholeHostTerminal: "parent-must-observe" });
+    for (const [sequence, kind] of ["authorized", "started", "halted"].entries()) save(`${id}/${String(sequence).padStart(5, "0")}-${kind}.json`, {
+      schema: "benchmark-isolated-campaign-event/v1", sequence, kind, campaign: id, round, campaignSha256: plan.campaignSha256, status,
+    });
+    save(`${id}/collection-manifest.json`, { status, manifest: evidence.tree(directory) });
+    return { folder, round, commit };
+  }
+  try {
+    for (const group of groupNames) {
+      const request = stoppedGroup(group), before = evidence.tree(request.folder), result = await validateCampaign(request);
+      assert.equal(result.status, "blocked", JSON.stringify(result));
+      assert.equal(result.schema, "benchmark-isolated-group-campaign-inspection/v1");
+      assert.deepEqual(Object.keys(result).sort(), Object.keys(legacy).sort(), "no new top-level group field");
+      assert.deepEqual(result.selection.groups.map((r) => r.group), [group]); assert.deepEqual(result.groups, []);
+      assert.equal(result.qualified, false); assert.equal(result.deletionAuthorized, false);
+      assert.deepEqual(evidence.tree(request.folder), before);
+    }
+    for (const change of [
+      (p) => { p.schema = "benchmark-isolated-campaign/v1"; },
+      (p) => { p.order = ["foreign"]; }, (p) => { p.order = []; },
+      (p) => { p.bindings = []; }, (p) => { p.bindings[0].selection.apps.pop(); },
+      (p) => { p.bindings[0].execution.invocation.argv.push("--apps", "corten"); },
+      (p) => { p.bindings[0].execution.effectiveOptions.duration = 1; },
+    ]) assert.equal((await validateCampaign(stoppedGroup("catalog-page", change))).status, "invalid");
+    for (const change of [
+      (s) => { s.outcomes = []; }, (s) => { s.outcomes[0].group = "json-api"; },
+      (s) => { s.outcomes.push({ group: "json-api", outcome: "not-run" }); },
+      (s) => { s.executionVersion = 2; }, (s) => { delete s.executionVersion; },
+    ]) assert.equal((await validateCampaign(stoppedGroup("catalog-page", undefined, change))).status, "invalid");
+  } finally { expectedPlan = plan; }
+  assert.equal((await validateCampaign(archive())).schema, "benchmark-isolated-campaign-inspection/v1");
+});
 test("adjacent and collection rehashes cannot replace journal-bound native bytes", async () => {
   for (const phase of ["00-catalog-page-timing", "01-json-api-prepare", "01-json-api-timing", "02-localized-marketplace-timing"]) {
     const request = archive(); appendFileSync(join(request.folder, id, phase, "native", "raw.log"), "REPLACED NATIVE BYTES\n");
