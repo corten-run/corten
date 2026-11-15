@@ -4654,32 +4654,40 @@ async function run(browser) {
       const traverse = (way) =>
         scope.evaluate((way) => /** @type {any} */ (window).navigation[way]().finished.then(() => location.pathname + location.search, (/** @type {unknown} */ e) => String(e)), way);
       // The answer's headers are in and its body held: the address is the page's until the answer
-      // is drawn.
+      // is drawn, which it is when the address is pushed.
       const first = await entries();
-      let during = { at: "", shown: "" };
+      let during = { reading: false, at: "", shown: "" };
       const drawn = await answered(async () => {
         await scope.evaluate(() => {
           const text = Response.prototype.text;
           /** @type {(value?: unknown) => void} */
           let release = () => {};
           const held = new Promise((resolve) => (release = resolve));
-          Object.assign(window, { __release: release, __reading: false });
+          Object.assign(window, { __release: release, __reading: false, __atPush: null });
           Response.prototype.text = function () {
             if (!this.headers.has("corten-patch")) return text.call(this);
             Response.prototype.text = text;
             Object.assign(window, { __reading: true });
             return held.then(() => text.call(this));
           };
+          const push = history.pushState;
+          history.pushState = function (...args) {
+            history.pushState = push;
+            Object.assign(window, { __atPush: document.querySelector("#smoke-scope output")?.textContent });
+            return push.apply(this, args);
+          };
         });
         await scope.getByRole("button", { name: "Week", exact: true }).click();
-        await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).catch(() => {});
-        during = { at: await at(), shown: (await shown()) ?? "" };
+        const reading = await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
+        during = { reading, at: await at(), shown: (await shown()) ?? "" };
         await scope.evaluate(() => /** @type {any} */ (window).__release());
       });
-      const pushed = { during, drawn, at: await at(), added: (await entries()) - first, shown: await shown() };
+      const atPush = await scope.evaluate(() => /** @type {any} */ (window).__atPush);
+      const pushed = { during, drawn, atPush, at: await at(), added: (await entries()) - first, shown: await shown() };
       check(
         "a data-address form's patch puts the address it asked for in a new history entry once it is drawn, not when its answer arrives",
-        pushed.during.at === "/smoke/scope" && pushed.during.shown === "all" && pushed.drawn && pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
+        pushed.during.reading && pushed.during.at === "/smoke/scope" && pushed.during.shown === "all" && pushed.drawn && pushed.atPush === "week" &&
+          pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
         JSON.stringify(pushed),
       );
       // Back and Forward: the patch again, the rest of the screen kept.
@@ -4693,6 +4701,61 @@ async function run(browser) {
         back.at === "/smoke/scope" && back.shown === "all" && back.asked.join() === "action " &&
           forward.at === "/smoke/scope?scope=week" && forward.shown === "week" && forward.asked.join() === "action ?scope=week" && kept,
         JSON.stringify({ back, forward, kept }),
+      );
+      // A traversal superseded while its patch read is on its way (before its headers, then while
+      // its body is read) draws nothing and reads no page: the screen is the newer one's.
+      /** @param {"headers" | "body"} phase */
+      const superseded = async (phase) => {
+        const start = { at: await at(), shown: await shown() };
+        const own = (/** @type {URL} */ url) => url.pathname === "/smoke/scope";
+        /** @type {() => void} */
+        let release = () => {};
+        const held = new Promise((resolve) => (release = () => resolve(undefined)));
+        let first = true;
+        if (phase === "headers")
+          await scope.route(own, async (route) => {
+            if (!first || route.request().headers()["corten"] !== "action") return route.continue();
+            first = false;
+            await held;
+            await route.continue().catch(() => {});
+          });
+        else
+          await scope.evaluate(() => {
+            const text = Response.prototype.text;
+            /** @type {(value?: unknown) => void} */
+            let letGo = () => {};
+            const waiting = new Promise((resolve) => (letGo = resolve));
+            Object.assign(window, { __release: letGo, __reading: false });
+            Response.prototype.text = function () {
+              if (!this.headers.has("corten-patch")) return text.call(this);
+              Response.prototype.text = text;
+              Object.assign(window, { __reading: true });
+              return waiting.then(() => text.call(this));
+            };
+          });
+        asked.length = 0;
+        const sent = scope.waitForRequest((r) => own(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+        await scope.evaluate(() => void (/** @type {any} */ (window).navigation.back()));
+        const out =
+          phase === "headers" ? await sent : await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
+        const went = await traverse("forward");
+        if (phase === "headers") release();
+        else await scope.evaluate(() => /** @type {any} */ (window).__release());
+        await scope.waitForTimeout(300);
+        if (phase === "headers") await scope.unroute(own);
+        return { out, start, went, at: await at(), shown: await shown(), asked: asked.splice(0) };
+      };
+      const early = await superseded("headers");
+      const reading = await superseded("body");
+      // Judged by where the screen ends, not by the newer traversal's `finished`: WebKit 27.2 rejects
+      // it with an AbortError too when it supersedes another traversal, with no runtime on the page,
+      // though it lands.
+      const stays = (/** @type {Awaited<ReturnType<typeof superseded>>} */ s) =>
+        s.out && s.at === s.start.at && s.shown === s.start.shown && s.asked.length === 2 && s.asked.every((a) => a.startsWith("action "));
+      check(
+        "a data-address traversal superseded before its patch's headers or during its body draws nothing and reads no page",
+        stays(early) && stays(reading),
+        JSON.stringify({ early, reading }),
       );
       // The same address again: its answer is asked and drawn, and no new entry is made.
       const before = await entries();
@@ -4721,10 +4784,13 @@ async function run(browser) {
       // redirect (`corten-location`, as Corten answers one to the runtime).
       /**
        * Sends the form as `button`, goes back to the entry it was sent from with the patch read of
-       * `url` answered by `answer`, and says what was asked and drawn.
+       * `url` answered by `answer`, and says what was asked and drawn. `claim`: the page read draws
+       * takes focus for its unmarked form's button as its content is put in `<main>`, as a page's
+       * own script may.
        * @param {string} button @param {string} search @param {import("@playwright/test").RouteFulfillOptions} answer
+       * @param {boolean} [claim]
        */
-      const backFrom = async (button, search, answer) => {
+      const backFrom = async (button, search, answer, claim = false) => {
         await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
         const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
         await scope.route(from, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill(answer) : route.continue()));
@@ -4732,9 +4798,22 @@ async function run(browser) {
         // Focus outside the part, which a page read leaves at the document's start, as Back to any
         // other page does.
         await scope.focus("header a");
+        if (claim)
+          await scope.evaluate(() => {
+            const panel = document.getElementById("smoke-scope");
+            const seen = new MutationObserver(() => {
+              if (document.getElementById("smoke-scope") === panel) return;
+              seen.disconnect();
+              /** @type {HTMLElement | null} */ (document.querySelector("main form:not(#smoke-scope form) button"))?.focus();
+            });
+            seen.observe(/** @type {Element} */ (document.querySelector("main")), { childList: true, subtree: true });
+          });
         const went = await traverse("back");
         await scope.unroute(from);
-        const focus = await scope.evaluate(() => document.activeElement?.localName);
+        const focus = await scope.evaluate(() => {
+          const el = document.activeElement;
+          return el?.localName === "button" ? el.textContent?.trim() : el?.localName;
+        });
         return { at: went, shown: await shown(), asked: asked.splice(0), focus };
       };
       const failed = await backFrom("Day", "?scope=week", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" });
@@ -4781,6 +4860,14 @@ async function run(browser) {
         "Back to a data-address form's entry whose patch read is a 500 with a patch reads the page instead",
         refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day" && refused.focus === "body",
         JSON.stringify(refused),
+      );
+      // A page that gives a control focus as it is drawn keeps it: only focus the read left where it
+      // was goes to the document's start.
+      const claimed = await backFrom("Week", "?scope=day", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" }, true);
+      check(
+        "Back to a data-address form's entry read as a page leaves focus the page gave a control as it was drawn",
+        claimed.at === "/smoke/scope?scope=day" && claimed.shown === "day" && claimed.asked.join() === "action ?scope=day,nav ?scope=day" && claimed.focus === "Year, in place",
+        JSON.stringify(claimed),
       );
       // A patch whose body is cut off after its headers: the page is read. The body's read is made
       // to fail once, as a dropped connection fails it.

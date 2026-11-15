@@ -2731,11 +2731,13 @@ function address(to, patched) {
  * @param {URL} url @param {AbortSignal} signal
  */
 async function readAddress(url, signal) {
-  // A page read: the traversal kept focus for the patch, so it goes where the browser would have
-  // put it for a page, the document's start.
+  // A page read: the traversal kept focus for the patch, so focus the swap left where it was (outside
+  // `<main>`) goes where the browser puts it for a page, the document's start. Focus the page gave a
+  // control of its own as it was drawn stays.
   const page = async () => {
+    const was = document.activeElement;
     await visit(url, signal, undefined, false, undefined, undefined, stale);
-    if (!signal.aborted && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    if (!signal.aborted && was instanceof HTMLElement && document.activeElement === was) was.blur();
   };
   const res = await fetch(url, { headers: { corten: "action" }, signal }).catch(() => null);
   signal.throwIfAborted();

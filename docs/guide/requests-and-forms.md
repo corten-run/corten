@@ -1781,10 +1781,12 @@ fn ScopePanel<'a>(scope: Scope, rows: &'a [Sale]) -> impl Patch {
 The handler answers both with `req.patch_or`, the panel with JavaScript and the page otherwise.
 Back asks it at every address the forms put in the address bar and at the one they were sent from,
 so the patch draws everything an address changes: the part, and the form with it, whose controls
-then show the scope the part does. A route whose patch adds to the page (`view::Append`, Load
-more's) is not one to mark: Back would add the rows again. The page's other links and forms keep
-the address they were drawn with; one that should carry the scope is drawn by the same patch, or
-keeps the address's query (`keep_query`). The mark needs the Navigation API
+then show the scope the part does, except a field the user changed and did not send, which keeps
+what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patches)). A route
+whose patch adds to the page (`view::Append`, Load more's) is not one to mark: Back would add the
+rows again. The page's other links and forms keep the address they were drawn with; one that
+should carry the scope is drawn by the same patch, or keeps the address's query (`keep_query`).
+The mark needs the Navigation API
 ([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
 loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything
 but a `<form>`, on a form without `data-patch`, and on one whose `method` posts; a
