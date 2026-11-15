@@ -3052,7 +3052,9 @@ rules something out.
     script. While the read is on its way the runtime marks the elements with an id beside the tag
     `aria-busy="true"`, as it does a form and a navigation, and removes it when the read ends; a
     read that ends without a patch (offline, the server unreachable, an error page, a page) marks
-    them `data-corten-read-failed`. Not `aria-busy="false"`: busy says an element is being
+    them `data-corten-read-failed`, as does one whose parts were not all still there when its patch
+    was ready to draw (one replaced or removed while it was on its way), which is not applied over
+    them. Not `aria-busy="false"`: busy says an element is being
     updated, and false is also the state of every element that is not, so a part that read fine
     but was not replaced (an empty patch) would look failed. A `data-` attribute, as Values 2
     extends a standard: the waiting element is the app's, any element, where an attribute of

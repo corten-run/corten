@@ -3932,6 +3932,85 @@ async function run(browser) {
   });
   await page.unroute("**/smoke/duo");
 
+  // One of two parts that share a read removed while it is on its way: the read goes on for the
+  // other, which is not drawn over the gap but marked failed, so its link shows, not left busy
+  // with nothing coming (#1400).
+  let releaseDuo = () => {};
+  const duoHeld = new Promise((resolve) => (releaseDuo = () => resolve(undefined)));
+  let duoAsked = () => {};
+  const duoSent = new Promise((resolve) => (duoAsked = () => resolve(undefined)));
+  let duoAborted = false;
+  await page.route("**/smoke/duo-held", async (route) => {
+    duoAsked();
+    await duoHeld;
+    await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="duo-c">C</p><p id="duo-d">D</p>' }).catch(() => (duoAborted = true));
+  });
+  await page.evaluate(async () => {
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="duo-3"></div><div id="duo-4"></div>'));
+    const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+    const waiting = (/** @type {string} */ box, /** @type {string} */ part) =>
+      `<div id="${box}"><p id="${part}">Waiting</p><template data-corten-read-again="0" data-from="/smoke/duo-held"></template></div>`;
+    await corten.patch(__html(waiting("duo-3", "duo-c") + waiting("duo-4", "duo-d")));
+  });
+  await Promise.race([duoSent, page.waitForTimeout(5000)]);
+  await page.evaluate(() => document.getElementById("duo-3")?.remove());
+  releaseDuo();
+  await page.waitForSelector("#duo-d[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+  check(
+    "a part whose shared read lost its other part is marked failed, not left busy",
+    (await page.textContent("#duo-d")) === "Waiting" && !duoAborted && (await page.$("#duo-d[data-corten-read-failed]:not([aria-busy])")) !== null,
+    `${await page.textContent("#duo-d")}, aborted ${duoAborted}, ${await page.evaluate(() => document.getElementById("duo-d")?.outerHTML)}`,
+  );
+  await page.evaluate(() => document.getElementById("duo-4")?.remove());
+  await page.unroute("**/smoke/duo-held");
+
+  // A part replaced while its read's patch waits for a stylesheet it links: the patch, drawn for
+  // the part as it was, is not drawn over the one now there (#1400).
+  let releaseSheet = () => {};
+  const sheetHeld = new Promise((resolve) => (releaseSheet = () => resolve(undefined)));
+  let sheetAsked = () => {};
+  const sheetSent = new Promise((resolve) => (sheetAsked = () => resolve(undefined)));
+  await page.route("**/smoke/late-sheet.css", async (route) => {
+    sheetAsked();
+    await sheetHeld;
+    await route.fulfill({ status: 200, contentType: "text/css", body: "" }).catch(() => {});
+  });
+  await page.route("**/smoke/late-part", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+      body: '<link rel="stylesheet" data-corten-style href="/smoke/late-sheet.css"><p id="late-a">Drawn</p>',
+    }),
+  );
+  await page.evaluate(async () => {
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="late-1"></div>'));
+    const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+    await corten.patch(__html('<div id="late-1"><p id="late-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/late-part"></template></div>'));
+  });
+  await Promise.race([sheetSent, page.waitForTimeout(5000)]);
+  await page.evaluate(() => {
+    const fresh = document.createElement("p");
+    fresh.id = "late-a";
+    fresh.textContent = "Fresh";
+    document.getElementById("late-a")?.replaceWith(fresh);
+  });
+  releaseSheet();
+  await page.waitForFunction(() => !document.querySelector("#late-1 [aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(200);
+  check(
+    "a part replaced while its read's stylesheet loads keeps what replaced it",
+    (await page.textContent("#late-a")) === "Fresh" && (await page.$("#late-a[data-corten-read-failed], #late-1 [aria-busy]")) === null,
+    `${await page.evaluate(() => document.getElementById("late-1")?.innerHTML)}`,
+  );
+  // The stylesheet stays in the head once loaded, as a section's does; the checks that count those
+  // must not count it.
+  await page.evaluate(() => {
+    document.getElementById("late-1")?.remove();
+    document.head.querySelector('link[href="/smoke/late-sheet.css"]')?.remove();
+  });
+  await page.unroute("**/smoke/late-part");
+  await page.unroute("**/smoke/late-sheet.css");
+
   // <corten-live> shows its connection: connecting, live once open, reconnecting (with when it
   // dropped) when the stream breaks, closed when the server answers it with no stream.
   let flaky = 0;

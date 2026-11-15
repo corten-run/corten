@@ -290,7 +290,9 @@ Corten's own in the URL. The component's CSS hides the link while a read may sti
 part, and shows it in place of the line saying the part is on its way under
 `@media (scripting: none)` and once the read has failed: a read that brings no patch (offline,
 the server unreachable, an error page) marks the waiting elements `data-corten-read-failed`. A read
-that brings a patch is not a failure, even one that leaves the part as it was. A browser without
+that brings a patch is not a failure, even one that leaves the part as it was. One of the parts
+replaced or removed while the read was on its way (a form's answer, a script) is not drawn over:
+the patch is not applied, and the parts still waiting are marked failed, so their links show. A browser without
 the `scripting` media feature matches neither query and shows both. The query follows whether
 scripts are on, not whether the runtime ran
 ([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with

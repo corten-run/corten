@@ -991,7 +991,9 @@ export function patch(html, signal) {
 /**
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
- * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {string} html @param {{ readonly aborted: boolean } | undefined} signal read once, after the
+ *   patch's modules and stylesheets have loaded and before anything changes: whether to stop
+ * @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
@@ -1129,37 +1131,50 @@ function readPartsAgain(main) {
  * @param {Element[]} roots
  */
 function readNow(roots) {
-  /** @type {Map<string, [Element, Element[]]>} */
+  /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
   for (const root of roots) for (const tag of Array.from(queryAll(root, PART_NOW))) {
     const from = /** @type {string} */ (attrOf(tag, "data-from"));
     let read = reads.get(from);
-    if (!read) reads.set(from, (read = [tag, []]));
+    if (!read) reads.set(from, (read = [[], []]));
+    read[0].push(tag);
     read[1].push(...partOf(tag));
   }
-  for (const [from, [tag, waiting]] of reads) readPart(from, tag, waiting);
+  for (const [from, [tags, waiting]] of reads) readPart(from, tags, waiting);
 }
 
 /**
  * One read of {@link readNow}: fetches `from` as a part read again is ({@link readPatchAgain}) and
- * applies the patch it answers. The parts it waits for are `aria-busy` until the read ends; one
- * that brings no patch (offline, the server unreachable, an error page, a page) marks them
- * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript gets.
- * Nothing is drawn or marked once the page is left or one of them is replaced, and leaving the
- * page (the tag with it) stops the fetch, so the server stops reading.
- * @param {string} from @param {Element} tag @param {Element[]} waiting
+ * applies the patch it answers. The parts it waits for are `aria-busy` until the read ends. The
+ * patch is drawn only if, once its modules and stylesheets have loaded, the page is the one that
+ * asked and every part it waits for is still there: a page left, or a part replaced (a form's
+ * answer) or removed while it was on its way, is not drawn over. On the page that asked, every
+ * waiting part still there when the read ends without drawing (offline, the server unreachable, an
+ * error page, a page, or one of the parts gone) is marked `data-corten-read-failed`, where the app's CSS shows the link
+ * a browser without JavaScript gets, so none is left waiting for nothing. The fetch stops once
+ * every tag and part has left the page, so the server stops reading.
+ * @param {string} from @param {Element[]} tags @param {Element[]} waiting
  */
-async function readPart(from, tag, waiting) {
+async function readPart(from, tags, waiting) {
   const page = swapped;
+  const here = () => page === swapped && waiting.every(inPage);
+  // The fetch stops when the last of the tags and parts leaves (after it ends, that does nothing).
+  const stop = new AbortController();
+  const held = [...tags, ...waiting];
+  let left = held.length;
+  for (const el of held) signalOf(el).addEventListener("abort", () => --left || stop.abort());
   for (const el of waiting) elementOwn.setAttribute.call(el, "aria-busy", "true");
-  const res = await fetch(from, { headers: { corten: "action" }, signal: signalOf(tag) }).catch(() => {});
+  const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
   const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
   // A success that is not a patch is the app's mistake (the route answered its page).
   if (html === undefined && res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
-  const here = page === swapped && waiting.every(inPage);
-  if (html !== undefined && here) await apply(html, undefined, null, undefined, true, tag).catch(reportError);
+  let drew = false;
+  // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
+  // changes anything: the check is made then, and says whether it drew.
+  const ask = { get aborted() { return !(drew = here()); } };
+  if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0]).catch(reportError);
   for (const el of waiting) elementOwn.removeAttribute.call(el, "aria-busy");
-  if (html === undefined && here) for (const el of waiting) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
+  if (!drew && page === swapped) for (const el of waiting) if (inPage(el)) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
 }
 
 /**
