@@ -75,6 +75,10 @@ Its observation is bounded to 45 minutes, checks cancellation and preserves the
 running host on timeout or an invalid observation. A failed admission or
 cancellation leaves every later group visibly `not-admitted`, not silently omitted
 or automatically retried. The complete reserved roster remains mandatory.
+Later groups must also be observed nonterminal before running admission is saved.
+A job already terminal at that observation remains in its saved `starting` state
+for ordinary collection, rather than admitting another host from a false running
+claim. This does not discard a fast completed job's evidence or permit a restart.
 
 Each production controller runs on a separate worker event loop. Worker entry and
 dependency modules execute captured, hash-checked source bytes with a deny-unlisted
@@ -102,6 +106,16 @@ their coarse phase codes, including `create-link`. No rejected provider values a
 retained or forwarded. These diagnostics do not identify the cause of historical
 failures whose rejected responses were not retained, or change any acceptance,
 completion, ownership, retry or cleanup gate.
+
+Failures inside the production composition also retain one closed `controllerStage`
+code: `source-plan`, `exact-approval`, `remote-main-advertisement`,
+`remote-main-fetch`, `remote-main-ancestry`, `source-recheck`,
+`controller-construction`, `controller-launch`, `controller-collect`,
+`controller-audit`, `controller-checkpoint` or `provider-settlement`.
+The stage identifies the failing operation, not its cause or whether a host exists.
+Only an own data property from that vocabulary crosses the worker boundary;
+unknown values and accessors are not forwarded. It adds no retry, cleanup or
+launch authority. Raw Git errors, URLs, arguments and stderr remain private.
 
 The href diagnostic can additionally classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,

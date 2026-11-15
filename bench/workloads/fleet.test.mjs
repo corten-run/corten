@@ -617,13 +617,31 @@ test("captured worker omits malformed diagnostics and never invokes diagnostic a
   });
 });
 
+test("captured worker retains only closed controller stages alongside provider diagnostics", async (t) => {
+  for (const stage of ["source-plan", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry", "controller-construction", "controller-launch", "provider-settlement"]) {
+    await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE'), {controllerStage:${JSON.stringify(stage)}});`), (error) => {
+      assert.equal(error.controllerStage, stage);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("PRIVATE_MESSAGE")); return true;
+    });
+  }
+  for (const body of [
+    `throw Object.assign(new Error('PRIVATE_MESSAGE'),{controllerStage:'PRIVATE_STAGE'});`,
+    `const error=new Error('PRIVATE_MESSAGE'); Object.defineProperty(error,'controllerStage',{get(){throw new Error('PRIVATE_GETTER');}}); throw error;`,
+  ]) await assert.rejects(capturedFailure(t, body), (error) => {
+    assert.equal(error.controllerStage, undefined); assert.equal(error.message, "group-operation-failed"); return true;
+  });
+});
+
 test("worker protocol rejects malformed diagnostics, unexpected fields and unsettled results", async (t) => {
   const base = { schema: "benchmark-group-fleet-worker-result/v1", error: "group-operation-failed", uncertain: false };
   for (const [message, exit, count] of [
     [{ ...base, providerDiagnostic: { code: "PRIVATE_CODE" } }, 0, 1],
     [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429, raw: "PRIVATE" } }, 0, 1],
+    [{ ...base, controllerStage: "PRIVATE_STAGE" }, 0, 1],
+    [{ ...base, controllerStage: { raw: "PRIVATE_STAGE" } }, 0, 1],
     [{ ...base, extra: "PRIVATE" }, 0, 1],
     [{ schema: base.schema, code: 3, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 0, 1],
+    [{ schema: base.schema, code: 3, controllerStage: "controller-launch" }, 0, 1],
     [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 1, 1],
     [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 0, 2],
   ]) {
@@ -645,13 +663,14 @@ test("fleet receipts retain sanitized provider failure and uncertainty without r
   for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
   const codes = ["create-request", ...["shape", "count", "id", "rel", "href"].map((predicate) => `create-link-${predicate}`)];
   flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
-    controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
+    controlTreeUncertain: true, controllerStage: "controller-launch", providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
   assert.equal(await fleetMain(approved, p.deps), 2);
   const result = p.output.at(-1);
   assert.equal(result.fullGroupQualified, false); assert.equal(result.groups.length, groupNames.length);
   for (const row of result.groups) {
     assert.equal(row.outcome, "error"); assert.equal(row.error, "group-operation-failed");
     assert.equal(row.uncertain, true, "fleet receipt must retain uncertainty");
+    assert.equal(row.controllerStage, "controller-launch");
     assert.equal(row.providerDiagnostic?.code, codes[groupNames.indexOf(row.group) % codes.length]); assert.equal(row.id, String(groupNames.indexOf(row.group) + 1));
     const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
     assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row), "saved receipt must match public row");
