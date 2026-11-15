@@ -4730,6 +4730,26 @@ async function run(browser) {
         moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day",
         JSON.stringify(moved),
       );
+      // A handler that answers the form with its page, not a patch: the page is drawn and the
+      // address follows too, and Back from it reads a page, the screen being another one now.
+      const paged = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
+      await scope.route(paged, async (route) => {
+        const headers = route.request().headers();
+        if (headers["corten"] !== "action") return route.continue();
+        await route.fulfill({ response: await route.fetch({ headers: { ...headers, corten: "nav", "accept-encoding": "identity" } }) });
+      });
+      const index = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.index);
+      const from = await index();
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      await scope.unroute(paged);
+      const page = { at: await at(), added: (await index()) - from, shown: await shown() };
+      asked.length = 0;
+      const pageBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+      check(
+        "a data-address form answered with a page puts its address in history, and Back from it reads a page",
+        page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && pageBack.at === "/smoke/scope?scope=day" && pageBack.shown === "day" && pageBack.asked.join() === "nav ?scope=day",
+        JSON.stringify({ page, pageBack }),
+      );
     }
     await scope.close();
   }

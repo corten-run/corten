@@ -3956,6 +3956,74 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
+53. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+    history once its patch is drawn, and Back and Forward between those entries read the patch
+    again.** A filter or scope that redraws one part of a screen with a GET `data-patch` form
+    left the address as it was: a reload, Back and a bookmark lost the filter, the page's other
+    forms still carried the old one, and the same form without JavaScript navigates, so the two
+    paths disagreed (README Value 3)
+    ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+    An app that pushed the address from its own script made Back to that entry read the whole
+    screen, which the patch was there to avoid (22.6 KB and 0.5 to 1 s in the issue's port, its
+    numbers, not measured here). The mark says what the form already is: its answer is the page at
+    the address it asked for. Once the patch (or a page, when the handler answers one) is drawn,
+    the runtime pushes the request's URL, the redirect's when there was one, as the browser does
+    for the form without JavaScript; the same address again adds no entry. The runtime keeps, in
+    memory, the entries of the screen such forms made and the one each was sent from, and a
+    traversal between two of them reads the destination as the form did (`corten: action`, which
+    the HTTP cache can answer) and applies its patch, the rest of the screen and the focus
+    staying. Any other answer (a page, Corten's redirect, an error, no answer) is read as a page,
+    as every other entry is, and so is every entry once another page is swapped in or the page
+    reloads. So the route at each of those addresses answers its part with `req.patch_or`, drawing
+    all the address changes; a route whose patch appends (Load more) is not one to mark.
+
+    Not chosen: a header on the patch's answer that names its address (`corten-location` with
+    replace semantics, as the issue suggested), since the same `patch_or` answers Load more and a
+    filter and only the form knows which it is, and a header of Corten's own where the form's
+    markup can say it needs a reason of its own ([Rule 10](#rule-standard-formats)); changing the
+    address for every GET `data-patch` form, which would give Load more an entry per page and an
+    address that reloads to fewer rows than the screen shows; an option to replace the entry
+    rather than push one, which no app has asked for and the browser's own form does not do; a
+    hook for a script to push the address and answer the traversal, a second way to do what the
+    mark does, with URLs written in scripts (README Value 5); and keeping each patch in memory to
+    draw on Back, which the HTTP cache does already and would show a stale part.
+
+    What it costs: the runtime is 666 bytes larger raw, 212 with gzip (15,341 to 15,553) and 181
+    with brotli (13,846 to 14,027), paid once a release by every user. A GET `data-patch` submit
+    reads one attribute, a marked one's answer pushes an entry, and a traversal looks two keys up
+    in a set. Nothing changes on the server: `html!`'s output and the request path are as they
+    were, and the check that refuses a misplaced mark runs when the markup compiles. On the
+    smoke's scope screen (a panel and 120 rows besides), Back and Forward between the form's
+    entries asked 323 bytes of body, 1,196 on the wire with headers, against 11,077 and 1,586 for
+    the page an app's own `pushState` made Back read; their times on a local server were the same
+    (7.3 against 7.6 ms medians), the read being small either way.
+
+    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
+    defaults, once each build; the traversals' bytes and times in Chromium, 40 each, alternated;
+    the request path's instructions under callgrind, three alternated runs of each build); platform
+    (`history.pushState` adds an entry the Navigation API reports and does not ask the runtime to
+    load, and a same-document traversal can be intercepted, in Chromium, Firefox and WebKit; the
+    smoke's checks in all three); reasoned (the form's mark says which answers are the page at
+    their address, which neither the handler nor the runtime can tell; an entry of the screen
+    read as a patch shows what a page read would, provided the route's patch draws all its address
+    changes, which the guide asks of a marked form's route); value (an address that names what
+    the screen shows is correct output that survives a reload, the README's conflict order 1,
+    above the bytes it costs, its 2; the form works the same with and without JavaScript, README
+    Value 3; one mark, no script, README Value 5).
+
+    Revisit when: an app needs the entry replaced rather than pushed (a slider that applies as it
+    moves); a route's type can say that its patch draws the part for its address, when `html!`
+    could refuse marking a form whose route appends, which the guide only asks today; an app needs
+    Back between such entries across a page swap or a reload; or the browsers the runtime falls
+    back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
+    mark goes.
+
+    Last checked: 2026-11-15, the runtime's size on `307d00bca` against `c9ed56785`; 2026-11-15,
+    the smoke's eight checks of the mark passing with `307d00bca`'s runtime in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), and the traversals' bytes
+    and times measured on it in Chromium 156.0.8078.4; 2026-11-15, the request path's count on
+    `307d00bca` against `c9ed56785`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
