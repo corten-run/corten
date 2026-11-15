@@ -232,10 +232,12 @@ class MarketplaceTests(TestCase):
         with patch.dict(os.environ, MARKETPLACE_SOURCE='api', API_BASE='http://example.test/base'):
             source = MarketplaceSource()
         response = Mock(status_code=200)
-        response.json.side_effect = [RECORDS['item_1'], RECORDS['item_2']]
+        first = {**RECORDS['item_1'], 'id': 'a/b ?'}
+        second = {**first, 'title': 'Changed title'}
+        response.json.side_effect = [first, second]
         source.session.get = Mock(return_value=response)
-        self.assertEqual(source.get('a/b ?')['id'], 'item_1')
-        self.assertEqual(source.get('a/b ?')['id'], 'item_2')
+        self.assertEqual(source.get('a/b ?')['title'], first['title'])
+        self.assertEqual(source.get('a/b ?')['title'], second['title'])
         self.assertEqual(source.session.get.call_count, 2)
         source.session.get.assert_called_with('http://example.test/base/marketplace/records/a%2Fb%20%3F', allow_redirects=False, timeout=10)
         response.status_code = 302

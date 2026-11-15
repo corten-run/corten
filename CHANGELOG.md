@@ -13,9 +13,27 @@ Corten is pre-1.0, so any minor version may change the API.
   its own type does not compile
   ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
 
+- **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
+  older installed compiler and the minimum version before checking the runtime's DOM types.
+  Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
+
+- Corten's own checks use TypeScript 7.0.2, matching npm's newest stable release installed by the
+  getting-started guide, and use its DOM declarations for the Navigation API. Move the
+  repository's AST checks off the removed JavaScript API, using the exactly pinned compiler's
+  unstable native parser API until a stable parsing entry point is available.
+  Keep navigation `info` checked in both the listener and its `startedBy` helper through one
+  shared narrowed event type, with compiler regression probes for both reads.
+  Select 7.0.2 explicitly through the `typescript7` npm alias; retain root TypeScript 5.9.3
+  only for benchmark tooling's classic compiler API, avoiding colliding `tsc` bins in Corten checks.
+  A broken checkout compiler directs contributors to `npm ci` in that checkout, not a global install.
+
 - Accept omitted optional `rel`/`href` fields on benchmark provider create links,
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.
+
+- Validate Django marketplace fixtures at startup and fetched records before every
+  JSON, page or write response, retaining complete numeric schema and requested-ID
+  checks without repeating validation on fixture reads or successful POSTs.
 
 - Permit one fresh complete benchmark provider census after a transient count or
   total mismatch, within the original deadline and global request limit. Partial

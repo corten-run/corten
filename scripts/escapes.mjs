@@ -8,21 +8,31 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript7/unstable/ast";
+import { parse, parseFiles } from "./typescript.mjs";
 
 /** What `text`, the file `file`, has that this check forbids, by line. @param {string} file @param {string} text @returns {string[]} */
 export function problems(file, text) {
+  return parse(file, text, (source) => problemsIn(file, text, source));
+}
+
+/** @param {string} file @param {string} text @param {ts.SourceFile} source */
+function problemsIn(file, text, source) {
   /** @type {string[]} */
   const found = [];
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, file.endsWith(".d.ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+  const visited = new Set();
   const at = (/** @type {number} */ pos) => `${file}:${source.getLineAndCharacterOfPosition(pos).line + 1}`;
   /** @param {ts.Node} node */
   const visit = (node) => {
+    const key = `${node.kind}:${node.pos}:${node.end}`;
+    if (visited.has(key)) return;
+    visited.add(key);
     // `*` and `?` are JSDoc's own spellings of it.
-    if (node.kind === ts.SyntaxKind.AnyKeyword || node.kind === ts.SyntaxKind.JSDocAllType || node.kind === ts.SyntaxKind.JSDocUnknownType) found.push(`${at(node.getStart(source))}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
-    // A node's JSDoc is not among its children.
-    for (const doc of /** @type {{ jsDoc?: ts.JSDoc[] }} */ (node).jsDoc ?? []) visit(doc);
-    ts.forEachChild(node, visit);
+    const bareQuestion = node.kind === ts.SyntaxKind.JSDocNullableType && node.getText(source) === "?";
+    if (node.kind === ts.SyntaxKind.AnyKeyword || node.kind === ts.SyntaxKind.JSDocAllType || bareQuestion) found.push(`${at(node.getStart(source))}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
+    // JSDoc can also appear among a node's children in the native API; visit it once.
+    for (const doc of node.jsDoc ?? []) visit(doc);
+    node.forEachChild(visit);
   };
   visit(source);
   for (const range of commentsOf(source)) {
@@ -40,13 +50,13 @@ export function problems(file, text) {
 function commentsOf(source) {
   /** @type {Map<number, ts.CommentRange>} */
   const all = new Map();
-  /** @param {ts.Node} node */
-  const visit = (node) => {
-    for (const range of ts.getLeadingCommentRanges(source.text, node.pos) ?? []) all.set(range.pos, range);
-    for (const range of ts.getTrailingCommentRanges(source.text, node.end) ?? []) all.set(range.pos, range);
-    for (const child of node.getChildren(source)) visit(child);
-  };
-  visit(source);
+  for (let pos = 0; pos < source.text.length;) {
+    const token = ts.getTokenAtPosition(source, pos);
+    for (const range of ts.getLeadingCommentRanges(source.text, token.pos) ?? []) all.set(range.pos, range);
+    for (const range of ts.getTrailingCommentRanges(source.text, token.end) ?? []) all.set(range.pos, range);
+    if (token.end <= pos) break;
+    pos = token.end;
+  }
   return all.values();
 }
 
@@ -56,7 +66,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .split("\0")
     // The scripts the type check covers: not the minified builds, nor the smokes' Node scripts.
     .filter((file) => /\.(js|d\.ts)$/.test(file) && !file.includes("/dist/") && !file.includes("node_modules/"));
-  const found = files.filter((file) => existsSync(join(root, file))).flatMap((file) => problems(file, readFileSync(join(root, file), "utf8")));
+  const inputs = files.filter((file) => existsSync(join(root, file))).map((file) => ({ file, text: readFileSync(join(root, file), "utf8") }));
+  const found = parseFiles(inputs, problemsIn).flat();
   if (found.length) {
     console.error(found.join("\n"));
     process.exit(1);
