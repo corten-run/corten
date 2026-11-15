@@ -122,7 +122,7 @@
 //! by describing what it sends as that type does:
 //!
 //! ```
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, AnyAnswer};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -137,6 +137,7 @@
 //!     const FORMAT: Format = Format::Json;
 //!     type Inputs = AnyInputs;
 //!     type Rows = NotAFeed;
+//!     type Kind = AnyAnswer;
 //! }
 //!
 //! impl corten::openapi::Answers for Cached {
@@ -166,7 +167,7 @@
 //! Without it, the handler does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, AnyAnswer};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -181,6 +182,7 @@
 //!     const FORMAT: Format = Format::Json;
 //!     type Inputs = AnyInputs;
 //!     type Rows = NotAFeed;
+//!     type Kind = AnyAnswer;
 //! }
 //!
 //! #[corten::routes(api = ApiRoot, openapi = ApiDoc)]

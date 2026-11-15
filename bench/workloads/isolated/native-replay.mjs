@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { groupNames } from "../registry.mjs";
@@ -97,7 +98,7 @@ export async function inspectNative(binding, folder) {
       if (group === "localized-marketplace") {
         // This fixed native API returns its fully replayed summary, not a status
         // envelope. It includes observed excluded/stopped targets, not just winners.
-        assert.deepEqual(saved, summary); assert.equal(saved.complete, true);
+        assert.ok(isDeepStrictEqual(saved, summary), "saved native summary differs"); assert.equal(saved.complete, true);
         assert.deepEqual(Object.keys(saved.apps).sort(), [...binding.selection.apps].sort());
         const outcomes = binding.selection.apps.map((app) => ({ app,
           outcome: !admitted(saved.apps[app]) || Object.values(saved.apps[app].runs).flat().some((r) => r.stopped) ? "failed" : "passed" }));
@@ -117,7 +118,7 @@ export async function inspectNative(binding, folder) {
     }
   }
   try {
-    assert.deepEqual(tree(folder), before);
+    assert.ok(isDeepStrictEqual(tree(folder), before), "native evidence mutated during replay");
     validateNativeResult(binding, result);
   } catch { throw new Error("native-evidence-mutated-or-invalid"); }
   // Raw native diagnostics are archive-controlled. Never forward their strings.

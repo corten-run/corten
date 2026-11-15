@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmdirSync, statSync, writeFileSync, writeSync } from "node:fs";
@@ -362,7 +363,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     assert.equal(seen.size, members.size);
   }
   assert.deepEqual(samples[0].processes, []);
-  assert.deepEqual(tree(directory), before);
+  assert.ok(isDeepStrictEqual(tree(directory), before), "host lifetime evidence mutated during inspection");
   const empty = (sample) => sample.processes.length === 0 && sample.groups.every((g) =>
     g.files["cgroup.procs"].trim() === "" && (g.files["cgroup.events"] ?? "").split("\n").filter((s) => s.startsWith("populated ")).join("\n") === "populated 0");
   const checks = { accounting: controlsComplete, terminal: terminal.terminal === true && terminal.command.terminal === true,
