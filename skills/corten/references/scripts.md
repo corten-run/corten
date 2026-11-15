@@ -142,6 +142,12 @@ division: end statements with `;` and keep a division on the line it continues.
    handler on it and pass the form as a ref (`ref={form}`, `js::apply(form)`). Keep the submit
    button so the form works without a script. There is no attribute for this: it is an exported
    function, in one `script!` module when several screens use it.
+   A filter or scope whose answer is one part of the screen is a GET `data-patch` form marked
+   `data-address`, its route answering with `req.patch_or(part, page)`: once the patch is drawn,
+   the address is the one it asked for (a new history entry), and Back and Forward between those
+   entries read the patch again. The patch draws everything the address changes, the form
+   included; never mark a form whose patch appends (Load more), and never call
+   `history.pushState` for it yourself (Back to such an entry reads the whole page).
 
 ## Text a script computes
 

@@ -3,7 +3,8 @@
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
 //! argument and as the value an element gives its ref, a patch drawn with this area's
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
-//! `<details>` drawn closed that a form outside each asks for again.
+//! `<details>` drawn closed that a form outside each asks for again, and a screen whose scope
+//! form's answer is the page at the address it asks for (`data-address`).
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -40,6 +41,16 @@ pub mod url {
     /// The page's `<details>` drawn open, as the answer to a form that asks for it.
     #[route("/smoke/sheet/more", get = open_more)]
     pub struct OpenMore;
+
+    /// A screen whose scope form says its answer is the page at the address it asks for
+    /// (`data-address`, #1406): with JavaScript the address answers the scope's panel as a patch,
+    /// and without it, or on a reload, the whole screen.
+    #[route("/smoke/scope", get = scope_page)]
+    #[derive(Default)]
+    pub struct Scope {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
 }
 
 /// The components the smoke's pages draw.
@@ -142,6 +153,55 @@ async fn open_more(req: Req) -> HtmlResult {
             <p>"Unfolded"</p>
         </details>
     })
+}
+
+/// The scope screen's parameter, in its address.
+#[derive(Clone, Default, Route, Fields)]
+#[route(query)]
+pub struct ScopeQuery {
+    pub scope: Option<String>,
+}
+
+#[derive(Id)]
+struct SmokeScopeId;
+
+/// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
+/// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
+/// for, and Back and Forward read this patch again.
+#[component]
+fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
+    let f = ScopeQuery::FIELDS;
+    html! {
+        <section id={SmokeScopeId}>
+            <form method="get" action={url::Scope::default()} data-patch data-address>
+                <button name={f.scope} value="day">"Day"</button>
+                <button name={f.scope} value="week">"Week"</button>
+            </form>
+            <p>"Scope: "<output>{scope}</output></p>
+        </section>
+    }
+}
+
+/// The screen: the panel, a form without the mark that draws the panel for another scope and
+/// leaves the address, and the rest of the screen, which a change of scope does not draw again.
+async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
+        req.page(html! {
+            <Layout req={&req} title="Scope" viewer={None} head="">
+                <ScopePanel scope={scope} />
+                <form method="get" action={url::Scope::default()} data-patch>
+                    <button name={ScopeQuery::FIELDS.scope} value="year">"Year, in place"</button>
+                </form>
+                <ol>
+                    for i in 0..120 {
+                        <li>"Row "{i}" of the rest of the screen, which a change of scope does not draw again."</li>
+                    }
+                </ol>
+            </Layout>
+        })
+    })
+    .await
 }
 
 #[derive(Id)]

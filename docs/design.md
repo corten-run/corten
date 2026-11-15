@@ -4049,6 +4049,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
 1. <a id="limit-navigation-api"></a>Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
    browsers do full page loads, and forms, patches and handlers still work.
+   There a `data-address` form's patch leaves the address as it is, as an unmarked form's does:
+   the runtime could put the address in, but not answer Back to it, which would show the address
+   over the screen it left.
 2. <a id="limit-whole-element-patches"></a>Patches replace whole elements: the server's markup wins, except for what the user is doing.
    A field they edited keeps its value (for the form that was sent, edited after it was sent),
    and focus and the caret move to the matching element (same id; else, inside the nearest

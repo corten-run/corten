@@ -5,6 +5,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A GET `data-patch` form marked `data-address` says its answer is the page at the address it
+  asked for: once the patch is drawn, the runtime puts that address in the address bar, in a new
+  history entry (none when it is the address already), as the browser does for the form without
+  JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
+  shared link. Back and Forward between the entries such forms made read the patch again
+  (`corten: action`, which the HTTP cache can answer) rather than the page, and an answer that
+  is not a patch is read as a page. `html!` refuses the mark on anything but a `<form>`, on a form
+  without `data-patch` and on one that posts. It needs the Navigation API; without it the address
+  stays as before
+  ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into

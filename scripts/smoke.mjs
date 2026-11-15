@@ -4610,6 +4610,129 @@ async function run(browser) {
     await sheet.evaluate(() => ["smoke-queue", "smoke-queue-spot", "smoke-queued"].forEach((id) => document.getElementById(id)?.remove()));
     await sheet.close();
   }
+  // A GET data-patch form marked data-address (#1406): its answer is the page at the address it
+  // asked for, so the address follows once the patch is drawn, not at the click, in a new history
+  // entry (none when it is the address already). Back and Forward between those entries read the
+  // patch again (`corten: action`), not the page, and the rest of the screen stays; an answer that
+  // is not a patch (a 500, a redirect) is read as a page. A reload draws the address's scope, and
+  // a form without the mark leaves the address.
+  {
+    const scope = await browser.newPage();
+    scope.on("pageerror", (e) => errors.push(`scope: ${e.message}`));
+    await scope.goto(`${base}/smoke/scope`);
+    if (!(await scope.evaluate(() => "navigation" in window))) skip("a data-address form's patch puts its address in history", "no Navigation API");
+    else {
+      /** The requests for the screen's address since the last read: how each asked (`corten`, else a document load) and its query. @type {string[]} */
+      const asked = [];
+      scope.on("request", (r) => {
+        const url = new URL(r.url());
+        if (url.pathname === "/smoke/scope") asked.push(`${r.headers()["corten"] ?? "document"} ${url.search}`);
+      });
+      const at = () => scope.evaluate(() => location.pathname + location.search);
+      const shown = () => scope.evaluate(() => document.querySelector("#smoke-scope output")?.textContent);
+      const entries = () => scope.evaluate(() => /** @type {any} */ (window).navigation.entries().length);
+      /** Does `act`, then waits until its submit's answer is drawn and the submit has ended. @param {() => Promise<unknown>} act */
+      const answered = async (act) => {
+        await scope.evaluate(() => {
+          const panel = document.getElementById("smoke-scope");
+          Object.assign(window, { __panel: panel, __forms: Array.from(document.querySelectorAll("main form")) });
+        });
+        await act();
+        await scope
+          .waitForFunction(
+            () => document.getElementById("smoke-scope") !== /** @type {any} */ (window).__panel && !(/** @type {any} */ (window).__forms.some((/** @type {Element} */ f) => f.hasAttribute("aria-busy"))),
+            undefined,
+            { timeout: 5000 },
+          )
+          .catch(() => {});
+      };
+      /** Goes back or forward, and says where the page is once the traversal has finished. @param {"back" | "forward"} way */
+      const traverse = (way) =>
+        scope.evaluate((way) => /** @type {any} */ (window).navigation[way]().finished.then(() => location.pathname + location.search, (/** @type {unknown} */ e) => String(e)), way);
+      // Held on its way: the address is the page's until the answer is drawn.
+      const week = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
+      /** @type {() => void} */
+      let release = () => {};
+      const held = new Promise((resolve) => (release = () => resolve(undefined)));
+      await scope.route(week, async (route) => {
+        await held;
+        await route.continue();
+      });
+      const first = await entries();
+      let during = "";
+      await answered(async () => {
+        const sent = scope.waitForRequest((r) => week(new URL(r.url())), { timeout: 5000 }).catch(() => null);
+        await scope.getByRole("button", { name: "Week", exact: true }).click();
+        await sent;
+        during = await at();
+        release();
+      });
+      await scope.unroute(week);
+      const pushed = { during, at: await at(), added: (await entries()) - first, shown: await shown() };
+      check(
+        "a data-address form's patch puts the address it asked for in a new history entry once it is drawn, not at the click",
+        pushed.during === "/smoke/scope" && pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
+        JSON.stringify(pushed),
+      );
+      // Back and Forward: the patch again, the rest of the screen kept.
+      await scope.evaluate(() => Object.assign(window, { __rest: document.querySelector("main ol") }));
+      asked.length = 0;
+      const back = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+      const forward = { at: await traverse("forward"), shown: await shown(), asked: asked.splice(0) };
+      const kept = await scope.evaluate(() => document.querySelector("main ol") === /** @type {any} */ (window).__rest);
+      check(
+        "Back and Forward between a data-address form's entries read its patch again (corten: action), not the page",
+        back.at === "/smoke/scope" && back.shown === "all" && back.asked.join() === "action " &&
+          forward.at === "/smoke/scope?scope=week" && forward.shown === "week" && forward.asked.join() === "action ?scope=week" && kept,
+        JSON.stringify({ back, forward, kept }),
+      );
+      // The same address again: no new entry.
+      const before = await entries();
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      const same = { at: await at(), added: (await entries()) - before, shown: await shown() };
+      check("a data-address form's answer for the address it is at adds no history entry", same.at === "/smoke/scope?scope=week" && same.added === 0 && same.shown === "week", JSON.stringify(same));
+      // A GET data-patch form without the mark draws its answer and leaves the address.
+      await answered(() => scope.getByRole("button", { name: "Year, in place", exact: true }).click());
+      const unmarked = { at: await at(), added: (await entries()) - before, shown: await shown() };
+      check("a GET data-patch form without data-address leaves the address", unmarked.at === "/smoke/scope?scope=week" && unmarked.added === 0 && unmarked.shown === "year", JSON.stringify(unmarked));
+      // A reload of the address draws its scope: the whole screen, as without JavaScript.
+      asked.length = 0;
+      await scope.reload();
+      const reloaded = { shown: await shown(), asked: asked.splice(0) };
+      check("a reload of a data-address form's address draws the page for it", reloaded.shown === "week" && reloaded.asked.join() === "document ?scope=week", JSON.stringify(reloaded));
+      // Back to an entry whose patch read answers with no patch is read as a page: a 500, then a
+      // redirect (`corten-location`, as Corten answers one to the runtime).
+      /**
+       * Sends the form as `button`, goes back to the entry it was sent from with the patch read of
+       * `url` answered by `answer`, and says what was asked and drawn.
+       * @param {string} button @param {string} search @param {import("@playwright/test").RouteFulfillOptions} answer
+       */
+      const backFrom = async (button, search, answer) => {
+        await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
+        const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
+        await scope.route(from, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill(answer) : route.continue()));
+        asked.length = 0;
+        const went = await traverse("back");
+        await scope.unroute(from);
+        return { at: went, shown: await shown(), asked: asked.splice(0) };
+      };
+      const failed = await backFrom("Day", "?scope=week", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" });
+      check(
+        "Back to a data-address form's entry whose patch read fails reads the page instead",
+        failed.at === "/smoke/scope?scope=week" && failed.shown === "week" && failed.asked.join() === "action ?scope=week,nav ?scope=week",
+        JSON.stringify(failed),
+      );
+      // The page read above began the screen again: the form's next entry is the first of it.
+      await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
+      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } });
+      check(
+        "Back to a data-address form's entry whose patch read redirects reads the page instead",
+        moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day",
+        JSON.stringify(moved),
+      );
+    }
+    await scope.close();
+  }
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");

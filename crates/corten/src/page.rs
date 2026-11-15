@@ -2103,6 +2103,59 @@ impl Req {
     /// }
     /// # let _ = App::new(url::router()).router();
     /// ```
+    ///
+    /// A GET form marked `data-address` as well says that its answer is the page at the address it
+    /// asked for (a filter or scope that draws only its part): once the patch is drawn, the runtime
+    /// puts that address in the address bar, as the browser does for the form without JavaScript,
+    /// and Back and Forward between the addresses it put there ask this handler for the patch
+    /// again (`docs/guide/requests-and-forms.md`, Filters and lists that grow).
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="get" data-patch data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {
+    /// assert!(scope().to_html().contains("data-patch data-address"));
+    /// # }
+    /// ```
+    ///
+    /// `html!` refuses the mark where the runtime would never change the address: on anything but a
+    /// `<form>`,
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <section data-patch data-address><button>"Apply"</button></section> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// on a form without `data-patch`, which the browser sends and changes the address for itself,
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="get" data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// and on a form that posts, whose answer stays at the page's address. A `method` written as an
+    /// expression is known only when the form is sent, and the runtime changes the address only for
+    /// a GET.
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="post" data-patch data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
     pub fn patch_or<For, Kind, F, Fut>(
         &self,
         view: impl crate::view::Patch,

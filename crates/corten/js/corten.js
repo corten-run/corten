@@ -1512,6 +1512,8 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const key = navigation?.currentEntry?.key;
   if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
   if (key) drawnFor = key;
+  // Another page: the entries `data-address` forms made showed the one this replaces.
+  addressed.clear();
   typedFields.clear();
   // Back or forward to an entry: what the user typed there and had not sent, put in before the
   // page joins, so a component that reads its fields as it connects reads them.
@@ -2535,7 +2537,13 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
-      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, stale) });
+      // Between two entries of this page that a `data-address` form's patch drew: its patch again,
+      // the rest of the page and the focus staying.
+      const patch = addressed.has(event.destination.key) && addressed.has(navigation?.currentEntry?.key ?? "");
+      event.intercept({
+        focusReset: patch ? "manual" : "after-transition",
+        handler: () => (patch ? readAddress(url, event.signal) : visit(url, event.signal, redirected, false, undefined, undefined, stale)),
+      });
       return;
     }
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
@@ -2685,6 +2693,46 @@ const typedIn = new Map();
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
+
+/**
+ * The history entries of the page on screen whose part a `data-address` form's patch drew for
+ * their address (and the entry each such form was sent from), by key: Back and Forward between two
+ * of them read the patch again ({@link readAddress}), not the page. A page swapped in empties it.
+ * @type {Set<string>}
+ */
+const addressed = new Set();
+
+/**
+ * Puts `to`, the address a `data-address` form asked for by GET, in the address bar once its
+ * answer is drawn, as the browser does for the form without JavaScript: in a new history entry,
+ * none when it is the address already. `patched` when the answer was a patch, so the entry it was
+ * sent from shows the same page.
+ * @param {string} to @param {boolean} patched
+ */
+function address(to, patched) {
+  const from = navigation?.currentEntry?.key;
+  if (to === location.href) return;
+  if (patched && from) addressed.add(from);
+  history.pushState(null, "", to);
+  addressed.add(navigation?.currentEntry?.key ?? "");
+}
+
+/**
+ * Back or forward between entries of this page that `data-address` forms' patches drew
+ * ({@link addressed}): the entry's address is read as the form read it (`corten: action`), so the
+ * HTTP cache can answer it, and its patch is drawn. An answer that is not a patch from here (a
+ * page, a redirect, an error, none) is read again as a page, as for any other entry.
+ * @param {URL} url @param {AbortSignal} signal
+ */
+async function readAddress(url, signal) {
+  const res = await fetch(url, { headers: { corten: "action" }, signal }).catch(() => null);
+  signal.throwIfAborted();
+  if (!res?.headers.has("corten-patch") || res.redirected || !fromHere(res.url)) return visit(url, signal, undefined, false, undefined, undefined, stale);
+  const html = await res.text();
+  signal.throwIfAborted();
+  await apply(html, signal, null);
+  drawnFor = navigation?.currentEntry?.key ?? drawnFor;
+}
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
 // that was there.
 navigation?.addEventListener("currententrychange", () => {
@@ -2994,6 +3042,9 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
   const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
+  // Its answer is the page at the address it asks for: the address follows once it is drawn. Only
+  // with the Navigation API, which Back and Forward to that address need.
+  const addressing = method === "GET" && !!navigation && hasAttr(form, "data-address");
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3061,13 +3112,16 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, within);
+      const patched = res.headers.has("corten-patch");
+      let drawn = true;
+      if (patched) await apply(body, signal, sent, res.ok, true, undefined, within);
       else {
         const notice = noticeOf(res);
-        await swapPage(body, signal, false, notice);
+        drawn = await swapPage(body, signal, false, notice);
         announce(notice);
       }
       signal.throwIfAborted();
+      if (addressing && drawn) address(res.url, patched);
       if (res.status === 422) focusInvalid(form);
       // Sent after an answer that took the write (2xx) or refused only its input (422). Not after a
       // refusal of the state it was made against (a 409 or 410, "someone saved first"): the user
