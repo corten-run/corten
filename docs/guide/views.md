@@ -376,7 +376,8 @@ navigation reads the whole page. Where a navigation's page would load in full in
 stylesheet that does not load, a page element with no place on screen), so does the write's: its
 address is loaded, which draws the page there, not the write's answer (a refused form's messages
 and values), though its notice is kept. The runtime says it draws the whole page
-(`corten-draws: whole` on the write); a runtime that does not (a tab open across the deploy that
+(`Prefer: corten-draws=whole` on the write, an HTTP preference a server that does not know it
+ignores); a runtime that does not (a tab open across the deploy that
 brought this) gets `<main>` alone, as it did before, and keeps its layout until a full load. A
 runtime that gets `<main>` alone for a write (a server from before, halfway through a deploy) has
 the next navigation read the whole page.
@@ -388,6 +389,10 @@ changes the layout only through an element the layout draws with an id, from a v
 passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
 can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
 only for the patch: without JavaScript the redirect's next page is a full load that reads it.
+In an app with layout reads a write route whose answer type can be a page (`HtmlResult`) keeps a
+copy of the request's head on each submit, for the page its handler may answer; one whose handler
+answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) returns `HtmlResult<Patches>`
+and keeps none ([Requests and forms](requests-and-forms.md#request-modes)).
 
 ```rust,ignore
 #[component]

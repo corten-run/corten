@@ -2287,7 +2287,7 @@ where
         let late = if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
             None
         } else {
-            crate::layout::at_late_route(&mut req, page)
+            crate::layout::at_late_route(&req, page)
         };
         let answer = futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>);
         match late {

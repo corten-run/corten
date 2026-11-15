@@ -9,17 +9,16 @@
  * sent (fetch does not): `progress` is called with each `ProgressEvent`, the last when all of it
  * is, counting the bytes of the whole request, not of a file. The answer is a `Response` read as
  * fetch's is, once all of it is in; a failure to reach the server rejects as fetch's does, and an
- * abort with the signal's reason.
- * @param {URL} url @param {string} method @param {FormData} body @param {AbortSignal} signal
- * @param {(event: ProgressEvent) => void} progress
+ * abort with the signal's reason. `headers` are the runtime's for a submit, sent as fetch would.
+ * @param {URL} url @param {string} method @param {Record<string, string>} headers @param {FormData} body
+ * @param {AbortSignal} signal @param {(event: ProgressEvent) => void} progress
  * @returns {Promise<Response>}
  */
-export function upload(url, method, body, signal, progress) {
+export function upload(url, method, headers, body, signal, progress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(method, url);
-    xhr.setRequestHeader("corten", "action");
-    xhr.setRequestHeader("corten-draws", "whole");
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     xhr.responseType = "arraybuffer";
     xhr.upload.onprogress = progress;
     xhr.onload = () => {

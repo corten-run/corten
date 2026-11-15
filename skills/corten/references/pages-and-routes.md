@@ -68,8 +68,10 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    or redirect outside `patch_or` there does not compile, nor does mounting that route by hand
    (`Area::route`) with a `get` that is not `HtmlResult<Patches>` (that one fails at
    `cargo build`, not `cargo check`). An answer type of the app's own says
-   `type Kind = AnyAnswer;`; never claim `Patches`. Keep every other handler `HtmlResult`;
-   never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
+   `type Kind = AnyAnswer;`; never claim `Patches`. A write route whose handler answers only
+   `req.patch_or(..)`, `req.patch(..)` or `req.invalid(..)` (a `data-patch` form's, its page
+   inside `patch_or`) returns `HtmlResult<Patches>` too, the cheaper path in an app with layout
+   reads (below); keep every other handler `HtmlResult`; never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
    elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element
@@ -94,8 +96,10 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    the runtime draws the layout again (a layout value is a `LayoutRead`, never an `Ahead`, which starts before the handler, on every write, and may not see it);
    give the value it read after the write with `.give::<CartCount>(n)`. A patch is not a page and
    fills no layout read (a `later` in it is a debug error), so a write whose answer must change one
-   answers its page, never a patch of the read's view. A write route that answers patches alone
-   says so, `HtmlResult<Patches>`, and keeps nothing for a page it never answers. Write each nav link from
+   answers its page, never a patch of the read's view. An `HtmlResult` write route copies the
+   request's head for the page it may answer, on every runtime write, patch or not; one that
+   answers patches alone (`patch_or`, `patch`, `invalid`) returns `HtmlResult<Patches>` (above)
+   and copies nothing. Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and
    `aria-current` separately.

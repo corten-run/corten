@@ -2594,23 +2594,20 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
   const redirected = event.info?.[REDIRECTED];
-  // The writes answered before the page is asked for, which its layout draws.
-  const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
   // A write not in the record yet, which this navigation cuts off (waiting for its answer, or a
   // patch that took it and is not drawn): the server may have applied it, so the page is read
-  // whole, as after a write whose page is not drawn yet. One that went out is numbered now, after
-  // `through`: the server may still be running it as this page is read, so it stays undrawn once
-  // the page is drawn, for the next navigation to read whole again.
-  let cut = false;
-  if (!again) {
-    for (const pending of submits.values()) {
-      if (!pending.write || pending.drawn) continue;
-      cut = true;
-      if (pending.went) undrawn.add(++writesIn);
-    }
-    // The page is about to change: replies to its pending submits would patch the wrong page.
-    for (const pending of submits.values()) pending.controller.abort();
-  }
+  // whole, as after a write whose page is not drawn yet. A patch the server has answered is
+  // numbered before `through`: the page is asked for after it, so its layout draws it. One still
+  // on its way is numbered after: the server may still be running it as this page is read, so it
+  // stays undrawn once the page is drawn, for the next navigation to read whole again.
+  const cutOff = again ? [] : Array.from(submits.values()).filter((pending) => pending.write && !pending.drawn);
+  for (const pending of cutOff) if (pending.answered) undrawn.add(++writesIn);
+  // The writes answered before the page is asked for, which its layout draws.
+  const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
+  for (const pending of cutOff) if (pending.went && !pending.answered) undrawn.add(++writesIn);
+  const cut = cutOff.length > 0;
+  // The page is about to change: replies to its pending submits would patch the wrong page.
+  if (!again) for (const pending of submits.values()) pending.controller.abort();
   // The page reading itself (`ReadAgain`, or a navigation to its own address) leaves a write that
   // failed in view to the next page, so the failure it shows stays.
   const itself = !!again || pageKey(url) === pageKey(new URL(location.href));
@@ -2987,9 +2984,12 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, drawn: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, drawn: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
+
+/** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
+const DRAWS_WHOLE = "corten-draws=whole";
 
 /**
  * A form's entries as the browser sends them in a body that is not multipart, or in a GET's
@@ -3080,20 +3080,21 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, drawn: false, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", went: false, answered: false, drawn: false, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
-  // `corten-draws`: this runtime draws a write's own page whole, which a server sends only to one
-  // that says so (a runtime from before gets `<main>`).
-  const init = { method, headers: { corten: "action", "corten-draws": "whole" }, signal };
+  // This runtime draws a write's own page whole, which a server sends only to one that says so, as
+  // an HTTP preference (RFC 7240): a runtime from before gets `<main>`, and a server from before
+  // ignores a preference it does not know.
+  const init = { method, headers: { corten: "action", prefer: DRAWS_WHOLE }, signal };
   if (method === "GET") url.search = fields.toString();
   else if (sends.enctype === "multipart/form-data") init.body = data;
   else {
     // The browser's content types, which name no charset (fetch adds one to a URLSearchParams).
     const plain = sends.enctype === "text/plain";
     init.body = plain ? entries.map(([name, value]) => `${name}=${value}\r\n`).join("") : fields.toString();
-    init.headers = { corten: "action", "corten-draws": "whole", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
+    init.headers = { corten: "action", prefer: DRAWS_WHOLE, "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
   for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // The submit this one replaces ends once this one holds the marks they share, so the form and a
@@ -3121,7 +3122,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // Out: one a navigation cuts off from here, or that fails on its way, may be applied all the same.
     pending.went = true;
     const res = upload
-      ? await upload(url, method, /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
+      ? await upload(url, method, /** @type {Record<string, string>} */ (init.headers), /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
           if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
         })
       : await fetch(url, init);
@@ -3163,8 +3164,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       // A 5xx says the write failed (a toast), but a proxy's 502 can hide one that was applied.
       else if (method !== "GET" && res.status >= 500) failedWrite();
       // In the record now, or with nothing to record (a refusal): a navigation from here on does
-      // not count it as cut off. A patch that took the write is, until it is drawn (below).
+      // not count it as cut off. A patch that took the write is, until it is drawn (below), but as
+      // one the server has answered: a page asked for from now on is made after it.
       pending.drawn = !(patch && res.ok);
+      pending.answered = true;
       const body = await res.text();
       renew();
       signal.throwIfAborted();

@@ -39,13 +39,15 @@ use crate::{
 /// Request header the runtime sets: `nav` for navigations, `action` for form submits, `page` for
 /// the whole page it fetches after a write.
 pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
-/// Request header a runtime that draws a write's own page whole sends with each form submit
-/// (`corten-draws: whole`). A write the runtime sent without it (a tab whose runtime predates
-/// this, open across a deploy) gets its own page as `<main>`, which such a runtime swaps in; a
-/// whole page it would take for an answer it cannot draw (#1370). A header of its own, not a
-/// second value of `corten`, so a server that predates it (a fleet halfway through a deploy) reads
-/// `corten: action` as it always did.
-pub(crate) const DRAWS_HEADER: HeaderName = HeaderName::from_static("corten-draws");
+/// `Prefer` (RFC 7240), the request header in which a runtime that draws a write's own page whole
+/// says so with each form submit: `Prefer: corten-draws=whole` ([`DRAWS_WHOLE`]). A write the
+/// runtime sent without it (a tab whose runtime predates this, open across a deploy) gets its own
+/// page as `<main>`, which such a runtime swaps in; a whole page it would take for an answer it
+/// cannot draw (#1370). A server that predates it (a fleet halfway through a deploy) ignores a
+/// preference it does not know, as RFC 7240 asks, and reads `corten: action` as it always did.
+pub(crate) const PREFER: HeaderName = HeaderName::from_static("prefer");
+/// The preference a runtime that draws a write's own page whole sends in [`PREFER`].
+pub(crate) const DRAWS_WHOLE: &str = "corten-draws=whole";
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
 const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
@@ -134,12 +136,33 @@ impl Mode {
 }
 
 /// A write the runtime sent (`mode`, `method`) that answers its own page whole: one whose runtime
-/// says it draws one ([`DRAWS_HEADER`]). Looked up only for such a write.
+/// says it draws one ([`PREFER`]). Looked up only for such a write.
 #[inline]
 pub(crate) fn own_page_whole(mode: Mode, method: &http::Method, headers: &HeaderMap) -> bool {
-    mode == Mode::Action
-        && !matches!(*method, http::Method::GET | http::Method::HEAD)
-        && headers.get(DRAWS_HEADER).is_some_and(|value| value.as_bytes() == b"whole")
+    mode == Mode::Action && !matches!(*method, http::Method::GET | http::Method::HEAD) && prefers_whole(headers)
+}
+
+/// Whether the request prefers `corten-draws=whole` (RFC 7240, 2): its first `corten-draws`
+/// preference across every `Prefer` line, named case aside, its value as written (a token, or a
+/// quoted string without an escape), its parameters aside. Any other value, or none, is `<main>`,
+/// which every runtime draws.
+fn prefers_whole(headers: &HeaderMap) -> bool {
+    for line in headers.get_all(PREFER) {
+        for preference in crate::cache::split_unquoted(line.as_bytes(), b',') {
+            let named = crate::cache::split_unquoted(preference, b';').next().unwrap_or_default();
+            let (name, value) = match named.iter().position(|&b| b == b'=') {
+                Some(at) => (&named[..at], &named[at + 1..]),
+                None => (named, &b""[..]),
+            };
+            if !name.trim_ascii().eq_ignore_ascii_case(b"corten-draws") {
+                continue;
+            }
+            let value = value.trim_ascii();
+            let value = value.strip_prefix(b"\"").and_then(|v| v.strip_suffix(b"\"")).unwrap_or(value);
+            return value == b"whole";
+        }
+    }
+    false
 }
 
 /// How long a hover prefetch may take before a debug build names its page.
@@ -3507,5 +3530,36 @@ mod carried_tests {
         let res = carried(kept, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
+    }
+
+    /// A runtime says it draws a write's own page whole as an HTTP preference (RFC 7240): the first
+    /// `corten-draws` across every `Prefer` line, its name case aside, its value as written (a
+    /// token or a quoted string), its parameters and other preferences aside (#1370).
+    #[test]
+    fn a_write_s_own_page_is_whole_for_a_runtime_that_prefers_it() {
+        let whole = |lines: &[&'static str]| {
+            let mut headers = HeaderMap::new();
+            for line in lines {
+                headers.append(PREFER, HeaderValue::from_static(line));
+            }
+            prefers_whole(&headers)
+        };
+        assert!(whole(&[DRAWS_WHOLE]));
+        assert!(whole(&["respond-async, Corten-Draws = \"whole\"; seen=\"a;b\", wait=10"]));
+        assert!(whole(&["return=minimal", "corten-draws=whole"]));
+        assert!(!whole(&[]));
+        assert!(!whole(&["corten-draws"]));
+        assert!(!whole(&["corten-draws=WHOLE"]));
+        assert!(!whole(&["corten-draws=main, corten-draws=whole"]));
+        assert!(!whole(&["corten-draws=main", "corten-draws=whole"]));
+        assert!(!whole(&[r#"note="x, corten-draws=whole""#]));
+        assert!(!whole(&["corten-drawsx=whole"]));
+        // Only a write the runtime sent, never a `GET` or `HEAD`.
+        let mut headers = HeaderMap::new();
+        headers.insert(PREFER, HeaderValue::from_static(DRAWS_WHOLE));
+        assert!(own_page_whole(Mode::Action, &http::Method::POST, &headers));
+        assert!(!own_page_whole(Mode::Action, &http::Method::GET, &headers));
+        assert!(!own_page_whole(Mode::Action, &http::Method::HEAD, &headers));
+        assert!(!own_page_whole(Mode::Document, &http::Method::POST, &headers));
     }
 }

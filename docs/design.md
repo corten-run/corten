@@ -481,23 +481,60 @@ rules something out.
    named to it in `corten-location`, as to a navigation, since `fetch` follows a 303 without its
    `#id` and cannot read another origin's answer. So a redirect varies on `corten`, and an
    answer to that fetch is the browser's alone, as a navigation's is. The mode would move to a
-   standard header that says "part of a page" and that a script may set. A write the runtime sends
-   also says, with `corten-draws: whole`, that it draws its own page whole
-   ([Choice 53](#choice-write-own-page-whole)): a runtime from before that (a tab open across a
-   deploy) gets `<main>` alone, an answer it draws, and a server from before reads the request as
-   it did. It is a header beside `corten`, not a value of it, since a server that does not know a
-   value of `corten` reads the request as a whole document's; only a write reads it, and a write's
-   answer is not one a cache stores (no validator, no freshness), so no `Vary` names it. It goes with the mode to a standard header that says what the client draws.
+   standard header that says "part of a page" and that a script may set.
+
+   A write the runtime sends also says that it draws its own page whole
+   ([Choice 53](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
+   server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
+   deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
+   `<main>` alone, an answer it draws, and a server from before reads the request as it did. A
+   header of Corten's own (`corten-draws: whole`, as this was first written) would do the same, and
+   a new value of `corten` would not, since a server that does not know a value of `corten` reads
+   the request as a whole document's. Not `return=representation`: it asks for the resource's state
+   after a successful request, where a refused form (422) is the answer that most needs the whole
+   page, and `<main>` and the whole document are both representations of the page; what the runtime
+   says is what it can draw, so the preference is one Corten names. It is not in RFC 7240's registry
+   (a specification is required, and an unregistered preference is ignored as an unknown one is,
+   as the RFC's own examples show); neither is `corten`. Weighed and not a reason against it: it adds
+   no CORS preflight, since `Prefer` is not a safelisted header but `corten` beside it is not either,
+   so a submit to another origin was preflighted already (and the app's pages refuse cross-site
+   writes); an intermediary may act on a preference it defines (`respond-async`), not on one it does
+   not know; the server reads it only for a write the runtime sent, splitting the `Prefer` lines at
+   the commas and semicolons outside quotes (`cache::split_unquoted`, as `Cache-Control` is read),
+   which costs a write about 210 instructions more than looking up a header of its own
+   ([Choice 53](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
+   answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
+   every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
+   whole page and change nothing the runtime does. No `Vary` names it: RFC 7240 asks for one where
+   applying a preference can vary what a cache does, and here none can. Only a write's answer
+   varies with it, never a `GET`'s or `HEAD`'s (`page::own_page_whole`); a cache sends a `POST` on
+   to the server, whatever it stored (RFC 9111, 4: an unsafe request is written through), and reuses
+   a `POST`'s answer only for a later `GET` of its address, and only when it has explicit freshness
+   and a `Content-Location` naming that address (RFC 9110, 9.3.3), which a page's answer does not
+   (it is private and `no-cache` unless the app says otherwise, and Corten sends no
+   `Content-Location`); and the PWA's worker passes every request but a `GET` to the network
+   (`pwa.rs`).
 
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot
    set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
-   mode into content negotiation).
+   mode into content negotiation; RFC 7240: a server ignores a preference it does not
+   know, `Preference-Applied` only where it is not apparent, `Vary` only where a cache's handling
+   can vary; RFC 9110, 9.3.3 and RFC 9111, 4: a `POST`'s answer never answers a `POST`, and a `GET`
+   only with freshness and `Content-Location`); measured (the preference's cost on a write, by
+   callgrind).
 
-   Revisit when: a standard header says "part of a page" and a script may set it.
+   Revisit when: a standard header says "part of a page" and a script may set it; or a registered
+   preference says what a client can draw of an answer, which would replace `corten-draws`.
 
    Last checked: 2026-10-30, no registered media type for a request's mode, as written at
    `1e5c56e2`; 2026-11-06, a script's `Sec-Fetch-Mode` and `Sec-Fetch-Dest` replaced by the
-   browser's, probed in Chromium 156, Firefox 157 and WebKit 27.2.
+   browser's, probed in Chromium 156, Firefox 157 and WebKit 27.2; 2026-11-15, `Prefer` weighed
+   against a header of Corten's own, RFC 7240's text and its registry of preferences (`respond-async`,
+   `return`, `wait`, `handling` and others, none about what a client draws) read, the CORS
+   safelist (`Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, `Range`) checked,
+   and the cost of reading it measured.
 
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
@@ -3973,7 +4010,7 @@ rules something out.
     closed for a write that redirects
     ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
     Now a write's `req.page` (any method but `GET` and `HEAD`) is the whole document with
-    JavaScript as without, for a runtime that says it draws it (`corten-draws: whole`,
+    JavaScript as without, for a runtime that says it draws it (`Prefer: corten-draws=whole`,
     [Choice 11](#choice-corten-request-header)): a runtime from before (a tab open across the deploy)
     gets `<main>` alone, as it did, since it would take a whole page for an answer it does not
     draw, say the write failed, and a resend would be a new write; and a runtime given `<main>` for
@@ -4033,7 +4070,7 @@ rules something out.
     the same write without JavaScript: the copy of the request's head that its reads start from
     (made before the handler, since the handler takes the request), the fill's two boxes and the
     one header more. In an app without layout reads it takes 28,168 where it took 24,813 (the
-    document's head and layout). A runtime that does not send `corten-draws` gets `<main>` in
+    document's head and layout). A runtime that does not prefer it gets `<main>` in
     23,742 (23,247 before: the header's look-up and the route's look at the request's mark).
     A write that answers something else starts no read, since nothing runs beside its handler. In an
     app with layout reads only a route whose answer type can be a page keeps a copy of the
@@ -4090,7 +4127,7 @@ rules something out.
     the time and bytes in release (three runs of 25), and the runtime's size against `4dad0f513`
     (earlier rounds: `04000147b` against `02ac51d9e`, `e59c32c28` against `934c94367`,
     `e760a5385` and `de46e974b` against the change as it was, `0d2d818cd` with the harness);
-    2026-11-15, a write without `corten-draws` answered `<main>` and drawn with no failure, and a
+    2026-11-15, a write without the preference answered `<main>` and drawn with no failure, and a
     navigation that leaves a patch before it is drawn, by the watchlist smoke, each failing with the
     runtime of `e2c5cec0c` in Chromium; 2026-11-15, a write that failed in view by the watchlist smoke
     in Chromium and Firefox, failing on `fba53d131` in Chromium; 2026-11-14, the writes a layout draws

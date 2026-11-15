@@ -613,8 +613,11 @@ Corten is pre-1.0, so any minor version may change the API.
   answer must change one answers its page
   ([design Choice 53](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
-  else starts none. The runtime says it draws the page whole with a `corten-draws: whole` request
-  header; a runtime without it (a tab open across the deploy) gets `<main>` alone, as before.
+  else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
+  `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
+  alone, as before, and a server that does not know it ignores it. A write route whose handler
+  answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
+  `HtmlResult<Patches>`, which keeps no copy of the request's head for a page.
   Measured against `main` with callgrind: such a write takes 62,214 instructions where its
   `<main>` swap took 24,902 (two layout reads), and the same write without JavaScript 57,365; with
   a 20 ms read it answers in 21.3 ms where `<main>` took 0.04 ms. In an app with layout reads a
@@ -631,7 +634,10 @@ Corten is pre-1.0, so any minor version may change the API.
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; make such a value a `LayoutRead`, which Corten starts only
   for a page that draws the layout, as the `Ahead` docs now say (an `Ahead` is for a read the page
-  itself awaits) ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+  itself awaits). **Breaking:** `corten::testing` sends the preference for `Mode::Action`
+  (`.mode(Mode::Action)`), so an app test that expects a `<main>` swap from a write's `req.page`
+  now gets the whole document; a test of what an older runtime gets sets
+  `.header(HeaderName::from_static("prefer"), "corten-draws=main")`, which comes first and is the one read ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

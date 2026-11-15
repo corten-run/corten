@@ -407,7 +407,7 @@ async fn call_with(
         req = req.header("corten", mode);
         // A form submit, as the runtime sends one: it draws a write's own page whole (#1370).
         if mode == "action" {
-            req = req.header("corten-draws", "whole");
+            req = req.header("prefer", "corten-draws=whole");
         }
     }
     if let Some(accept) = accept {
@@ -14846,11 +14846,18 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 1);
         // A runtime that does not say it draws a write's own page whole (one from before this, in
         // a tab open across a deploy) gets `<main>` alone, as it always did, which it swaps in;
-        // a whole page it would take for an answer it cannot draw. No read starts for it.
-        for draws in [None, Some("main")] {
+        // a whole page it would take for an answer it cannot draw. No read starts for it. Nor for
+        // another value of the preference, a later one than the first, or one in another's quotes.
+        for draws in [
+            None,
+            Some("corten-draws=main"),
+            Some("corten-draws=main, corten-draws=whole"),
+            Some(r#"x="corten-draws=whole""#),
+            Some("corten-draws=WHOLE"),
+        ] {
             let mut req = Request::builder().method("POST").uri("/form").header("corten", "action");
             if let Some(draws) = draws {
-                req = req.header("corten-draws", draws);
+                req = req.header("prefer", draws);
             }
             let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             let (parts, body) = res.into_parts();
@@ -14865,14 +14872,15 @@ mod layout_reads {
     /// A write the runtime sent to a route of a routes module: one whose answer type can be a page
     /// answers its own page whole, filled after the handler as the route answers, before the app's
     /// middleware sees it; one that answers patches alone (`HtmlResult<Patches>`) keeps no head
-    /// and starts no read (#1370).
+    /// (no copy of the request's extensions is made) and starts no read (#1370).
     #[tokio::test]
     async fn a_routes_module_write_fills_its_own_page_and_a_patches_route_keeps_nothing() {
         let count = CartCount::default();
+        let copies = Arc::new(AtomicUsize::new(0));
         let router = App::new(shop_url::router())
             .layout_read(count.clone())
             .layout_read(SignedIn)
-            .middleware((AsViewer(Some("ada")), SeesFilled))
+            .middleware((AsViewer(Some("ada")), CountsCopies(copies.clone()), SeesFilled))
             .router();
         let (status, headers, body) = call_with(router.clone(), "POST", "/typed-write", Some("action"), None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -14880,12 +14888,34 @@ mod layout_reads {
         assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
         assert!(body.contains("<main><p>typed write</p></main>") && !body.contains("corten-later"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert!(copies.swap(0, Ordering::SeqCst) > 0, "a route whose answer can be a page keeps the head");
         let (status, headers, body) = call_with(router, "POST", "/patches-only", Some("action"), None).await;
         assert!(
             status == StatusCode::OK && headers.contains_key("corten-patch") && body.contains("patched"),
             "{headers:?} {body}"
         );
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "a patch starts no read");
+        assert_eq!(copies.load(Ordering::SeqCst), 0, "a route that answers patches alone keeps no head");
+    }
+
+    /// An extension that counts its copies: a request's head kept with its extensions copies it.
+    struct Copied(Arc<AtomicUsize>);
+
+    impl Clone for Copied {
+        fn clone(&self) -> Self {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Copied(self.0.clone())
+        }
+    }
+
+    /// The app's middleware, putting [`Copied`] in each request.
+    struct CountsCopies(Arc<AtomicUsize>);
+
+    impl crate::Middleware for CountsCopies {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            req.extensions_mut().insert(Copied(self.0.clone()));
+            next.run(req).await
+        }
     }
 
     /// The app's middleware, saying whether the page the route answered was filled by the time it
@@ -15683,8 +15713,8 @@ mod layout_reads {
     /// time, in an app with two layout reads or, with `WRITE_READS=0`, none. With `WRITE_MODE=page`
     /// the same write comes from a browser without JavaScript (no `corten` header), whose page is the
     /// same whole document; with `WRITE_MODE=main` from a runtime that does not draw a write's own
-    /// page whole (no `corten-draws`), which gets `<main>`. With `WRITE_MIDDLEWARE=req` the app's
-    /// middleware takes `Req` before the route. Counting it under callgrind at two numbers of
+    /// page whole (no `Prefer: corten-draws=whole`), which gets `<main>`. With
+    /// `WRITE_MIDDLEWARE=req` the app's middleware takes `Req` before the route. Counting it under callgrind at two numbers of
     /// requests gives the instructions per request (#1370). Run in release:
     /// `WRITE_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_write_answering_in_an_action_costs`
     #[test]
@@ -15713,7 +15743,7 @@ mod layout_reads {
                 match mode.as_str() {
                     "page" => {}
                     "main" => req = req.header("corten", "action"),
-                    _ => req = req.header("corten", "action").header("corten-draws", "whole"),
+                    _ => req = req.header("corten", "action").header("prefer", "corten-draws=whole"),
                 }
                 let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
                 let status = res.status();
@@ -15748,7 +15778,7 @@ mod layout_reads {
                 for draws in [true, false] {
                     let mut req = Request::builder().method("POST").uri("/typed-write").header("corten", "action");
                     if draws {
-                        req = req.header("corten-draws", "whole");
+                        req = req.header("prefer", "corten-draws=whole");
                     }
                     let began = std::time::Instant::now();
                     let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();

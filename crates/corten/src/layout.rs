@@ -584,7 +584,7 @@ pub(crate) struct NotAPageAnswer;
 /// stay within their first allocation.
 #[inline(never)]
 pub(crate) fn at_late_route(
-    req: &mut crate::http::Request,
+    req: &crate::http::Request,
     page: bool,
 ) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
     let signal = req.extensions().get::<crate::Signal>()?;
@@ -597,9 +597,15 @@ pub(crate) fn at_late_route(
     }
     let shared = signal.shared()?.clone();
     let until = signal.late_until();
-    let (parts, body) = std::mem::take(req).into_parts();
-    let kept = parts.clone();
-    *req = crate::http::Request::from_parts(parts, body);
+    // Copied field by field from the request in place, rather than taken apart, cloned and put
+    // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read
+    // may look at any of it), so the headers and extensions are cloned all the same.
+    let mut kept = http::Request::new(()).into_parts().0;
+    kept.method = req.method().clone();
+    kept.uri = req.uri().clone();
+    kept.version = req.version();
+    kept.headers = req.headers().clone();
+    kept.extensions = req.extensions().clone();
     Some((shared, until, kept))
 }
 

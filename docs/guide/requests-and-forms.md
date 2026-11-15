@@ -66,7 +66,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
-| `POST` with `corten: action` and `corten-draws: whole`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript (`<main>` alone for a runtime that does not send `corten-draws`) | swaps the page and draws its layout again |
+| `POST` with `corten: action` and `Prefer: corten-draws=whole`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript (`<main>` alone for a runtime that does not prefer it) | swaps the page and draws its layout again |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
@@ -83,18 +83,21 @@ in any mode, sends it whole, and the runtime draws what changed around `<main>` 
 redirect, so a layout read (a cart's count) is current; a patch fills no layout read, so a write
 whose answer must change one answers its page ([layout reads](views.md#the-document)). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
-loads only ([the document](views.md#the-document)); every page carries a key hashed from the
+loads and on a write's own page ([the document](views.md#the-document)), not on a navigation; every page carries a key hashed from the
 caller its handler read (if any; by value, so a rule that holds only another caller keys as that
 one does), the deploy and its layout, and when a navigation answers with a different key
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
 A `data-patch` form may send to any route. One whose handler answers its page in
-`Mode::Action` (`req.page`, no `patch_or`) gets that page swapped in, its title and `<main>`, as a
-navigation's would be: the form works, and every submit sends and draws the whole page, which a
-small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
+`Mode::Action` (`req.page`, no `patch_or`) gets that page drawn as a redirect's is, its title,
+`<main>` and each element of the layout that changed: the form works, and every submit sends and
+draws the whole page, which a small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
 the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
-is the one thing that needs one, so it takes only a route that says `patches`.
+is the one thing that needs one, so it takes only a route that says `patches`. A write whose
+handler answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
+`HtmlResult<Patches>` too: in an app with layout reads an `HtmlResult` write keeps a copy of the
+request's head for the page it may answer, on every submit, and a `Patches` one keeps none.
 
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer

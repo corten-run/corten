@@ -3789,7 +3789,7 @@ async function run(browser) {
    * in `asked`, and the writes answered are counted in `answers`; a write's answer waits for what
    * `hold` gives for its number. While `fail` is set, a write is done but its answer is dropped, as a
    * network that fails after the server applied it. While `draws` is false, a write goes without
-   * `corten-draws`, as from a runtime from before it. A write's answer's headers are given to `edit`
+   * its `Prefer: corten-draws=whole`, as from a runtime from before it. A write's answer's headers are given to `edit`
    * too, to change. The page opened is `path`.
    * @param {(body: string, writes: number, headers?: Record<string, string>) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
@@ -3820,7 +3820,7 @@ async function run(browser) {
         const writes = seen.writes;
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const sent = { ...req.headers(), "accept-encoding": "identity" };
-        if (write && !seen.draws) delete sent["corten-draws"];
+        if (write && !seen.draws) delete sent.prefer;
         const res = await route.fetch({ headers: sent });
         const headers = res.headers();
         if (write) seen.answered = { ...headers };
@@ -4127,7 +4127,7 @@ async function run(browser) {
     );
     await own.context().close();
   }
-  // A write sent without `corten-draws`, as a runtime from before it sends one (a tab open across
+  // A write sent without its `Prefer: corten-draws=whole`, as a runtime from before it sends one (a tab open across
   // the deploy that brought it): the server answers <main> alone, as it did then, which that
   // runtime draws, where a whole page would be an answer it does not draw (it would say the write
   // failed). This runtime, given <main> alone for a write (a server from before), draws it and reads
@@ -4207,6 +4207,22 @@ async function run(browser) {
       patchName,
       stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown }),
+    );
+    // The patch was answered before that page was asked for, so the page's layout drew it: the
+    // navigation after reads <main> alone, not the whole page again.
+    await own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written"));
+    const returned = await own
+      .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    check(
+      "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone",
+      returned && seen.asked.at(-1) === "GET /smoke/written nav",
+      JSON.stringify({ returned, asked: seen.asked }),
     );
     await own.context().close();
   }
@@ -6736,7 +6752,16 @@ async function run(browser) {
   // throttle a script can set, and send it at localhost's speed.
   const throttle = engine === "chromium" ? await page.context().newCDPSession(page) : null;
   await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 2 << 20 });
+  const progressRequest = page.waitForRequest((req) => req.method() === "POST" && (req.headers()["content-type"] ?? "").startsWith("multipart/form-data"), { timeout: 10000 });
   const progressed = await upload({ name: "slow.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(600 << 10, 7) });
+  const progressHeaders = await progressRequest.then((req) => req.allHeaders()).catch(() => /** @type {Record<string, string>} */ ({}));
+  // Sent by XMLHttpRequest, it says what a fetch submit says: a form submit, from a runtime that
+  // draws a write's own page whole.
+  check(
+    "an upload sent by XMLHttpRequest says it is a submit from a runtime that draws a write's own page whole",
+    progressHeaders.corten === "action" && progressHeaders.prefer === "corten-draws=whole",
+    JSON.stringify({ corten: progressHeaders.corten ?? null, prefer: progressHeaders.prefer ?? null }),
+  );
   await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   await throttle?.detach();
   /** @type {{ loaded: number, total: number, computable: boolean, busy: string | null, shown: boolean }[]} */
