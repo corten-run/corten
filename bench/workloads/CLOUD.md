@@ -835,7 +835,242 @@ JSON's `nativeManifest`; they are not supplied by this minimal source export.
    silently enlarge the limits. A timeout/partial transfer is untrusted evidence,
    never permission to restart the job or overwrite an earlier local attempt.
 
-For example, after those checks, a POSIX operator shell can use this **download-only**
+Use a Linux operator workstation with Node 24+, OpenSSH, GNU `timeout`, util-linux
+`mount`/`findmnt`/`prlimit`, and explicit local administrator permission to mount **one new
+local tmpfs**. This does not grant permission to modify a remote mount or unit.
+Allow up to 1 GiB of local memory/swap for evidence; tmpfs is not encrypted storage.
+Run as the inspecting user, without `set -x`, terminal recording or credential
+logging. Existing authentication and the verified known-hosts file stay in their
+existing locations, read-only; never copy them into the workspace. If these local
+permissions/resources are unavailable, stop, rather than using an unbounded folder.
+
+From the trusted measured checkout, provision a unique private workspace. The
+mount has both a kernel byte quota and an inode quota; a per-process file limit
+alone would not bound a recursive download. Keep this shell and its variables for
+the remaining steps. Nothing here changes campaign or measurement settings.
+
+```sh
+set -eu
+umask 077
+AUDIT_UID=$(id -u)
+AUDIT_GID=$(id -g)
+WORK_PARENT=$(mktemp -d /tmp/corten-audit.XXXXXXXX)
+test "$(realpath -e -- "$WORK_PARENT")" = "$WORK_PARENT"
+WORK="$WORK_PARENT/work"
+mkdir -m 700 -- "$WORK"
+sudo mount -t tmpfs -o "size=1073741824,nr_inodes=100000,mode=0700,uid=$AUDIT_UID,gid=$AUDIT_GID,nodev,nosuid,noexec" tmpfs "$WORK"
+test "$(findmnt -n -o FSTYPE --mountpoint "$WORK")" = tmpfs
+node --input-type=module - "$WORK" <<'JS'
+import assert from 'node:assert/strict';
+import { lstatSync, readdirSync, statfsSync } from 'node:fs';
+import { physical } from './bench/workloads/isolated/evidence.mjs';
+const root = physical(process.argv[2]), info = lstatSync(root), fs = statfsSync(root);
+assert.equal(info.uid, process.getuid()); assert.equal(info.mode & 0o777, 0o700);
+assert.equal(fs.type, 0x01021994); // Linux TMPFS_MAGIC.
+assert.ok(fs.blocks * fs.bsize > 0 && fs.blocks * fs.bsize <= 1073741824);
+assert.ok(fs.files > 0 && fs.files <= 100000); assert.deepEqual(readdirSync(root), []);
+JS
+EXPORT="$WORK/export"
+mkdir -m 700 -- "$EXPORT"
+```
+
+Prepare this **trusted operator script locally**, not from downloaded evidence.
+It is streamed on stdin to the existing measured `/bench/repo` checkout; it creates
+no remote file and does not import source blobs or unpack contexts. `remote` mode
+requires the entry UID (root), fixed `/bench` paths, the latest waiting event and
+an absent inbox. `local` mode requires this user's private quota-backed export.
+Both modes check UID, permissions, types, links, names and sizes **before any file
+content is read**. Directory enumeration is incremental and capped, including the
+journal census. Controls are capped at 16 MiB each (bootstrap: 1 KiB), all files
+at 256 MiB, and the complete requested copy at 1 GiB / 100,000 entries. The sealed
+files must remain unchanged throughout inspection; changes fail, not authorize a
+second attempt. These are read-only inspections, not an atomic filesystem freeze.
+
+```sh
+cat > "$WORK/preflight.mjs" <<'JS'
+import assert from 'node:assert/strict';
+import { lstatSync, opendirSync, statfsSync } from 'node:fs';
+import { join } from 'node:path';
+import { isIP } from 'node:net';
+import { isDeepStrictEqual } from 'node:util';
+import { deploymentSha256 } from './bench/workloads/deployments.mjs';
+import { digest, physical, readRegular, tree } from './bench/workloads/isolated/evidence.mjs';
+try {
+  const [mode, root, round, commit, campaign, group, token, planHash, subjectHash, waitEvent, ip, knownHosts] = process.argv.slice(2);
+  assert.ok(['validate', 'remote', 'local'].includes(mode));
+  assert.ok(['json-api', 'mixed-production'].includes(group));
+  assert.match(round, /^r[1-9][0-9]*$/); assert.match(commit, /^[a-f0-9]{40}$/);
+  assert.match(token, /^[a-f0-9]{16}$/);
+  assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
+  for (const hash of [planHash, subjectHash]) assert.match(hash, /^[a-f0-9]{64}$/);
+  const remote = mode === 'remote', mixed = group === 'mixed-production', prefix = mixed ? 'mixed' : 'json';
+  const kind = mixed ? 'mixed-review-needed' : 'review-needed';
+  assert.match(waitEvent, new RegExp(`^[0-9]{5}-${kind}\\.json$`));
+  if (mode === 'validate') {
+    assert.equal(root, '/bench'); assert.equal(isIP(ip), 4);
+    assert.ok(knownHosts.startsWith('/') && !/["'\\\r\n$%]/.test(knownHosts));
+    physical(knownHosts, false); const s = lstatSync(knownHosts);
+    assert.equal(s.uid, process.getuid()); assert.equal(s.nlink, 1); assert.equal(s.mode & 0o077, 0);
+    process.exit(0);
+  }
+  const uid = process.getuid(), maxEntries = 100000, maxFile = 256 * 2 ** 20, maxTotal = 2 ** 30;
+  physical(root);
+  if (remote) { assert.equal(root, '/bench'); assert.equal(uid, 0); }
+  else {
+    const fs = statfsSync(root);
+    assert.equal(fs.type, 0x01021994);
+    assert.ok(fs.blocks * fs.bsize > 0 && fs.blocks * fs.bsize <= maxTotal);
+    assert.ok(fs.files > 0 && fs.files <= maxEntries);
+  }
+  function directory(path, privateMode = true) {
+    physical(path); const s = lstatSync(path);
+    assert.equal(s.uid, uid); assert.equal(s.mode & (privateMode ? 0o077 : 0o022), 0);
+  }
+  directory(root, !remote);
+  const base = remote ? join(root, 'campaign', campaign) : root;
+  if (remote) { directory(join(root, 'campaign')); directory(base); }
+  const paths = {
+    bootstrap: join(root, 'bootstrap-ready.json'),
+    reservation: remote ? join(root, 'campaign', '.host-attempt.json') : join(root, 'reservation.json'),
+    plan: join(base, 'plan.json'), event: join(base, remote ? waitEvent : 'wait-event.json'),
+    subject: join(base, `${prefix}-audit-subject.json`) };
+  const sources = join(base, mixed ? 'mixed-audit-sources' : 'audit-sources');
+  function names(path, visit) {
+    const dir = opendirSync(path); let count = 0;
+    try { for (let e; (e = dir.readSync());) { assert.ok(++count <= maxEntries, 'directory entry limit'); visit(e.name); } }
+    finally { dir.closeSync(); }
+  }
+  function waiting() {
+    assert.equal(lstatSync(join(base, `${prefix}-audit-delivery.json`), { throwIfNoEntry: false }), undefined);
+    let latest = '';
+    names(base, name => { if (/^[0-9]{5}-/.test(name) && name > latest) latest = name; });
+    assert.equal(latest, waitEvent, 'waiting journal advanced');
+  }
+  if (remote) waiting();
+  else {
+    const allowed = new Set(['bootstrap-ready.json', 'reservation.json', 'plan.json', 'wait-event.json',
+      `${prefix}-audit-subject.json`, mixed ? 'mixed-audit-sources' : 'audit-sources']);
+    names(root, name => assert.ok(allowed.has(name), 'unexpected export entry'));
+  }
+  const records = new Map(), folded = new Set(); let entries = 0, total = 0;
+  const stamp = s => [s.dev, s.ino, s.uid, s.mode, s.nlink, s.size, s.mtimeMs, s.ctimeMs];
+  function admit(path, type, cap = maxFile) {
+    assert.ok(++entries <= maxEntries, 'copy entry limit'); physical(join(path, '..'));
+    const s = lstatSync(path);
+    assert.equal(s.uid, uid); assert.equal(s.mode & 0o077, 0);
+    assert.ok(!s.isSymbolicLink() && (type === 'directory' ? s.isDirectory() : s.isFile()), 'link/type');
+    if (type === 'file') {
+      assert.equal(s.nlink, 1); assert.ok(Number.isSafeInteger(s.size) && s.size >= 0 && s.size <= cap, 'file size limit');
+      total += s.size; assert.ok(total <= maxTotal, 'copy byte limit');
+    }
+    records.set(path, stamp(s));
+  }
+  for (const [key, path] of Object.entries(paths)) admit(path, 'file', key === 'bootstrap' ? 1024 : 16 * 2 ** 20);
+  function walk(path, key = '') {
+    const lower = key.toLowerCase(); assert.ok(!folded.has(lower), 'case collision'); folded.add(lower);
+    const isDir = ['', 'blobs', ...(mixed ? ['contexts'] : [])].includes(key);
+    assert.ok(isDir || /^blobs\/[a-f0-9]{64}$/.test(key) || (mixed && /^contexts\/[a-z][a-z0-9-]*\.tar$/.test(key)), 'snapshot path');
+    admit(path, isDir ? 'directory' : 'file');
+    if (isDir) names(path, name => walk(join(path, name), key ? `${key}/${name}` : name));
+  }
+  walk(sources); // Complete metadata/size census before readRegular/tree allocations.
+  function unchanged(path) { assert.deepEqual(stamp(lstatSync(path)), records.get(path), 'evidence metadata changed'); }
+  const controls = {};
+  const read = key => { unchanged(paths[key]); const bytes = readRegular(paths[key]); unchanged(paths[key]);
+    controls[key] = digest(bytes); return JSON.parse(bytes); };
+  const reservation = read('reservation'), plan = read('plan');
+  const { campaignSha256, ...planBody } = plan;
+  assert.equal(campaignSha256, planHash); assert.equal(deploymentSha256(planBody), planHash);
+  assert.equal(plan.round, round); assert.equal(plan.commit, commit); assert.ok(plan.order.includes(group));
+  assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
+  assert.equal(reservation.campaignSha256, planHash);
+  assert.deepEqual(read('bootstrap'), { schema: 'benchmark-common-bootstrap/v1',
+    round, commit, token, group: plan.order.length === 1 ? group : 'all' });
+  const event = read('event'), status = event.status;
+  assert.equal(event.kind, kind); assert.equal(event.campaign, campaign); assert.equal(event.round, round);
+  assert.equal(event.campaignSha256, planHash); assert.equal(event.sequence, Number(waitEvent.slice(0, 5)));
+  assert.equal(status.campaign, campaign); assert.equal(status.round, round);
+  assert.equal(status.campaignSha256, planHash); assert.equal(status.state, 'blocked-review-needed');
+  assert.equal(status.auditGroup, group); assert.equal(status.auditInbox, `${campaign}/${prefix}-audit-delivery.json`);
+  assert.equal(status[mixed ? 'mixedAuditSubjectSha256' : 'auditSubjectSha256'], subjectHash);
+  const started = Date.parse(event.at);
+  assert.ok(Number.isFinite(started) && started <= Date.now() && Date.now() < started + 24 * 60 * 60 * 1000);
+  const subject = read('subject'), { subjectSha256, ...body } = subject;
+  assert.equal(subjectSha256, subjectHash); assert.equal(deploymentSha256(body), subjectHash);
+  assert.equal(subject.schema, `benchmark-${prefix}-audit-subject/v1`);
+  assert.equal(subject.campaignSha256, planHash); assert.equal(subject.commit, commit);
+  const binding = plan.bindings.find(b => b.request.group === group); assert.ok(binding);
+  assert.equal(subject.round, mixed ? binding.request.round : `j${2 * Number(round.slice(1))}`);
+  if (mixed) assert.equal(subject.bindingSha256, deploymentSha256(binding));
+  else assert.equal(subject.sourceSha256, plan.sourceSha256);
+  const { sha256, ...manifest } = subject.sourcesManifest;
+  assert.equal(deploymentSha256(manifest), sha256);
+  assert.ok(Array.isArray(manifest.files) && manifest.files.length <= maxEntries);
+  const allowedFiles = new Set();
+  for (const file of manifest.files) {
+    assert.match(file.sha256, /^[a-f0-9]{64}$/); assert.equal(file.storedAs, `blobs/${file.sha256}`);
+    assert.ok(Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= maxFile);
+    allowedFiles.add(file.storedAs);
+    const path = join(sources, file.storedAs); unchanged(path);
+    const bytes = readRegular(path); unchanged(path);
+    assert.equal(bytes.length, file.bytes); assert.equal(digest(bytes), file.sha256);
+  }
+  if (mixed) {
+    assert.deepEqual(subject.requests.map(r => r.identity.app), binding.selection.apps);
+    for (const request of subject.requests) {
+      assert.match(request.identity.app, /^[a-z][a-z0-9-]*$/);
+      const key = `contexts/${request.identity.app}.tar`, path = join(sources, key); allowedFiles.add(key);
+      unchanged(path); assert.equal(digest(readRegular(path)), request.identity.contextArchiveSha256); unchanged(path);
+    }
+  }
+  for (const path of records.keys()) {
+    unchanged(path);
+    if (path.startsWith(sources + '/')) {
+      const key = path.slice(sources.length + 1);
+      assert.ok(['blobs', ...(mixed ? ['contexts'] : [])].includes(key) || allowedFiles.has(key), 'unreferenced snapshot file');
+    }
+  }
+  assert.ok(isDeepStrictEqual(tree(sources), manifest.snapshot), 'snapshot differs');
+  for (const path of records.keys()) unchanged(path);
+  directory(root, !remote);
+  if (remote) { directory(join(root, 'campaign')); directory(base); }
+  if (remote) waiting();
+  console.log(JSON.stringify({ subjectSha256, snapshotSha256: manifest.snapshot.sha256,
+    controlsSha256: deploymentSha256(controls), entries, bytes: total }));
+} catch {
+  console.error('Review preflight refused; preserve workspace, state and host.'); process.exitCode = 2;
+}
+JS
+```
+
+After step 2's fresh provider/ownership observation, execute that script on the
+exact host. `COMMIT`, `TOKEN`, `PLAN_SHA256` and `SUBJECT_SHA256` are the independently
+observed expected values, not automatically trusted fields from a downloaded
+subject. `validate` mode checks remote arguments locally before a remote command
+is constructed; `GROUP` must be one of the two table rows. This makes the
+single-quoted remote arguments literal, not shell input. Use the same reviewed checkout locally and
+remotely. The command verifies the remote HEAD and tracked source before importing
+the existing readers, clears Node/shell injection variables, bounds remote work
+to 30 seconds plus a five-second kill grace, and emits only small integrity hashes
+and counts. No credential, environment dump or raw source goes into these records.
+
+```sh
+remote_preflight() {
+  node --input-type=module - validate /bench "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+    "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" "$IP" "$KNOWN_HOSTS" < "$WORK/preflight.mjs"
+  env -i PATH="$PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+  timeout 45 ssh -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
+  -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
+  -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
+  -oControlMaster=no -oControlPath=none "root@$IP" \
+  "cd /bench/repo && test \"\$(git rev-parse HEAD)\" = '$COMMIT' && git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --quiet '$COMMIT' -- && exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root LANG=C.UTF-8 TZ=UTC timeout -k 5 30 node --input-type=module - remote /bench '$ROUND' '$COMMIT' '$CAMPAIGN' '$GROUP' '$TOKEN' '$PLAN_SHA256' '$SUBJECT_SHA256' '$WAIT_EVENT'" \
+  < "$WORK/preflight.mjs"
+}
+test ! -e "$WORK/before.json"
+remote_preflight > "$WORK/before.json"
+```
+
+After that successful preflight and another step 2 observation, use this **download-only**
 SFTP batch. `IP`, `UNIT`, `ROUND`, `CAMPAIGN`, `WAIT_EVENT`, `SUBJECT`, `SNAPSHOT`,
 `KNOWN_HOSTS` and `EXPORT` are explicitly checked values from steps 1-4, not paths
 selected by a receipt. Validate the campaign as `ROUND-[a-f0-9]{16}` and the event
@@ -843,10 +1078,28 @@ as five digits plus the table's exact waiting kind and `.json`; choose subject
 and snapshot from the table. Local paths must be absolute physical paths without
 quotes, backslashes, newlines or SSH expansion characters (`$`, `%`). `EXPORT`
 must be fresh, mode 0700, quota-limited, and disjoint from state and checkout;
-use `umask 077`. The shell variables below contain no credential material.
+use `umask 077`. In particular, **the snapshot destination must not exist**:
+OpenSSH `get -R` adds basename nesting when its destination already exists.
+Do not precreate it or reuse an earlier attempt. The shell variables below contain
+no credential material. The empty-directory test includes dangling symlinks.
+`prlimit` enforces the 256 MiB per-file write limit during transfer too; a growing
+remote file fails this inspection, not the waiting job.
 
 ```sh
-timeout 180 sftp -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
+case "$GROUP" in
+  json-api) SUBJECT=json-audit-subject.json; SNAPSHOT=audit-sources ;;
+  mixed-production) SUBJECT=mixed-audit-subject.json; SNAPSHOT=mixed-audit-sources ;;
+  *) exit 2 ;;
+esac
+node --input-type=module - "$EXPORT" <<'JS'
+import assert from 'node:assert/strict';
+import { opendirSync } from 'node:fs';
+const dir = opendirSync(process.argv[2]);
+try { assert.equal(dir.readSync(), null, 'export is not fresh'); } finally { dir.closeSync(); }
+JS
+test ! -e "$EXPORT/$SNAPSHOT" && test ! -L "$EXPORT/$SNAPSHOT"
+env -i PATH="$PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+prlimit --fsize=268435456:268435456 -- timeout 180 sftp -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
   -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
   -oServerAliveInterval=15 -oServerAliveCountMax=2 \
   -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
@@ -876,68 +1129,20 @@ Keep partial attempts separate; never merge them with a later download.
    to finish before the earlier deadline; do not treat a still-active stopping
    unit or an old waiting event as fresh authority.
 
-Inspect locally without importing/running downloaded code or unpacking the context
-tars. From the trusted measured checkout, the following read-only check binds the
-downloaded data to the operator's previously observed identity. Supply the saved
-reservation token, campaign plan hash and subject hash from the verified first
-observation, **not values automatically copied out of the subject being checked**.
-The preflight/quotas and before/after host observations above remain prerequisites.
+After step 5's fresh ownership/unit observations, run the **same** remote preflight
+again, then inspect locally from the trusted checkout. Only the script's input
+mode/root changes; the expected identity stays fixed. Byte-for-byte equality of
+the small summaries binds the before/after control bytes, full snapshot and local
+copy. Neither hashing nor a successful comparison is independent audit approval.
 
 ```sh
-node --input-type=module - "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
-  "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" <<'JS'
-import assert from 'node:assert/strict';
-import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
-import { deploymentSha256 } from './bench/workloads/deployments.mjs';
-import { digest, readRegular, tree } from './bench/workloads/isolated/evidence.mjs';
-const [root, round, commit, campaign, group, token, planHash, subjectHash] = process.argv.slice(2);
-assert.ok(['json-api', 'mixed-production'].includes(group));
-assert.match(round, /^r[1-9][0-9]*$/); assert.match(commit, /^[a-f0-9]{40}$/);
-assert.match(token, /^[a-f0-9]{16}$/);
-assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
-for (const hash of [planHash, subjectHash]) assert.match(hash, /^[a-f0-9]{64}$/);
-const mixed = group === 'mixed-production', prefix = mixed ? 'mixed' : 'json';
-const read = name => JSON.parse(readRegular(join(root, name)));
-const reservation = read('reservation.json'), plan = read('plan.json');
-const { campaignSha256, ...planBody } = plan;
-assert.equal(campaignSha256, planHash); assert.equal(deploymentSha256(planBody), planHash);
-assert.equal(plan.round, round); assert.equal(plan.commit, commit); assert.ok(plan.order.includes(group));
-assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
-assert.equal(reservation.campaignSha256, planHash);
-assert.deepEqual(read('bootstrap-ready.json'), { schema: 'benchmark-common-bootstrap/v1',
-  round, commit, token, group: plan.order.length === 1 ? group : 'all' });
-const event = read('wait-event.json'), status = event.status;
-assert.equal(event.kind, mixed ? 'mixed-review-needed' : 'review-needed');
-assert.equal(status.campaign, campaign); assert.equal(status.round, round);
-assert.equal(status.campaignSha256, planHash); assert.equal(status.state, 'blocked-review-needed');
-assert.equal(status.auditGroup, group); assert.equal(status.auditInbox, `${campaign}/${prefix}-audit-delivery.json`);
-assert.equal(status[mixed ? 'mixedAuditSubjectSha256' : 'auditSubjectSha256'], subjectHash);
-const started = Date.parse(event.at);
-assert.ok(Number.isFinite(started) && started <= Date.now() && Date.now() < started + 24 * 60 * 60 * 1000);
-const subject = read(`${prefix}-audit-subject.json`), { subjectSha256, ...body } = subject;
-assert.equal(subjectSha256, subjectHash); assert.equal(deploymentSha256(body), subjectHash);
-assert.equal(subject.schema, `benchmark-${prefix}-audit-subject/v1`);
-assert.equal(subject.campaignSha256, planHash); assert.equal(subject.commit, commit);
-const binding = plan.bindings.find(b => b.request.group === group); assert.ok(binding);
-assert.equal(subject.round, mixed ? binding.request.round : `j${2 * Number(round.slice(1))}`);
-if (mixed) assert.equal(subject.bindingSha256, deploymentSha256(binding));
-else assert.equal(subject.sourceSha256, plan.sourceSha256);
-const { sha256, ...manifest } = subject.sourcesManifest;
-assert.equal(deploymentSha256(manifest), sha256);
-const sources = join(root, mixed ? 'mixed-audit-sources' : 'audit-sources');
-assert.ok(isDeepStrictEqual(tree(sources), manifest.snapshot), 'snapshot differs');
-for (const file of manifest.files) {
-  assert.match(file.sha256, /^[a-f0-9]{64}$/); assert.equal(file.storedAs, `blobs/${file.sha256}`);
-  const bytes = readRegular(join(sources, file.storedAs));
-  assert.equal(bytes.length, file.bytes); assert.equal(digest(bytes), file.sha256);
-}
-if (mixed) for (const request of subject.requests) {
-  assert.match(request.identity.app, /^[a-z][a-z0-9-]*$/);
-  assert.equal(digest(readRegular(join(sources, 'contexts', `${request.identity.app}.tar`))), request.identity.contextArchiveSha256);
-}
-console.log('Review copy matches observed subject; not approval or campaign qualification.');
-JS
+test ! -e "$WORK/after.json" && test ! -e "$WORK/local.json"
+remote_preflight > "$WORK/after.json"
+node --input-type=module - local "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+  "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" \
+  < "$WORK/preflight.mjs" > "$WORK/local.json"
+cmp -- "$WORK/before.json" "$WORK/after.json"
+cmp -- "$WORK/before.json" "$WORK/local.json"
 ```
 
 6. Give a fresh independent reviewer the verified subject, complete snapshot and
@@ -972,6 +1177,21 @@ separately approved `--collect` only after the exact unit is terminal. Terminal
 archive integrity, native replay, exit agreement and cleanup/deletion gates remain
 unchanged. This manual export does not exercise or qualify those operations;
 real target-host transport and review-to-delivery composition still need verification.
+
+Keep the tmpfs mounted while inspection/review needs its bytes, including after a
+failed or partial transfer. Do not reuse it for another attempt. After the owning
+operator has explicitly retired this local copy (and retained any required evidence
+through a separately authorized bounded destination), release **only this unique
+local mount**. This discards its contents; there is no automatic exit trap that
+could erase failure evidence, recursive deletion, lazy unmount or remote cleanup:
+
+```sh
+test "$(realpath -e -- "$WORK")" = "$WORK_PARENT/work"
+test "$(findmnt -n -o FSTYPE --mountpoint "$WORK")" = tmpfs
+sudo umount -- "$WORK"
+rmdir -- "$WORK"
+rmdir -- "$WORK_PARENT"
+```
 
 ## Readiness And Verification
 
