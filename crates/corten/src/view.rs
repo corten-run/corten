@@ -273,8 +273,9 @@ use std::{
 /// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
 /// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
 /// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
-/// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (and an `<annotation-xml>` whose
-/// `encoding` is `text/html` or `application/xhtml+xml`), which hold HTML too:
+/// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
+/// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose `encoding` is
+/// `text/html` or `application/xhtml+xml`, which hold HTML too:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -313,6 +314,11 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="text/html"><title><b>"x"</b></title></annotation-xml></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
 /// let _ = html! { <p><plaintext>"Raw"</plaintext></p> };
 /// ```
 ///
@@ -346,11 +352,11 @@ use std::{
 /// let _ = html! { <div><noframes><b>"Draft"</b></noframes></div> };
 /// ```
 ///
-/// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>`
-/// (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with
-/// `color`, `face` or `size`) written straight into one: the browser closes the `<svg>` before
-/// it, so it and what follows land outside the drawing. HTML in a drawing goes in a
-/// `<foreignObject>`:
+/// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>` or a
+/// `<math>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a
+/// `<font>` with `color`, `face` or `size`) written straight into one: the browser closes the
+/// `<svg>` or the MathML elements before it, so it and what follows land outside them. HTML in a
+/// drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -362,13 +368,19 @@ use std::{
 /// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
 /// ```
 ///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mrow><div>"x"</div></mrow></math></p> };
+/// ```
+///
 /// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 /// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
 /// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
 /// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
 /// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
 /// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
-/// integration points. Where the markup does not show how it is parsed, at the top of a
+/// integration points, and a `<title>` in a `<mglyph>` there. Where the markup does not show how
+/// it is parsed, at the top of a
 /// component's markup (whose parent may write it into an `<svg>`) and among a component's
 /// children (which go where it writes them), none of this is refused, so a component that draws
 /// an SVG fragment without its `<svg>` compiles:
@@ -401,9 +413,11 @@ use std::{
 /// ```
 ///
 /// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
-/// `<math>` with text in its `<mi>`, and a link named by `aria-label` in an `<svg>`'s `<title>` whose
-/// `href` may write nothing (the accessible-name checks leave an `<svg>` alone outside its
-/// `<foreignObject>`, as before they followed the HTML standard's integration points):
+/// `<math>` with text in its `<mi>` and a `<title>` in a `<mglyph>` there, an `<annotation-xml>`
+/// holding HTML, one whose `encoding` an expression writes (which the markup does not show, so
+/// nothing in it is refused), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
+/// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
 ///
 /// ```
 /// use corten::prelude::*;
@@ -415,11 +429,15 @@ use std::{
 ///
 /// fn main() {
 ///     let home: Option<&str> = Some("#top");
+///     let encoding = "application/mathml+xml";
 ///     let view = html! {
 ///         <div>
 ///             <script type="text/x-template">"<b>Draft</b>"</script>
 ///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
 ///             <math><mrow><mi>"x"</mi></mrow></math>
+///             <math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>
+///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
 ///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
 ///         </div>
 ///     };
@@ -428,6 +446,9 @@ use std::{
 ///         concat!(
 ///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
 ///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
+///             r#"<math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>"#,
+///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
 ///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
 ///         )
 ///     );

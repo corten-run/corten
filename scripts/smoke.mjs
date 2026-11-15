@@ -290,6 +290,73 @@ if (skipped.length) console.log(`\n${skipped.length} skipped`);
 console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n")}` : "\nall passed");
 process.exit(failures.length ? 1 : 0);
 
+/**
+ * How the browser parses markup `html!` accepts and the refused markup beside it
+ * (docs/design.md#choice-html-parse-refusals): an element a MathML text integration point's
+ * `<mglyph>`, an `<annotation-xml>` or an `<svg>` holds stays there, and an element in a
+ * `<title>` parsed as HTML is text, and one a browser takes out of foreign content lands outside
+ * it. The markup is what `html!` writes for these shapes (its examples in `view.rs`), loaded as a
+ * page of its own.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function parsesAsHtmlMeans(browser) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const MATHML = "http://www.w3.org/1998/Math/MathML";
+  const XHTML = "http://www.w3.org/1999/xhtml";
+  /** @type {[string, string, (namespaces: { MATHML: string, XHTML: string }) => boolean][]} */
+  const shapes = [
+    [
+      "a <title> in a <mglyph> in an <mi> is MathML's and holds elements",
+      `<p><math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math></p>`,
+      ({ MATHML }) => document.querySelector("mi > mglyph > title > mrow")?.namespaceURI === MATHML,
+    ],
+    [
+      "an <annotation-xml> with an HTML encoding holds HTML",
+      `<p><math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math></p>`,
+      ({ XHTML }) => document.querySelector("annotation-xml > b")?.namespaceURI === XHTML,
+    ],
+    [
+      "an <annotation-xml> with a MathML encoding holds a MathML <title> with elements",
+      `<p><math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math></p>`,
+      ({ MATHML }) => document.querySelector("annotation-xml > title > mrow")?.namespaceURI === MATHML,
+    ],
+    [
+      "an <svg>'s <title> holds HTML, and its <style> and <textarea> hold elements",
+      `<div><svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea></svg></div>`,
+      ({ XHTML }) =>
+        document.querySelector("svg > title > span")?.namespaceURI === XHTML &&
+        !!document.querySelector("svg > style > g") &&
+        !!document.querySelector("svg > textarea > g"),
+    ],
+    [
+      "an element in a <title> in an <mi> is text (refused by html!)",
+      `<p><math><mi><title><b>x</b></title></mi></math></p>`,
+      () => !document.querySelector("b") && document.querySelector("mi > title")?.textContent === "<b>x</b>",
+    ],
+    [
+      "an element in a <title> in an HTML <annotation-xml> is text (refused by html!)",
+      `<p><math><annotation-xml encoding="text/html"><title><b>x</b></title></annotation-xml></math></p>`,
+      () => !document.querySelector("b") && document.querySelector("annotation-xml > title")?.textContent === "<b>x</b>",
+    ],
+    [
+      "a <div> in an <mrow> lands outside the <math> (refused by html!)",
+      `<p><math><mrow><div>x</div></mrow></math></p>`,
+      () => !!document.querySelector("div") && !document.querySelector("math div"),
+    ],
+    [
+      "a <p> in an <svg> lands outside it (refused by html!)",
+      `<div><svg><rect width="4" height="4"></rect><p>Total</p></svg></div>`,
+      () => !!document.querySelector("p") && !document.querySelector("svg p"),
+    ],
+  ];
+  for (const [name, markup, keeps] of shapes) {
+    await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
+    check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML }), markup);
+  }
+  await context.close();
+}
+
 /** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */
 function precommits() {
   return "navigation" in window && "NavigationPrecommitController" in window;
@@ -311,6 +378,7 @@ function entriesWhileRecordingAddresses() {
 
 /** @param {import("@playwright/test").Browser} browser */
 async function run(browser) {
+  await parsesAsHtmlMeans(browser);
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
   const bug = browserBug(browser);
   // A navigation Chromium aborts gives way to its error page, which would interrupt a retry made at
