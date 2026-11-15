@@ -325,15 +325,17 @@ function capturedFailure(t, body, WorkerClass = Worker) {
 }
 
 test("captured worker preserves only sanitized provider diagnostics and explicit uncertainty", async (t) => {
-  for (const uncertain of [false, true]) {
-    await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE_TOKEN'), {
-      providerDiagnostic:{code:'list-http',httpStatus:429}, controlUncertain:${uncertain}});`), (error) => {
-      assert.equal(error.providerDiagnostic?.code, "list-http", "captured provider code must survive");
-      assert.equal(error.providerDiagnostic?.httpStatus, 429);
-      assert.equal(error.controlUncertain === true, uncertain);
-      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("PRIVATE_MESSAGE_TOKEN"));
-      return true;
-    });
+  for (const diagnostic of [{ code: "list-http", httpStatus: 429 },
+    ...["shape", "count", "id", "rel", "href"].map((predicate) => ({ code: `create-link-${predicate}` }))]) {
+    for (const uncertain of [false, true]) {
+      await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE_TOKEN'), {
+        providerDiagnostic:${JSON.stringify(diagnostic)}, controlUncertain:${uncertain}});`), (error) => {
+        assert.deepEqual(error.providerDiagnostic, diagnostic, "captured provider diagnostic must survive");
+        assert.equal(error.controlUncertain === true, uncertain);
+        assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("PRIVATE_MESSAGE_TOKEN"));
+        return true;
+      });
+    }
   }
 });
 
@@ -375,15 +377,16 @@ test("worker protocol rejects malformed diagnostics, unexpected fields and unset
 
 test("fleet receipts retain sanitized provider failure and uncertainty without replay", async (t) => {
   const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
-  flags.child = () => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
-    controlTreeUncertain: true, providerDiagnostic: { code: "create-request" } }); };
+  const codes = ["create-request", ...["shape", "count", "id", "rel", "href"].map((predicate) => `create-link-${predicate}`)];
+  flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
+    controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
   assert.equal(await fleetMain(approved, p.deps), 2);
   const result = p.output.at(-1);
   assert.equal(result.fullGroupQualified, false); assert.equal(result.groups.length, groupNames.length);
   for (const row of result.groups) {
     assert.equal(row.outcome, "error"); assert.equal(row.error, "group-operation-failed");
     assert.equal(row.uncertain, true, "fleet receipt must retain uncertainty");
-    assert.equal(row.providerDiagnostic?.code, "create-request"); assert.equal(row.id, undefined);
+    assert.equal(row.providerDiagnostic?.code, codes[groupNames.indexOf(row.group) % codes.length]); assert.equal(row.id, undefined);
     const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
     assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row), "saved receipt must match public row");
   }

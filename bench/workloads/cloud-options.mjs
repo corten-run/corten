@@ -5,6 +5,7 @@ import { roundName, selection, validateState } from "./cloud-contract.mjs";
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "list-request", "list-http", "list-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
+  "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
   "create-action-response", "create-action-pending", "delete-request", "delete-http"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 // This is the entire public diagnostic vocabulary, not an acceptance/retry policy.
