@@ -14,16 +14,6 @@ const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
   uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
-function refusedHrefDetail(href, dropletId, actionId) {
-  if (typeof href !== "string") return "non-string";
-  let url; try { url = new URL(href); } catch { return "malformed-uri"; }
-  if (url.username || url.password || url.href.includes("#")) return "credentials-or-fragment";
-  if (url.origin !== origin) return "foreign-origin";
-  const paths = [`/v2/actions/${actionId}`, `/v2/droplets/${dropletId}/actions/${actionId}`];
-  if (paths.some((path) => url.href === `${origin}${path}`)) return "semantically-same-canonical-uri";
-  if (paths.some((path) => url.pathname === path || url.pathname === `${path}/`)) return "query-or-trailing-slash";
-  return "wrong-action-or-resource";
-}
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
 function nodeOptionArgs(text) {
@@ -241,28 +231,24 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         if (!Array.isArray(actions)) refuseCreate({ code: "create-link-shape" });
         if (actions.length !== 1) refuseCreate({ code: "create-link-count" });
         if (!positive(actions[0]?.id)) refuseCreate({ code: "create-link-id" });
-        // rel/href are optional in the published action-link model. The exact
-        // action GET below proves type/resource/completion; supplied hints must
-        // still agree, and no provider-supplied href is ever fetched.
-        if (!(actions[0].rel === undefined || actions[0].rel === "create")) refuseCreate({ code: "create-link-rel" });
-        // Both documented action endpoints identify this same action/resource.
-        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`
-          || actions[0].href === `${origin}/v2/droplets/${result.droplet.id}/actions/${actions[0].id}`))
-          refuseCreate({ code: "create-link-href", detail: refusedHrefDetail(actions[0].href, result.droplet.id, actions[0].id) });
+        // Project only consumed IDs. Unused rel/href metadata has no authority:
+        // never read, parse, follow or forward it. The canonical GET proves the
+        // action's actual type, resource and completion, not a link's spelling.
+        const dropletId = result.droplet.id, actionId = actions[0].id;
         for (;;) {
-          const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
+          const response = await call("create-action", "GET", `/v2/actions/${actionId}`);
           code = "create-action-response";
           const action = response?.action;
-          if (!(action?.id === actions[0].id && action.resource_type === "droplet" && action.type === "create")) refuseCreate({ code });
+          if (!(action?.id === actionId && action.resource_type === "droplet" && action.type === "create")) refuseCreate({ code });
           // The action model permits integer zero as well as null. Neither is
           // completion proof: only a completed action bound to this droplet is.
-          if (!(action.resource_id === result.droplet.id || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
-          if (action.status === "completed") { assert.equal(action.resource_id, result.droplet.id); break; }
+          if (!(action.resource_id === dropletId || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
+          if (action.status === "completed") { assert.equal(action.resource_id, dropletId); readRemaining(); break; }
           if (action.status !== "in-progress") refuseCreate({ code });
           code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
         }
-        value = [result.droplet];
+        value = [{ id: dropletId }];
       } else {
         assert.equal(command.length, 5); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "delete"]); assert.equal(command[4], "--force");
         assert.ok(/^[1-9]\d*$/.test(command[3]));

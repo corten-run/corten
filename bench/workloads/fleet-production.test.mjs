@@ -88,7 +88,7 @@ const synthetic = (${syntheticDependencies.toString()})({
   return { h, output, workers, saved, events, prepare, deps };
 }
 
-test("captured production composition reaches bound running hosts and propagates remote options", { timeout: 30000 }, async (t) => {
+test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
   const p = fixture(t);
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
@@ -105,6 +105,9 @@ test("captured production composition reaches bound running hosts and propagates
     const post = events.find((row) => row.group === group && row.method === "POST");
     assert.equal(post.body.name, job.name); assert.deepEqual(post.body.ssh_keys, [42]);
     assert.equal(post.body.size, saved.host.size); assert.equal(post.body.region, saved.host.region); assert.equal(post.body.image, saved.host.image);
+    assert.deepEqual(events.filter((row) => row.group === group && (row.method === "POST" || row.path?.startsWith("/v2/actions/")))
+      .map((row) => [row.method, row.path]), [["POST", "/v2/droplets"], ["GET", `/v2/actions/${1101 + i}`]]);
+    assert.ok(!JSON.stringify(p.output).includes("SYNTHETIC_FLEET_CREDENTIAL"));
     const uploads = events.filter((row) => row.group === group && row.boundary === "upload");
     assert.equal(uploads.length, 3);
     const script = uploads.find((row) => row.to.endsWith("/job.sh")).content;
@@ -132,6 +135,38 @@ test("captured production composition reaches bound running hosts and propagates
   for (let i = 1; i < groupNames.length; i++) assert.ok(events.findIndex((row) => row.group === groupNames[i] && row.method === "POST")
     > events.findIndex((row) => row.group === groupNames[i - 1] && row.boundary === "provider-child-exit"));
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("completed POST host A cannot provision otherwise owned host B or admit the next group", { timeout: 30000 }, async (t) => {
+  const p = fixture(t, "host-id-mismatch");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  assert.equal(p.workers.length, 1);
+  const events = p.events(), saved = p.saved();
+  assert.equal(saved.id, "201", "fresh owned identity retained for recovery");
+  assert.equal(saved.status, "preparing");
+  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
+  assert.deepEqual(events.filter((row) => row.path?.startsWith("/v2/actions/")).map((row) => [row.method, row.path]), [["GET", "/v2/actions/1101"]]);
+  assert.ok(!events.some((row) => row.method === "DELETE"));
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+});
+
+test("late completed create preserves uncertainty and locks without provisioning or later admission", { timeout: 30000 }, async (t) => {
+  const p = fixture(t, "late-create");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  assert.equal(p.workers.length, 1);
+  const events = p.events(), saved = p.saved();
+  assert.equal(saved.status, "creating"); assert.equal(saved.id, undefined);
+  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
+  assert.equal(events.filter((row) => row.path?.startsWith("/v2/actions/")).length, 1);
+  assert.ok(!events.some((row) => row.method === "DELETE"));
+  const first = p.output.at(-1).groups[0];
+  assert.equal(first.uncertain, true);
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+  assert.ok(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")));
+  assert.ok(fs.existsSync(path.join(p.h.base, groupNames[0], ".groups-launch.lock")));
+  assert.ok(fs.existsSync(path.join(p.h.base, groupNames[0], "groups-r21/operation.lock")));
 });
 
 test("captured production rejects Git advertisement before reservation or provider access", { timeout: 15000 }, async (t) => {

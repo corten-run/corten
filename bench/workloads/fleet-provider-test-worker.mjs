@@ -7,14 +7,16 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
-assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close"].includes(mode));
+assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
+let clock = 0;
 serveProviderWorker({
+  now: () => clock,
   spawn(binary, argv) {
     assert.equal(binary, "doctl"); assert.deepEqual(argv.slice(0, 2), ["auth", "token"]);
     record({ boundary: "synthetic-credential" });
@@ -34,13 +36,18 @@ serveProviderWorker({
       const droplets = hosts(), id = droplets.length + 101;
       const droplet = { id, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region },
         networks: { v4: [{ type: "public", ip_address: `192.0.2.${id - 100}` }] } };
-      writeFileSync(hostsPath, JSON.stringify([...droplets, droplet]));
-      return { status: 202, value: { droplet, links: { actions: [{ id: id + 1000, rel: "create", href: `https://api.digitalocean.com/v2/actions/${id + 1000}` }] } } };
+      writeFileSync(hostsPath, JSON.stringify([...droplets, { ...droplet, id: mode === "host-id-mismatch" ? id + 100 : id }]));
+      if (mode === "host-id-mismatch") return { status: 202, value: { droplet,
+        links: { actions: [{ id: id + 1000, rel: "create", href: `https://api.digitalocean.com/v2/actions/${id + 1000}` }] } } };
+      return { status: 202, value: { droplet: { ...droplet, unused: "SYNTHETIC_FLEET_CREDENTIAL" },
+        links: { actions: [{ id: id + 1000, rel: ["delete", "SYNTHETIC_FLEET_CREDENTIAL"],
+          href: { arbitrary: true, uri: "https://SYNTHETIC_FLEET_CREDENTIAL@foreign.invalid/v2/actions/999" } }] } } };
     }
     if (method === "GET" && /^\/v2\/droplets\/\d+$/.test(path))
       return { status: 200, value: { droplet: hosts().find((row) => row.id === Number(path.split("/").at(-1))) } };
     if (method === "GET" && /^\/v2\/actions\/\d+$/.test(path)) {
       const id = Number(path.split("/").at(-1));
+      if (mode === "late-create") clock = 24 * 60 * 60 * 1000;
       return { status: 200, value: { action: { id, type: "create", resource_id: id - 1000, resource_type: "droplet", status: "completed" } } };
     }
     assert.fail("unexpected synthetic REST operation");
