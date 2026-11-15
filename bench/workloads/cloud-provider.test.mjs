@@ -30,6 +30,28 @@ const publishedCreate = () => ({ status: 202, value: { droplet: { id: 3164444, s
 const createAction = (status = "completed", resource_id = 3164444) => ({ status: 200, value: {
   action: { id: 7515, type: "create", resource_type: "droplet", resource_id, status } } });
 
+test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {
+  const cases = [
+    ["shape", (response) => { response.value.links.actions = { raw: credential }; }],
+    ["count", (response) => { response.value.links.actions = []; }],
+    ["id", (response) => { response.value.links.actions[0].id = credential; }],
+    ["rel", (response) => { response.value.links.actions[0].rel = credential; }],
+    ["href", (response) => { response.value.links.actions[0].href = `https://synthetic.invalid/${credential}`; }],
+  ];
+  for (const [predicate, mutate] of cases) await t.test(predicate, async () => {
+    const response = publishedCreate(), calls = []; mutate(response);
+    const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+      calls.push({ method, path }); return response;
+    } });
+    await assert.rejects(run(create, 1000, true), (error) => {
+      assert.equal(error.providerDiagnostic?.code, `create-link-${predicate}`);
+      assert.deepEqual(Object.keys(error.providerDiagnostic), ["code"]);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+    });
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
+  });
+});
+
 const censusPage = (droplets, total, page) => ({ status: 200, value: { droplets, meta: { total }, links: page === undefined ? {}
   : { pages: { next: `https://api.digitalocean.com/v2/droplets?page=${page}&per_page=200` } } } });
 function censusFixture(steps) {
@@ -222,7 +244,7 @@ test("create failures retain only bounded phase codes and HTTP status, never raw
       if (mode === "transport") throw new Error(`raw-native-${credential}`);
       return createAction(mode === "pending" ? "in-progress" : credential, mode === "pending" ? 0 : 3164444);
     } });
-    const code = { response: "create-response", link: "create-link", action: "create-action-response", pending: "create-action-pending",
+    const code = { response: "create-response", link: "create-link-href", action: "create-action-response", pending: "create-action-pending",
       http: "create-action-http", transport: "create-action-request" }[mode];
     await assert.rejects(run(create, 2500), (error) => {
       assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}) });
@@ -320,17 +342,20 @@ test("unbound zero action cannot complete, poll past the deadline, or repeat POS
 
 test("accepted create rejects ambiguous links before any action read and never repeats POST", async () => {
   const link = publishedCreate().value.links.actions[0];
-  for (const actions of [undefined, null, {}, [], [null], [{}], [link, link],
-    ...["delete", "", null, 1].map((rel) => [{ id: link.id, rel }]),
-    ...[undefined, "7515", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => [{ id }]),
-    ...[null, "", 1, {}, "/v2/actions/7515", "not a URL"].map((href) => [{ id: link.id, href }]),
+  for (const [predicate, actions] of [
+    ...[undefined, null, {}].map((actions) => ["shape", actions]),
+    ...[[], [link, link]].map((actions) => ["count", actions]),
+    ...[null, {}].map((entry) => ["id", [entry]]),
+    ...["delete", "", null, 1].map((rel) => ["rel", [{ id: link.id, rel }]]),
+    ...[undefined, "7515", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["id", [{ id }]]),
+    ...[null, "", 1, {}, "/v2/actions/7515", "not a URL"].map((href) => ["href", [{ id: link.id, href }]]),
     ...["http://api.digitalocean.com/v2/actions/7515", "https://synthetic.invalid/v2/actions/7515",
       "https://api.digitalocean.com/v2/actions/7516", "https://api.digitalocean.com/v2/actions/7515?next=1",
       "https://api.digitalocean.com/v2/actions/7515#fragment",
-      "https://synthetic@api.digitalocean.com/v2/actions/7515"].map((href) => [{ id: link.id, href }])]) {
+      "https://synthetic@api.digitalocean.com/v2/actions/7515"].map((href) => ["href", [{ id: link.id, href }]])]) {
     const calls = [], response = publishedCreate(); response.value.links.actions = actions;
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
-    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === "create-link");
+    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === `create-link-${predicate}`);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
   }
 });
@@ -395,6 +420,19 @@ test("ID-only create link never extends the original deadline or bypasses cancel
       ...(mode === "post-deadline" ? [] : [{ method: "GET", path: "/v2/actions/7515", timeout: 2000 }]),
       ...(mode === "pending" ? [{ method: "GET", path: "/v2/actions/7515", timeout: 1000 }] : [])]);
   }
+});
+
+test("cancellation at the first action grant retains coarse create-link rather than a successful predicate code", async () => {
+  let posts = 0, cancelled = false;
+  const run = providerTransport({ repo: resolve("."), spawn, interrupted: () => cancelled,
+    now: () => { if (posts) cancelled = true; return 0; }, request({ method }) {
+      assert.equal(method, "POST"); posts++; return publishedCreate();
+    } });
+  await assert.rejects(run(create, 1000, true), (error) => {
+    assert.equal(error.providerDiagnostic?.code, "create-link");
+    assert.equal(error.controlUncertain, true); return true;
+  });
+  assert.equal(posts, 1);
 });
 
 test("provider consumes named stored credential once in private memory and never runs a provider CLI", async () => {

@@ -13,6 +13,10 @@ Corten is pre-1.0, so any minor version may change the API.
   its own type does not compile
   ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
 
+- Distinguish five benchmark provider create-link refusal predicates with closed
+  diagnostic codes, without forwarding rejected values or changing completion,
+  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
   Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
