@@ -3038,7 +3038,9 @@ rules something out.
     performance at the user's end, so that would not decide against it once Value 1 is met. The two
     changes do not exclude each other: a block would carry the large values and `data-on`
     everything else a page has (formats, messages, a component's small arguments), single-quoted
-    either way, so this Choice is taken on its own and the issue stays open for the block. Also not
+    either way, so this Choice is taken on its own and the issue stays open for the block. Data a script
+    needs after the page loads, which a choice picks, is not the block's: a script reads it from
+    its route ([Choice 53](#choice-screen-read)). Also not
     chosen: a block the app writes itself (a way around the typed call, and markup a view would
     have to keep in step with the script); leaving the attribute double-quoted (88% more bytes for a
     large argument, and a parse four to twelve times slower).
@@ -3857,6 +3859,68 @@ rules something out.
     and the runtime's size against `8f11b7b35`; 2026-11-14, the smoke's check of a submit that
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
+
+53. <a id="choice-screen-read"></a>**A script reads a screen's data with `read()`, from a module of its own, typed by its route; not
+    from a data block in the page.** A rich screen in the browser needs data the page did not draw:
+    another set's products when the user picks it, the package for another shipping service
+    ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+    A script's only typed input was a handler argument written into the page
+    ([Rule 3](#rule-handler-arguments)), so such a screen drew every choice's data into the page or
+    fetched JSON by hand under a type written beside the server's. The route already answers that
+    data: `req.screen` gives a data client `{"title","data"}`, tagged and revalidated as any page
+    is. So a route says `data = T`, and its `get` handler must return `HtmlResult<Screen<T>>`,
+    which only `req.screen` given a `T` makes, checked at the handler's name in `#[route(..)]`;
+    the route is then a handler argument of type `ScreenUrl<T>`, and `read(url, { signal })` from
+    `corten/read` asks it with `Accept: application/json` and resolves to `data`, typed as `T` by
+    the declaration `corten::types` writes. The read is a `fetch` in the default cache mode, so the
+    browser's HTTP cache does for it what it does for any `GET`: an answer it kept is asked about
+    with its weak `ETag` and an unchanged one is a 304 with no body, and a `Public` route's
+    `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
+    from answering it. A failure is a `ReadError` whose `status` is the answer's, or 0 when there
+    was none, as `corten:error` gives a submit the network fails; an abort rejects with
+    `signal`'s reason, as `fetch` does. No new endpoint, header or format: the URL, the
+    negotiation and the envelope are the ones native screens already read.
+
+    What it costs: nothing for a page whose scripts do not import it. `corten/read` is a module
+    of its own, as `corten/keys` is, in the import map and preloaded only for apps whose listed
+    scripts import it, so the runtime is the same bytes (43,095, 15,218 with gzip, 13,725 with
+    brotli, before and after) and so is every other app's import map. The module is 560 bytes,
+    387 with gzip and 320 with brotli, which the users of an app that reads download once a
+    release. A read costs a request where a handler argument costs none, so data a page needs when
+    it loads stays a handler argument; a read is for data a choice picks or the page may never need.
+
+    Not chosen: the `<script type="application/json">` block
+    [Choice 45](#choice-data-on-single-quoted) left open. It makes the pages that hand a script
+    large data at load a little faster, but it puts the data in the page whether the script needs
+    it or not, so it does nothing for a screen whose data a choice picks (each choice's data would
+    be drawn into the page), and its reader is in the runtime every user downloads, where a read
+    costs only the apps that call it. It stays open on [Choice 45](#choice-data-on-single-quoted)'s terms, for large data a page
+    needs when it loads. Also not chosen: a script that fetches the JSON itself under a type it
+    writes (a type at the seam written by hand, which README Value 4 rules out); an `App::api`
+    route beside each screen (a second route and handler for data the screen already answers);
+    `read` in the runtime itself (every user would download it to help the pages that read).
+
+    Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
+    at level 6 and brotli at quality 11, on `2298bfe32` and `7122cd141`, once each); platform
+    (`fetch` in the default cache mode keeps a 200 the server tags and revalidates it with
+    `If-None-Match`, a 304 answering it from the kept copy: the smoke's read checks, where in
+    Chromium the second read names the first answer's tag and in Firefox it is answered 304, and
+    the server answers that tag with a 304 and no body; Playwright's WebKit asks again without the
+    tag and is sent the whole answer, as it does the runtime's navigation fetch); reasoned (an app whose scripts do not import `corten/read`
+    gets the same runtime and import map, so its pages pay nothing; `data`'s type comes from the
+    route's `data = T` and the declaration of `T`, so no script writes it, and a route whose
+    handler can answer without a `T` does not compile); value (a rich screen in the browser is as
+    possible as one the server draws, and only the apps that read pay for it, README Value 1;
+    types at the seam come from Rust, Value 4; one way to a screen's data, the route that answers
+    it, with no second endpoint, Values 5 and 6).
+
+    Revisit when: `corten/read` grows past 1 KB with gzip; most apps' scripts import it, when a
+    reader in the runtime may cost less than the module's own request; a page needs a screen's
+    data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would pay (its Revisit when); or Chromium or
+    Firefox stops revalidating a read it kept, which the 304 rests on.
+
+    Last checked: 2026-11-15, the sizes on `2298bfe32` and `7122cd141`; 2026-11-15, the smoke's read
+    checks on `7122cd141` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules
 
