@@ -168,10 +168,10 @@ impl<T: Float> Bounds<T> {
     }
 
     /// Refuses `min` itself: "above 0". HTML has no exclusive end: with a step the input says the
-    /// first step above `min` that these bounds hold (a step finer than the float tells apart reads
-    /// as `min` for a few steps, which are passed over, up to 16); with
-    /// [`any_step`](Bounds::any_step), or no such step, it says `min`, which the browser sends and
-    /// the handler refuses.
+    /// first step above `min` that reads as more than it (a step finer than the float tells apart
+    /// near `min` reads as `min` for a few steps, which are passed over); with
+    /// [`any_step`](Bounds::any_step) it says `min`, which the browser sends and the handler
+    /// refuses.
     pub const fn exclusive_min(self) -> Self {
         Bounds { min: self.min, max: self.max, step: self.step, above: true, below: self.below }
     }
@@ -183,27 +183,20 @@ impl<T: Float> Bounds<T> {
     }
 }
 
-/// How many steps from an exclusive end the input's end is looked for: a step finer than the type
-/// tells apart near the end (`1e-8` from an `f32`'s `1`) reads as the end itself for a few.
-const STEPS_INSIDE: i128 = 16;
-
 impl<T: Numeric> Bounds<T> {
     /// The step inside an exclusive end that the input says in its place, as text and as the
-    /// number it reads as: the nearest one these bounds hold. `None` for an end the input says as
-    /// it is: inclusive, with no step, or with no such step near it, where the digits do not line
-    /// up (the bounds then hold no value near the end either).
+    /// number it reads as. `None` for an end the input says as it is: inclusive, with no step, or
+    /// where the digits do not line up (the bounds then hold no value near the end either).
     fn inside(&self, last: bool) -> Option<(String, T)> {
         let step = self.step?;
         if (last && !self.below) || (!last && !self.above) {
             return None;
         }
-        (1..=STEPS_INSIDE).find_map(|nth| {
-            let decimal = T::step_inside(self.min, self.max, step, last, nth)?;
-            let mut text = String::new();
-            write_decimal(decimal, &mut text);
-            let value = T::read(&text)?;
-            self.holds(value).then_some((text, value))
-        })
+        let decimal = T::step_inside(self.min, self.max, step, last)?;
+        let mut text = String::new();
+        write_decimal(decimal, &mut text);
+        let value = T::read(&text)?;
+        Some((text, value))
     }
 
     /// The `min` and `max` the input says, as numbers: what corten-ui's `NumberField` disables
@@ -288,11 +281,12 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     /// Not an infinity or NaN; every integer.
     #[doc(hidden)]
     fn is_finite(self) -> bool;
-    /// The `nth` step above `min` (from 1), or (`last`) the `nth` from the last one below `max`,
-    /// exactly, as digits and an exponent: `None` where there is none or the digits do not line
-    /// up, and for an integer, which has no exclusive end.
+    /// The first step above `min` that reads as more than `min`, or (`last`) the last one below
+    /// `max` that reads as less, exactly, as digits and an exponent. Past an empty range: the first
+    /// is above the last. `None` where the digits do not line up, and for an integer, which has no
+    /// exclusive end.
     #[doc(hidden)]
-    fn step_inside(min: Self, max: Self, step: Self, last: bool, nth: i128) -> Option<(i128, i32)>;
+    fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)>;
     /// `self` as an input's value, with the decimals of `step`: `12.5` in steps of `0.01` is
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
@@ -338,7 +332,7 @@ macro_rules! whole {
             fn is_finite(self) -> bool {
                 true
             }
-            fn step_inside(_: Self, _: Self, _: Self, _: bool, _: i128) -> Option<(i128, i32)> {
+            fn step_inside(_: Self, _: Self, _: Self, _: bool) -> Option<(i128, i32)> {
                 None
             }
             fn shown(self, _: Self) -> String {
@@ -399,13 +393,26 @@ macro_rules! float {
             fn is_finite(self) -> bool {
                 <$t>::is_finite(self)
             }
-            fn step_inside(min: Self, max: Self, step: Self, last: bool, nth: i128) -> Option<(i128, i32)> {
-                if !step.is_finite() || step <= 0.0 {
+            fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)> {
+                if !(step.is_finite() && min.is_finite() && max.is_finite()) || step <= 0.0 {
                     return None;
                 }
-                let (min, max, step) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
-                let steps = if last { max.steps_below(min, step)?.checked_sub(nth - 1)? } else { nth };
-                min.plus_steps(step, steps)
+                let (from, to, by) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
+                // A step finer than the float tells apart at the end reads as the end until it
+                // passes half the float's spacing there: start a step short of that.
+                let spacing = if last { max - max.next_down() } else { min.next_up() - min };
+                let skip = (spacing as f64 / 2.0 / step as f64).floor();
+                if !skip.is_finite() || skip >= 1e30 {
+                    return None;
+                }
+                let skip = (skip as i128 - 1).max(0);
+                let nearest = if last { to.steps_below(from, by)? } else { 1 };
+                (0..4).find_map(|extra| {
+                    let k = if last { nearest - skip - extra } else { nearest + skip + extra };
+                    let (digits, exponent) = from.plus_steps(by, k).filter(|_| k >= 0)?;
+                    let value = format!("{digits}e{exponent}").parse::<$t>().ok()?;
+                    (if last { value < max } else { value > min }).then_some((digits, exponent))
+                })
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -712,10 +719,17 @@ mod tests {
         assert!(min > 1.0 && max < 2.0 && fine.holds(min) && fine.holds(max), "{out} {min} {max}");
         assert_eq!(out, r#" min="1.00000006" max="1.99999994" step="0.00000001""#);
         assert_eq!(min, "1.00000006".parse::<f32>().unwrap());
-        // Every candidate reads as the end: none is drawn, and the end is.
+        // A step 60 times finer than the float tells apart at 1: the same, found from the spacing.
+        let finer = Bounds::new(1.0f32, 2.0).step(1e-9).exclusive_min();
+        let mut out = String::new();
+        finer.render_attrs(&mut out);
+        assert_eq!(out, r#" min="1.00000006" max="2" step="0.000000001""#);
+        assert!(finer.drawn().0 > 1.0 && finer.holds(finer.drawn().0) && !finer.holds(1.0));
+        // A max that reads as the min (`1.00000002` is `1` in an f32): the range is empty, and
+        // so is the drawn one, min above max, which the browser sends nothing from.
         let none = Bounds::new(1.0f32, 1.00000002).step(1e-8).exclusive_min();
-        assert_eq!(none.drawn().0, 1.0);
-        assert!(!none.holds(1.0));
+        let (min, max) = none.drawn();
+        assert!(min > max && !none.holds(min) && !none.holds(max), "{min} {max}");
     }
 
     #[test]
