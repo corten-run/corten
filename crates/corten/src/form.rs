@@ -1447,7 +1447,28 @@ pub struct Errors {
 
 /// [`Errors`]' messages of rows: by the hash of the row's chain ([`Place::hash_rows`]), where each
 /// is in the list. Two chains with one hash share a list, and [`Kept::is`] tells them apart.
-type RowIndex = std::collections::HashMap<u64, Vec<u32>>;
+type RowIndex = std::collections::HashMap<u64, Vec<u32>, std::hash::BuildHasherDefault<RowHashed>>;
+
+/// [`RowIndex`]'s hasher, which takes its key as it is: each key is a [`row_hash`], already keyed
+/// randomly, so hashing it again would cost a second hash for every look and add nothing.
+#[derive(Default)]
+struct RowHashed(u64);
+
+impl std::hash::Hasher for RowHashed {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(*byte);
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
+    }
+}
 
 /// The key of [`row_hash`], random for each process: a row's key is the client's choice, so with a
 /// key it knows a client could send chains that share one list and are read through on each look.
