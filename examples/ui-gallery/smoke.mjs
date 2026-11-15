@@ -8,6 +8,14 @@ import { browserBug } from "../../scripts/browser-bugs.mjs";
 import { networkInterfaces } from "node:os";
 
 const base = process.argv[2] ?? "http://localhost:18482";
+/**
+ * The draft's post `name` (`post(name) = ..`), sent to the draft's own address with `do=name`,
+ * from whichever view of it: a URL matcher for `route` and `waitForURL`.
+ * @param {string} name
+ */
+const draftPost = (name) => (/** @type {URL} */ url) => url.pathname === "/" && url.searchParams.get("do") === name;
+const saveAt = draftPost("save");
+const renameAt = draftPost("rename");
 const engines = { chromium, firefox, webkit };
 /**
  * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
@@ -1596,6 +1604,21 @@ async function run(browser) {
     return [toaster, toaster?.parentElement, document.querySelector("#menu-result")].map((e) => (e ? getComputedStyle(e).display : "missing")).join();
   });
   check("empty live regions stay in the page, so a message is announced", !/none|missing/.test(region), region);
+  // A data-patch save from another view of the draft goes to that view's address with do=save, and
+  // the page stays on that view.
+  {
+    const viewed = await page.context().newPage();
+    await viewed.goto(`${base}/?tab=offers`);
+    const [sent] = await Promise.all([viewed.waitForRequest((r) => r.method() === "POST"), viewed.getByRole("button", { name: "Save draft" }).click()]);
+    const toasted = await viewed.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Draft saved.", null, { timeout: 5000 }).then(() => true, () => false);
+    const mode = await sent.headerValue("corten");
+    check(
+      "a data-patch save from another view is sent to that view's address with do=save, and the page stays there",
+      new URL(sent.url()).search === "?tab=offers&do=save" && mode === "action" && toasted && new URL(viewed.url()).search === "?tab=offers",
+      `${sent.url()} ${mode} ${toasted} ${viewed.url()}`,
+    );
+    await viewed.close();
+  }
   const save = page.getByRole("button", { name: "Save draft" });
   await save.click();
   await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Draft saved.");
@@ -1617,7 +1640,7 @@ async function run(browser) {
   // the next submit, another page or its close button.
   const cut = (/** @type {import("@playwright/test").Route} */ route) =>
     route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
-  await page.route("**/save", cut);
+  await page.route(saveAt, cut);
   const errorsBefore = errors.length;
   await save.click();
   const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
@@ -1723,7 +1746,7 @@ async function run(browser) {
   // Another page takes it away.
   {
     const other = await page.context().newPage();
-    await other.route("**/save", cut);
+    await other.route(saveAt, cut);
     await other.goto(page.url());
     await other.getByRole("button", { name: "Save draft" }).click();
     const shown = await other.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
@@ -1741,7 +1764,7 @@ async function run(browser) {
   check("corten:error is cancelable, and a handler took it", (await taken) === true);
   await page.waitForTimeout(300);
   check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
-  await page.unroute("**/save", cut);
+  await page.unroute(saveAt, cut);
   // A success after an action's failed Toast is a notice again: unmarked, and gone after its seconds.
   {
     await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -1827,7 +1850,7 @@ async function run(browser) {
     const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
       route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
     const errorsAt = errors.length;
-    await page.route("**/rename", cutRename);
+    await page.route(renameAt, cutRename);
     await page.getByRole("button", { name: "Rename draft" }).click();
     // The live region: rendered in the open dialog (so text added to it is announced), and empty,
     // with no box until the kit's FailedAlert in it is shown, tinted.
@@ -1914,7 +1937,7 @@ async function run(browser) {
       return background;
     });
     check("FailedAlert draws no box before the failure, and the soft destructive alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && regionSaying.background === softDestructive && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(softDestructive), JSON.stringify({ regionBefore, regionSaying, softDestructive }));
-    await page.unroute("**/rename", cutRename);
+    await page.unroute(renameAt, cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {
       /** @type {() => void} */
@@ -1925,7 +1948,7 @@ async function run(browser) {
         await gate;
         await route.abort("connectionreset");
       };
-      await page.route("**/rename", held);
+      await page.route(renameAt, held);
       await page.getByRole("button", { name: "Rename draft" }).click();
       await page.locator("#rename-name").fill("Cut draft");
       const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => queueMicrotask(() => resolve(e.defaultPrevented)), { once: true })));
@@ -1937,7 +1960,7 @@ async function run(browser) {
       const toastShown = await page.locator("#ui-toast").waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
       const stale = await said.evaluate((p) => !(/** @type {HTMLElement} */ (p).hidden));
       check("a dialog closed before its submit failed shows nothing, and the toaster says it", !prevented && toastShown && !stale, JSON.stringify({ prevented, toastShown, stale }));
-      await page.unroute("**/rename", held);
+      await page.unroute(renameAt, held);
       await page.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
     }
     await page.locator("#rename-name").evaluate((i) => (/** @type {HTMLInputElement} */ (i).value = ""));
@@ -2107,7 +2130,7 @@ async function run(browser) {
   // A post without the runtime (no data-patch): the whole page, the dialog drawn open.
   await page.getByRole("button", { name: "Rename draft" }).click();
   await Promise.all([
-    page.waitForURL("**/rename"),
+    page.waitForURL(renameAt),
     page.locator("#rename form[action]").evaluate((f) => {
       f.removeAttribute("data-patch");
       /** @type {HTMLFormElement} */ (f).requestSubmit();
@@ -4977,10 +5000,11 @@ async function run(browser) {
   check("no script: a tab is a link to its page", (await plain.getByRole("tabpanel").textContent()) === "Two offers, the best at $10.00.");
   await plain.getByRole("button", { name: "More actions" }).click();
   check("no script: the menu opens (popover)", await plain.getByRole("menuitem", { name: "Help" }).isVisible());
-  // Saving has a path of its own, so it sends the browser back to the draft, whose toaster says it.
+  // Saving is a post of the draft's own (do=save), so it sends the browser back to the view of the
+  // draft it was on, whose toaster says it.
   await plain.goto(`${base}/`);
   const saved = await Promise.all([
-    plain.waitForResponse((r) => new URL(r.url()).pathname === "/save" && r.request().method() === "POST"),
+    plain.waitForResponse((r) => saveAt(new URL(r.url())) && r.request().method() === "POST"),
     plain.waitForEvent("load"),
     plain.getByRole("button", { name: "Save draft" }).click(),
   ]).then(([answer]) => answer);
@@ -4990,8 +5014,19 @@ async function run(browser) {
   const savedToast = "no script: the draft a save goes back to shows its toast";
   if (engine !== "webkit") check(savedToast, (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()), await plain.locator("#ui-toast").textContent());
   else skip(savedToast, "the notice's __Host- cookie must be Secure, and Playwright's WebKit never sends a Secure cookie back over http");
+  await plain.goto(`${base}/?tab=offers`);
+  const fromOffers = await Promise.all([
+    plain.waitForResponse((r) => saveAt(new URL(r.url())) && r.request().method() === "POST"),
+    plain.waitForEvent("load"),
+    plain.getByRole("button", { name: "Save draft" }).click(),
+  ]).then(([answer]) => answer);
+  check(
+    "no script: a save from another view of the draft is sent to that view's address and goes back to it",
+    new URL(fromOffers.url()).search === "?tab=offers&do=save" && fromOffers.headers().location === "/?tab=offers" && new URL(plain.url()).search === "?tab=offers",
+    `${fromOffers.url()} ${fromOffers.headers().location} ${plain.url()}`,
+  );
   await plain.goto(`${base}/`);
-  await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
+  await Promise.all([plain.waitForURL(draftPost("publish")), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
   {
     const failed = await plain.locator("#ui-toast").evaluate((m) => ({ text: m.textContent, marked: m.hasAttribute("data-failed"), shown: !(/** @type {HTMLElement} */ (m).hidden) }));
     check("no script: an action's failed Toast is in the page, marked", failed.shown && failed.marked && !!failed.text?.startsWith("Not published"), JSON.stringify(failed));
@@ -4999,7 +5034,7 @@ async function run(browser) {
   await plain.goto(`${base}/`);
   await plain.getByRole("button", { name: "Rename draft" }).click();
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
-  await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
+  await Promise.all([plain.waitForURL(renameAt), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
   check("no script: refused, the dialog is open with the error", (await plain.locator("#rename").isVisible()) && ((await plain.locator("#rename").textContent()) ?? "").includes("Give the draft a name."));
   // The other draft's name: the whole page drawn again has the dialog open with the form's alert.
   await plain.locator("#rename-name").fill("Holiday lot");
