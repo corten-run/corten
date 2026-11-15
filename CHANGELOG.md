@@ -503,12 +503,13 @@ Corten is pre-1.0, so any minor version may change the API.
   answer must change one answers its page
   ([design Choice 51](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
-  else starts none. Measured against `main` with callgrind: such a write takes 57,202 instructions
-  where its `<main>` swap took 23,042 (two layout reads), 25,173 where it took 22,794 without
-  reads; a patch in an app with layout reads takes 26,562 where it took 21,556 (its route keeps a
-  copy of the request's head for a page it may answer with), and one in an app without them
-  21,487 where it took 21,382 (counted before a page a middleware makes was filled too). The
-  runtime is 190 bytes larger with gzip. A read an `Ahead` starts
+  else starts none. Measured against `main` with callgrind: such a write takes 58,628 instructions
+  where its `<main>` swap took 23,028 (two layout reads), 25,203 where it took 22,780 without
+  reads; a patch in an app with layout reads takes 27,977 where it took 21,549 (its route keeps a
+  copy of the request's head for a page it may answer with), 8.0% of the watchlist's watch, a real
+  write; any other request in such an app runs about 100 to 170 more (a navigation 22,374 where it
+  took 22,206), and a patch in an app without layout reads 21,518 where it took 21,370. The
+  runtime is 286 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, so the next navigation reads the whole page; so does one
   after a write cut off before its answer or answered with a 5xx, which the server may have

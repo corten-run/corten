@@ -3726,24 +3726,30 @@ rules something out.
 
     What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
     reads, as the same write without JavaScript always did; in the test app (two reads, a small
-    layout) it takes 57,202 instructions where its `<main>` swap took 23,042, and 25,173 where it
-    took 22,794 in an app without layout reads (the document's head and layout). A write that
-    answers something else pays for no read: nothing runs beside its handler, and only the request
-    the server marks as such a write (on the route's `Next`, so no other request looks for a mark)
-    keeps a copy of the request's head for a page it may answer with, since a handler's answer type
-    (`HtmlResult`) does not say whether it answers a page or a patch. So a patch in an app with
-    layout reads takes 26,562 instructions where it took 21,556 (callgrind puts about 3,450 in the
-    copy and its drop, the rest in the boxed fill around the route, which a whole document's `GET`
-    pays too); in an app without them a patch takes 21,487 where it took 21,382 (by reasoning, not a
-    profile, the mark carried through the middleware's futures); these are the counts before a page a
-    middleware makes was filled too, which adds a check of one atomic to a write's `Req` and, only
-    for a `Req` taken before the route, a copy of the head. The runtime is 572 bytes larger raw and
-    190 with gzip (15,069 to 15,259) with the writes it numbers. A `GET` form and a navigation pay
-    nothing.
+    layout) it takes 58,628 instructions where its `<main>` swap took 23,028, and 25,203 where it
+    took 22,780 in an app without layout reads (the document's head and layout). A write that
+    answers something else starts no read, since nothing runs beside its handler, but in an app with
+    layout reads only the request the server marks as such a write keeps a copy of the request's
+    head for a page it may answer with, since a handler's answer type (`HtmlResult`) does not say
+    whether it answers a page or a patch, and its answer is looked at for a page a middleware made.
+    So a patch there takes 27,977 instructions where it took 21,549, 6,428 more: callgrind puts
+    about 3,400 in allocating and freeing (most of it the head's copy and its drop) and 1,100 in
+    copying, the rest in the futures around the route. The watchlist's watch, a real write answered
+    with its patch, takes 80,331 in process, so that is 8.0% of a write without I/O. Other requests
+    pay a little too: in an app with layout reads each looks at one more atomic mark as its `Req` is
+    made, and every request runs through router futures that can carry the fill. A navigation takes
+    22,374 where it took 22,206 (168 more), a whole document 53,110 where it took 53,006, the watch
+    80,452 where it took 80,331, and a patch in an app without layout reads 21,518 where it took
+    21,370. The fill is boxed for the writes that carry it, a trade for the many requests that are
+    not such writes: without the box a navigation ran 197 more and a patch without layout reads 204
+    more, and a write in an action about 1,000 less (a patch with layout reads 26,971). The runtime
+    is 821 bytes larger raw and 286 with gzip (15,069 to 15,355), numbering the writes a layout
+    draws.
 
-    Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`, the
-    difference of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every
-    range within 150 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
+    Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
+    `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference
+    of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
+    150 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
     patch carries elements by id, and a layout read's view at two places has none, so filling it
     needs a marker on every page; a write's own answer is not at an address a full load would
     draw); value (the page shows the same values with JavaScript as without, Values 3; one answer
@@ -3757,15 +3763,15 @@ rules something out.
     (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit
     before the change) pass 10% of what the watchlist's watch costs in process
     (`what_a_watch_costs`: a real write's handler answering with its patch, a lower bound since it
-    has no I/O). Neither count has been taken on the change as it now is: the second harness was
-    added with the late fill, and the Linux machine that runs callgrind was down.
+    has no I/O). Last taken: 6,428 against 80,331, 8.0%.
 
-    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `e59c32c28` with the harness test added
-    against `934c94367` (earlier rounds: `e760a5385` and `de46e974b` against the change as it was),
-    and the runtime's size on `de46e974b` against the change; 2026-11-14, the runtime's size on
-    `1f449f98a` (15,259 bytes with gzip, 97 more for numbering the writes a layout draws), and the
-    two-write race and a middleware's page by the watchlist smoke in Chromium and the crate's tests
-    on `1f449f98a`, whose request path (the late fill) was not counted again.
+    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `04000147b` with the harness tests
+    added against `02ac51d9e`, three alternating rounds (earlier rounds: `e59c32c28` against
+    `934c94367`, `e760a5385` and `de46e974b` against the change as it was), and the runtime's size
+    on `04000147b` against `02ac51d9e`; 2026-11-14, the writes a layout draws in either order and a
+    write cut off before its answer by the watchlist smoke in Chromium and Firefox (WebKit, without
+    the Navigation API, skips them) on `04000147b`, each failing on `3eeba8d8d` in Chromium, and a middleware's page filled under the
+    deadline and before the error page by the crate's tests on `04000147b`, failing without it.
 
 ## Rules
 

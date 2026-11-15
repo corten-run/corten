@@ -2736,7 +2736,8 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // extensions.
     // Boxed, as the whole document's is below, so every other request's future stays the size it
     // was: with the fill's state inline, a navigation and a patch in an app without layout reads
-    // each ran about 250 more instructions, most of them copying (callgrind).
+    // each ran about 200 more instructions, most of them copying, where the box costs each such
+    // write about 1,000 (callgrind, #1370).
     if action_write {
         signal.mark_late();
         let next = FillsLate { next: next.late(until), shared, until };
