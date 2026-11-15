@@ -5,6 +5,30 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Accept omitted optional `rel`/`href` fields on benchmark provider create links,
+  while still requiring one positive action ID and exact droplet-bound completed
+  action proof. Conflicting supplied fields remain rejected; no mutation is retried.
+
+- Permit one fresh complete benchmark provider census after a transient count or
+  total mismatch, within the original deadline and global request limit. Partial
+  results remain rejected; HTTP errors and mutations are never retried.
+
+- The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
+  at least `--control-height` tall wherever they are used (in a list, a table cell or a toolbar),
+  as a button or field beside them is, so a theme that sets it to 2.75rem gives them a 44 px touch
+  target too; before, the label stayed 20 px whatever the theme said. A dense row sets a lower
+  `--control-height` on its container. A label that wraps grows, its box on the first line's
+  middle. The label is border-box, so a `min-height: var(--control-height)` an app gave it as a
+  workaround adds nothing and can go. The kit theme's `--choice-list-gap` drops from .75rem to
+  .25rem, so with the kit's theme a `Checkboxes` or `RadioGroup` row is 2.25rem tall and its
+  choices are 2.5rem apart (2rem before), the first choice's text .5rem further under the legend.
+  An app with a copied `checkbox.css`, `radio_group.css` or `switch.css` takes the change with
+  `corten ui add --force`, or `--merge` for an edited copy (`corten ui diff` shows which). A theme
+  that declares `choice-list-gap` at the kit's old .75rem (one `corten ui init` wrote, or one that
+  took `corten ui add`'s suggested line) keeps it, so once its copies are updated its rows are 3rem
+  apart unless it sets .25rem in `tokens/ui.tokens.json`
+  ([#1388 Kit Checkbox, Radio and Switch ignore --control-height: their label, the whole target, stays 20 px when a theme makes every other control 44 px](https://github.com/corten-run/corten/issues/1388)).
+
 - Preserve sanitized provider diagnostics and control uncertainty from grouped
   benchmark workers in fleet failure receipts, without exposing raw errors or
   changing launch, settlement, lock or cleanup gates.
@@ -72,6 +96,17 @@ Corten is pre-1.0, so any minor version may change the API.
 - Preserve captured `ProgramData` only for grouped cloud SSH/SCP children so Windows
   OpenSSH can initialize with the sanitized environment. Git/doctl environments and
   credential handling are unchanged; local configuration-only checks make no connection.
+
+- A navigation that keeps the user's place (`data-keep-place`, or a page reading itself again for
+  `ReadAgain`) finds the focused control by name inside its nearest ancestor with an id and leaves
+  inputs of `type="hidden"` out of its index, so a repeated filter field in a hidden input no
+  longer takes its place, nor does a copy in another form when the filter's form or rail has an
+  id. Disabled controls, ones with the `hidden` attribute and ones inside an `inert` element still
+  count, and the control is looked for again in `<main>` only when nothing under its ancestor
+  matches. A matching field that switches to or from `type="hidden"` across the swap now counts as
+  inserted or removed, so focus may be left unrestored or go to another field; give the control
+  its own id ([Limit 28](docs/design.md#limit-keep-place-identity))
+  ([#1372 A data-keep-place navigation gives focus to a hidden input with the focused control's name and value: placeOf matches any input in main by index](https://github.com/corten-run/corten/issues/1372)).
 
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run

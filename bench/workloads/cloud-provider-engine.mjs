@@ -1,5 +1,5 @@
 // One private credential value per approved action. No config copies, token
-// environment/arguments, mutable doctl provider subprocesses, redirects or retries.
+// environment/arguments, mutable doctl provider subprocesses, redirects or HTTP/mutation retries.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { request as httpsRequest } from "node:https";
@@ -121,15 +121,22 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2), deadline = now() + timeout;
     let code = "provider-command";
+    let listTime = deadline - timeout;
+    const listRemaining = () => {
+      const current = now();
+      if (!Number.isFinite(current) || !Number.isFinite(deadline) || current < listTime || current >= deadline || interrupted()) throw stopped(true);
+      listTime = current; return Math.ceil(deadline - current);
+    };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const remaining = Math.ceil(deadline - now());
+      const remaining = phase === "list" ? listRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
       let response;
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted }); }
       catch { throw stopped(true); }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
+      if (phase === "list") listRemaining();
       if (response?.status !== expected) {
         const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
         throw Object.assign(stopped(false, diagnostic), { httpFailure: true });
@@ -143,23 +150,41 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         value = (await call("account", "GET", "/v2/account"))?.account ?? null;
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
-        value = []; const seen = new Set(); let total;
-        for (let page = 1; page <= 100; page++) {
-          const result = await call("list", "GET", `/v2/droplets?page=${page}&per_page=200`);
-          code = "list-response";
-          assert.ok(Array.isArray(result.droplets) && result.droplets.length <= 200);
-          assert.ok(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0 && result.meta.total <= 20000);
-          total ??= result.meta.total; assert.equal(result.meta.total, total, "provider census changed");
-          for (const droplet of result.droplets) { assert.ok(positive(droplet.id) && !seen.has(droplet.id)); seen.add(droplet.id); value.push(droplet); }
-          const next = result.links?.pages?.next;
-          if (next === undefined) { assert.equal(value.length, total, "incomplete provider census"); break; }
-          const url = new URL(next);
-          assert.ok(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash);
-          assert.deepEqual([...url.searchParams.keys()].sort(), ["page", "per_page"]);
-          assert.equal(url.searchParams.get("page"), String(page + 1)); assert.equal(url.searchParams.get("per_page"), "200");
-          assert.ok(value.length < total && page < 100, "unbounded provider census");
+        let requests = 0;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const rows = [], seen = new Set(); let total;
+          for (let page = 1; page <= 100; page++) {
+            assert.ok(requests < 100, "unbounded provider census"); requests++;
+            const result = await call("list", "GET", `/v2/droplets?page=${page}&per_page=200`);
+            code = "list-response";
+            assert.ok(Array.isArray(result?.droplets) && result.droplets.length <= 200);
+            assert.ok(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0 && result.meta.total <= 20000);
+            for (const droplet of result.droplets) { assert.ok(positive(droplet?.id) && !seen.has(droplet.id)); seen.add(droplet.id); rows.push(droplet); }
+            if (result.links !== undefined) assert.ok(result.links && typeof result.links === "object" && !Array.isArray(result.links));
+            if (result.links?.pages !== undefined) assert.ok(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages));
+            const next = result.links?.pages?.next;
+            if (next !== undefined) {
+              assert.equal(typeof next, "string"); const url = new URL(next);
+              assert.ok(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash);
+              const fields = [...url.searchParams.keys()].sort();
+              assert.ok(fields.length === 2 && fields[0] === "page" && fields[1] === "per_page", "invalid provider census page parameters");
+              assert.ok(url.searchParams.get("page") === String(page + 1) && url.searchParams.get("per_page") === "200", "invalid provider census page sequence");
+            }
+            listRemaining();
+            // Only these two internal count conditions permit a fresh page1.
+            // All page/ID/link validation above must succeed first. No catch on
+            // the public list-response code, and no rows survive the retake.
+            const changed = total !== undefined && result.meta.total !== total;
+            total ??= result.meta.total;
+            if (changed || next === undefined && rows.length !== total) {
+              assert.equal(attempt, 0, "provider census remained inconsistent"); break;
+            }
+            if (next === undefined) { value = rows; break; }
+            assert.ok(rows.length < total && page < 100, "unbounded provider census");
+          }
+          if (value !== undefined) break;
         }
-        assert.equal(value.length, total);
+        assert.ok(value !== undefined, "incomplete provider census");
       } else if (command[2] === "create") {
         assert.equal(command.length, 17);
         assert.deepEqual(command.filter((_, i) => ![3, 5, 7, 9, 11, 13].includes(i)), ["compute", "droplet", "create", "--size", "--region", "--image", "--ssh-keys", "--tag-names", "--wait", "--output", "json"]);
@@ -174,8 +199,12 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(positive(result.droplet?.id));
         code = "create-link";
         const actions = result.links?.actions;
-        assert.ok(Array.isArray(actions) && actions.length === 1 && actions[0].rel === "create" && positive(actions[0].id));
-        assert.equal(actions[0].href, `${origin}/v2/actions/${actions[0].id}`);
+        assert.ok(Array.isArray(actions) && actions.length === 1 && positive(actions[0]?.id));
+        // rel/href are optional in the published action-link model. The exact
+        // action GET below proves type/resource/completion; supplied hints must
+        // still agree, and no provider-supplied href is ever fetched.
+        assert.ok(actions[0].rel === undefined || actions[0].rel === "create");
+        assert.ok(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`);
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
           code = "create-action-response";
@@ -198,6 +227,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
+      if (command[2] === "list") listRemaining();
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
       const diagnostic = providerFailure(error) ?? { code };
