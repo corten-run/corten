@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -67,6 +67,43 @@ test("generated terminal packer executes GNU framing and preserves existing and 
   try { ftruncateSync(fd, expandedLimit + 1); } finally { closeSync(fd); }
   assert.notEqual(run().status, 0); assert.ok(!existsSync(archive));
   assert.ok(!readdirSync(root).some((name) => name.startsWith("cloud-pack.") || name.startsWith(".cloud-spool-")));
+});
+
+test("pre-entry package checks need neither Node nor a cloned repository", (t) => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  if (spawnSync(python, ["--version"], { timeout: 3000, windowsHide: true }).status !== 0) { t.skip("Python unavailable"); return; }
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-setup-pack-")));
+  t.after(() => { assert.equal(dirname(root), realpathSync(tmpdir())); rmSync(root, { recursive: true }); });
+  const pack = remoteFiles(reservation({ round: "r21", commit, token: "0123456789abcdef" }))["pack.sh"];
+  const program = pack.split("<<'CORTEN_SETUP_PACKAGE'\n")[1].split("\nCORTEN_SETUP_PACKAGE")[0]
+    .replace("pathlib.Path('/bench')", "pathlib.Path(__import__('sys').argv[1])");
+  const run = () => spawnSync(python, ["-c", program, root], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  for (const [name, body] of [["run.log", "setup failed before Node"], ["host.txt", "host"], ["exit-code", "1\n"]]) writeFileSync(join(root, name), body);
+  assert.equal(run().status, 0);
+  mkdirSync(join(root, "campaign")); assert.equal(run().status, 0);
+  for (const value of ["0\n", "256\n", "1\\n", "1\nextra"]) {
+    writeFileSync(join(root, "exit-code"), value); assert.notEqual(run().status, 0, JSON.stringify(value));
+  }
+  writeFileSync(join(root, "exit-code"), "1\n");
+  writeFileSync(join(root, "bootstrap-ready.json"), "{}"); assert.notEqual(run().status, 0); unlinkSync(join(root, "bootstrap-ready.json"));
+  writeFileSync(join(root, "campaign", ".host-attempt.json"), "{}"); assert.notEqual(run().status, 0); unlinkSync(join(root, "campaign", ".host-attempt.json"));
+  linkSync(join(root, "run.log"), join(root, "hardlink")); assert.notEqual(run().status, 0); unlinkSync(join(root, "hardlink"));
+  assert.equal(run().status, 0);
+  assert.ok(!existsSync(join(root, "repo")), "early failure must not need a clone");
+});
+
+test("early setup failure packs a validated archive with no usable Node or source clone", { skip: process.platform !== "linux" }, async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-early-pack-")));
+  t.after(() => { assert.equal(dirname(root), realpathSync(tmpdir())); rmSync(root, { recursive: true }); });
+  for (const [name, body] of [["run.log", "early setup failed"], ["host.txt", "host"], ["exit-code", "1\n"]]) writeFileSync(join(root, name), body);
+  const script = join(root, "pack.sh"), nodeMarker = join(root, "node-was-called");
+  const pack = remoteFiles(reservation({ round: "r21", commit, token: "0123456789abcdef" }))["pack.sh"]
+    .replaceAll("/bench", root);
+  writeFileSync(script, `node() { touch '${nodeMarker}'; return 99; }\n${pack}`);
+  const result = spawnSync("bash", [script], { encoding: "utf8", timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!existsSync(nodeMarker)); assert.ok(!existsSync(join(root, "repo")));
+  const archive = join(root, "results.tgz"); await archiveMembers(archive, fileHash(archive));
 });
 
 test("native entry receives a fresh private physical campaign root, never a reused path", () => {

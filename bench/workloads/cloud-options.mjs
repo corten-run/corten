@@ -117,11 +117,15 @@ export function controllerState(s, round) {
     assert.equal(s.status, "retired");
     assert.ok(s.retirement && typeof s.retirement === "object" && !Array.isArray(s.retirement), "retirement evidence required");
     assert.deepEqual(Object.keys(s.retirement).sort(), ["evidenceSha256", "kind"]);
-    assert.equal(s.retirement.kind, "unused");
-    full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "unused host evidence hash");
+    assert.ok(["unused", "setup-failed"].includes(s.retirement.kind));
+    full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "retirement evidence hash");
     assert.ok(s.deletionIntentAt, "retirement requires a durable deletion intent");
-    for (const key of ["archiveSha256", "evidenceSha256", "evidence", "validation", "exitCode", "collectedAt"])
-      assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
+    for (const key of ["validation", "exitCode", "collectedAt", "evidenceOutcome", "bootstrapReady"])
+      assert.equal(s[key], undefined, "retirement cannot claim native campaign execution");
+    if (s.retirement.kind === "unused") {
+      for (const key of ["archiveSha256", "evidenceSha256", "evidence"])
+        assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
+    } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
   }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");

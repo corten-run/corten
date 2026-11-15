@@ -107,6 +107,12 @@ export function harness(t, flags = {}) {
         const proof = { schema: "benchmark-unused-host/v1", hostId: saved.id, unit: saved.unit, unused: true, observedAtMs: Date.now() };
         return good(JSON.stringify(Object.hasOwn(flags, "unusedProof") ? flags.unusedProof : proof));
       }
+      if (script.includes("benchmark-failed-setup-host/v1")) {
+        const saved = JSON.parse(readFileSync(statePath));
+        const proof = { schema: "benchmark-failed-setup-host/v1", hostId: saved.id, unit: saved.unit,
+          setupFailed: true, exitCode: 1, observedAtMs: Date.now() };
+        return good(JSON.stringify(Object.hasOwn(flags, "setupProof") ? flags.setupProof : proof));
+      }
       if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
       if (script.startsWith("systemctl show")) {
         units++; if (flags.unitError) throw new Error("fake unit failure");

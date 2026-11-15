@@ -3,6 +3,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
+import { digest } from "./cloud-local.mjs";
+import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 test("a reconciled allocation is recovery evidence, not successful create completion", async (t) => {
   for (const failure of [{ createRejected: true }, { createLost: true }]) {
@@ -50,5 +52,24 @@ test("a start-attempted or running allocation never takes the unused-retirement 
     const h = harness(t, { missingUnit: true }); h.seed(); h.change((s) => { s.status = status; });
     await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0);
     assert.equal(h.calls.some((c) => c.at(-1).includes("benchmark-unused-host/v1")), false);
+  }
+});
+
+test("an interrupted unused receipt is preserved but only a fresh probe can authorize retirement", async (t) => {
+  for (const mode of ["valid", "bad-old-record", "bad-fresh-proof"]) {
+    const h = harness(t, { missingUnit: true }); h.seed(); h.change((s) => { s.status = "preparing"; });
+    const state = h.saved(), raw = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: state.id, unit: state.unit, unused: true, observedAtMs: 1000 });
+    const record = unusedEvidence(raw, state, unusedHostScript(state), 1000, 1000);
+    if (mode === "bad-old-record") record.id = "124";
+    const bytes = JSON.stringify(record), path = join(h.local, "unused-host.json"); writeFileSync(path, bytes);
+    if (mode === "bad-fresh-proof") h.flags.unusedProof = { unused: true };
+    if (mode !== "valid") {
+      await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
+      assert.equal(readFileSync(path, "utf8"), bytes); continue;
+    }
+    assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1);
+    assert.equal(readFileSync(join(h.local, `unused-host.interrupted-${digest(bytes)}.json`), "utf8"), bytes);
+    assert.notEqual(readFileSync(path, "utf8"), bytes);
+    assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1);
   }
 });

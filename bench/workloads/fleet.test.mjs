@@ -330,23 +330,27 @@ test("partial collection launches no missing/ambiguous/busy job, and does not wa
   assert.ok(!existsSync(join(p.h.base, "launch-intent.json")));
 });
 
-test("collection reports unused retirement as incomplete, never as native qualification", async (t) => {
+test("collection reports both retirement kinds as incomplete, never as native qualification", async (t) => {
+  for (const kind of ["unused", "setup-failed"]) {
   const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
   for (const group of groupNames) p.seed(group);
   const approved = await p.approve("--collect"), unusedBytes = JSON.stringify({ syntheticUnused: true });
   flags.child = ({ group }) => {
     p.seed(group, (state) => {
-      state.status = "retired"; state.retirement = { kind: "unused", evidenceSha256: digest(unusedBytes) };
+      state.status = "retired"; state.retirement = { kind, evidenceSha256: digest(unusedBytes) };
+      if (kind === "setup-failed") Object.assign(state, { archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64),
+        evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"] });
       delete state.bootstrapReady;
       state.deletionIntentAt = state.destroyedAt = "2026-11-14T02:00:00.000Z";
     });
-    writeFileSync(join(p.h.base, group, "groups-r21/unused-host.json"), unusedBytes);
+    writeFileSync(join(p.h.base, group, `groups-r21/${kind === "unused" ? "unused-host.json" : "failed-setup-host.json"}`), unusedBytes);
     return 1;
   };
   assert.equal(await fleetMain(approved, p.deps), 1);
-  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === "unused-retired"));
+  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === (kind === "unused" ? "unused-retired" : "setup-failed-retired")));
   assert.equal(p.output.at(-1).fullGroupQualified, false);
   assert.ok(!existsSync(join(p.h.base, "launch-intent.json")));
+  }
 });
 
 test("a pending collection sibling never delays another host's confirmed unused retirement", async (t) => {

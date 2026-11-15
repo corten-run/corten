@@ -193,14 +193,40 @@ runtime, and no benchmark data. `/bench` may be absent or contain only the exact
 hashed uploaded control files and an empty log. Ambiguous files, partial data,
 unreadable observations or any attempted start refuse this path.
 
+Both retirement probes recognize only their own exact fixed `timeout` parent,
+binding its PID, executable and full argv before and after scanning other
+processes. Other wrappers and processes receive no exception.
+
 The controller preserves `unused-host.json` with the exact probe hash, bound host,
 source and fresh observation window before recording a deletion intent. It issues
 at most one DELETE and requires exact-ID 404 confirmation. Later collection only
 rechecks the immutable receipt and absence; a lost acknowledgement never repeats
 DELETE. The saved status is `retired`, not `collected`, and carries no native archive,
 validation, timings or successful result. Fleet inspection reports `unused-retired`
-or `cleanup-pending`, never a verified baseline. Started jobs retain the existing
-native collection and evidence gates; this path cannot delete a running benchmark.
+or `cleanup-pending`, never a verified baseline.
+
+An interrupted receipt write before deletion intent is not a permanent recovery
+dead end. Collection verifies and retains the exact previous receipt under its
+content hash, then requires a new fresh host probe before writing the current
+receipt and intent. It never overwrites unknown evidence, treats an old observation
+as current permission or repeats a saved deletion intent.
+
+If the common setup itself ran and failed before native entry, collection first
+preserves the immutable terminal archive and its raw nonzero exit. A separate
+pre-entry packaging check uses only the base image's Python and GNU tools, not
+the Node installation or source clone that setup may have failed to create.
+It permits only bounded regular metadata and an absent or empty campaign root;
+native packaging keeps its existing full-tree validation. A separate
+`setup-failed` retirement requires both an absent or empty local campaign root and
+a fresh host proof: exact terminal started unit, no bootstrap marker or native
+campaign data, exact uploaded controls, matching exit, no running containers or
+benchmark processes and no pending jobs. The saved `failed-setup-host.json` binds
+the archive and extracted-tree hashes. No native validator result, timings or
+successful exit is invented. Unsettled validation, any entry evidence, failed
+observations or a running unit preserves the host. Fleet output reports
+`setup-failed-retired`; repeat collection checks the same receipt and absence,
+without another DELETE. Native-started jobs retain the existing native collection
+and evidence gates. Neither retirement path can delete a running benchmark.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;

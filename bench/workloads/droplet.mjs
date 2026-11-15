@@ -11,7 +11,7 @@ import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash,
 import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -161,26 +161,64 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
-  const verifyUnused = () => {
-    const bytes = regular(join(local, "unused-host.json"), 4096);
-    assert.equal(digest(bytes), state.retirement.evidenceSha256, "unused retirement evidence changed");
-    const record = JSON.parse(bytes), script = unusedHostScript(state);
-    assert.deepEqual(record, unusedEvidence(JSON.stringify(record.observation), state, script, record.startedAtMs, record.finishedAtMs), "unused retirement evidence differs");
+  const setupExit = () => {
+    verifyArchive(); const extracted = join(local, state.evidence); physical(extracted);
+    assert.equal(treeHash(extracted), state.evidenceSha256, "failed setup archive extraction changed");
+    const campaign = join(extracted, "campaign");
+    if (existsSync(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "native data cannot use setup retirement"); }
+    const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
+    full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit required");
+    const exit = Number(marker.trim()); assert.ok(exit <= 255); return exit;
+  };
+  const retirementFile = (kind) => kind === "setup-failed" ? "failed-setup-host.json" : "unused-host.json";
+  const verifyRetirementRecord = (bytes, kind) => {
+    const setup = kind === "setup-failed";
+    const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
+    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit()), setupExit(), record.startedAtMs, record.finishedAtMs)
+      : unusedEvidence(raw, state, unusedHostScript(state), record.startedAtMs, record.finishedAtMs);
+    assert.deepEqual(record, expected, "retirement evidence differs");
+  };
+  const verifyRetirement = () => {
+    const bytes = regular(join(local, retirementFile(state.retirement.kind)), 4096);
+    assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
+    verifyRetirementRecord(bytes, state.retirement.kind);
+  };
+  const retire = async (kind, evidence, finishedAtMs) => {
+    await own(); check();
+    assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "retirement proof expired before deletion");
+    const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
+    const path = join(local, retirementFile(kind));
+    if (existsSync(path)) {
+      // A crash between receipt and state writes is recoverable. Preserve the
+      // exact old record, but only this operation's fresh probe authorizes intent.
+      assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
+      const prior = regular(path, 4096), hash = digest(prior); verifyRetirementRecord(prior, kind);
+      const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
+      if (existsSync(retained)) assert.equal(digest(regular(retained, 4096)), hash, "interrupted retirement history differs");
+      else durable(retained, prior);
+      assert.equal(digest(regular(path, 4096)), hash, "interrupted retirement receipt changed");
+      unlinkSync(path); syncDirectory(local);
+    }
+    durable(path, bytes);
+    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    verifyRetirement();
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
+    assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
+    state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
     const script = unusedHostScript(state), startedAtMs = Date.now();
     const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
     const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs);
-    await own(); check();
-    assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "unused proof expired before deletion");
-    const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
-    durable(join(local, "unused-host.json"), bytes);
-    Object.assign(state, { status: "retired", retirement: { kind: "unused", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
-    verifyUnused();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-    assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    return retire("unused", evidence, finishedAtMs);
+  };
+  const retireFailedSetup = async () => {
+    assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock && !state.bootstrapReady, "uncertain or native-started work cannot use setup retirement");
+    const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
+    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs);
+    return retire("setup-failed", evidence, finishedAtMs);
   };
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
@@ -256,7 +294,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.collect, "collect options required");
       return locked(async () => {
         if (state.status === "retired") {
-          verifyUnused();
+          verifyRetirement();
           assert.equal(await exactHost(), undefined, "delete outcome uncertain; no automatic repeated deletion");
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
@@ -291,7 +329,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const hash = await extractArchive(archive, extracted, state.archiveSha256); check();
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
-        await validateEvidence(); state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
+        try { await validateEvidence(); }
+        catch (error) {
+          // No native report can exist before entry. Only a separate fresh,
+          // terminal pre-entry proof permits failed-setup cleanup, never success.
+          try { setupExit(); } catch { throw error; }
+          return retireFailedSetup();
+        }
+        state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         verifyArchive(); await validateEvidence();
         assert.ok(await unit(), "unit became active; preserve host"); await own(); check();
         state.deletionIntentAt = new Date().toISOString(); save();

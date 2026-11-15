@@ -121,9 +121,9 @@ export function validateState(s, round) {
     if (s.retirement !== undefined) assert.equal(s.status, "retired");
     if (s.status === "retired") {
       exact(s.retirement, ["kind", "evidenceSha256"]);
-      assert.equal(s.retirement.kind, "unused");
-      full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "unused retirement evidence hash");
-      assert.ok(s.deletionIntentAt, "unused retirement requires deletion intent");
+      assert.ok(["unused", "setup-failed"].includes(s.retirement.kind));
+      full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "retirement evidence hash");
+      assert.ok(s.deletionIntentAt, "retirement requires deletion intent");
     } else {
       assert.equal(s.status, "collected");
       assert.ok(s.collectedAt && s.archiveSha256 && s.evidenceSha256 && s.evidence, "deletion requires preserved evidence");

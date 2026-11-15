@@ -7,7 +7,7 @@ import { roundName, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -82,10 +82,21 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       if (job.outcome !== "available") { result.groups.push({ group, outcome: job.outcome }); continue; }
       const s = job.state;
       if (s.status === "retired") {
-        const bytes = regular(join(job.local, "unused-host.json"), 4096), record = JSON.parse(bytes);
+        const setup = s.retirement.kind === "setup-failed";
+        const bytes = regular(join(job.local, setup ? "failed-setup-host.json" : "unused-host.json"), 4096), record = JSON.parse(bytes);
         assert.equal(digest(bytes), s.retirement.evidenceSha256);
-        assert.deepEqual(record, unusedEvidence(JSON.stringify(record.observation), s, unusedHostScript(s), record.startedAtMs, record.finishedAtMs));
-        result.groups.push({ group, outcome: s.destroyedAt ? "unused-retired" : "cleanup-pending", id: s.id }); continue;
+        const raw = JSON.stringify(record.observation);
+        if (setup) {
+          const extracted = join(job.local, s.evidence); physical(extracted);
+          assert.equal(fileHash(join(job.local, "results.tgz")), s.archiveSha256);
+          assert.equal(treeHash(extracted), s.evidenceSha256);
+          const campaign = join(extracted, "campaign");
+          if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), []); }
+          const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
+          full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit"); const exit = Number(marker.trim()); assert.ok(exit <= 255);
+          assert.deepEqual(record, setupEvidence(raw, s, terminalSetupScript(s, exit), exit, record.startedAtMs, record.finishedAtMs));
+        } else assert.deepEqual(record, unusedEvidence(raw, s, unusedHostScript(s), record.startedAtMs, record.finishedAtMs));
+        result.groups.push({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
       if (s.status !== "collected" || !s.collectedAt) { result.groups.push({ group, outcome: "uncollected" }); continue; }
       assert.ok(!interrupted());

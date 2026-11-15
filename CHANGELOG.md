@@ -9,8 +9,10 @@ Corten is pre-1.0, so any minor version may change the API.
   source-bound common bootstrap, then admit remaining hosts serially while their
   benchmark jobs overlap. Preserve the complete registry and all measurement gates.
   Failed creates can be reconciled without provisioning and unused never-started
-  allocations retired through normal collection with separate immutable evidence,
-  one deletion intent and exact-ID absence confirmation, never a successful baseline.
+  allocations and terminal pre-native setup failures retired through normal
+  collection with separate immutable evidence, one deletion intent and exact-ID
+  absence confirmation, never a successful baseline. Early failure packaging does
+  not depend on the Node installation or source clone that setup may not have made.
 
 - Distinguish benchmark provider census refusal predicates and finite href/count
   details without forwarding rejected values. Bound count-only census convergence

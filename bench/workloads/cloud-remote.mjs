@@ -1,6 +1,6 @@
 import { remoteFiles as contractFiles, validateState } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
-import { archiveLimit } from "./cloud-local.mjs";
+import { archiveLimit, expandedLimit } from "./cloud-local.mjs";
 
 export const sourceUrl = "https://github.com/corten-run/corten.git";
 export function bootstrapMarker(state) {
@@ -48,7 +48,29 @@ if test -e 'results.tgz' || test -L 'results.tgz'; then
   test "$(stat -c '%s' -- 'results.tgz')" -le ${archiveLimit}
   exit 0
 fi
-node --input-type=module -e 'import { checkPackage } from "/bench/repo/bench/workloads/cloud-local.mjs"; checkPackage("/bench");'
+if test ! -e 'bootstrap-ready.json' && test ! -L 'bootstrap-ready.json' && { test ! -e 'campaign' && test ! -L 'campaign' || test -d 'campaign' && test ! -L 'campaign' && test -z "$(ls -A -- 'campaign')"; }; then
+  /usr/bin/timeout 25 /usr/bin/python3 - <<'CORTEN_SETUP_PACKAGE'
+import os, pathlib, re, stat
+root = pathlib.Path('/bench')
+assert root.is_dir() and not root.is_symlink() and root.resolve() == root
+assert not os.path.lexists(root / 'bootstrap-ready.json')
+campaign = root / 'campaign'
+if os.path.lexists(campaign):
+    assert campaign.is_dir() and not campaign.is_symlink() and next(campaign.iterdir(), None) is None
+size = 0
+for name in ['run.log', 'host.txt', 'exit-code']:
+    info = (root / name).lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    size += info.st_size
+    assert size <= ${expandedLimit}
+marker = root / 'exit-code'
+assert marker.stat().st_size <= 16
+value = marker.read_bytes()
+assert re.fullmatch(rb'[1-9][0-9]{0,2}\\n', value) and int(value) <= 255
+CORTEN_SETUP_PACKAGE
+else
+  node --input-type=module -e 'import { checkPackage } from "/bench/repo/bench/workloads/cloud-local.mjs"; checkPackage("/bench");'
+fi
 stage=$(mktemp '/bench/cloud-pack.XXXXXXXX')
 trap 'rm -f -- "$stage"' EXIT
 files=('run.log' 'host.txt' 'exit-code')
