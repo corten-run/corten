@@ -1153,17 +1153,18 @@ function readPartsAgain(roots) {
  * `ReadAgain::now`): each address once, so tags for two parts that one read draws share it, at
  * once, whether the tab is shown or not. A root may be such a tag itself (one a patch appends). A
  * tag for `answered`, the address of the patch that put it there, would ask for itself again: its
- * part is marked failed instead, so its link shows.
- * @param {Element[]} roots @param {string | null} [answered]
+ * part is marked failed instead, so its link shows. `visited` is the count of visits when the read
+ * was first asked for, kept by one made again, so a navigation started since overrides its redirect.
+ * @param {Element[]} roots @param {string | null} [answered] @param {number} [visited]
  */
-function readNow(roots, answered) {
+function readNow(roots, answered, visited = visits) {
   /** @type {Element[]} */
   const tags = [];
   for (const tag of roots.flatMap((root) => [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))])) {
     if (answered && attrOf(tag, "data-from") === answered) for (const el of partOf(tag)) markFailed(el);
     else tags.push(tag);
   }
-  if (tags.length) readTags(tags);
+  if (tags.length) readTags(tags, visited);
 }
 
 /** Marks `el`, a part no read will bring, `data-corten-read-failed`. @param {Element} el */
@@ -1172,12 +1173,12 @@ const markFailed = (el) => elementOwn.setAttribute.call(el, "data-corten-read-fa
 /**
  * Reads the parts `tags` (`ReadAgain::now`) wait for, each address once ({@link readNow}). A page
  * the browser renders before it is shown (Speculation Rules' prerender) reads them once it is.
- * @param {Element[]} tags
+ * @param {Element[]} tags @param {number} [visited]
  */
-function readTags(tags) {
+function readTags(tags, visited = visits) {
   // Not in lib.dom yet; a browser without it never prerenders.
   if (Reflect.get(document, "prerendering") === true) {
-    document.addEventListener("prerenderingchange", () => readTags(tags.filter(inPage)), { once: true });
+    document.addEventListener("prerenderingchange", () => readTags(tags.filter(inPage), visited), { once: true });
     return;
   }
   /** @type {Map<string, [Element[], Element[]]>} */
@@ -1189,7 +1190,7 @@ function readTags(tags) {
     read[0].push(tag);
     read[1].push(...partOf(tag));
   }
-  for (const [from, [own, waiting]] of reads) readPart(from, own, waiting);
+  for (const [from, [own, waiting]] of reads) readPart(from, own, waiting, visited);
 }
 
 /**
@@ -1206,16 +1207,16 @@ function readTags(tags) {
  * so none is left waiting for nothing. A redirect (`corten-location`) is followed unless a
  * navigation has started since, and a read that ended while the browser hid the page is made again
  * once it is shown, if its parts are still the ones it waited for. While one is on its way the page
- * is not read whole ({@link readAgainLater}). The fetch stops once every tag and part has left the
- * page, so the server stops reading.
- * @param {string} from @param {Element[]} tags @param {Element[]} waiting
+ * is not read whole ({@link readAgainLater}). The fetch stops once a part it waits for leaves the
+ * page (its answer could not be drawn), so the server stops reading and the page's reads go on.
+ * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {number} visited
  */
-async function readPart(from, tags, waiting) {
+async function readPart(from, tags, waiting, visited) {
   partReads += 1;
   // Its listeners on the tags and parts go when it ends, so a tag read again does not gather them.
   const done = new AbortController();
   try {
-    await readPartOnce(from, tags, waiting, done.signal);
+    await readPartOnce(from, tags, waiting, visited, done.signal);
   } finally {
     partReads -= 1;
     done.abort();
@@ -1227,11 +1228,11 @@ let partReads = 0;
 
 /**
  * {@link readPart}'s read, whose listeners last while `done` does.
- * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {AbortSignal} done
+ * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {number} visited
+ * @param {AbortSignal} done
  */
-async function readPartOnce(from, tags, waiting, done) {
+async function readPartOnce(from, tags, waiting, visited, done) {
   const page = swapped;
-  const visited = visits;
   // A script may change a tag's address while the read is on its way (corten-ui's rows::sort puts
   // a table's order in it): the answer is drawn for what was, so it is read again.
   const moved = () => tags.some((tag) => inPage(tag) && attrOf(tag, "data-from") !== from);
@@ -1241,16 +1242,21 @@ async function readPartOnce(from, tags, waiting, done) {
   // over, and the rest are marked failed, as when a patch is not drawn over them.
   const retry = () => {
     if (page !== swapped) return;
-    if (waiting.every(inPage)) readNow(tags.filter(inPage));
+    if (waiting.every(inPage)) readNow(tags.filter(inPage), null, visited);
     else for (const el of waiting) if (inPage(el)) markFailed(el);
   };
   // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.
   const mine = {};
-  // The fetch stops when the last of the tags and parts leaves (after it ends, that does nothing).
+  // The fetch stops when a part it waits for leaves, as its answer can no longer be drawn, or when
+  // the last of its tags does with no part named (after it ends, that does nothing).
   const stop = new AbortController();
-  const held = [...tags, ...waiting];
-  let holding = held.length;
-  for (const el of held) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
+  let holding = tags.length + waiting.length;
+  for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
+  for (const el of waiting) signalOf(el).addEventListener("abort", () => stop.abort(), { signal: done });
+  // Without the Navigation API a link the user follows is a full load, which starts with
+  // `beforeunload`: counted as a visit, so the read's redirect does not take its place. Only while
+  // the read is on its way, as a browser may keep a page with that listener out of its cache.
+  if (!navigation) addEventListener("beforeunload", () => void (visits += 1), { signal: done });
   for (const el of waiting) markBusy(el, mine);
   const leftAt = left;
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});

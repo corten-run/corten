@@ -276,7 +276,8 @@ The runtime fetches the route with `corten: action` as soon as the page is on th
 load or a navigation), whether the tab is shown or not, and applies the patch it answers by id.
 The handler runs once for the page and once for the part, and each run reads only what it draws.
 The element the tag names, and only it, is `aria-busy="true"` while the read is on its way, and a
-navigation away stops the fetch, so the server stops reading. The read depends on that element
+navigation away, or a patch that replaces that element, stops the fetch, so the server stops
+reading. The read depends on that element
 alone: a patch of anything else meanwhile (the next cell of a grid, a live row of the same list,
 another part read first) neither stops it nor marks it. A part is read once; one that should be
 read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
@@ -284,7 +285,8 @@ part a form's patch or another part's answer draws waiting is read the same way,
 names the address that answer came from, which would ask for itself again: that part is marked
 failed. Tags are read in `<main>` and in the layout's elements that are the page's (`page` in
 `html!`). A read the server redirects (a sign-in) takes the page there, as a form's does, unless
-its part was replaced or a navigation started meanwhile (the user's link wins); a read the browser
+its part was replaced or a navigation started meanwhile (the user's link wins, a full load
+without the Navigation API too); a read the browser
 cut short by keeping the page in its back-forward cache is made again when the page is shown, if
 its part is still the one it waited for; a page the browser prerenders reads its parts once it is
 shown. A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's

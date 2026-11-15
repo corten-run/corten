@@ -1333,16 +1333,29 @@ async function run(browser) {
     await slower.context().close();
   }
   // A part's read the server redirects (`corten-location`) after the user followed a link, whose
-  // page is still on its way: the user's navigation goes on, and the redirect is not followed (#1400).
-  if (swaps) {
+  // page is still on its way: the user's navigation goes on, and the redirect is not followed, with
+  // the Navigation API or a full load without it; and so for a read made again at the address a
+  // script moved its tag to after the link was followed (#1400).
+  for (const [moved, native] of [
+    ...(swaps ? [[false, false], [true, false]] : []),
+    [false, true],
+  ]) {
     const overtaken = await (await browser.newContext()).newPage();
+    // A full load in place of a swap, where the runtime has no Navigation API.
+    if (native)
+      await overtaken.addInitScript(() => {
+        delete (/** @type {any} */ (Window.prototype)).navigation;
+        delete (/** @type {any} */ (window)).navigation;
+      });
     /** @type {string[]} */
     const asked = [];
     overtaken.on("request", (r) => asked.push(new URL(r.url()).pathname + new URL(r.url()).search));
     let releasePart = () => {};
     let partAsked = () => {};
     const partSent = new Promise((resolve) => (partAsked = () => resolve(undefined)));
-    await overtaken.route("**/smoke/overtaken", async (route) => {
+    await overtaken.route("**/smoke/overtaken*", async (route) => {
+      // The read at the address the tag was moved to answers at once; the first waits.
+      if (new URL(route.request().url()).search) return route.fulfill({ status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } }).catch(() => {});
       partAsked();
       await new Promise((resolve) => (releasePart = () => resolve(undefined)));
       await route.fulfill({ status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } }).catch(() => {});
@@ -1366,21 +1379,72 @@ async function run(browser) {
     });
     await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
     await overtaken.click('header nav a[href="/news"]', { noWaitAfter: true });
-    // The user's navigation is on its way, its page held.
-    await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
+    // The user's navigation is on its way, its page held: a swap's, or a full load's.
+    for (let waited = 0; !newsHeld.length && waited < 5000; waited += 50) await overtaken.waitForTimeout(50);
+    if (!native) await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
+    // A script moves the tag's address meanwhile (a sort): the first answer is read again there.
+    if (moved) await overtaken.evaluate(() => document.querySelector('template[data-part="overtaken-a"]')?.setAttribute("data-from", "/smoke/overtaken?sorted=1"));
     releasePart();
     await overtaken.waitForTimeout(500);
     releaseNews();
     await overtaken.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }).catch(() => {});
     await overtaken.waitForTimeout(300);
     check(
-      "a part's redirect that comes after the user followed a link does not take the page from it",
+      moved
+        ? "and nor does one read again at the address a script moved its tag to after the link was followed"
+        : native
+          ? "nor where the link is a full load, without the Navigation API"
+          : "a part's redirect that comes after the user followed a link does not take the page from it",
       new URL(overtaken.url()).pathname === "/news" && !asked.includes("/?overtaken=1"),
       `${overtaken.url()} asked ${asked.filter((p) => p.includes("overtaken") || p.startsWith("/news")).join(", ")}`,
     );
     await overtaken.unrouteAll({ behavior: "ignoreErrors" });
     await overtaken.context().close();
-  } else skip("a part's redirect that comes after the user followed a link does not take the page from it", noSwaps);
+  }
+  if (!swaps)
+    for (const name of [
+      "a part's redirect that comes after the user followed a link does not take the page from it",
+      "and nor does one read again at the address a script moved its tag to after the link was followed",
+    ])
+      skip(name, noSwaps);
+  // A read whose part a form's answer replaced, while its tag stays and the server never answers:
+  // it stops, so the page's own read again, put off while it was on its way, goes on (#1400).
+  {
+    const orphan = await (await browser.newContext()).newPage();
+    let first = true;
+    await orphan.route(`${base}/`, async (route) => {
+      if (route.request().headers().corten || !first) return route.continue();
+      first = false;
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    let orphanStopped = false;
+    orphan.on("requestfailed", (r) => r.url().endsWith("/smoke/orphan") && (orphanStopped = true));
+    // Never answered.
+    await orphan.route("**/smoke/orphan", () => new Promise(() => {}));
+    let [loaded, wholeReads] = [false, 0];
+    orphan.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
+    await orphan.goto(`${base}/`);
+    await orphan.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="orphan-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="orphan-0"><p id="orphan-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/orphan" data-part="orphan-a"></template></div>'));
+      await corten.patch(__html('<p id="orphan-a">Drawn by a form</p>'));
+    });
+    loaded = true;
+    for (let waited = 0; !wholeReads && waited < 5000; waited += 100) await orphan.waitForTimeout(100);
+    check(
+      "a read whose part a form replaced stops, and the page's read again goes on",
+      orphanStopped && wholeReads > 0,
+      `stopped ${orphanStopped}, page read ${wholeReads} times`,
+    );
+    await orphan.unrouteAll({ behavior: "ignoreErrors" });
+    await orphan.context().close();
+  }
   // A navigation away while the part's read is on its way: a client navigation stops the read and
   // leaves nothing marked failed on the page it draws; a page the browser left whole (and may keep
   // in its back-forward cache) has the part read when it is back, never marked failed (#1400).
