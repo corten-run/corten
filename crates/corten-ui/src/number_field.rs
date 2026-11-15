@@ -272,7 +272,10 @@ mod tests {
         let field = |value: f64| Number { value: value.into(), ..Number::new(ShareId, Form::FIELDS.p, quarters, "Less", "More") };
         let at_first = NumberField { field: &field(0.25) }.to_html();
         assert!(at_first.contains(r#"value="0.25" min="0.25" max="0.75" step="0.25""#), "{at_first}");
-        assert!(at_first.contains(r#"aria-label="Less" tabindex="-1" disabled"#) && !at_first.contains(r#""More" tabindex="-1" disabled"#));
+        assert!(
+            at_first.contains(r#"aria-label="Less" tabindex="-1" disabled"#)
+                && !at_first.contains(r#""More" tabindex="-1" disabled"#)
+        );
         let between = NumberField { field: &field(0.5) }.to_html();
         assert!(!between.contains(" disabled"), "{between}");
     }
