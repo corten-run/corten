@@ -984,6 +984,10 @@ pub struct Req {
     fills: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
+    /// A debug build's: the request is to a route with named posts, at one of their addresses
+    /// (`do=..`), where the page it draws stays ([`Req::check_action_forms`]).
+    #[cfg(debug_assertions)]
+    at_post: bool,
 }
 
 /// What a write said on the page it redirected to ([`Req::redirect_with_notice`]): "Batch 3517
@@ -1189,6 +1193,8 @@ impl Req {
             fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
             shared,
             signal,
+            #[cfg(debug_assertions)]
+            at_post: extensions.get::<crate::router::HasPosts>().is_some() && at_action(uri.query()),
         }
     }
 
@@ -1657,8 +1663,28 @@ impl Req {
         #[cfg(debug_assertions)]
         if page {
             self.check_submit_keys(&out[start..])?;
+            if self.at_post {
+                self.check_action_forms(&out[start..])?;
+            }
         }
         Ok(modules)
+    }
+
+    /// In a debug build: an error when a page drawn at one of a page's posts' addresses (`?do=..`:
+    /// a write it refused, without JavaScript, or the address opened) has a post form with no
+    /// `action`. The browser stays at that address, so the form would send its post to that action
+    /// again, whatever it is for. Only a page at such an address is read.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_action_forms(&self, html: &str) -> Result<()> {
+        match post_form_without_action(html) {
+            Some(form) => Err(self.unserved(format!(
+                "{path} is drawn at one of its posts' addresses (do=..), where the browser stays, and it draws the post form {form} with no action, which would send its post to that address again: write each post form's action, action={{page}} for its post = .. or action={{page.save()}} for a post(save) = ..",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// In a debug build: an error when the page draws a hint with text (`id={HintId(&id)}`) that
@@ -2647,6 +2673,25 @@ impl Req {
         ];
         Ok(HtmlResponse::new((StatusCode::MOVED_PERMANENTLY, headers).into_response()))
     }
+}
+
+/// Whether `query` has the key that names one of a page's posts (`do=..`).
+#[cfg(debug_assertions)]
+fn at_action(query: Option<&str>) -> bool {
+    !matches!(crate::router::named(query), crate::router::Named::None)
+}
+
+/// The first `<form method="post">` in `html` with no `action` (or an empty one), as written: it
+/// posts to the address the page is at.
+#[cfg(debug_assertions)]
+fn post_form_without_action(html: &str) -> Option<&str> {
+    crate::html::start_tags(html)
+        .find(|tag| {
+            tag.name == "form"
+                && tag.attr("method").is_some_and(|method| method.eq_ignore_ascii_case("post"))
+                && tag.attr("action").is_none_or(|action| action.trim().is_empty())
+        })
+        .map(|tag| &html[tag.start..tag.end])
 }
 
 /// A page with a `Refresh` header: browsers keep a full load's after the runtime navigates

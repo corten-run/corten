@@ -390,7 +390,7 @@ pub(crate) mod tests {
     fn a_dialogs_failure_text_is_one_alert() {
         use corten::{Errors, view::Render};
         let errors = Errors::new();
-        let html = crate::gallery::RenameDialog { name: "", errors: &errors }.to_html();
+        let html = crate::gallery::RenameDialog { here: crate::app::DRAFT, name: "", errors: &errors }.to_html();
         assert_eq!(html.matches("role=").count(), 1, "{html}");
         assert!(
             html.contains(

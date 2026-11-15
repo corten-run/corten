@@ -71,10 +71,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
                     match part {
                         [] => {}
-                        // What `#[corten::routes]` passes for a route that says `patches`, and
-                        // for one that says `data = SetListing`.
-                        [TokenTree::Ident(i)] if i.to_string() == "__patches" => {}
-                        [TokenTree::Ident(i)] if i.to_string() == "__data" => {}
+                        // What `#[corten::routes]` passes for a route that says `patches`, for one
+                        // with actions (`post(sku) = ..`), and for one that says `data = SetListing`.
+                        [TokenTree::Ident(i)] if i.to_string() == "__patches" || i.to_string() == "__actions" || i.to_string() == "__data" => {}
                         [key, ..] if is_ident(Some(key), "prefetch") => {
                             if prefetched {
                                 return err(key.span(), "prefetch is named twice");
@@ -119,7 +118,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ),
         );
     }
-    let (attrs, prefetch, patches, data) = route_prefetch(&item.attrs, item.name.span())?;
+    let (attrs, prefetch, patches, actions, data) = route_prefetch(&item.attrs, item.name.span())?;
     let item = Item { attrs, ..item };
     let Some((path, span)) = item.attr_string("route")? else {
         return err(
@@ -215,7 +214,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         body.extend(q("let mut __corten_first = true; let __corten_first = &mut __corten_first;", &[]));
         body.extend(query_writes(&query));
     }
-    let keys_check = check_keys(&item, &query);
+    let mut keys_check = check_keys(&item, &query);
+    // A route with actions: its addresses add `do`, which none of its own parameters may be.
+    if actions && only_lifetimes(&item.impl_generics) {
+        keys_check.extend(q("const _: () = ::corten::route::__private::check_action_key(&[__A0]);", &[query_keys(&query, true)]));
+    }
     let (matched, suffixes) = suffixed(&path);
     // The path as written, when axum matches less of it (`{page}.xml` as `{page}`).
     let mut written =
@@ -841,12 +844,14 @@ fn is_route_query(attr: &proc_macro::Group) -> bool {
 /// `#[route("/..", prefetch = false)]` or `prefetch = costly` (a function of the route): the
 /// attributes with the route's cut to its path, the body of `Route::may_prefetch` (`true`
 /// unless it says otherwise), whether `#[corten::routes]` said the route says `patches`
-/// (`"/..", __patches`, right after the path), for `Route::PATCHES`, and the data it said the
-/// route's screen answers data (`"/..", __data`), for `Route::DATA`, which reads the type from
-/// the `RouteData` impl the routes module writes where the type is in scope.
-fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool, bool), Error> {
+/// (`"/..", __patches`, right after the path), for `Route::PATCHES`, whether it said the route
+/// has actions (`__actions`, after it), whose `do` its query parameters may not be, and whether
+/// it said the route's screen answers data (`__data`, after those), for `Route::DATA`, which
+/// reads the type from the `RouteData` impl the routes module writes where the type is in scope.
+fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool, bool, bool), Error> {
     let mut prefetch: TokenStream = TokenTree::Ident(Ident::new("true", span)).into();
     let mut patches = false;
+    let mut actions = false;
     let mut data = false;
     let mut out = Vec::with_capacity(attrs.len());
     for attr in attrs {
@@ -860,14 +865,16 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
             out.push(attr.clone());
             continue;
         }
-        if matches!(&inner[1..], [TokenTree::Punct(comma), TokenTree::Ident(marker), ..] if comma.as_char() == ',' && marker.to_string() == "__patches")
-        {
-            patches = true;
-            inner.drain(1..3);
-        }
-        if matches!(&inner[1..], [TokenTree::Punct(comma), TokenTree::Ident(marker), ..] if comma.as_char() == ',' && marker.to_string() == "__data")
-        {
-            data = true;
+        while let [TokenTree::Punct(comma), TokenTree::Ident(marker), ..] = &inner[1..] {
+            if comma.as_char() != ',' {
+                break;
+            }
+            match marker.to_string().as_str() {
+                "__patches" => patches = true,
+                "__actions" => actions = true,
+                "__data" => data = true,
+                _ => break,
+            }
             inner.drain(1..3);
         }
         match &inner[1..] {
@@ -930,7 +937,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
         cut.set_span(attr.span());
         out.push(cut);
     }
-    Ok((out, prefetch, patches, data))
+    Ok((out, prefetch, patches, actions, data))
 }
 
 /// Where a `prefetch` value that is whole (`false`, `true` or a function's path) is followed by

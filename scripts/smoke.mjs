@@ -6289,6 +6289,8 @@ async function run(browser) {
    * @param {(route: import("playwright").Route) => unknown} answer
    */
   const uploads = (answer) => (/** @type {import("playwright").Route} */ route) => (route.request().method() === "POST" ? answer(route) : route.fallback());
+  /** The account page's address, whatever its query: its posts go to it with do=picture or do=name. @param {URL} url */
+  const atAccount = (url) => url.pathname === "/account";
   /** Uploads one file with the account page's form and gives the status line's text. @param {{ name: string, mimeType: string, buffer: Buffer }} file */
   const upload = async (file) => {
     await page.evaluate(() => {
@@ -6417,7 +6419,7 @@ async function run(browser) {
   // A network failure reaches the form as corten:error, as a fetch's does. The browser logs the
   // request it fails on purpose (Chromium's net::ERR_FAILED), and the one a navigation abandons.
   const failedOnPurpose = errors.length;
-  await page.route("**/account", uploads((route) => route.abort()));
+  await page.route(atAccount, uploads((route) => route.abort()));
   const uploadFailed = page.evaluate(
     () =>
       new Promise((resolve) => {
@@ -6428,7 +6430,7 @@ async function run(browser) {
   await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
   await page.click("main form[enctype] button");
   check("an upload the network fails dispatches corten:error with status 0", (await uploadFailed) === 0, String(await uploadFailed));
-  await page.unroute("**/account");
+  await page.unroute(atAccount);
   // An upload answered with a status that takes no body (204, 205, 304) is made a Response with
   // none, as fetch's is: one made with the answer's empty body would throw. A status a Response
   // cannot have (600 or more) is the failure a network error is, corten:error with status 0, and
@@ -6504,7 +6506,7 @@ async function run(browser) {
   // Corten's own 204, the redirect a write's handler answers with (`corten-location`), back to
   // this page: the page the form is on is drawn again, and nothing failed.
   await watchUpload();
-  await page.route("**/account", uploads((route) => route.fulfill({ status: 204, headers: { "corten-location": "/account" } })));
+  await page.route(atAccount, uploads((route) => route.fulfill({ status: 204, headers: { "corten-location": "/account" } })));
   await page.evaluate(() => document.querySelector("main form[enctype]")?.setAttribute("data-smoke-old", ""));
   await pressUpload();
   const redirectedIn = await page
@@ -6519,7 +6521,7 @@ async function run(browser) {
     const w = /** @type {any} */ (window);
     return { error: sessionStorage.getItem("smoke-upload-error"), loaded: w.__xhrStatus?.join() ?? "a full load", busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, path: location.pathname };
   });
-  await page.unroute("**/account");
+  await page.unroute(atAccount);
   check(
     "an upload answered with Corten's 204 redirect goes there, with no corten:error and the form not busy",
     redirectedIn && afterRedirect.error === null && afterRedirect.busy === null && afterRedirect.path === "/account",
@@ -6542,20 +6544,20 @@ async function run(browser) {
       continue;
     }
     await watchUpload();
-    await page.route("**/account", uploads((route) => answerUpload(route, status)));
+    await page.route(atAccount, uploads((route) => answerUpload(route, status)));
     await pressUpload();
     const bare = await uploadEnded(quiet);
-    await page.unroute("**/account");
+    await page.unroute(atAccount);
     if (status === 304 && bare.loaded !== "304") skip(bareName, `the engine's XMLHttpRequest did not load a 304: ${unfulfilled || `loaded ${bare.loaded || "nothing"}, corten:error ${bare.error}`}`);
     else check(bareName, bare.error === (quiet ? null : status) && bare.busy === null && bare.loaded === String(status) && (status !== 205 || bare.files === 0), JSON.stringify(bare));
   }
   // A status of 600 or more, which a browser may log as a failed resource.
   const beyondLogged = errors.length;
   await watchUpload();
-  await page.route("**/account", uploads((route) => answerUpload(route, 600)));
+  await page.route(atAccount, uploads((route) => answerUpload(route, 600)));
   await pressUpload();
   const beyond = await uploadEnded();
-  await page.unroute("**/account");
+  await page.unroute(atAccount);
   errors.splice(beyondLogged, errors.length, ...errors.slice(beyondLogged).filter((e) => !/status of 600\b/.test(e)));
   const beyondName = "an upload answered with a status of 600 dispatches corten:error with status 0, and the form is not busy";
   if (beyond.loaded !== "600") skip(beyondName, `the engine did not hand XMLHttpRequest a status of 600: ${unfulfilled || `loaded ${beyond.loaded || "nothing"}, corten:error ${beyond.error}`}`);
@@ -6578,7 +6580,7 @@ async function run(browser) {
     const redirectContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
     await redirectContext.addCookies(await page.context().cookies());
     const redirected = await redirectContext.newPage();
-    await redirected.route("**/account", uploads((route) => route.fulfill({ status: 303, headers: { location: "/news" } })));
+    await redirected.route(atAccount, uploads((route) => route.fulfill({ status: 303, headers: { location: "/news" } })));
     await redirected.goto(`${base}/account`);
     const answered = await redirected.evaluate(async () => {
       const url = performance
@@ -6614,7 +6616,7 @@ async function run(browser) {
   /** @type {import("playwright").Route[]} */
   const heldUploads = [];
   await leave.route(
-    "**/account",
+    atAccount,
     uploads((route) => {
       heldUploads.push(route);
     }),
@@ -6709,6 +6711,77 @@ async function run(browser) {
     return { answer: document.querySelector("#avatar-result")?.textContent ?? "", failed, busy: Element.prototype.getAttribute.call(form, "aria-busy"), files: /** @type {HTMLInputElement | null} */ (form.querySelector("input[type=file]"))?.files?.length ?? -1 };
   });
   check("a multipart form without a progress handler, with a control named getAttribute, is still sent", ordinary.answer !== "" && !ordinary.failed.length, JSON.stringify(ordinary));
+  // The account page's two forms are posts of the page's own, told apart by their address alone
+  // (do=picture, do=name): a multipart upload beside a urlencoded form, with JavaScript (each a
+  // data-patch) and without.
+  await page.goto(`${base}/account`);
+  {
+    const nameForm = page.locator("main form:has(input[name=name])");
+    await nameForm.locator("input[name=name]").fill("Grace");
+    const [sent] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), nameForm.locator("button").click()]);
+    await page.waitForFunction(() => document.querySelector("#name-result")?.textContent === "Your pages now say Grace.", null, { timeout: 5000 }).catch(() => {});
+    const type = (await sent.headerValue("content-type")) ?? "";
+    const badge = (await page.textContent("#viewer-badge")) ?? "";
+    check(
+      "a data-patch post of the page's own goes to its address with do=name, urlencoded, and patches the page where it is",
+      new URL(sent.url()).search === "?do=name" && type.startsWith("application/x-www-form-urlencoded") && badge.includes("Grace") && new URL(page.url()).search === "",
+      `${sent.url()} ${type} ${badge} ${page.url()}`,
+    );
+    const named = await page.evaluate(() => ({
+      label: document.querySelector("#viewer-link")?.getAttribute("aria-label"),
+      current: document.querySelector("#viewer-link")?.getAttribute("aria-current"),
+      line: document.querySelector("#signed-in-as")?.textContent,
+    }));
+    check(
+      "the new name replaces every place the page names them: the header link's accessible name, still current, and the account's line",
+      named.label === "Grace: account" && named.current === "page" && named.line === "Signed in as Grace.",
+      JSON.stringify(named),
+    );
+    await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    const [upload] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), page.click("main form[enctype] button")]);
+    await page.waitForFunction(() => document.querySelector("#avatar-result")?.textContent === "Saved card.png as your picture.", null, { timeout: 8000 }).catch(() => {});
+    const uploadType = (await upload.headerValue("content-type")) ?? "";
+    check(
+      "the same page's multipart post goes to do=picture, and its handler reads the body",
+      new URL(upload.url()).search === "?do=picture" && uploadType.startsWith("multipart/form-data") && (await page.textContent("#avatar-result")) === "Saved card.png as your picture.",
+      `${upload.url()} ${uploadType} ${await page.textContent("#avatar-result")}`,
+    );
+  }
+  {
+    const noScript = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext({ javaScriptEnabled: false });
+    await noScript.addCookies(await page.context().cookies());
+    const plainAccount = await noScript.newPage();
+    await plainAccount.goto(`${base}/account`);
+    /** Presses `button` and gives the post's answer once the page it leads to has loaded. @param {string} button */
+    const post = (button) =>
+      Promise.all([plainAccount.waitForResponse((r) => r.request().method() === "POST"), plainAccount.waitForNavigation(), plainAccount.click(button)]).then(([answer]) => answer);
+    const nameButton = "main form:has(input[name=name]) button";
+    await plainAccount.fill("main input[name=name]", "Ada");
+    const renamed = await post(nameButton);
+    const at = new URL(plainAccount.url());
+    check(
+      "without JavaScript the name's urlencoded post goes to do=name and the browser back to the page",
+      new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
+      `${renamed.url()} ${renamed.status()} ${plainAccount.url()}`,
+    );
+    await plainAccount.fill("main input[name=name]", " ");
+    const refused = await post(nameButton);
+    check(
+      "without JavaScript a refused name is the page at its post's address, the reason in it",
+      refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
+      `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}`,
+    );
+    // From the page drawn at do=name, the picture's form still posts to its own address.
+    await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    const uploadedPlain = await post("main form[enctype] button");
+    const plainType = (await uploadedPlain.request().headerValue("content-type")) ?? "";
+    check(
+      "without JavaScript the picture's multipart post goes to do=picture, from the page drawn at do=name",
+      new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
+      `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}`,
+    );
+    await noScript.close();
+  }
   errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 

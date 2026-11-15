@@ -51,10 +51,7 @@ pub fn Layout<'a>(
                             <a {..req.nav(&url::Alerts { saved: None })}>"Alerts"</a>
                         </nav>
                         match viewer {
-                            // Named for where it goes, starting with what it shows (the name).
-                            Some(viewer) => <a {..req.nav(&account::url::Account)} aria-label={format!("{}: account", viewer.name)}>
-                                <ViewerBadge viewer={viewer} />
-                            </a>,
+                            Some(viewer) => <ViewerLink req={req} viewer={viewer} />,
                             None => <form method="post" action={url::SignIn} data-patch><button>"Sign in"</button></form>,
                         }
                     </div>
@@ -83,9 +80,23 @@ pub fn Layout<'a>(
 #[derive(Id)]
 pub struct SectorNavId;
 
+/// The header's link to the viewer's account, named for where it goes, starting with what it shows
+/// (the name). A write that changes who they are (a new name, a picture) replaces it by its id, so its
+/// name follows the badge; drawn by the request it answers, it keeps its mark as the current page.
+#[derive(Id)]
+pub struct ViewerLinkId;
+
+#[component]
+pub fn ViewerLink<'a>(req: &'a Req, viewer: &'a Viewer) -> impl Patch {
+    html! {
+        <a id={ViewerLinkId} {..req.nav(&account::url::Account)} aria-label={format!("{}: account", viewer.name)}>
+            <ViewerBadge viewer={viewer} />
+        </a>
+    }
+}
+
 /// The header's badge, inside the link to their account: who is signed in, with their picture
-/// once they upload one. The upload's answer replaces it by its id, and the link around it keeps
-/// its mark as the current page.
+/// once they upload one; a write replaces it with the link around it ([`ViewerLink`]).
 #[derive(Id)]
 pub struct ViewerBadgeId;
 
@@ -124,7 +135,7 @@ mod tests {
         let ada = app.get(&Home::default()).cookie("session", &session).await;
         let ada = ada.text();
         assert!(
-            ada.contains(r#"<a href="/account" data-nav aria-label="Ada: account"><span id="viewer-badge""#)
+            ada.contains(r#"<a id="viewer-link" href="/account" data-nav aria-label="Ada: account"><span id="viewer-badge""#)
                 && ada.contains(">Ada</span></a>"),
             "{ada}"
         );
@@ -132,8 +143,9 @@ mod tests {
         let account = app.get(&Account).cookie("session", &session).await;
         let account = account.text();
         assert!(
-            account
-                .contains(r#"<a href="/account" data-nav aria-current="page" aria-label="Ada: account"><span id="viewer-badge""#),
+            account.contains(
+                r#"<a id="viewer-link" href="/account" data-nav aria-current="page" aria-label="Ada: account"><span id="viewer-badge""#
+            ),
             "{account}"
         );
         let lost = app.get(&Local::parse("/nope").unwrap()).cookie("session", &session).await;
