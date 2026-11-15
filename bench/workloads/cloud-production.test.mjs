@@ -124,6 +124,35 @@ test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch f
   }
 });
 
+test("pre-reservation failures retain their closed controller stage without cloud calls", async (t) => {
+  for (const [flags, stage] of [[{ fetchError: true }, "remote-main-fetch"], [{ unmerged: true }, "remote-main-ancestry"]]) {
+    const p = productionHarness(t, flags), approval = await p.approve("--detach");
+    await assert.rejects(productionMain(approval, p.deps), (error) => {
+      assert.equal(error.controllerStage, stage); return true;
+    });
+    assert.ok(p.calls.every(([binary]) => binary === "git"));
+    assert.ok(!existsSync(p.h.local)); assert.equal(p.h.creates, 0);
+  }
+});
+
+test("frozen settlement failures retain their stronger uncertainty and stage", async (t) => {
+  const p = productionHarness(t, { fetchError: true }), approval = await p.approve("--detach");
+  const factory = p.deps.providerFactory;
+  p.deps.providerFactory = (options) => {
+    const provider = factory(options);
+    provider.close = async () => { throw Object.freeze(Object.assign(new Error("PRIVATE_CLOSE"), {
+      controlTreeUncertain: true, controlUncertain: true, providerDiagnostic: { code: "get-http", httpStatus: 503 },
+    })); };
+    return provider;
+  };
+  await assert.rejects(productionMain(approval, p.deps), (error) => {
+    assert.equal(error.controllerStage, "provider-settlement");
+    assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
+    assert.deepEqual(error.providerDiagnostic, { code: "get-http", httpStatus: 503 }); return true;
+  });
+  assert.ok(p.calls.every(([binary]) => binary === "git")); assert.equal(p.h.creates, 0);
+});
+
 test("approved composed transport provisions fixed files and starts exactly once", async (t) => {
   const p = productionHarness(t, { active: true }), approval = await p.approve("--detach");
   assert.equal(await productionMain(approval, p.deps), 3); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);

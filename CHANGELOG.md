@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve closed production-controller failure stages through fleet workers and
+  saved receipts, distinguishing pre-reservation source and Git failures from
+  launch, collection and teardown without forwarding raw errors or changing gates.
+  Refuse later-host admission when its service is already terminal; preserve its
+  started identity and evidence for collection instead of saving a false running state.
+
 - Stage grouped benchmark host admission behind the first required group's
   source-bound common bootstrap, then admit remaining hosts serially while their
   benchmark jobs overlap. Preserve the complete registry and all measurement gates.

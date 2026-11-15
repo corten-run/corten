@@ -108,6 +108,24 @@ test("group launch permits exact siblings but reserves only this group's complet
   await assert.rejects(h.task({}, options).launch()); assert.equal(h.creates, 1);
 });
 
+test("a terminal later group cannot be saved as running admission and remains collectable", async (t) => {
+  const { h, options } = configured(t);
+  options.group = groupNames[1]; h.flags.active = false;
+  await assert.rejects(h.task({}, options).launch(), /group ended before running admission/);
+  assert.equal(h.saved().status, "starting"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+  h.flags.active = true;
+  assert.equal(await h.task().collect(), 3);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
+test("a nonterminal later group retains ordinary running admission", async (t) => {
+  const { h, options } = configured(t); options.group = groupNames[1];
+  await h.task({}, options).launch();
+  assert.equal(h.saved().status, "running"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.saved().bootstrapReady, undefined); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
 test("foreign benchmark, own preexisting host, or fleet/account tampering cannot create", async (t) => {
   for (const mode of ["foreign", "own", "changed-account", "changed-fleet"]) {
     const { h, fleet, options, path } = configured(t);
