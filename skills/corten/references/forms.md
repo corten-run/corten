@@ -36,10 +36,18 @@ async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
 ```
 
 A form that belongs to one page posts to that page's route (`get = home, post = greet`), so the
-page drawn without JavaScript is at an address that answers a `GET`. A write with a path of its
-own (one of a page's several writes, or one several pages use) answers `req.redirect` or
-`req.redirect_with_notice` once done, and draws a page only to refuse (`req.invalid`); a debug
-build answers 500 to a successful page drawn at a path with no `GET`.
+page drawn without JavaScript is at an address that answers a `GET`. A page with several writes
+names each as a post of its own route, `post(price) = set_price, post(photo) = add_photo`, and
+posts to `action={at.price()}` (or a button's `formaction={at.photo()}`): the page's address with
+`do=price`, chosen from the address before the body is read, so a multipart `Upload` is one too.
+Each handler takes the page's `Params` and redirects back to the same view; never declare a route
+per write to carry the page's query, and never write `?do=` by hand. A write several pages use has
+a path of its own. Either answers `req.redirect` or `req.redirect_with_notice` once done, and
+draws a page only to refuse (`req.invalid`); a page with named posts gives every form an
+`action`. A debug build answers 500 to a successful page drawn at a path with no `GET`, and to a
+page with named posts drawn at a `do` address with a post form that has no `action`. A post's
+address is the view the page was drawn at; a tab that changes the address in the browser rewrites
+no form, so send such a tab as a field if a write must follow it.
 
 A patch may hold several top-level elements; each replaces the element with the same `id`, so
 each needs one, a `#[derive(Id)]` type: `req.patch` and `req.invalid` take a `Patch`, and a view

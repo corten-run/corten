@@ -16,6 +16,27 @@ Corten is pre-1.0, so any minor version may change the API.
   form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
+  post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
+  its query set once instead of on a route per write to redirect back to the same view
+  ([#1403](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
+  method per name, `action={at.price()}` or a button's `formaction={at.photo()}`, whose address is
+  the page's own with `do=price`; the router chooses the handler from the address alone, so a
+  urlencoded form and a multipart upload are chosen alike and the handler's extractor still owns
+  the body. A post with no `do` goes to the plain `post`; an unknown name, `do` sent twice or no
+  `do` without a plain `post` is a 400; a `GET` of a post's address draws the page. A name with
+  no handler, two handlers for one name, a route with posts but no `get` or in an API's module, a
+  query parameter named `do`, and a redirect to a post's address do not compile. A debug build
+  answers a page of a route with named posts, drawn at a `do` address, with a post form that has no
+  `action` with a 500 (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and
+  the ui-gallery's draft use them.
+
+- Preserve closed production-controller failure stages through fleet workers and
+  saved receipts, distinguishing pre-reservation source and Git failures from
+  launch, collection and teardown without forwarding raw errors or changing gates.
+  Refuse later-host admission when its service is already terminal; preserve its
+  started identity and evidence for collection instead of saving a false running state.
+
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into

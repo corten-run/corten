@@ -100,6 +100,100 @@ impl Endpoint for Giving {
     }
 }
 
+/// A page's `POST` handler when it has named posts (`post(hold) = ..`): the one the `do` of the
+/// post's address names, or its plain `post` for a post that names none. Only the query is read,
+/// so the body, a multipart upload's too, is still the chosen handler's to read, under its limit.
+/// A name the page has no post for, a post that names none where the page has no plain `post`,
+/// and a post that names two are a `400`: the address is the app's own, so the request is at
+/// fault, and no other handler is tried in its place.
+struct Chooser {
+    plain: Option<Route>,
+    actions: Box<[(&'static str, Route)]>,
+}
+
+impl Endpoint for Chooser {
+    #[inline]
+    fn call(&self, req: Request) -> Answering {
+        let chosen = match named(req.uri().query()) {
+            Named::None => self.plain.as_ref(),
+            Named::One(name) => self.actions.iter().find(|(own, _)| *own == name.as_ref()).map(|(_, route)| route),
+            Named::Twice => None,
+        };
+        match chosen {
+            Some(route) => route.call(req),
+            None => self.refuse(req.uri().query()),
+        }
+    }
+}
+
+impl Chooser {
+    /// The `400` for a post no handler of the page's is for, its text written for a developer
+    /// (the error page shows it under `corten dev`).
+    #[cold]
+    fn refuse(&self, query: Option<&str>) -> Answering {
+        let names = self.actions.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ");
+        let message = match named(query) {
+            Named::None => format!("this post names none of the page's posts ({names}) in its address's do, and the page has no post = .. for one that names none"),
+            Named::One(name) => format!("the page has no post named {name:?} (do={name}); its posts are {names}"),
+            Named::Twice => format!("this post's address names do twice; it names one of the page's posts ({names})"),
+        };
+        Box::pin(std::future::ready((StatusCode::BAD_REQUEST, message).into_response()))
+    }
+}
+
+/// A debug build's mark on a request to a route with named posts, which [`crate::page::Req`]
+/// reads to check the page it draws at one of their addresses.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+pub(crate) struct HasPosts;
+
+/// A route's handler for a method, marking its request [`HasPosts`] (a debug build's).
+#[cfg(debug_assertions)]
+struct Posts {
+    inner: Route,
+}
+
+#[cfg(debug_assertions)]
+impl Endpoint for Posts {
+    fn call(&self, mut req: Request) -> Answering {
+        req.extensions_mut().insert(HasPosts);
+        self.inner.call(req)
+    }
+}
+
+/// What a post's address names in its `do`.
+pub(crate) enum Named<'q> {
+    None,
+    One(std::borrow::Cow<'q, str>),
+    Twice,
+}
+
+/// The `do` of `query`, its key and value percent-decoded as `Params` reads the query's other
+/// keys, so an address names the same post however it is spelled (`%64o=price` is `do=price`). A
+/// browser sends a post's name, a Rust identifier, as it is written, so decoding is only for a
+/// pair with a `%` in it.
+#[inline]
+pub(crate) fn named(query: Option<&str>) -> Named<'_> {
+    use std::borrow::Cow;
+    let decode = |text| percent_encoding::percent_decode_str(text).decode_utf8_lossy();
+    let mut found = Named::None;
+    for pair in query.unwrap_or("").split('&') {
+        // A key that decodes to `do` starts with its `d` or an escape.
+        if !matches!(pair.as_bytes().first(), Some(b'd' | b'%')) {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key != crate::route::ACTION_KEY && !(key.contains('%') && decode(key) == crate::route::ACTION_KEY) {
+            continue;
+        }
+        if !matches!(found, Named::None) {
+            return Named::Twice;
+        }
+        found = Named::One(if value.contains('%') { decode(value) } else { Cow::Borrowed(value) });
+    }
+    found
+}
+
 /// A handler for some methods, waiting for its state (`S`) or with it.
 enum Slot<S> {
     Unbound(Arc<dyn Fn(S) -> Route + Send + Sync>),
@@ -220,17 +314,25 @@ pub(crate) struct MethodSet<S = ()> {
     slots: [Option<Slot<S>>; 9],
     fallback: Option<Slot<S>>,
     allow: Allow,
+    /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
+    /// address ([`Chooser`]).
+    actions: Vec<(&'static str, Slot<S>)>,
 }
 
 impl<S> Clone for MethodSet<S> {
     fn clone(&self) -> Self {
-        MethodSet { slots: self.slots.clone(), fallback: self.fallback.clone(), allow: self.allow.clone() }
+        MethodSet {
+            slots: self.slots.clone(),
+            fallback: self.fallback.clone(),
+            allow: self.allow.clone(),
+            actions: self.actions.clone(),
+        }
     }
 }
 
 impl<S> Default for MethodSet<S> {
     fn default() -> Self {
-        MethodSet { slots: std::array::from_fn(|_| None), fallback: None, allow: Allow::Methods(Vec::new()) }
+        MethodSet { slots: std::array::from_fn(|_| None), fallback: None, allow: Allow::Methods(Vec::new()), actions: Vec::new() }
     }
 }
 
@@ -257,6 +359,15 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
         self
     }
 
+    /// Its `POST` handler as the page's post `name`, which a post whose `do` is `name` reaches.
+    /// The route still allows `POST`.
+    pub(crate) fn named(mut self, name: &'static str) -> Self {
+        let slot = self.slots[POST].take().expect("corten: a named post is a post handler");
+        assert!(!self.actions.iter().any(|(own, _)| *own == name), "corten: a route has two handlers for the action {name}");
+        self.actions.push((name, slot));
+        self
+    }
+
     /// The handlers of both, which have none for the same method.
     pub(crate) fn merge(mut self, other: MethodSet<S>) -> Self {
         for (at, (mine, theirs)) in self.slots.iter_mut().zip(other.slots).enumerate() {
@@ -268,6 +379,10 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
         if other.fallback.is_some() {
             assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
             self.fallback = other.fallback;
+        }
+        for (name, slot) in other.actions {
+            assert!(!self.actions.iter().any(|(own, _)| *own == name), "corten: a route has two handlers for the action {name}");
+            self.actions.push((name, slot));
         }
         self.allow = match (self.allow, other.allow) {
             (Allow::Any, _) | (_, Allow::Any) => Allow::Any,
@@ -289,6 +404,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             slots: self.slots.map(|slot| slot.map(|slot| slot.bind(&state))),
             fallback: self.fallback.map(|slot| slot.bind(&state)),
             allow: self.allow,
+            actions: self.actions.into_iter().map(|(name, slot)| (name, slot.bind(&state))).collect(),
         }
     }
 
@@ -298,6 +414,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             slots: self.slots.map(|slot| slot.map(|slot| slot.gives(gives))),
             fallback: self.fallback.map(|slot| slot.gives(gives)),
             allow: self.allow,
+            actions: self.actions.into_iter().map(|(name, slot)| (name, slot.gives(gives))).collect(),
         }
     }
 }
@@ -544,14 +661,20 @@ impl Router {
                 Through::App => at(&path).or_else(|| stages.clone()),
                 Through::Lane(lane) => Some(lane as Arc<dyn Stages>),
             };
-            routes.push(Entry {
-                path,
-                slots: methods.slots.map(|slot| slot.map(Slot::route)),
-                fallback: methods.fallback.map(Slot::route),
-                allow,
-                written,
-                stages: around,
-            });
+            let mut slots = methods.slots.map(|slot| slot.map(Slot::route));
+            // A page's named posts: its `POST` handler chooses among them by the post's `do`, so
+            // no other request, and no post to a route without them, reads its query.
+            if !methods.actions.is_empty() {
+                let actions = methods.actions.into_iter().map(|(name, slot)| (name, slot.route())).collect();
+                slots[POST] = Some(Arc::new(Chooser { plain: slots[POST].take(), actions }));
+                // A debug build marks the route's requests, so only a page of a route with named
+                // posts is checked for a post form that would send to one again (`Req`).
+                #[cfg(debug_assertions)]
+                {
+                    slots = slots.map(|slot| slot.map(|inner| Arc::new(Posts { inner }) as Route));
+                }
+            }
+            routes.push(Entry { path, slots, fallback: methods.fallback.map(Slot::route), allow, written, stages: around });
         }
         let not_found: Route = Arc::new(Status(StatusCode::NOT_FOUND));
         let not_allowed: Route = Arc::new(Status(StatusCode::METHOD_NOT_ALLOWED));

@@ -174,9 +174,11 @@ Where a form posts decides what a browser without JavaScript is left at. A form 
 one page posts to that page's route (`#[route("/items/{id}", get = show, post = save)]`, the form's
 `action={url::Item { id }}`): the page drawn as its answer is at the page's own address, which
 answers a `GET`, so it can be bookmarked and shared, and a refusal drawn there keeps what the user
-typed. A path takes one `POST`, so a page with several writes, or a write several pages use,
-gives the write a path of its own (`/watch`, `/sign-out`). That write answers a redirect once it
-is done, `req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
+typed. A page with several writes names each as a post of its own route, whose address is the
+page's with the post's name added and draws the page too
+([Several posts on one page](#several-posts-on-one-page)). A write several pages use gets a path
+of its own (`/watch`, `/sign-out`), and that write answers a redirect once it is done,
+`req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
 ([Redirects](#redirects)), and draws a page only to refuse (`req.invalid`): drawn there after a
 success, the page would sit at an address with no `GET`, which answers 405 when it is reloaded
 from a bookmark or a shared link. The same holds for a post that comes from elsewhere to a path
@@ -194,6 +196,62 @@ a `Table` is not checked, and a page such a route serves at a path a post-only m
 matches is taken for that route's, a false 500; an `unstaged` route skips the stages the check
 runs in; an `any = ..` route answers `GET` too; and a release build compiles none of it, so it
 never runs in a production image or a smoke test against one.
+
+### Several posts on one page
+
+A screen with several writes (a row's price, photo and hold; a draft's save, publish and rename)
+names each as a post of its page's own route, beside its plain `post` or instead of it:
+
+```rust,ignore
+#[corten::routes]
+mod url {
+    #[route("/inventory", get = inventory, post(price) = set_price, post(photo) = add_photo, post(hold) = hold)]
+    pub struct Inventory {
+        #[route(query)]
+        pub view: super::View,
+    }
+}
+```
+
+The routes module gives the route a method for each name, whose value is the page's own address
+with `do=` and the name: `url::Inventory { view }.price()` is `/inventory?page=3&do=price`. A
+form posts there (`action={at.price()}`), and another button in the same form sends to another
+(`<button formaction={at.hold()}>`), as a browser does without JavaScript and the runtime does for
+a `data-patch` form. Each handler takes the page's `Params`, so the view the write was sent from
+is its own, and it goes back there:
+
+```rust,ignore
+async fn set_price(req: Req, Params(p): Params<url::Inventory>, Form(f): Form<Price>) -> HtmlResult {
+    // .. save f
+    req.patch_or(PriceCell { .. }, || async { req.redirect(&url::Inventory { view: p.view }) }).await
+}
+```
+
+The router reads only the address's query for `do` (key and name percent-decoded, as `Params`
+reads the query), before anything reads the body, so a urlencoded form and a multipart upload
+(`Upload<T>`, [Files](#files)) are chosen the same way, and the chosen handler's extractor still
+owns the body and its limit. A post with no `do` goes to
+the plain `post`. A name the page has no post for, `do` sent twice, or no `do` where the page has
+no plain `post` answers 400 with the names it has. A `GET` or `HEAD` of a post's address draws
+the page and runs nothing.
+
+The compiler checks the rest: a page names only the posts it has (`at.sell()` is no method),
+each has one handler, a page with posts has a `get` and is in no API's module, none of its query
+parameters is `do`, a name is an ASCII identifier and not one of the route's own methods (`href`,
+`at`), and a route with a type parameter cannot have posts. A post's address is not a link
+(`Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
+back to the page, not to its own address.
+
+A page drawn at a post's address (a refusal without JavaScript) stays there, so a post form in it
+without an `action` would send to that post again. A page with named posts gives every form its
+`action`, and a debug build answers such a page, drawn at an address with `do`, with a 500 that
+says so (a route without named posts is not read, so it may have a `do` of its own) ([Limit 29](../design.md#limit-page-action-address)).
+
+A post's address is the view the page was drawn at. A tab or a choice that puts itself in the
+address in the browser (corten-ui's `TabGroup` and `Choice` replace the entry's URL) rewrites no
+form, so a named post sent after one goes back to the view the page was drawn at, not the tab
+shown. A write that should follow such a tab sends it as a field, or the tab is a link that draws
+the page at its view.
 
 ### Seeing what went over the wire
 
@@ -1346,7 +1404,10 @@ says what that means for state a connection keeps.
 ## Files
 
 A form with a file input posts `multipart/form-data` (`enctype="multipart/form-data"`), which
-`Form` does not read (it answers 415). The handler takes `Upload<T>` instead. The input is named
+`Form` does not read (it answers 415). The handler takes `Upload<T>` instead; an upload that is
+one of a page's several posts is a named post
+([Several posts on one page](#several-posts-on-one-page)), which the router chooses from the
+address, so only its `Upload` reads the body. The input is named
 by a `Files` field of the form struct, so the markup (`name={f.photos}`), the files and `Errors`
 all take the same `FieldName`:
 
