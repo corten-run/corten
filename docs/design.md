@@ -3137,19 +3137,21 @@ rules something out.
     storage and copies it into the page (`head_slot` in `crates/corten/src/view.rs`), so equal keys
     in two of them, or in one and the body, are not checked. Its limit is at a component's edge, where the markup on
     either side cannot know the other's context: a component's markup does not see an `<svg>` its
-    parent writes it into, so it takes a `<template>`, `<noscript>`, `<textarea>` or `<title>` at
-    its top there for HTML's, and the keys in it, which the runtime finds, are not checked; and a
-    component's children do not see where the
-    component writes them (in an `<svg>`'s `<desc>`, say, where a `<template>` is HTML's), so a
-    `<template>`'s or a `<noscript>`'s content among them, or a `<textarea>`'s or a `<title>`'s, is
-    not checked either, unless it is in
-    an `<svg>` the children write themselves, which is SVG's wherever it lands. Following the
-    namespace across components would have every element's markup report it to the check, for a
-    duplicate few apps can write. An element a browser moves out of an `<svg>` (`<div>`, `<p>`)
-    does not compile written straight into one, so the check follows the markup there as the
-    browser does, except where `html!` cannot see it: a component that writes such an element at
-    the top of its markup into a parent's `<svg>` closes the drawing, and the parent's check still
-    takes what follows for SVG's. Nor does it follow an element a browser moves out of a table (a
+    parent writes it into, so it takes a `<template>`, `<noscript>`, `<textarea>`, `<title>`,
+    `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` at its top there for HTML's, and the keys in
+    it, which the runtime finds, are not checked; and a component's children do not see where the
+    component writes them (in an `<svg>`'s `<desc>`, say, where a `<template>` is HTML's), so the
+    content of one of those among them is not checked either, unless it is in an `<svg>` the
+    children write themselves, which is SVG's wherever it lands. Following the namespace across
+    components would have every element's markup report it to the check, for a duplicate few apps
+    can write. Nor does it follow MathML: one of those in a `<math>`, outside its text integration
+    points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`) and `<annotation-xml>`, is MathML's and
+    the runtime finds what it holds, which the check does not count. An element a browser moves out
+    of an `<svg>` (`<div>`, `<p>`) does not compile written straight into one, so the check
+    follows the markup there as the browser does, except where `html!` cannot see it: a component
+    that writes such an element at the top of its markup into a parent's `<svg>`, or an expression
+    that writes one there, closes the drawing, and the parent's check still takes what follows for
+    SVG's. Nor does it follow an element a browser moves out of a table (a
     `<span>` written straight into a `<tr>`, put before the `<table>`): when the table is a
     component's root, the moved element falls outside it, so the runtime does not find it there
     while the check counts it, and may stop on a duplicate the runtime does not see. Both are
@@ -3220,7 +3222,11 @@ rules something out.
     card-market and seller-desk, two runs of each build alternated, the base first, and on
     watchlist's `key_check_cost` for the key check); platform (a
     `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
-    script its decoded value); reasoned (the runtime already finds a ref's elements in the page's
+    script its decoded value; the HTML standard's tree construction, which the key check and
+    `html!`'s refusals follow: its RCDATA and RAWTEXT elements, whose content a browser parsing
+    HTML reads as text, its HTML integration points in SVG (`<foreignObject>`, `<desc>`,
+    `<title>`), whose children are HTML's, and the start tags its rules for foreign content take out
+    of an `<svg>`); reasoned (the runtime already finds a ref's elements in the page's
     order for `*` and `#`, so a value is one attribute read per element when the handler runs and
     nothing on a load; the ref's third type parameter is one type wherever the component uses the
     ref, so a ref given text on one element and a number on another, or a value on one and none on
@@ -3242,7 +3248,10 @@ rules something out.
     Revisit when: an app's script needs a record per element rather than one number, text or `bool`
     (then the value might be any `ToJson` with its generated declaration), or the platform gives
     elements typed custom data a script can read without a name as text, or something outside Corten
-    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal. The bet
+    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal, or the
+    HTML standard changes its RCDATA or RAWTEXT elements, its integration points or the start tags
+    it takes out of foreign content, which `TEXT_ONLY`, `SVG_HTML_POINTS` and `BREAKOUT` in
+    `crates/corten-macros/src/html.rs` copy. The bet
     fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
     each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
     things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value

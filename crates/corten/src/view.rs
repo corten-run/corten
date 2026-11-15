@@ -309,6 +309,36 @@ use std::{
 /// let _ = html! { <p><plaintext>"Raw"</plaintext></p> };
 /// ```
 ///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/x-template"><b>"Draft"</b></script></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style><b>"Draft"</b></style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><iframe title="Preview"><b>"Draft"</b></iframe></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><xmp><b>"Draft"</b></xmp></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noembed><b>"Draft"</b></noembed></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noframes><b>"Draft"</b></noframes></div> };
+/// ```
+///
 /// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>`
 /// (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with
 /// `color`, `face` or `size`) written straight into one: the browser closes the `<svg>` before
@@ -325,13 +355,15 @@ use std::{
 /// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
 /// ```
 ///
-/// Their text and expressions compile (written escaped, which a `<textarea>` and a `<title>`
-/// read back), and so does what an `<svg>` holds: its `<textarea>` and `<style>` are SVG's
-/// elements, whose children are elements, and its `<title>` holds HTML. Where the markup does
-/// not show how it is parsed, at the top of a component's markup (whose parent may write it into
-/// an `<svg>`), among a component's children (which go where it writes them) and in a `<math>`,
-/// none of this is refused, so a component that draws an SVG fragment without its `<svg>`
-/// compiles:
+/// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
+/// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
+/// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
+/// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
+/// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
+/// children are elements, and its `<title>` holds HTML. Where the markup does not show how it is
+/// parsed, at the top of a component's markup (whose parent may write it into an `<svg>`), among
+/// a component's children (which go where it writes them) and in a `<math>`, none of this is
+/// refused, so a component that draws an SVG fragment without its `<svg>` compiles:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -355,6 +387,40 @@ use std::{
 ///             r#"<div><textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea>"#,
 ///             r#"<svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea>"#,
 ///             r#"<rect width="4" height="42"><title>Sales <b>42</b></title></rect></svg></div>"#,
+///         )
+///     );
+/// }
+/// ```
+///
+/// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
+/// `<math>`, and a link named by `aria-label` in an `<svg>`'s `<title>` whose `href` may
+/// write nothing (the accessible-name checks leave an `<svg>` alone outside its
+/// `<foreignObject>`):
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Wrap(children: impl Render) -> impl Render {
+///     html! { <svg>{children}</svg> }
+/// }
+///
+/// fn main() {
+///     let home: Option<&str> = Some("#top");
+///     let view = html! {
+///         <div>
+///             <script type="text/x-template">"<b>Draft</b>"</script>
+///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
+///             <math><mi><title><b>"x"</b></title></mi></math>
+///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
+///             r#"<svg><title>a<b>b</b></title></svg><math><mi><title><b>x</b></title></mi></math>"#,
+///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
 ///         )
 ///     );
 /// }

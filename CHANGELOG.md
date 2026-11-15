@@ -545,10 +545,6 @@ Corten is pre-1.0, so any minor version may change the API.
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
   gets `key={..}` on each of its elements.
-- **Breaking:** `html!` checks the children of an `<svg>`'s `<desc>` and `<title>` as HTML, as it
-  did a `<foreignObject>`'s, since a browser parses them as HTML: the accessible-name check
-  applies there, and an `<a>` named by a written-out `aria-label` there needs an `href` that
-  always writes one.
 - **Breaking:** markup a browser would not keep as written no longer compiles where the markup
   shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
   a `<p>`, a document's `<head>`), and in an `<svg>`, its `<foreignObject>`, `<desc>` and
@@ -556,7 +552,8 @@ Corten is pre-1.0, so any minor version may change the API.
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
   inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
-  component's CSS file. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
+  component's CSS file, and a data block (`<script type="text/x-template">`) writes its content as
+  a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
   the HTML standard's rules for foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`,
   `<span>`, `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`),
   written straight into one, closed the `<svg>`: put it in a `<foreignObject>`. Inside an `<svg>`

@@ -30,8 +30,10 @@ Markup a browser would not keep as written does not compile, where the markup sh
 browser parses it. An element inside one whose content a browser reads as text (`<textarea>`,
 `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
 the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
-a `<style>` belongs in a `#[component(js)]` or the component's CSS file, and a `<plaintext>`,
-which makes the rest of the page text, is a `<pre>`. An element the HTML standard's rules for
+a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data block,
+`<script type="text/x-template">`, writes its content as a string literal, which a `<script>`
+writes as is), and a `<plaintext>`, which makes the rest of the page text, is a `<pre>`. An
+element the HTML standard's rules for
 foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the
 others it lists, and a `<font>` with `color`, `face` or `size`), written straight into one,
 would close the drawing before it: HTML in a drawing goes in a `<foreignObject>`. The markup
@@ -65,8 +67,7 @@ with no `href`, is refused, and so is a written-out name on an `<a>` whose `href
 may write one) exempts the element, as does a name that is itself an expression
 (`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
 in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
-component that draws an SVG fragment without its `<svg>` says `role="group"`). What an `<svg>`'s
-`<foreignObject>`, `<desc>` or `<title>` holds is HTML to a browser, and is checked. The check reads
+component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
 the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it.
 The rest of a page's accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
 
