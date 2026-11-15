@@ -4020,7 +4020,9 @@ rules something out.
     app needs a query parameter named `do` on a page with posts.
 
     Last checked: 2026-11-15, instructions per request on `e69833f2c` against `dea1788d2`, three
-    runs of each case alternating between the two; PLATFORM_ENTRY
+    runs of each case alternating between the two, and again on `40a9b4ecf` (each case within 11
+    of those); 2026-11-15, the watchlist and ui-gallery smokes on `40a9b4ecf` in Chromium 156,
+    Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules
 
