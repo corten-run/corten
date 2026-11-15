@@ -635,12 +635,13 @@ Corten is pre-1.0, so any minor version may change the API.
   a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
   the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
   `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
-  `face` or `size`), written straight into one, closed the `<svg>` or the MathML around it: put
-  it in a `<foreignObject>`, or in a formula in an `<mtext>`. Inside an `<svg>`,
+  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose `encoding` is
+  not an HTML one (or is not written), closed the `<svg>` or the MathML around it: put it in a
+  `<foreignObject>`, or in a formula in an `<mtext>`. Inside an `<svg>`,
   or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
-  drawing or the formula and holds elements. At the top of a component's markup or among a
-  component's children, where the markup does not show how they are parsed, none of this is
-  refused ([design Limit 29](docs/design.md#limit-markup-context)).
+  drawing or the formula and holds elements. At the top of a component's markup, among a
+  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread
+  writes, where the markup does not show how they are parsed, none of this is refused ([design Limit 29](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

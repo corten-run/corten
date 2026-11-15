@@ -726,9 +726,11 @@ mod tests {
 
     /// A document around `KeyedMarkup`: its head's `<title>` is the page's, in a document's head,
     /// and a navigation asks for its parts (`Part::Swap`, `Part::Title`). It is written without
-    /// the doctype, which a document may leave out, so its `<html>` is its one root and holds its
-    /// refs: the document renders scoped, whole and in its parts, and its `<main>` holds a keyed
-    /// ref's element and a `<template>` of its own, beside `KeyedMarkup`'s.
+    /// the doctype, which a document may leave out: `html!` counts a `<!DOCTYPE html>` as a root
+    /// beside the `<html>`, and a component with refs renders one root element, so a document
+    /// with refs cannot write one. Without it the `<html>` holds the refs and the document renders
+    /// scoped, whole and in its parts; its `<main>` holds a keyed ref's element and a `<template>`
+    /// of its own, beside `KeyedMarkup`'s.
     #[component]
     fn KeyedDocument<'a>(title: &'a str, ids: &'a [String]) -> impl Document {
         let lead = refs();

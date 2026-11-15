@@ -354,9 +354,10 @@ use std::{
 ///
 /// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>` or a
 /// `<math>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a
-/// `<font>` with `color`, `face` or `size`) written straight into one: the browser closes the
-/// `<svg>` or the MathML elements before it, so it and what follows land outside them. HTML in a
-/// drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
+/// `<font>` with `color`, `face` or `size`) written straight into one, or into an
+/// `<annotation-xml>` whose `encoding` is not an HTML one (or is not written), which holds MathML:
+/// the browser closes the `<svg>` or the MathML elements before it, so it and what follows land
+/// outside them. HTML in a drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -371,6 +372,11 @@ use std::{
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <p><math><mrow><div>"x"</div></mrow></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml><div>"x"</div></annotation-xml></math></p> };
 /// ```
 ///
 /// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
@@ -413,8 +419,8 @@ use std::{
 /// ```
 ///
 /// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
-/// `<math>` with text in its `<mi>` and a `<title>` in a `<mglyph>` there, an `<annotation-xml>`
-/// holding HTML, one whose `encoding` an expression writes (which the markup does not show, so
+/// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` in a `<mglyph>`
+/// there, an `<annotation-xml>` holding HTML, one whose `encoding` an expression writes (which the markup does not show, so
 /// nothing in it is refused), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
 /// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
 /// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
@@ -435,6 +441,7 @@ use std::{
 ///             <script type="text/x-template">"<b>Draft</b>"</script>
 ///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
 ///             <math><mrow><mi>"x"</mi></mrow></math>
+///             <math><mtext><div>"x"</div></mtext></math>
 ///             <math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>
 ///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
 ///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
@@ -446,6 +453,7 @@ use std::{
 ///         concat!(
 ///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
 ///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
+///             r#"<math><mtext><div>x</div></mtext></math>"#,
 ///             r#"<math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>"#,
 ///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,

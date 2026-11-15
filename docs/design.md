@@ -3229,9 +3229,10 @@ rules something out.
     children write themselves, which is SVG's wherever it lands. Following the namespace across
     components would have every element's markup report it to the check, for a duplicate few apps
     can write. Nor does it follow MathML: one of those in a `<math>`, outside its text integration
-    points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`) and an `<annotation-xml>` whose `encoding`
-    is `text/html` or `application/xhtml+xml` (with another or none, an `<annotation-xml>`'s
-    content is MathML's), is MathML's and the runtime finds what it holds, which the check does not
+    points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`, where a `<mglyph>` or a `<malignmark>`
+    stays MathML's) and an `<annotation-xml>` whose `encoding` is `text/html` or
+    `application/xhtml+xml` (with another or none, an `<annotation-xml>`'s content is MathML's),
+    is MathML's and the runtime finds what it holds, which the check does not
     count. An element a browser moves out of an `<svg>` (`<div>`, `<p>`) does not compile written
     straight into one ([Choice 53](#choice-html-parse-refusals)), so the check
     follows the markup there as the browser does, except where `html!` cannot see it: a component
@@ -3374,9 +3375,10 @@ rules something out.
     the `Swap` and `Title` parts; 1,000 renders each), with the test copied into the base,
     counted 131,623,718, 13,703,103 and 27,893,110 instructions for the three in every run of both
     builds, wrote the same bytes (23,408, 2,976 and 6,370 a render) and compiled to the same
-    instructions to the line (2,416 lines each, addresses aside). A document's own markup cannot
-    hold a ref but at its root, since `refs()` belongs to a component with one root element, so
-    the harness writes the document without its optional doctype. Card-market's `render_cost`,
+    instructions to the line (2,416 lines each, addresses aside). A document with refs cannot
+    write its doctype: `html!` takes a `<!DOCTYPE html>` for a second root beside the `<html>`,
+    and a component with refs renders one root element, so the harness writes the document
+    without its optional doctype. Card-market's `render_cost`,
     on `6575d4d8c` against `72a37a87e` (no generated code has changed since), counted
     `ItemDetail`'s render at 2,372,754,748 instructions (median; 2,372,507,167 to 2,372,779,152)
     on the base and 2,372,745,747 (2,369,854,428 to 2,372,790,283) on the branch, each difference
@@ -4107,11 +4109,13 @@ rules something out.
     text integration points, where a `<mglyph>` or a `<malignmark>` stays MathML's) and an
     `<annotation-xml>` whose `encoding` is `text/html` or `application/xhtml+xml`; SVG in a
     literal `<svg>`, where a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements;
-    MathML in a literal `<math>`, outside those points, where they are MathML's and hold elements,
-    and only an element taken out of foreign content is refused. At the top of a component's markup, which its parent may write into an `<svg>`,
-    among a component's children, which go where the component writes them, and in an
-    `<annotation-xml>` without such an `encoding` (one an expression writes included), it does not
-    know, and refuses nothing. `html!` does not refuse an attribute written twice, and it takes an
+    MathML in a literal `<math>`, outside those points, and in an `<annotation-xml>` whose
+    `encoding` is another or is not written (where an `<svg>` is SVG's, as the standard's tree
+    construction dispatcher has it), where they are MathML's and hold elements, and only an
+    element taken out of foreign content is refused. At the top of a component's markup, which its
+    parent may write into an `<svg>`, among a component's children, which go where the component
+    writes them, and in an `<annotation-xml>` whose `encoding` an expression or a spread may write,
+    it does not know, and refuses nothing. `html!` does not refuse an attribute written twice, and it takes an
     `<annotation-xml>` for HTML when any of its `encoding`s is `text/html` or
     `application/xhtml+xml`, while a browser keeps the first: `encoding="x" encoding="text/html"`
     holds MathML in a browser, and an element in a `<title>` there is refused though the browser
@@ -4160,18 +4164,21 @@ rules something out.
     Last checked: 2026-11-15, the HTML standard's tree construction (its tokenization states for
     RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points, its
     tree construction dispatcher, which keeps `<mglyph>` and `<malignmark>` MathML's at a text
-    integration point, and its rules for parsing tokens in foreign content, which take the same
+    integration point and reads an `<svg>` in a MathML `<annotation-xml>` as SVG's, and its rules for parsing tokens in foreign content, which take the same
     start tags out of a `<math>` as out of an `<svg>`), read that day, against the lists in
     `crates/corten-macros/src/html.rs` on `6575d4d8c` and again on this round's change, as its
     tests and the examples of `html!` hold the parse and the refusals to. The MathML and
     SVG-breakout claims rest on that dated read of the standard, and on what the engines below do
     with it: `scripts/smoke.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
-    loads the markup `html!` writes for a `<title>` in an `<mi>`'s `<mglyph>`, an
-    `<annotation-xml>` with an HTML and with a MathML `encoding`, and an `<svg>`'s `<title>`,
+    loads, written by hand as `html!` writes them (it is not rendered by `html!`), the shapes
+    `html!`'s examples hold: a `<title>` in an `<mi>`'s `<mglyph>` and `<malignmark>`, a `<div>`
+    in an `<mtext>`, an `<svg>` straight in a `<math>` (MathML's), an `<annotation-xml>` with an
+    HTML, a MathML and no `encoding` (an `<svg>` in the last SVG's), and an `<svg>`'s `<title>`,
     `<style>` and `<textarea>`, and the refused shapes beside them (an element in a `<title>` in
-    an `<mi>` and in an HTML `<annotation-xml>`, a `<div>` in an `<mrow>`, a `<p>` in an
-    `<svg>`), and checks the parsed elements, and passed in Chromium 156.0.8078.4, Firefox 157.0
-    and WebKit 27.2 (Playwright 1.64.1); 2026-11-14, a one-off probe, not a repository check: a
+    an `<mi>` and in an HTML `<annotation-xml>`, a `<div>` in an `<mrow>` and in an
+    `<annotation-xml>` without an `encoding`, a `<p>` in an `<svg>`), and checks the parsed
+    elements, and passed in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright
+    1.64.1); 2026-11-14, a one-off probe, not a repository check: a
     page written by hand (not by `html!`, which refuses most of it) loaded in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), reading
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
@@ -4631,7 +4638,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or
     `size`), an element in a `<title>`, `<textarea>`, `<script>`, `<style>`, `<iframe>`,
     `<xmp>`, `<noembed>` or `<noframes>`, and a `<plaintext>` are not refused there, nor among a
-    component's children, until an element of the markup shows the context. Keys in a
+    component's children, nor in an `<annotation-xml>` whose `encoding` an expression or a spread
+    may write, until an element of the markup shows the context. Keys in a
     `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
     `<noframes>` there are not checked, though in an `<svg>` the runtime finds them. Among a
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless

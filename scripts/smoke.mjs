@@ -291,12 +291,13 @@ console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n
 process.exit(failures.length ? 1 : 0);
 
 /**
- * How the browser parses markup `html!` accepts and the refused markup beside it
- * (docs/design.md#choice-html-parse-refusals): an element a MathML text integration point's
- * `<mglyph>`, an `<annotation-xml>` or an `<svg>` holds stays there, and an element in a
- * `<title>` parsed as HTML is text, and one a browser takes out of foreign content lands outside
- * it. The markup is what `html!` writes for these shapes (its examples in `view.rs`), loaded as a
- * page of its own.
+ * How the browser parses the shapes `html!`'s examples in `view.rs` hold, accepted and refused
+ * (docs/design.md#choice-html-parse-refusals): an element a MathML text integration point, its
+ * `<mglyph>` or `<malignmark>`, an `<annotation-xml>` or an `<svg>` holds stays there, an
+ * `<svg>` straight in a `<math>` is MathML's, an element in a `<title>` parsed as HTML is text,
+ * and one a browser takes out of foreign content lands outside it. The strings below are written
+ * by hand as `html!` writes those shapes (it writes literal markup as given), not rendered by it:
+ * this checks the browser's parsing that `html!`'s rules stand on, each shape as a page of its own.
  * @param {import("@playwright/test").Browser} browser
  */
 async function parsesAsHtmlMeans(browser) {
@@ -322,6 +323,30 @@ async function parsesAsHtmlMeans(browser) {
       ({ MATHML }) => document.querySelector("annotation-xml > title > mrow")?.namespaceURI === MATHML,
     ],
     [
+      "a <title> in a <malignmark> in an <mi> is MathML's and holds elements",
+      `<p><math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math></p>`,
+      ({ MATHML }) => document.querySelector("mi > malignmark > title > mrow")?.namespaceURI === MATHML,
+    ],
+    [
+      "a <div> in an <mtext> stays there, HTML's",
+      `<p><math><mtext><div>x</div></mtext></math></p>`,
+      ({ XHTML }) => document.querySelector("math > mtext > div")?.namespaceURI === XHTML,
+    ],
+    [
+      "an <svg> straight in a <math> is MathML's",
+      `<p><math><svg><g></g></svg></math></p>`,
+      ({ MATHML }) =>
+        document.querySelector("math > svg")?.namespaceURI === MATHML &&
+        document.querySelector("math > svg > g")?.namespaceURI === MATHML,
+    ],
+    [
+      "an <annotation-xml> without an encoding holds MathML, and an <svg> in it is SVG's",
+      `<p><math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math></p>`,
+      ({ MATHML }) =>
+        document.querySelector("annotation-xml > title > mrow")?.namespaceURI === MATHML &&
+        document.querySelector("annotation-xml > svg > g")?.namespaceURI === "http://www.w3.org/2000/svg",
+    ],
+    [
       "an <svg>'s <title> holds HTML, and its <style> and <textarea> hold elements",
       `<div><svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea></svg></div>`,
       ({ XHTML }) =>
@@ -342,6 +367,11 @@ async function parsesAsHtmlMeans(browser) {
     [
       "a <div> in an <mrow> lands outside the <math> (refused by html!)",
       `<p><math><mrow><div>x</div></mrow></math></p>`,
+      () => !!document.querySelector("div") && !document.querySelector("math div"),
+    ],
+    [
+      "a <div> in an <annotation-xml> without an encoding lands outside the <math> (refused by html!)",
+      `<p><math><annotation-xml><div>x</div></annotation-xml></math></p>`,
       () => !!document.querySelector("div") && !document.querySelector("math div"),
     ],
     [
