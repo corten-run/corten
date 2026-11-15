@@ -1,9 +1,11 @@
 // Synthetic orchestration only: no provider, credentials, SSH or native benchmark.
 import assert from "node:assert/strict";
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setImmediate as turn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
+import { EventEmitter } from "node:events";
+import { isDeepStrictEqual } from "node:util";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
@@ -298,4 +300,114 @@ test("production snapshot bootstrap executes captured entry/closure bytes and de
     else assert.equal(await operation, 3);
     assert.ok(!existsSync(marker), `${change}: mutable source must never evaluate`);
   }
+});
+
+function capturedFailure(t, body, WorkerClass = Worker) {
+  const h = harness(t), root = join(h.temp, "failure-snapshot");
+  const module = `import {parseDropletArgs} from './cloud-options.mjs';
+    export function parseProductionArgs(args) { const at=args.indexOf('--approve-reviewed-merged-ready');
+      return {options:parseDropletArgs(args.slice(0,at)),approval:args[at+1],preview:false}; }
+    export async function productionMain() { ${body} }`;
+  const sources = fleetWorkerPaths.map((path) => {
+    const target = join(root, path); mkdirSync(dirname(target), { recursive: true });
+    const source = path === "bench/workloads/cloud-production.mjs" ? module : readFileSync(resolve(path), "utf8");
+    writeFileSync(target, source);
+    return { path, url: pathToFileURL(target).href, sha256: digest(source), source };
+  });
+  class BoundedWorker extends WorkerClass {
+    constructor(entry, options) {
+      super(entry, { ...options, resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8, stackSizeMb: 2 } });
+    }
+  }
+  const group = groupNames[0], args = ["r21", "--state-dir", join(h.base, group), "--detach", "--commit", commit, "--ssh-key", "42",
+    "--account-id", accountId, "--context", context, "--group", group, "--fleet", join(h.base, "fleet-r21.json"), "--approve-reviewed-merged-ready", "f".repeat(64)];
+  return productionChild(args, { cancellation: new SharedArrayBuffer(4), sources, WorkerClass: BoundedWorker });
+}
+
+test("captured worker preserves only sanitized provider diagnostics and explicit uncertainty", async (t) => {
+  for (const uncertain of [false, true]) {
+    await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE_TOKEN'), {
+      providerDiagnostic:{code:'list-http',httpStatus:429}, controlUncertain:${uncertain}});`), (error) => {
+      assert.equal(error.providerDiagnostic?.code, "list-http", "captured provider code must survive");
+      assert.equal(error.providerDiagnostic?.httpStatus, 429);
+      assert.equal(error.controlUncertain === true, uncertain);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("PRIVATE_MESSAGE_TOKEN"));
+      return true;
+    });
+  }
+});
+
+test("captured worker omits malformed diagnostics and never invokes diagnostic accessors", async (t) => {
+  for (const field of ["{code:'PRIVATE_CODE'}", "{code:'list-http',httpStatus:418}", "{code:'list-http',httpStatus:429,raw:'PRIVATE_RAW'}"]) {
+    await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE'),{providerDiagnostic:${field}});`), (error) => {
+      assert.equal(error.message, "group-operation-failed"); assert.equal(error.providerDiagnostic, undefined);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes("PRIVATE")); return true;
+    });
+  }
+  await assert.rejects(capturedFailure(t, `const error=new Error('PRIVATE_MESSAGE');
+    Object.defineProperty(error,'providerDiagnostic',{get(){throw new Error('PRIVATE_GETTER');}}); throw error;`), (error) => {
+    assert.equal(error.message, "group-operation-failed"); assert.equal(error.providerDiagnostic, undefined); return true;
+  });
+});
+
+test("worker protocol rejects malformed diagnostics, unexpected fields and unsettled results", async (t) => {
+  const base = { schema: "benchmark-group-fleet-worker-result/v1", error: "group-operation-failed", uncertain: false };
+  for (const [message, exit, count] of [
+    [{ ...base, providerDiagnostic: { code: "PRIVATE_CODE" } }, 0, 1],
+    [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429, raw: "PRIVATE" } }, 0, 1],
+    [{ ...base, extra: "PRIVATE" }, 0, 1],
+    [{ schema: base.schema, code: 3, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 0, 1],
+    [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 1, 1],
+    [{ ...base, providerDiagnostic: { code: "list-http", httpStatus: 429 } }, 0, 2],
+  ]) {
+    class ProtocolWorker extends EventEmitter {
+      constructor() {
+        super(); this.stdout = this.stderr = { resume() {} };
+        queueMicrotask(() => { for (let i = 0; i < count; i++) this.emit("message", message); this.emit("exit", exit); });
+      }
+    }
+    await assert.rejects(capturedFailure(t, "return 3;", ProtocolWorker), (error) => {
+      assert.equal(error.message, "group-control-uncertain"); assert.equal(error.controlUncertain, true);
+      assert.equal(error.providerDiagnostic, undefined); return true;
+    });
+  }
+});
+
+test("fleet receipts retain sanitized provider failure and uncertainty without replay", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  flags.child = () => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
+    controlTreeUncertain: true, providerDiagnostic: { code: "create-request" } }); };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  const result = p.output.at(-1);
+  assert.equal(result.fullGroupQualified, false); assert.equal(result.groups.length, groupNames.length);
+  for (const row of result.groups) {
+    assert.equal(row.outcome, "error"); assert.equal(row.error, "group-operation-failed");
+    assert.equal(row.uncertain, true, "fleet receipt must retain uncertainty");
+    assert.equal(row.providerDiagnostic?.code, "create-request"); assert.equal(row.id, undefined);
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row), "saved receipt must match public row");
+  }
+  assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN"));
+  assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  await assert.rejects(fleetMain(approved, p.deps), /already-attempted|busy/);
+});
+
+test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const diagnostics = [{ code: "account-http", httpStatus: 403 }, { code: "PRIVATE_CODE" },
+    { code: "list-http", httpStatus: 418 }, { code: "list-request", raw: "PRIVATE_RAW" }, undefined];
+  flags.child = ({ group }) => {
+    const i = groupNames.indexOf(group), error = Object.assign(new Error("PRIVATE_MESSAGE"), { providerDiagnostic: diagnostics[i % diagnostics.length] });
+    if (i === 5) Object.defineProperty(error, "providerDiagnostic", { get() { throw new Error("PRIVATE_GETTER"); } });
+    throw error;
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  for (const [i, row] of p.output.at(-1).groups.entries()) {
+    assert.equal(row.error, "group-operation-failed"); assert.equal(row.outcome, "error"); assert.equal(row.uncertain, false);
+    if (i === 0) { assert.equal(row.providerDiagnostic?.code, "account-http"); assert.equal(row.providerDiagnostic?.httpStatus, 403); }
+    else assert.equal(row.providerDiagnostic, undefined);
+  }
+  assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
+  assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
+  await assert.rejects(fleetMain(approved, p.deps), /already-attempted/);
 });
