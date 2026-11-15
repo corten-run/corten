@@ -424,7 +424,8 @@ in a `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `
 in one among a component's children (outside an `<svg>` the children write themselves), are not
 checked ([design Limit 29](../design.md#limit-markup-context)). Nor are those in one of them inside
 a `<math>` (outside its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>`, and an `<annotation-xml>`
-whose `encoding` is `text/html` or `application/xhtml+xml`), where it is MathML's and the runtime
+whose `encoding` is `text/html` or `application/xhtml+xml`, or in a `<mglyph>` or `<malignmark>` in
+one of them), where it is MathML's and the runtime
 finds what it holds: where the check cannot be sure, it lets a duplicate pass rather than stop a correct render. Markup that is not correct is another matter:
 a browser moves an element written straight into a `<table>`'s rows (a `<span>` in a `<tr>`)
 out before the table, so when the table is a component's root the runtime does not find it there,

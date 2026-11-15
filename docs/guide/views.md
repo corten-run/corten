@@ -34,12 +34,13 @@ a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data 
 `<script type="text/x-template">`, writes its content as a string literal, which a `<script>`
 writes as is), and a `<plaintext>`, which makes the rest of the page text, is a `<pre>`. An
 element the HTML standard's rules for
-foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the
-others it lists, and a `<font>` with `color`, `face` or `size`), written straight into one,
-would close the drawing before it: HTML in a drawing goes in a `<foreignObject>`. The markup
+foreign content take out of an `<svg>` or a `<math>` (`<b>`, `<div>`, `<p>`, `<span>`,
+`<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`), written
+straight into one, would close the drawing or the formula before it: HTML in a drawing goes in a
+`<foreignObject>`, and in a formula in an `<mtext>`. The markup
 shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`, a document's
 `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`, and in a `<math>`'s `<mi>`,
-`<mo>`, `<mn>`, `<ms>` and `<mtext>` and an `<annotation-xml>` whose `encoding` is `text/html`
+`<mo>`, `<mn>`, `<ms>` and `<mtext>` (but in a `<mglyph>` or `<malignmark>` there) and an `<annotation-xml>` whose `encoding` is `text/html`
 or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
 `<title>` or `<style>` is an element of the drawing or the formula and holds elements. At the top
 of a component's markup (its parent may write it into an `<svg>`) and among a component's

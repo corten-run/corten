@@ -589,8 +589,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
-- A handler parameter typed `Map<string, El>` takes only a ref whose every element has a
-  `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
+- **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
+  has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
   where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
   not on others does not compile, whatever its handlers take (`El`, `El[]` or a `Map`). A ref
   now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
@@ -624,17 +624,19 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** markup a browser would not keep as written no longer compiles where the markup
   shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
   a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
-  `<title>` included, and in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` and an
-  `<annotation-xml>` whose `encoding` is `text/html` or `application/xhtml+xml`
+  `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
+  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose `encoding` is
+  `text/html` or `application/xhtml+xml`
   ([design Choice 53](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
   inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
   component's CSS file, and a data block (`<script type="text/x-template">`) writes its content as
   a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
-  the HTML standard's rules for foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`,
-  `<span>`, `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`),
-  written straight into one, closed the `<svg>`: put it in a `<foreignObject>`. Inside an `<svg>`,
+  the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
+  `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
+  `face` or `size`), written straight into one, closed the `<svg>` or the MathML around it: put
+  it in a `<foreignObject>`, or in a formula in an `<mtext>`. Inside an `<svg>`,
   or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
   drawing or the formula and holds elements. At the top of a component's markup or among a
   component's children, where the markup does not show how they are parsed, none of this is
