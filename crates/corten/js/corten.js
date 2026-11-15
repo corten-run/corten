@@ -1045,12 +1045,14 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
-    const beside = asked?.isConnected ? asked : partTagBeside(put);
+    // A slow part's answer (`ReadAgain::now`'s tag asked) whose tag it replaced with the part (one
+    // inside the element it waited for) puts its own beside what it drew, never in place of
+    // another part's tag there: the page knows the part is read again ({@link readAgainLater}) and
+    // its next read finds it.
+    const waited = !!asked && matchesOf(asked, PART_NOW);
+    const beside = asked?.isConnected ? asked : waited ? null : partTagBeside(put);
     if (beside) beside.replaceWith(again);
-    // A part's answer whose tag it replaced with the part (one inside the element it waited for):
-    // its own goes beside what it drew, so the page knows the part is read again
-    // ({@link readAgainLater}) and its next read finds it.
-    else if (asked) put.find(inPage)?.after(again);
+    else if (waited) put.find(inPage)?.after(again);
     readPatchAgain(again, put);
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
@@ -1093,7 +1095,11 @@ function readPatchAgain(tag, put) {
     // Counted before the first read, and kept by one made again: a part its answer draws waiting
     // follows no redirect past a navigation started since.
     const visited = visits;
+    // Over when it ends, or once what it reads for leaves the page (a form's answer replaced it, or
+    // a page was swapped in): its fetch stops then, and the listener it adds goes, even while its
+    // answer waits for a stylesheet that never loads.
     const reading = new AbortController();
+    for (const el of put) signalOf(el).addEventListener("abort", () => reading.abort(), { signal: reading.signal });
     countLeaving(reading.signal);
     try {
       for (;;) {
@@ -1101,7 +1107,7 @@ function readPatchAgain(tag, put) {
         // part's order in it).
         const from = /** @type {string} */ (tag.getAttribute("data-from"));
         // Offline or unreachable: the part stays as it is.
-        const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
+        const res = await fetch(from, { headers: { corten: "action" }, signal: reading.signal }).catch(() => {});
         if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
           // A success that is not a patch is the app's mistake (the route answered its page).
           if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
@@ -1327,8 +1333,8 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   }
   // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the
   // read the page still waits for: not one whose part was replaced or whose address moved, nor one
-  // a navigation started since has overtaken (the user's link, on its way).
-  if (res && to && here() && visits === visited) {
+  // a navigation started since has overtaken, or one still on its way (the user's link).
+  if (res && to && here() && visits === visited && !navigation?.transition && !leavingPage) {
     for (const el of waiting) unmarkBusy(el, mine);
     const url = new URL(to, res.url).href;
     if (navigation) go(url, { info: { [LOAD]: true } });
@@ -2434,6 +2440,12 @@ function prefetch(target) {
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
 /**
+ * Whether the page has begun to leave on a navigation the browser makes itself (another site's
+ * link, a reload): no part's redirect is followed after it, even by a read started since. Cleared
+ * when the browser shows the page again from its back-forward cache.
+ */
+let leavingPage = false;
+/**
  * How many navigations have started (the runtime's visits, and those it leaves to the browser): a
  * part's read started before the newest follows no redirect.
  */
@@ -2788,7 +2800,10 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     sourceIn(event, "[data-reload]");
   // One the browser makes itself (another site's link, a reload) leaves the page too: a part's
   // read started before it follows no redirect ({@link readPart}).
-  if (skip && !event.destination.sameDocument && event.downloadRequest === null) visits += 1;
+  if (skip && !event.destination.sameDocument && event.downloadRequest === null) {
+    visits += 1;
+    leavingPage = true;
+  }
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
@@ -3162,7 +3177,10 @@ function reload(notice = null) {
 /** Whether the browser has hidden the page (the back-forward cache) and not shown it again. */
 let away = false;
 addEventListener("pagehide", () => ((left += 1), (away = true)));
-addEventListener("pageshow", () => (away = false));
+addEventListener("pageshow", () => {
+  away = false;
+  leavingPage = false;
+});
 
 /**
  * The pending submit of each `data-patch` form. The same submit again while it is pending (a

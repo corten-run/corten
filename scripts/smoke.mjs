@@ -1337,8 +1337,10 @@ async function run(browser) {
   // the Navigation API or a full load without it; and so for a read made again at the address a
   // script moved its tag to after the link was followed (#1400).
   const crossBase = new URL(base).hostname === "localhost" ? base.replace("localhost", "127.0.0.1") : null;
-  for (const { moved = false, native = false, nested = false, cross = false, polled = false } of [
-    ...(swaps ? [{}, { moved: true }, { nested: true }, { polled: true }, { polled: true, moved: true }, ...(crossBase ? [{ cross: true }] : [])] : []),
+  for (const { moved = false, native = false, nested = false, cross = false, polled = false, late = false } of [
+    ...(swaps
+      ? [{}, { moved: true }, { nested: true }, { polled: true }, { polled: true, moved: true }, { late: true }, ...(crossBase ? [{ cross: true }, { cross: true, late: true }] : [])]
+      : []),
     { native: true },
     { native: true, polled: true },
   ]) {
@@ -1360,7 +1362,7 @@ async function run(browser) {
       const url = new URL(route.request().url());
       // The part the first answer draws waiting, and the read at the address the tag was moved to,
       // answer at once; the first waits.
-      if (url.pathname.endsWith("-inner") || (url.search && !polled)) return route.fulfill(signIn).catch(() => {});
+      if (url.pathname.endsWith("-inner") || url.pathname.endsWith("-late") || (url.search && !polled)) return route.fulfill(signIn).catch(() => {});
       if (!url.search) {
         partAsked();
         await new Promise((resolve) => (releasePart = () => resolve(undefined)));
@@ -1391,20 +1393,22 @@ async function run(browser) {
     // is drawn (`ReadAgain::from`), whose answer then draws a part waiting.
     // A part read again takes the place of the tag beside what its patch draws, so it stays on the
     // page, where a script may move its address.
-    await overtaken.evaluate(async (polled) => {
-      document
-        .querySelector("main")
-        ?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-box"><div id="overtaken-0"></div><template data-corten-read-again="60" data-from="/smoke/none"></template></div>'));
-      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(
-        __html(
-          polled
-            ? '<div id="overtaken-0"><p id="overtaken-a">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/overtaken"></template>'
-            : '<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>',
-        ),
-      );
-    }, polled);
-    await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
+    if (!late) {
+      await overtaken.evaluate(async (polled) => {
+        document
+          .querySelector("main")
+          ?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-box"><div id="overtaken-0"></div><template data-corten-read-again="60" data-from="/smoke/none"></template></div>'));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(
+          __html(
+            polled
+              ? '<div id="overtaken-0"><p id="overtaken-a">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/overtaken"></template>'
+              : '<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>',
+          ),
+        );
+      }, polled);
+      await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
+    }
     if (cross) {
       await overtaken.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="overtaken-away" href="${href}">Away</a>`)), `${crossBase}/news`);
       await overtaken.click("#overtaken-away", { noWaitAfter: true });
@@ -1413,6 +1417,13 @@ async function run(browser) {
     for (let waited = 0; !newsHeld.length && waited < 5000; waited += 50) await overtaken.waitForTimeout(50);
     if (!native && !cross) await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
     // A script moves the tag's address meanwhile (a sort): the first answer is read again there.
+    // Or a part is drawn waiting only now, while that navigation is on its way (a live patch).
+    if (late)
+      await overtaken.evaluate(async () => {
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-0"></div>'));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(__html('<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken-late" data-part="overtaken-a"></template></div>'));
+      });
     if (moved)
       await overtaken.evaluate((polled) => document.querySelector(polled ? '#overtaken-box > template[data-from="/smoke/overtaken"]' : 'template[data-part="overtaken-a"]')?.setAttribute("data-from", "/smoke/overtaken?sorted=1"), polled);
     releasePart();
@@ -1422,6 +1433,8 @@ async function run(browser) {
     await overtaken.waitForTimeout(300);
     /** @type {[boolean, string][]} */
     const names = [
+      [late && cross, "nor one of a part drawn waiting after the link to another site was followed"],
+      [late, "nor one of a part drawn waiting while the user's navigation is on its way"],
       [polled && moved, "nor one a part read again drew after it was read again at the address a script moved it to"],
       [polled && native, "nor one a part read again drew waiting, where the link is a full load"],
       [moved, "and nor does one read again at the address a script moved its tag to after the link was followed"],
@@ -1446,10 +1459,14 @@ async function run(browser) {
       "nor one of a part the first part's answer drew waiting",
       "nor one of a part a part read again drew waiting",
       "nor one a part read again drew after it was read again at the address a script moved it to",
+      "nor one of a part drawn waiting while the user's navigation is on its way",
       "nor where the link is to another site, which the browser loads itself",
+      "nor one of a part drawn waiting after the link to another site was followed",
     ])
       skip(name, noSwaps);
-  else if (!crossBase) skip("nor where the link is to another site, which the browser loads itself", "the app is not at localhost, so no other host name reaches it");
+  else if (!crossBase)
+    for (const name of ["nor where the link is to another site, which the browser loads itself", "nor one of a part drawn waiting after the link to another site was followed"])
+      skip(name, "the app is not at localhost, so no other host name reaches it");
   // A read whose part a form's answer replaced, while its tag stays and the server never answers,
   // or its answer waits for a stylesheet that never loads: it stops, so the page's own read again,
   // put off while it was on its way, goes on (#1400).
@@ -1539,6 +1556,8 @@ async function run(browser) {
       }),
     );
     await shared.goto(`${base}/`);
+    // The page's own slow part is read first, so the listener counted is this read's alone.
+    await shared.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
     await shared.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="shared-0"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
@@ -1562,7 +1581,30 @@ async function run(browser) {
       sharedStyleAsked && settled[0][0] === "Drawn by a form" && settled[1][0] === "Waiting" && settled[1][1] === null && settled[1][2] === true,
       JSON.stringify({ sharedStyleAsked, settled }),
     );
-    check("and it stops listening for the page being left then", listening >= 1 && leftListening === 0, `${listening} listening while it waited, ${leftListening} after`);
+    check("and it stops listening for the page being left then", listening === 1 && leftListening === 0, `${listening} listening while it waited, ${leftListening} after`);
+    // So does a part read again whose read the server never answers, once its part is replaced.
+    let polledStopped = false;
+    shared.on("requestfailed", (r) => r.url().endsWith("/smoke/poll-stalled") && (polledStopped = true));
+    let pollAsked = false;
+    await shared.route("**/smoke/poll-stalled", () => void (pollAsked = true));
+    await shared.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="poll-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="poll-0"><p id="poll-a">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/poll-stalled"></template>'));
+    });
+    for (let waited = 0; !pollAsked && waited < 5000; waited += 50) await shared.waitForTimeout(50);
+    const pollListening = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
+    await shared.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="poll-0"><p id="poll-a">Drawn by a form</p></div>'));
+    });
+    await shared.waitForTimeout(300);
+    const pollLeft = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
+    check(
+      "a part read again whose part is replaced while its read is on its way stops the read and its listener",
+      pollAsked && pollListening === 1 && pollLeft === 0 && polledStopped,
+      `asked ${pollAsked}, ${pollListening} listening while it waited, ${pollLeft} after, fetch stopped ${polledStopped}`,
+    );
     await shared.unrouteAll({ behavior: "ignoreErrors" });
     await shared.context().close();
   }
@@ -1604,6 +1646,43 @@ async function run(browser) {
     );
     await polls.unrouteAll({ behavior: "ignoreErrors" });
     await polls.context().close();
+  }
+  // Two independent slow parts beside each other, the second with its tag inside the element it
+  // waits for: each answer's tag to read it again goes beside its own part, so the second does not
+  // take the place of the first's (#1400).
+  {
+    const pair = await (await browser.newContext()).newPage();
+    await pair.route("**/smoke/pair-*", async (route) => {
+      const name = new URL(route.request().url()).pathname.slice("/smoke/".length);
+      if (name === "pair-b") await new Promise((resolve) => setTimeout(resolve, 500));
+      await route
+        .fulfill({
+          status: 200,
+          headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+          body: `<p id="${name}">Read</p><template data-corten-read-again="30" data-from="/smoke/${name}"></template>`,
+        })
+        .catch(() => {});
+    });
+    await pair.goto(`${base}/`);
+    await pair.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="pair-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="pair-0"><p id="pair-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/pair-a" data-part="pair-a"></template><p id="pair-b">Waiting<template data-corten-read-again="0" data-from="/smoke/pair-b" data-part="pair-b"></template></p></div>',
+        ),
+      );
+    });
+    await pair.waitForFunction(() => document.getElementById("pair-b")?.textContent === "Read", null, { timeout: 5000 }).catch(() => {});
+    await pair.waitForTimeout(200);
+    const tags = await pair.evaluate(() => Array.from(document.querySelectorAll("#pair-0 > template"), (t) => `${t.getAttribute("data-from")} ${t.getAttribute("data-corten-read-again")}`));
+    check(
+      "two slow parts side by side each keep the tag that reads them again",
+      tags.length === 2 && tags.includes("/smoke/pair-a 30") && tags.includes("/smoke/pair-b 30"),
+      JSON.stringify(tags),
+    );
+    await pair.unrouteAll({ behavior: "ignoreErrors" });
+    await pair.context().close();
   }
   // And so for a part whose tag is inside the element it waits for, which its answer replaces: the
   // tag the answer brings to read it again goes beside what it drew (#1400).
