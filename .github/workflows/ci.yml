@@ -85,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Keep in step with workspace.package.rust-version in Cargo.toml.
-      - run: rustup toolchain install 1.88 --profile minimal && rustup default 1.88
+      - run: rustup toolchain install 1.89 --profile minimal && rustup default 1.89
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --workspace --all-features --all-targets
 

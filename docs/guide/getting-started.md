@@ -4,6 +4,10 @@
 
 ## Install and create an app
 
+Use Rust 1.89 or later. This is the oldest compiler Corten promises to build on, not a
+recommendation to avoid newer stable Rust. The [MSRV policy](../design.md#choice-msrv)
+records when that floor moves.
+
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
 npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
