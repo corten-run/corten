@@ -48,11 +48,14 @@ Corten is pre-1.0, so any minor version may change the API.
   OpenSSH can initialize with the sanitized environment. Git/doctl environments and
   credential handling are unchanged; local configuration-only checks make no connection.
 
-- A `data-keep-place` navigation finds the focused control by name inside its nearest ancestor
-  with an id and leaves hidden inputs out of its index, so repeated filter fields in hidden inputs
-  or other forms no longer take its place. Disabled, hidden and inert controls still count, a
-  found control that cannot take focus is left without it rather than another taking it, and
-  only a lost ancestor or control is looked for again in `<main>`, as before
+- A navigation that keeps the user's place (`data-keep-place`, or a page reading itself again for
+  `ReadAgain`) finds the focused control by name inside its nearest ancestor with an id and leaves
+  inputs of `type="hidden"` out of its index, so a repeated filter field in a hidden input no
+  longer takes its place, nor does a copy in another form when the filter's form or rail has an
+  id. Disabled controls, ones with the `hidden` attribute and ones inside an `inert` element still
+  count. A control found that cannot take focus leaves focus unrestored rather than another
+  taking it, and the control is looked for again in `<main>` only when nothing under its ancestor
+  matches
   ([#1372 A data-keep-place navigation gives focus to a hidden input with the focused control's name and value: placeOf matches any input in main by index](https://github.com/corten-run/corten/issues/1372)).
 
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's

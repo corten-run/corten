@@ -1499,16 +1499,18 @@ filter as soon as it changes, a handler submits the form (`form.requestSubmit()`
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
 position stays, and focus returns to the control the user is on when the form goes (by id, else
 by its name inside its nearest ancestor with an id, falling back to `<main>`, and its value for
-a checkbox or radio). Among repeated matches there it keeps the same index, leaving out hidden
-inputs but counting controls that are disabled, hidden or inert, so changing a preceding
-control's state does not move focus. If the control it finds cannot take focus, focus is left
-alone rather than given to another one. Only when the ancestor or the control is gone does it
-look for the control in `<main>`, by the same name and index there.
-Give the filter form or rail a `#[derive(Id)]` id to separate other forms' visible copies.
+a checkbox or radio). Among repeated matches there it keeps the same index, leaving out inputs of
+`type="hidden"` but counting controls that are disabled, carry the `hidden` attribute or sit
+inside an `inert` element, so a preceding control entering or leaving those states does not move
+focus. If the control at that index cannot take focus, or the ancestor now holds fewer matches,
+focus is not restored. Only when nothing under the ancestor matches (it is gone, or every match
+in it) does it look for the control in `<main>`, by the index it had there.
+Give the filter form or rail a `#[derive(Id)]` id to keep other forms' copies out of the count.
 **Limit:** Without the control's own stable id, correspondence depends on matching controls
-keeping their order, inside that ancestor or in `<main>` once it is gone. Inserting, removing or
-reordering matches ahead of the control can move focus to another one or leave it unrestored.
-Give a control its own `#[derive(Id)]` id when its matches can change
+keeping their order, inside that ancestor or in `<main>`. Inserting, removing or reordering
+matches ahead of the control can leave focus unrestored or move it to another one, and a
+matching field that switches to or from `type="hidden"` across the swap counts as inserted or
+removed. Give the control, or its form, a `#[derive(Id)]` id when its matches can change
 ([Limit 28](../design.md#limit-keep-place-identity)). Focus returns with its caret to the one they changed, or for
 a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
@@ -1762,7 +1764,8 @@ However the page was reached (a full load, a link, a `data-patch` form's redirec
 fetches the address after the delay, as it is then (so a query a script put in it with
 `history.replaceState`, as corten-ui's `rows::sort`, `TabGroup` and a choice do, is read too),
 and swaps it in: the history entry is replaced, the scroll
-position stays, the focused element (found again by its id) keeps focus, an answer the same as
+position stays, the focused element keeps focus (found again as a `data-keep-place` navigation
+finds it, [above](#filters-and-lists-that-grow)), an answer the same as
 the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
 write's redirect each read is of the whole page, as the write's was, so what changed around
 `<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a

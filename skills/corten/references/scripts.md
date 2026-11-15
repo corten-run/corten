@@ -127,11 +127,14 @@ division: end statements with `;` and keep a division on the line it continues.
    scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Focus matches by
    id, else name (and value for a checkbox or radio) inside the nearest ancestor with an id,
    falling back to `<main>`. Give the filter form or rail a `#[derive(Id)]` id to separate it
-   from other forms' visible copies. The index skips hidden inputs but counts disabled, hidden
-   and inert controls, so changing a preceding control's state does not change its identity. A
-   found control that cannot take focus is left without it; only when the ancestor or control is
-   gone is it looked for by the same name and index in `<main>`. Give the control its own stable
-   id if matches can be inserted, removed or reordered ahead of it. Never save and
+   from other forms' copies. The index skips inputs of `type="hidden"` but counts disabled
+   controls, ones with the `hidden` attribute and ones inside an `inert` element, so a preceding
+   control entering or leaving those states does not change its identity. A control at that
+   index that cannot take focus, or an ancestor now holding fewer matches, leaves focus
+   unrestored; only when nothing under the ancestor matches is it looked for by its index in
+   `<main>`. A page reading itself again (`ReadAgain`) finds it the same way. Give the control or
+   its form a stable id if matches can be inserted, removed or reordered ahead of it, or switch to
+   or from `type="hidden"` (that counts as inserted or removed). Never save and
    restore them yourself. `on:change` on the form applies every control (a text field and a
    `<textarea>` too, when they lose focus); `form.requestSubmit(button)` sends it as a submit
    button of the form (its `formaction` decides where); to apply for one control only, put the

@@ -4799,8 +4799,8 @@ async function run(browser) {
       );
       await keptPage.context().close();
     } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);
-    // Applying a filter adds another form ahead of it, repeating the chosen field. Hidden fields
-    // never take the user's place, nor does a copy in another form when the filter has an id.
+    // Applying a filter adds another form ahead of it, repeating the chosen field. Inputs of type
+    // hidden never take the user's place, nor does a copy in another form when the filter has an id.
     // Without ids, a copy that cannot take focus inserted ahead of it takes its index: focus is
     // left alone there, as before this lookup (docs/design.md#limit-keep-place-identity).
     for (const [kind, anchored, excluded] of [["hidden", true, ""], ["checkbox", true, ""], ["hidden", false, ""], ["checkbox", false, "disabled"], ["checkbox", false, "hidden"], ["checkbox", false, "inert"]]) {
@@ -4853,13 +4853,21 @@ async function run(browser) {
       await duplicatePage.context().close();
     }
     // Focus correspondence does not change when a preceding duplicate's eligibility changes. A
-    // control that is still there but cannot take focus keeps it from no other control; only a
-    // lost ancestor or control is looked for again in <main>, by its index there.
-    for (const kind of ["enable preceding", "disable preceding", "lose ancestor", "lose ancestor beside an unchanged duplicate", "move between forms", "become disabled", "become hidden", "become inert"]) {
-      const becoming = kind.startsWith("become ") ? kind.slice("become ".length) : "";
-      const label = becoming
-        ? `a data-keep-place swap leaves focus alone when its control must become ${becoming}, beside another form's copy`
-        : `a data-keep-place swap keeps focus and caret when it must ${kind}`;
+    // control that is still there but cannot take focus keeps it from no other control, and one
+    // missing from an ancestor that still holds matches is not looked for elsewhere; only when
+    // nothing under the ancestor matches is it looked for again in <main>, by its index there.
+    const shownKind = "become hidden but shown by a style";
+    const turningKind = "turn an earlier copy type=hidden";
+    for (const kind of ["enable preceding", "disable preceding", "lose ancestor", "lose ancestor beside an unchanged duplicate", "move between forms", "become disabled", "become hidden", "become inert", shownKind, turningKind]) {
+      const shown = kind === shownKind;
+      const turning = kind === turningKind;
+      const becoming = shown ? "hidden" : kind.startsWith("become ") ? kind.slice("become ".length) : "";
+      const alone = (!!becoming && !shown) || turning;
+      const label = turning
+        ? "a data-keep-place swap leaves focus alone when an earlier copy in its form turns type=hidden, beside a later form's copy"
+        : alone
+          ? `a data-keep-place swap leaves focus alone when its control must become ${becoming}, beside another form's copy`
+          : `a data-keep-place swap keeps focus and caret when it must ${kind}`;
       const correspondencePage = await (await browser.newContext()).newPage();
       await correspondencePage.goto(`${base}/news`);
       if (!(await correspondencePage.evaluate(() => "navigation" in window))) {
@@ -4878,7 +4886,13 @@ async function run(browser) {
           const losing = kind.startsWith("lose ancestor");
           const moved = kind === "move between forms" && applied;
           const target = `<input name="q" value="abcdef" data-smoke-focused ${becoming && applied ? becoming : ""}>`;
-          const preceding = kind.endsWith(" preceding") ? `<input name="q" value="abcdef" ${applied === (kind === "disable preceding") ? "disabled" : ""}>` : "";
+          const preceding = kind.endsWith(" preceding")
+            ? `<input name="q" value="abcdef" ${applied === (kind === "disable preceding") ? "disabled" : ""}>`
+            : turning
+              ? `<input name="q" value="abcdef" ${applied ? 'type="hidden"' : ""}>`
+              : "";
+          // After the filter, so its index in <main> is the focused control's once the copy turns.
+          const later = turning ? '<form><input name="q" value="abcdef"></form>' : "";
           const other =
             kind === "lose ancestor beside an unchanged duplicate"
               ? '<form><input name="q" value="abcdef"></form>'
@@ -4887,15 +4901,20 @@ async function run(browser) {
                 : becoming
                   ? '<form id="smoke-export"><input name="q" value="abcdef"></form>'
                   : "";
-          const body = (await res.text()).replace(
-            /(<form\b[^>]*data-keep-place[^>]*>)/,
-            (_, form) => `${other}${losing && applied ? form : form.replace("<form", '<form id="smoke-filter"')}${preceding}${moved ? "" : target}`,
-          );
+          const body = (await res.text())
+            .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${other}${losing && applied ? form : form.replace("<form", '<form id="smoke-filter"')}${preceding}${moved ? "" : target}`)
+            .replace("</main>", `${later}</main>`);
           await route.fulfill({ status: res.status(), headers, body });
         },
       );
       await correspondencePage.goto(`${base}/news`);
-      const after = await correspondencePage.evaluate(async () => {
+      const after = await correspondencePage.evaluate(async (shown) => {
+        if (shown) {
+          // A hidden attribute the app's style overrides: the control can still take focus.
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync("[data-smoke-focused][hidden] { display: inline-block !important }");
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }
         const input = /** @type {HTMLInputElement} */ (document.querySelector("[data-smoke-focused]"));
         input.focus();
         input.setSelectionRange(1, 4, "backward");
@@ -4914,8 +4933,8 @@ async function run(browser) {
           body: document.activeElement === document.body,
           active: document.activeElement?.outerHTML.slice(0, 150),
         };
-      });
-      check(label, after.before && after.swapped && (becoming ? after.body : after.focused && after.caret.join() === "1,4,backward"), JSON.stringify(after));
+      }, shown);
+      check(label, after.before && after.swapped && (alone ? after.body : after.focused && after.caret.join() === "1,4,backward"), JSON.stringify(after));
       await correspondencePage.context().close();
     }
     // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it

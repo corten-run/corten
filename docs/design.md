@@ -4090,17 +4090,21 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `80dbd7db`'s own runs.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
-28. <a id="limit-keep-place-identity"></a>A `data-keep-place` navigation restores focus by the
-    control's own id, else by its name (and value for a checkbox or radio) and its index among the
-    matching controls other than hidden inputs inside the nearest ancestor with an id, else
-    `<main>`. Controls that cannot take focus now (disabled, hidden or inert) are counted, so a
-    preceding control changing state does not move focus. A control still there that cannot take
-    focus is left without it; focus never moves to another control in its place. Only when the
-    ancestor or the control is gone is it looked for by the same name and index in `<main>`, as
-    the runtime did before it used ancestors. Without the control's own stable id, inserting,
-    removing or reordering matching controls ahead of it (in its ancestor, or in `<main>` once
-    that is gone) can still move focus to another control or leave it unrestored: an index does
-    not identify an item through an order change. Give such a control its own stable
-    `#[derive(Id)]` id.
+28. <a id="limit-keep-place-identity"></a>A navigation that keeps the user's place (a
+    `data-keep-place` form or link, or a page reading itself again for `ReadAgain`) restores
+    focus by the control's own id, else by its name (and value for a checkbox or radio) and its
+    index among the matching controls inside the nearest ancestor with an id, else `<main>`.
+    Inputs of `type="hidden"` are left out of that index. Disabled controls, ones with the
+    `hidden` attribute and ones inside an `inert` element are counted, so a preceding control
+    entering or leaving those states does not change the index. The control at that index is
+    focused if it can take focus; if it cannot, focus is not restored. If the ancestor still holds
+    matches but fewer than that index, focus is not restored either. Only when nothing under the
+    ancestor matches (the ancestor is gone, or every match in it) is the control looked for in
+    `<main>`, at the index it had there before the swap. Without the control's own stable id,
+    inserting, removing or reordering matching controls ahead of it can leave focus unrestored or
+    move it to another control, and a matching field that switches to or from `type="hidden"`
+    across the swap counts as inserted or removed. An index does not identify an item through an
+    order change. Give such a control its own stable `#[derive(Id)]` id; an id on its form keeps
+    other forms' copies out of the count.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.
