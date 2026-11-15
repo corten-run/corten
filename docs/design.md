@@ -3083,15 +3083,17 @@ rules something out.
     them, and so does a patch that draws a part waiting for the address that patch answers, which
     would ask for itself again. A redirect (a sign-in's `corten-location`) is followed, as a
     form's is, by a read the page still waits for (not one whose part was replaced or whose address
-    moved meanwhile, nor one a navigation started since has overtaken, a full load without the
-    Navigation API too, counted from `beforeunload` while a read is on its way: the user's link
-    wins), and a
+    moved meanwhile, nor one a navigation started since has overtaken: a link to another site the
+    browser loads itself and a full load without the Navigation API (counted from `beforeunload`
+    while a read is on its way) too, and for a part the read's answer draws waiting, counted from
+    the first read: the user's link wins), and a
     read whose fetch or body the browser ended by hiding the page (its back-forward cache) is made
     again when the page is shown, not marked failed, if its parts are still the ones it waited for.
     A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's read is
     on its way: each whole read would replace the part and its read, so a part slower than the
-    page's interval would never come. The read's fetch stops when its part leaves the page (a form's
-    answer replaced it), so a read the server never answers does not put the page's reads off. Not `aria-busy="false"`: busy says an element is being
+    page's interval would never come. A read stops putting them off, and its fetch stops, when its
+    part leaves the page (a form's answer replaced it), so neither a read the server never answers
+    nor an answer waiting for a stylesheet that never loads holds them up. Not `aria-busy="false"`: busy says an element is being
     updated, and false is also the state of every element that is not, so a part that read fine
     but was not replaced (an empty patch) would look failed. A `data-` attribute, as Values 2
     extends a standard: the waiting element is the app's, any element, where an attribute of
@@ -3149,9 +3151,11 @@ rules something out.
     only the named part busy with a cell and a live row beside it patched during its read, a waiting
     part in a part's answer and in a part read again read, one for its answer's own address marked
     failed, a redirect followed and one for a part replaced meanwhile or overtaken by the user's
-    link (with the Navigation API and a full load without it, and a read made again at a moved
-    address) not, a part slower than its page's read again drawn, a read whose part a form replaced
-    stopped so its page's read again goes on, a read cut by a hidden page read
+    link (with the Navigation API, to another site, a full load without the API, a read made again
+    at a moved address and a part the first answer drew waiting) not, a part slower than its page's
+    read again drawn, a read whose part a form replaced stopped so its page's read again goes on,
+    whether its server never answered or its answer waited for a stylesheet that never loaded, a
+    read cut by a hidden page read
     again when shown and not over a part a form replaced meanwhile (`pagehide` and `pageshow`
     dispatched by the test), a client navigation away
     leaving nothing marked, a page left whole and come back to with its part, a part in a layout

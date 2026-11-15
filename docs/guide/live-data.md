@@ -285,8 +285,8 @@ part a form's patch or another part's answer draws waiting is read the same way,
 names the address that answer came from, which would ask for itself again: that part is marked
 failed. Tags are read in `<main>` and in the layout's elements that are the page's (`page` in
 `html!`). A read the server redirects (a sign-in) takes the page there, as a form's does, unless
-its part was replaced or a navigation started meanwhile (the user's link wins, a full load
-without the Navigation API too); a read the browser
+its part was replaced or a navigation started meanwhile (the user's link wins, whether the
+runtime or the browser loads its page); a read the browser
 cut short by keeping the page in its back-forward cache is made again when the page is shown, if
 its part is still the one it waited for; a page the browser prerenders reads its parts once it is
 shown. A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's

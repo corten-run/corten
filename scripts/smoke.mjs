@@ -1336,9 +1336,10 @@ async function run(browser) {
   // page is still on its way: the user's navigation goes on, and the redirect is not followed, with
   // the Navigation API or a full load without it; and so for a read made again at the address a
   // script moved its tag to after the link was followed (#1400).
-  for (const [moved, native] of [
-    ...(swaps ? [[false, false], [true, false]] : []),
-    [false, true],
+  const crossBase = new URL(base).hostname === "localhost" ? base.replace("localhost", "127.0.0.1") : null;
+  for (const { moved = false, native = false, nested = false, cross = false } of [
+    ...(swaps ? [{}, { moved: true }, { nested: true }, ...(crossBase ? [{ cross: true }] : [])] : []),
+    { native: true },
   ]) {
     const overtaken = await (await browser.newContext()).newPage();
     // A full load in place of a swap, where the runtime has no Navigation API.
@@ -1353,17 +1354,28 @@ async function run(browser) {
     let releasePart = () => {};
     let partAsked = () => {};
     const partSent = new Promise((resolve) => (partAsked = () => resolve(undefined)));
+    const signIn = { status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } };
     await overtaken.route("**/smoke/overtaken*", async (route) => {
-      // The read at the address the tag was moved to answers at once; the first waits.
-      if (new URL(route.request().url()).search) return route.fulfill({ status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } }).catch(() => {});
+      const url = new URL(route.request().url());
+      // The read at the address the tag was moved to, and the part the first answer draws
+      // waiting, answer at once; the first waits.
+      if (url.search || url.pathname.endsWith("-inner")) return route.fulfill(signIn).catch(() => {});
       partAsked();
       await new Promise((resolve) => (releasePart = () => resolve(undefined)));
-      await route.fulfill({ status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } }).catch(() => {});
+      if (!nested) return route.fulfill(signIn).catch(() => {});
+      await route
+        .fulfill({
+          status: 200,
+          headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8", vary: "corten" },
+          body: '<div id="overtaken-0"><p id="overtaken-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken-inner" data-part="overtaken-b"></template></div>',
+        })
+        .catch(() => {});
     });
     /** @type {(() => void)[]} */
     const newsHeld = [];
     let newsOpen = false;
-    await overtaken.route(`${base}/news`, async (route) => {
+    // Another site's page, which the browser loads itself: this app at another host name.
+    await overtaken.route(`${cross ? crossBase : base}/news`, async (route) => {
       if (!newsOpen) await new Promise((resolve) => newsHeld.push(() => resolve(undefined)));
       await route.continue().catch(() => {});
     });
@@ -1378,10 +1390,13 @@ async function run(browser) {
       await corten.patch(__html('<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>'));
     });
     await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
-    await overtaken.click('header nav a[href="/news"]', { noWaitAfter: true });
+    if (cross) {
+      await overtaken.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="overtaken-away" href="${href}">Away</a>`)), `${crossBase}/news`);
+      await overtaken.click("#overtaken-away", { noWaitAfter: true });
+    } else await overtaken.click('header nav a[href="/news"]', { noWaitAfter: true });
     // The user's navigation is on its way, its page held: a swap's, or a full load's.
     for (let waited = 0; !newsHeld.length && waited < 5000; waited += 50) await overtaken.waitForTimeout(50);
-    if (!native) await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
+    if (!native && !cross) await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
     // A script moves the tag's address meanwhile (a sort): the first answer is read again there.
     if (moved) await overtaken.evaluate(() => document.querySelector('template[data-part="overtaken-a"]')?.setAttribute("data-from", "/smoke/overtaken?sorted=1"));
     releasePart();
@@ -1392,9 +1407,13 @@ async function run(browser) {
     check(
       moved
         ? "and nor does one read again at the address a script moved its tag to after the link was followed"
-        : native
-          ? "nor where the link is a full load, without the Navigation API"
-          : "a part's redirect that comes after the user followed a link does not take the page from it",
+        : nested
+          ? "nor one of a part the first part's answer drew waiting"
+          : cross
+            ? "nor where the link is to another site, which the browser loads itself"
+            : native
+              ? "nor where the link is a full load, without the Navigation API"
+              : "a part's redirect that comes after the user followed a link does not take the page from it",
       new URL(overtaken.url()).pathname === "/news" && !asked.includes("/?overtaken=1"),
       `${overtaken.url()} asked ${asked.filter((p) => p.includes("overtaken") || p.startsWith("/news")).join(", ")}`,
     );
@@ -1405,11 +1424,15 @@ async function run(browser) {
     for (const name of [
       "a part's redirect that comes after the user followed a link does not take the page from it",
       "and nor does one read again at the address a script moved its tag to after the link was followed",
+      "nor one of a part the first part's answer drew waiting",
+      "nor where the link is to another site, which the browser loads itself",
     ])
       skip(name, noSwaps);
-  // A read whose part a form's answer replaced, while its tag stays and the server never answers:
-  // it stops, so the page's own read again, put off while it was on its way, goes on (#1400).
-  {
+  else if (!crossBase) skip("nor where the link is to another site, which the browser loads itself", "the app is not at localhost, so no other host name reaches it");
+  // A read whose part a form's answer replaced, while its tag stays and the server never answers,
+  // or its answer waits for a stylesheet that never loads: it stops, so the page's own read again,
+  // put off while it was on its way, goes on (#1400).
+  for (const stalled of [false, true]) {
     const orphan = await (await browser.newContext()).newPage();
     let first = true;
     await orphan.route(`${base}/`, async (route) => {
@@ -1424,8 +1447,18 @@ async function run(browser) {
     });
     let orphanStopped = false;
     orphan.on("requestfailed", (r) => r.url().endsWith("/smoke/orphan") && (orphanStopped = true));
-    // Never answered.
-    await orphan.route("**/smoke/orphan", () => new Promise(() => {}));
+    let styleAsked = false;
+    await orphan.route("**/smoke/never.css", () => void (styleAsked = true));
+    // Never answered, or answered with a patch that links that stylesheet.
+    await orphan.route("**/smoke/orphan", (route) =>
+      stalled
+        ? route.fulfill({
+            status: 200,
+            headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+            body: '<link rel="stylesheet" href="/smoke/never.css" data-corten-style><p id="orphan-a">Read</p>',
+          })
+        : new Promise(() => {}),
+    );
     let [loaded, wholeReads] = [false, 0];
     orphan.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
     await orphan.goto(`${base}/`);
@@ -1433,14 +1466,20 @@ async function run(browser) {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="orphan-0"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<div id="orphan-0"><p id="orphan-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/orphan" data-part="orphan-a"></template></div>'));
+    });
+    if (stalled) for (let waited = 0; !styleAsked && waited < 5000; waited += 50) await orphan.waitForTimeout(50);
+    await orphan.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<p id="orphan-a">Drawn by a form</p>'));
     });
     loaded = true;
     for (let waited = 0; !wholeReads && waited < 5000; waited += 100) await orphan.waitForTimeout(100);
     check(
-      "a read whose part a form replaced stops, and the page's read again goes on",
-      orphanStopped && wholeReads > 0,
-      `stopped ${orphanStopped}, page read ${wholeReads} times`,
+      stalled
+        ? "and so does one whose answer waits for a stylesheet that never loads"
+        : "a read whose part a form replaced stops, and the page's read again goes on",
+      (stalled ? styleAsked : orphanStopped) && wholeReads > 0,
+      `stopped ${orphanStopped}, stylesheet asked ${styleAsked}, page read ${wholeReads} times`,
     );
     await orphan.unrouteAll({ behavior: "ignoreErrors" });
     await orphan.context().close();
@@ -1520,13 +1559,15 @@ async function run(browser) {
       );
     });
     for (let waited = 0; hiddenHeld.length < 2 && waited < 5000; waited += 50) await hidden.waitForTimeout(50);
+    // Both reads end while the page is hidden, so each waits to be made again when it is shown; a
+    // form's answer then replaces one of their parts before it is.
+    await hidden.evaluate(() => dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+    for (const release of hiddenHeld) release();
+    await hidden.waitForTimeout(400);
     await hidden.evaluate(async () => {
-      dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<p id="hidden-b">Drawn by a form</p>'));
     });
-    for (const release of hiddenHeld) release();
-    await hidden.waitForTimeout(400);
     await hidden.evaluate(() => dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
     await hidden.waitForFunction(() => document.getElementById("hidden-a")?.textContent === "Read when shown", null, { timeout: 5000 }).catch(() => {});
     await hidden.waitForTimeout(300);

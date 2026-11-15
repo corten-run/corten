@@ -1000,8 +1000,10 @@ export function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
+ * @param {number} [visited] for a part's answer, the count of visits when its read was first asked
+ *   for, which the parts it draws waiting keep ({@link readNow})
  */
-async function apply(html, signal, sent, took, own = true, asked, within) {
+async function apply(html, signal, sent, took, own = true, asked, within, visited = visits) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
@@ -1051,7 +1053,7 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // except one for the address this patch answers, which would ask for itself again. Looked for in
   // the text first, so a patch without one (a ticker's) queries nothing; a script's is
   // `TrustedHTML`, whose text is its markup.
-  if (String(html).includes('read-again="0"')) readNow(put, asked && attrOf(asked, "data-from"));
+  if (String(html).includes('read-again="0"')) readNow(put, asked && attrOf(asked, "data-from"), visited);
 }
 
 /**
@@ -1214,11 +1216,18 @@ function readTags(tags, visited = visits) {
 async function readPart(from, tags, waiting, visited) {
   partReads += 1;
   // Its listeners on the tags and parts go when it ends, so a tag read again does not gather them.
+  // It stops putting the page's reads off then, or as soon as it can no longer draw (its fetch
+  // stopped): an answer waiting for a stylesheet that never loads holds nothing up.
   const done = new AbortController();
+  let counted = true;
+  const release = () => {
+    if (counted) partReads -= 1;
+    counted = false;
+  };
   try {
-    await readPartOnce(from, tags, waiting, visited, done.signal);
+    await readPartOnce(from, tags, waiting, visited, done.signal, release);
   } finally {
-    partReads -= 1;
+    release();
     done.abort();
   }
 }
@@ -1227,11 +1236,12 @@ async function readPart(from, tags, waiting, visited) {
 let partReads = 0;
 
 /**
- * {@link readPart}'s read, whose listeners last while `done` does.
+ * {@link readPart}'s read, whose listeners last while `done` does; `release` says it can no
+ * longer draw.
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {number} visited
- * @param {AbortSignal} done
+ * @param {AbortSignal} done @param {() => void} release
  */
-async function readPartOnce(from, tags, waiting, visited, done) {
+async function readPartOnce(from, tags, waiting, visited, done, release) {
   const page = swapped;
   // A script may change a tag's address while the read is on its way (corten-ui's rows::sort puts
   // a table's order in it): the answer is drawn for what was, so it is read again.
@@ -1250,6 +1260,7 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // The fetch stops when a part it waits for leaves, as its answer can no longer be drawn, or when
   // the last of its tags does with no part named (after it ends, that does nothing).
   const stop = new AbortController();
+  stop.signal.addEventListener("abort", release);
   let holding = tags.length + waiting.length;
   for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
   for (const el of waiting) signalOf(el).addEventListener("abort", () => stop.abort(), { signal: done });
@@ -1289,7 +1300,7 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
   // changes anything: the check is made then, and says whether it drew.
   const ask = { get aborted() { return !(drew = here()); } };
-  if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0]).catch(reportError);
+  if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0], undefined, visited).catch(reportError);
   for (const el of waiting) unmarkBusy(el, mine);
   if (drew || page !== swapped) return;
   if (moved()) return retry();
@@ -2381,7 +2392,10 @@ function prefetch(target) {
 
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
-/** How many visits have started: a part's read started before the newest follows no redirect. */
+/**
+ * How many navigations have started (the runtime's visits, and those it leaves to the browser): a
+ * part's read started before the newest follows no redirect.
+ */
 let visits = 0;
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -2729,6 +2743,9 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     posts(event) ||
     event.navigationType === "reload" ||
     sourceIn(event, "[data-reload]");
+  // One the browser makes itself (another site's link, a reload) leaves the page too: a part's
+  // read started before it follows no redirect ({@link readPart}).
+  if (skip && !event.destination.sameDocument && event.downloadRequest === null) visits += 1;
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
