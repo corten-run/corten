@@ -8,7 +8,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
 
-- Check scripts with TypeScript 7.0.2, matching npm's newest stable release installed by the
+- Corten's own checks use TypeScript 7.0.2, matching npm's newest stable release installed by the
   getting-started guide, and use its DOM declarations for the Navigation API. Move the
   repository's AST checks off the removed JavaScript API, using the exactly pinned compiler's
   unstable native parser API until a stable parsing entry point is available.

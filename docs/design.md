@@ -205,10 +205,10 @@ rules something out.
    object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
    untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
    and `unknown` in TypeScript, which a JSDoc type fixes; a function called with `new` that sets
-   `this`'s properties, which 5.9.3 accepts in JavaScript and 7.0.2 refuses; a function that reads
-   `arguments`, which 5.9.3 lets take any number of arguments in JavaScript and 7.0.2 does not, and
-   a rest parameter fixes; and a property a class's constructor or method sets first, which
-   JavaScript takes as declared even when the class declares its fields, so a misspelled write is
+   `this`'s properties, and extra arguments to a function reading `arguments`: 6.x accepts these
+   in JavaScript and 7.0.2 refuses them (a class and a rest parameter fix them); and a property
+   a class's constructor or method sets first, which JavaScript takes as declared even when the
+   class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
    constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
@@ -257,7 +257,9 @@ rules something out.
    off the classic compiler API, so the root 5.9.3 compatibility install can be removed; or the
    benchmark harness isolates its classic API dependency in its own package, removing the need
    for Corten's alias; or the `@typescript/typescript-<platform>-<arch>/lib/lib.dom.d.ts` package
-   layout that `scripts/events.mjs` resolves through the alias changes.
+   layout that `scripts/events.mjs` resolves through the alias changes; or the runtime or kit
+   needs a DOM type unavailable at the TypeScript 6.0 minimum (CI checks both 6.0.3 and 7.0.2),
+   or TypeScript changes the checked-JavaScript inference differences at that minimum.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -312,7 +314,12 @@ rules something out.
    registry dependency or arbitrary ancestor. The escape scan parses all files in one native
    session rather than starting a process per file. Three sequential wall-time runs of
    `node scripts/escapes.mjs` before batching: 9.392, 8.134, 8.427 s, after: 2.431, 2.337,
-   2.255 s (medians 8.427 and 2.337 s on the same workstation, not controlled for load).
+   2.255 s (medians 8.427 and 2.337 s on the same workstation, not controlled for load);
+   2026-11-14, at `630ceb703` and the change: external TypeScript 6.0.3 and pinned 7.0.2
+   run on `jsconfig.json`, including the runtime and kit (both pass). CI now installs 6.0.3
+   outside the repository and runs that same config, so the minimum is continuously checked.
+   The constructor-function and extra-arguments JavaScript probes were run with both:
+   6.0.3 accepts them, while 7.0.2 reports TS2683, TS7009 and TS2554.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2685,7 +2692,9 @@ rules something out.
     Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
     sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
     (Playwright 1.64.1) on 2026-11-08; 2026-11-14, reopened at `727130519` with TypeScript
-    7.0.2: no additional checking flag beyond those considered under 5.9.3 changes the choice.
+    7.0.2: its `tsc --help --all` checking options read against this Choice and the options in
+    `jsconfig.json`, and `tsc -p jsconfig.json` run. No additional checking flag beyond those
+    considered under 5.9.3 changes the choice.
     The equal-options test is not evidence of equal compiler selection.
 
 40. <a id="choice-script-boundaries"></a>**What a script reads from outside the checker is `unknown` and checked where it
@@ -2799,7 +2808,10 @@ rules something out.
     `c34532753` and the change: the helper's unchecked `info` reproduced by the compiler probe,
     then both helper and listener checked through the shared event typedef and the probes;
     2026-11-14, at `727130519` and the change: the optional Navigation API boundary restored,
-    with a compiler probe requiring TS18048 for an unguarded read.
+    with a compiler probe requiring TS18048 for an unguarded read;
+    2026-11-14, at `630ceb703` and the change: dialog and toaster use lib.dom's Navigation
+    types rather than hand-declared shapes, with an optional boundary for older browsers.
+    Their scripts and the runtime checked with TypeScript 6.0.3 and 7.0.2 (both pass).
 
 41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
     `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept

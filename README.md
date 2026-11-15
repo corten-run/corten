@@ -54,7 +54,7 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
 
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
-npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
+npm install --global typescript    # needs Node.js; corten check needs TypeScript 6.0 or later
 corten new my-app
 cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save

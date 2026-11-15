@@ -53,6 +53,11 @@ jobs:
           npm install --global $(node -p "require('./package.json').devDependencies.typescript7.slice(4)")
           tsc --version
       - run: npm ci
+      - name: Minimum supported TypeScript checks the runtime and kit scripts
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ts6" --no-save --package-lock=false typescript@6.0.3
+          node "$RUNNER_TEMP/ts6/node_modules/typescript/bin/tsc" --version
+          node "$RUNNER_TEMP/ts6/node_modules/typescript/bin/tsc" -p jsconfig.json
       - name: Pinned compiler checks the template's scripts
         run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
       - name: corten new writes an app that passes corten check, and so does every kit component in it

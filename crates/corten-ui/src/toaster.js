@@ -120,12 +120,10 @@ export function connect(root, status, close, failed, seconds, signal) {
   );
   // Another page: not the page changing its own address (a tab's replaceState, a link to a place
   // on it), a download, or the page reading itself again.
-  // The Navigation API, where the browser has it (TypeScript's DOM library does not declare it
-  // yet), and the parts of its navigate event this reads.
-  /** @type {typeof globalThis & { navigation?: EventTarget }} */ (globalThis).navigation?.addEventListener(
+  /** @type {Navigation | undefined} */ (globalThis.navigation)?.addEventListener(
     "navigate",
     (e) => {
-      const event = /** @type {Event & { hashChange: boolean, downloadRequest: string | null, destination: { url: string, sameDocument: boolean }, navigationType: string }} */ (e);
+      const event = /** @type {NavigateEvent} */ (e);
       const page = (/** @type {string} */ url) => url.split("#")[0];
       const own = event.hashChange || event.downloadRequest !== null || (event.destination.sameDocument && event.navigationType !== "traverse");
       if (!own && page(event.destination.url) !== page(location.href)) over();
