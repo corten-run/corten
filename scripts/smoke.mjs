@@ -1412,6 +1412,22 @@ async function run(browser) {
       }, polled);
       await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
     }
+    // Or a part is drawn waiting only after the link is followed, while its navigation is on its
+    // way (a live patch): drawn by the page itself, as Playwright waits for a navigation to another
+    // site before it evaluates in the page.
+    if (late)
+      await overtaken.evaluate(() =>
+        document.addEventListener(
+          "click",
+          () =>
+            setTimeout(async () => {
+              document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-late"></div>'));
+              const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+              await corten.patch(__html('<div id="overtaken-late"><p id="overtaken-l">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken-late" data-part="overtaken-l"></template></div>'));
+            }, 300),
+          { once: true, capture: true },
+        ),
+      );
     if (cross) {
       await overtaken.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="overtaken-away" href="${href}">Away</a>`)), `${crossBase}/news`);
       await overtaken.click("#overtaken-away", { noWaitAfter: true });
@@ -1420,17 +1436,10 @@ async function run(browser) {
     for (let waited = 0; !newsHeld.length && waited < 5000; waited += 50) await overtaken.waitForTimeout(50);
     if (!native && !cross) await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
     // A script moves the tag's address meanwhile (a sort): the first answer is read again there.
-    // Or a part is drawn waiting only now, while that navigation is on its way (a live patch).
-    if (late)
-      await overtaken.evaluate(async () => {
-        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-0"></div>'));
-        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-        await corten.patch(__html('<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken-late" data-part="overtaken-a"></template></div>'));
-      });
     if (moved)
       await overtaken.evaluate((polled) => document.querySelector(polled ? '#overtaken-box > template[data-from="/smoke/overtaken"]' : 'template[data-part="overtaken-a"]')?.setAttribute("data-from", "/smoke/overtaken?sorted=1"), polled);
     releasePart();
-    await overtaken.waitForTimeout(500);
+    await overtaken.waitForTimeout(late ? 1000 : 500);
     releaseNews();
     await overtaken.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }).catch(() => {});
     await overtaken.waitForTimeout(300);
