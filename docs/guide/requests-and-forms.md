@@ -841,7 +841,25 @@ are still there to send again; only a successful answer to the form that sent th
 while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
-the server sent open and now sends closed closes. A dialog the server draws `open` is open but not
+the server sent open and now sends closed closes (replaced closed: no `close` event fires, and
+focus does not go back to what opened it). A dialog or `<details>` the user closed opens again
+when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
+did, the focused control of the form, else the form) is outside it: pressing it is newer than
+the user's close, so a Preview button beside a dialog opens it on every press, not only the
+first. It opens as drawn, so not modal; `on:connect={corten_ui::dialog::modal(target)}` makes it
+modal again. A button inside a dialog with `form=` naming a form outside it counts as inside, and
+so does Enter in a field of a dialog that a form with no submit button wraps. When the form has
+a submit button outside the dialog, Enter sends it through that button (the browser makes its
+default button the submitter), so the press counts as outside. It only opens: one the user opened stays
+open even when such an answer draws it closed. Outside is where the button was when it was
+pressed, so removing it, redrawing the dialog, replacing its form earlier in the same answer, or
+a write's answer redrawing it while its submit waits, does not make a press inside one outside. A submit from inside
+the element (a form in the dialog, sent before the user pressed Escape), an element inside the
+one replaced, a `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()` keep what
+the user left. A popover stays as the user left it, since no markup shows one. A `data-patch`
+submit answered with a whole page instead of a patch redraws `<main>` from the new markup, so
+its dialogs and `<details>` open or close as drawn; the layout's elements outside `<main>` keep
+what the user left. A dialog the server draws `open` is open but not
 modal; give it `on:connect={corten_ui::dialog::modal(target)}` ([headless components](ui.md)). Everything else is the server's.
 
 Each top-level element of a patch replaces the element with its `id`, and the browser drops one
