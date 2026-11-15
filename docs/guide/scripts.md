@@ -413,16 +413,18 @@ so an element in a `<template>`'s or a `<noscript>`'s content is not one of them
 expression or a component writes into an element a browser reads as text (`<textarea>`, `<title>`,
 `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`). An element written in one of those in the markup
 does not compile where the markup shows it is HTML, nor one in a `<script>` or a `<style>`, nor a
-`<plaintext>` (the browser would show its tags as text; [views](views.md)). Inside an `<svg>` all
+`<plaintext>` (the browser would show its tags as text; [views](views.md),
+[design Choice 53](../design.md#choice-html-parse-refusals)). Inside an `<svg>` all
 of them are elements like any other, and what they hold is found, except in its `<foreignObject>`,
 `<desc>` or `<title>`, which hold HTML. A component's markup does not see an `<svg>` its parent
 writes it into, and a component's children do not see where the component writes them, so the keys
 in a `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 `<noframes>` at the top of a component's markup (which its parent may write into an `<svg>`), or
 in one among a component's children (outside an `<svg>` the children write themselves), are not
-checked. Nor are those in one of them inside a `<math>` (outside its `<mi>`, `<mo>`, `<mn>`,
-`<ms>`, `<mtext>` and `<annotation-xml>`), where it is MathML's and the runtime finds what it
-holds: where the check cannot be sure, it lets a duplicate pass rather than stop a correct render. Markup that is not correct is another matter:
+checked ([design Limit 29](../design.md#limit-markup-context)). Nor are those in one of them inside
+a `<math>` (outside its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>`, and an `<annotation-xml>`
+whose `encoding` is `text/html` or `application/xhtml+xml`), where it is MathML's and the runtime
+finds what it holds: where the check cannot be sure, it lets a duplicate pass rather than stop a correct render. Markup that is not correct is another matter:
 a browser moves an element written straight into a `<table>`'s rows (a `<span>` in a `<tr>`)
 out before the table, so when the table is a component's root the runtime does not find it there,
 while the check counts it where it is written and may stop on a duplicate the runtime does not see. A view written into a
@@ -436,7 +438,9 @@ own (an id, not a name two rows can share). A key an `AttrValue` of the app's wr
 the check does not repeat.
 The check belongs to `corten-run`: it runs when that crate is built with debug assertions (as
 `cargo build` and `cargo test` build it), for every crate's markup, whatever the app's own crate is
-built with. A spread of attributes does not write `data-key`, as it does not write `data-ref`.
+built with. A spread of attributes does not write `data-key`, as it does not write `data-ref`. A
+`data-key=".."` written by hand beside a ref is still taken as its key, a known limit that
+`html!` does not refuse yet; write `key={..}`.
 
 **A value for each element.** Rows a script compares (orders by price, filters by stock) carry what
 it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a parameter

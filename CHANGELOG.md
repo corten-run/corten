@@ -146,6 +146,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
+  which says whether a ref's elements have a `key={..}`, so a handler parameter typed
+  `Map<string, El>` takes only a keyed ref. A component's prop for a parent's keyed ref names it
+  `Ref<El, NoRows, NoValue, Keyed>`; `Ref<El>` is `NoKey`
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
 - Bind native browser DOM evidence to bounded public reads, the actual document and
   network origin, with exact replay and separate semantic and apparatus lifetimes.
   Unsupported structure, private data, missing proof and uncertain cleanup remain
@@ -579,15 +585,18 @@ Corten is pre-1.0, so any minor version may change the API.
   component's. A document's head tags, each copied into the page, are not checked against each
   other or the body.
 - A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
-  a key is `key={..}`'s to write.
+  a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref is still taken
+  as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
 - **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
   gets `key={..}` on each of its elements.
 - **Breaking:** markup a browser would not keep as written no longer compiles where the markup
   shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
-  a `<p>`, a document's `<head>`), and in an `<svg>`, its `<foreignObject>`, `<desc>` and
-  `<title>` included. An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
+  `<title>` included, and in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` and an
+  `<annotation-xml>` whose `encoding` is `text/html` or `application/xhtml+xml`
+  ([design Choice 53](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
   inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
@@ -595,10 +604,11 @@ Corten is pre-1.0, so any minor version may change the API.
   a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
   the HTML standard's rules for foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`,
   `<span>`, `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`),
-  written straight into one, closed the `<svg>`: put it in a `<foreignObject>`. Inside an `<svg>`
-  a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements, and at the top of a
-  component's markup or among a component's children, where the markup does not show how they
-  are parsed, none of this is refused.
+  written straight into one, closed the `<svg>`: put it in a `<foreignObject>`. Inside an `<svg>`,
+  or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
+  drawing or the formula and holds elements. At the top of a component's markup or among a
+  component's children, where the markup does not show how they are parsed, none of this is
+  refused ([design Limit 29](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

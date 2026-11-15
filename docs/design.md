@@ -3117,15 +3117,11 @@ rules something out.
     markup, it lets a duplicate pass. The check counts the elements the runtime's query finds, so
     one in a `<template>`'s or a `<noscript>`'s content is not counted, nor one an expression or a
     component writes into an element whose content a browser reads as text (`<textarea>`, an HTML
-    `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`); an element written in one of those
-    in the markup itself does not compile where the markup shows it is parsed as HTML, nor in a
-    `<script>` or a `<style>`, nor a `<plaintext>` (in an `<svg>` they are elements like any
-    other, and what they hold is, except in its `<foreignObject>`, `<desc>` and `<title>`, the HTML
-    standard's integration points, whose children are HTML's). The same rule holds the refusals:
-    the markup shows HTML under an element that is HTML's wherever it lands (one the standard's
-    rules for foreign content take out of an `<svg>`, a document's `<head>`) and at the integration
-    points, and SVG in a literal `<svg>`; at the top of a component's markup, among a component's
-    children and in a `<math>` it shows neither, and nothing is refused there. It counts an
+    `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`); one written in those in the markup
+    itself does not compile where `html!` can see it is parsed as HTML
+    ([Choice 53](#choice-html-parse-refusals)). In an `<svg>` they are elements like any other, and
+    what they hold is counted, except in its `<foreignObject>`, `<desc>` and `<title>`, the HTML
+    standard's integration points, whose children are HTML's. It counts an
     element against its component's render only when the element is written into the string that
     render writes, so a view written into a string of its own (`html! { .. }.to_html()` or a
     component's `children.to_html()` as an attribute's value, which the browser reads as text) is
@@ -3135,8 +3131,9 @@ rules something out.
     places in the page (`raw`) is not checked against the page's, and Corten does the same with a
     document's head tags: it renders each expression or component in its `<head>` into scratch
     storage and copies it into the page (`head_slot` in `crates/corten/src/view.rs`), so equal keys
-    in two of them, or in one and the body, are not checked. Its limit is at a component's edge, where the markup on
-    either side cannot know the other's context: a component's markup does not see an `<svg>` its
+    in two of them, or in one and the body, are not checked. Its limit is at a component's edge
+    ([Limit 29](#limit-markup-context)), where the markup on either side cannot know the other's
+    context: a component's markup does not see an `<svg>` its
     parent writes it into, so it takes a `<template>`, `<noscript>`, `<textarea>`, `<title>`,
     `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` at its top there for HTML's, and the keys in
     it, which the runtime finds, are not checked; and a component's children do not see where the
@@ -3145,9 +3142,11 @@ rules something out.
     children write themselves, which is SVG's wherever it lands. Following the namespace across
     components would have every element's markup report it to the check, for a duplicate few apps
     can write. Nor does it follow MathML: one of those in a `<math>`, outside its text integration
-    points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`) and `<annotation-xml>`, is MathML's and
-    the runtime finds what it holds, which the check does not count. An element a browser moves out
-    of an `<svg>` (`<div>`, `<p>`) does not compile written straight into one, so the check
+    points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`) and an `<annotation-xml>` whose `encoding`
+    is `text/html` or `application/xhtml+xml` (with another or none, an `<annotation-xml>`'s
+    content is MathML's), is MathML's and the runtime finds what it holds, which the check does not
+    count. An element a browser moves out of an `<svg>` (`<div>`, `<p>`) does not compile written
+    straight into one ([Choice 53](#choice-html-parse-refusals)), so the check
     follows the markup there as the browser does, except where `html!` cannot see it: a component
     that writes such an element at the top of its markup into a parent's `<svg>`, or an expression
     that writes one there, closes the drawing, and the parent's check still takes what follows for
@@ -3155,7 +3154,11 @@ rules something out.
     `<span>` written straight into a `<tr>`, put before the `<table>`): when the table is a
     component's root, the moved element falls outside it, so the runtime does not find it there
     while the check counts it, and may stop on a duplicate the runtime does not see. Both are
-    markup a browser does not keep as written, not a correct render. It decodes the five references Corten's escapers write and no others, and leaves
+    markup a browser does not keep as written, not a correct render. A `data-key` written by hand
+    (`data-key="a"` beside the ref) is taken as the element's key, as `key="a"` is, though the
+    markup then names an attribute of Corten's as text, which `html!` refuses for `data-ref` and
+    `data-ref-value`; that is a known limit, not yet refused. The check decodes the five references
+    Corten's escapers write and no others, and leaves
     out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
     at what a browser reads there would repeat HTML's character reference rules or stop correct
     markup. Whether it runs is `corten-run`'s own debug-assertions setting: the code `html!` writes
@@ -3219,18 +3222,23 @@ rules something out.
     Stands on: measured (the runtime's size by Node's `zlib`, raw, gzip at its default level and
     brotli at quality 11, once each build; the item page's bytes from `render_cost` in
     `examples/card-market`; instructions by callgrind on the release `render_cost` tests of
-    card-market and seller-desk, two runs of each build alternated, the base first, and on
-    watchlist's `key_check_cost` for the key check); platform (a
+    card-market and seller-desk, two runs of each build alternated, the base first, and, for the
+    key check and what it adds to the code `html!` and `#[component]` write, on watchlist's
+    `key_check_cost`, three runs of each build alternated); platform (a
     `data-` attribute is HTML's place for data private to the page, and `getAttribute` gives a
-    script its decoded value; the HTML standard's tree construction, which the key check and
-    `html!`'s refusals follow: its RCDATA and RAWTEXT elements, whose content a browser parsing
-    HTML reads as text, its HTML integration points in SVG (`<foreignObject>`, `<desc>`,
-    `<title>`), whose children are HTML's, and the start tags its rules for foreign content take out
-    of an `<svg>`); reasoned (the runtime already finds a ref's elements in the page's
-    order for `*` and `#`, so a value is one attribute read per element when the handler runs and
-    nothing on a load; the ref's third type parameter is one type wherever the component uses the
-    ref, so a ref given text on one element and a number on another, or a value on one and none on
-    another, is a type error, as its fourth is for a key on one element and none on another; a debug
+    script its decoded value, so `key={true}` and `key=""` are one key of the handler's `Map`, and
+    so are a carriage return and a line feed; the query that finds a ref's elements does not reach a
+    `<template>`'s content or, with scripting on, a `<noscript>`'s; the HTML standard's tree
+    construction, which the key check follows for what that query finds: the elements whose content
+    a browser reads as text and the integration points in SVG and MathML, as
+    [Choice 53](#choice-html-parse-refusals) records); reasoned (the runtime already finds a ref's
+    elements in the page's order for `*` and `#`, so a value is one attribute read per element
+    when the handler runs and nothing on a load; the ref's third type parameter is one type wherever
+    the component uses the ref, so a ref given text on one element and a number on another, or a
+    value on one and none on another, is a type error, and its fourth, whether its elements have
+    keys, is fixed the same way by each element, so a ref with a key on one element and none on
+    another does not compile whatever its handlers take, and a `Map<string, El>` parameter's bound
+    takes only a ref whose every element has one; a debug
     build's record of keys is per render of a component and the string it writes, as the runtime
     finds a ref's elements under the component's root nearest them, and leaves out a `<template>`'s or a `<noscript>`'s content,
     which its query does not reach, but not an `<svg>`'s outside its `<foreignObject>`, `<desc>` and
@@ -3248,10 +3256,12 @@ rules something out.
     Revisit when: an app's script needs a record per element rather than one number, text or `bool`
     (then the value might be any `ToJson` with its generated declaration), or the platform gives
     elements typed custom data a script can read without a name as text, or something outside Corten
-    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal, or the
-    HTML standard changes its RCDATA or RAWTEXT elements, its integration points or the start tags
-    it takes out of foreign content, which `TEXT_ONLY`, `SVG_HTML_POINTS` and `BREAKOUT` in
-    `crates/corten-macros/src/html.rs` copy. The bet
+    has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal, or an app
+    is found to give equal keys where the debug check cannot see them across a component's edge (in
+    a `<template>` a component writes into a parent's `<svg>`, or among children it writes into an
+    `<svg>`'s `<desc>`, [Limit 29](#limit-markup-context)), when following the context across
+    components would be weighed against its cost to every render, or a browser reads a key other
+    than `getAttribute` gives it, when the check would compare what the runtime reads. The bet
     fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
     each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
     things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value
@@ -3262,37 +3272,44 @@ rules something out.
     `data-sort` and the attributes beside it onto ref values. If that issue is still open on
     2027-11-13, the first condition alone decides on that date.
 
-    Last checked: 2026-11-14, the release cost of the key check on markup that has it,
-    `key_check_cost` in `examples/watchlist/src/home.rs` (`LivePrices` with 50 rows and two keyed
-    cells each, and `KeyedMarkup`, with cells keyed by `key={..}` and by a static `key=".."`, a
-    `<template>` and a `<noscript>`, and a `<template>` among a component's children in an
-    `<svg>`'s `<desc>`, 1,000 renders each), on `e59c32c28` with the test added against
-    `6caa34f39`: callgrind (valgrind 3.19.0), three alternated runs each, counted 131,623,718
-    instructions for `render_live_prices` and 7,668,108 for `render_keyed_markup` in every run of
-    both, the same bytes, and both compile to the same instructions (1,809 lines each, differing
-    only in the mangled name of `data_ref`, which names the key's type), and on `9be6fe5dc` against
-    `1960d19f3`, which counts a key only against the render whose string it is written into, the
-    same counts and bytes and the same instructions to the line, and on `49f9751e3`, which counts no
-    key written into a `<textarea>` or the other elements read as text, against `8fbe60a59`, with a
-    `<textarea>` added to `KeyedMarkup` on both: 131,623,718 and 7,727,108 instructions in every run
-    of both, 23,408 and 2,976 bytes, and the same instructions to the line (1,834 lines each), and
-    on `8cee822d2`, which refuses an element in those only where the markup shows it is parsed as
-    HTML and refuses an element a browser takes out of an `<svg>` written straight into one,
-    against `e99410f45`: the same counts and bytes in every run of both and the same instructions to
-    the line (1,834 lines each), and on `d006d2b70`, which keeps the accessible-name and `href`
-    checks to an `<svg>`'s `<foreignObject>` as before, against `a74a767cd`: the same again;
-    2026-11-14, the elements a browser takes out of an `<svg>` as the HTML standard's rules for
-    parsing tokens in foreign content list them (its tree construction, read that day), and the
-    parsing an `html!` shows (HTML under such an element, a document's `<head>` or an `<svg>`'s
-    integration points, SVG in a literal `<svg>`, neither at the top of a component's markup,
-    among a component's children or in a `<math>`), on `8cee822d2`, and with an `<html>` no
-    proof of HTML (in an `<svg>` it is SVG's) on `d006d2b70`, as the tests in
-    `crates/corten-macros/src/html.rs` and the examples of `html!` hold it to;
-    2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), an
-    element written in a `<textarea>`, an HTML `<title>` (in `<head>`, in the body, in an `<svg>`'s
-    `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` or a `<noframes>` is not found, and one in
-    an `<svg>`'s own `<title>` is, as the tests beside `TextOnlyKeys`, `NoteKeys` and `SvgTitleKeys`
-    and the `compile_fail` examples of `html!` hold `html!` and the check to;
+    Last checked: 2026-11-15, the release cost of the key check and of all it adds to the code
+    `html!` and `#[component]` write (`scoped_into` around a scoped component's render, the locals
+    `html!` opens around a `<template>`'s, a `<noscript>`'s and a text holder's content, a document
+    head's `<title>` among them, the key's calls beside a keyed ref's element, and the blocks a
+    document's parts are gated by), on this branch against `72a37a87e`, the `main` it merged
+    then, by callgrind (valgrind 3.19.0), three alternated runs of each build, the base first:
+    watchlist's `key_check_cost` (`LivePrices`, a scoped component with 50 rows and two keyed
+    cells each; `KeyedMarkup`, with cells keyed by `key={..}` and by a static `key=".."`, a
+    `<template>`, a `<noscript>`, a `<textarea>` and a `<template>` among a component's children
+    in an `<svg>`'s `<desc>`; and `KeyedDocument` around it, whose head has a `<title>`, rendered
+    whole and as the `Swap` and `Title` parts; 1,000 renders each), on `8eda7734b` with the test
+    copied into the base, counted 131,623,718, 13,703,103 and 27,425,100 instructions for the
+    three in every run of both builds, wrote the same bytes (23,408, 2,976 and 6,135 a render) and
+    compiled to the same instructions to the line (1,956 lines each, addresses aside), and
+    card-market's `render_cost`, on `6575d4d8c`, counted `ItemDetail`'s render at 2,372,754,748 instructions
+    (median; 2,372,507,167 to 2,372,779,152) on the base and 2,372,745,747 (2,369,854,428 to
+    2,372,790,283) on the branch, the documents' `Layout` at 2,165,391,476 (2,165,142,542 to
+    2,165,423,522) and 2,165,382,214 (2,162,497,355 to 2,165,412,032), and the whole test at
+    28,502,851,578 (28,498,109,504 to 28,513,756,257) and 28,510,040,468 (28,505,134,816 to
+    28,513,379,457), each difference inside one build's own range, and its `Layout`, `SiteHeader`
+    and `ItemDetail` compile to the same instructions (12,414 lines each) but for one constant's
+    generated name;
+    2026-11-14, one-off probes, not checks the repository repeats: pages written by hand (not by
+    `html!`) loaded in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1),
+    counting what `querySelectorAll` finds and the keys of the handler's `Map`. An element in a
+    `<template>`'s or a `<noscript>`'s content, or written in a `<textarea>`, an HTML `<title>` (in
+    `<head>`, in the body, in an `<svg>`'s `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` or
+    a `<noframes>`, is not found, nor what a `<template>` in an `<svg>`'s `<desc>` or `<title>`
+    holds, and one in an `<svg>`'s own `<title>` or in an `<svg>`'s `<template>` is. `key={true}`
+    and `key=""`, and a carriage return and a line feed, are one key. `&#128;`, `&#+97;`, `&#97`,
+    `&nbsp;`, `&#0;`, `&#xD800;` and `&#x110000;` read as U+20AC, the text itself, `a`, U+00A0 and
+    U+FFFD, which the check leaves out rather than decode. To repeat them, load such pages in the
+    three engines and count. The tests beside `TemplateKeys`, `NoscriptKeys`, `SvgTemplateKeys`,
+    `TextOnlyKeys`, `NoteKeys`, `SvgTitleKeys`, `DescTemplateKeys`, `OuterSvgKeys`, `RawKeys`,
+    `NestedKeys`, `BlankKeys` and `NewlineKeys` hold the check to what they found;
+    2026-11-15, a ref with a key on some elements and none on another refused beside a handler
+    that takes one element and with no handler, by the ref attribute's bound, not the `Map`'s, on
+    `6575d4d8c` (`compile_fail` doctests on `ts::Map`);
     2026-11-14, a key a view writes into a string of its own (`html! { .. }.to_html()` and a
     `render` into a string of the app's as an attribute's value, and a component's
     `children.to_html()`) not counted against its component's render, and two equal keys in that
@@ -3301,20 +3318,6 @@ rules something out.
     2026-11-14, a `<template>` among a component's children, which the component writes into an
     `<svg>`'s `<desc>`, not counted, and one in an `<svg>` the children write themselves counted,
     on `7c2fba42a`, as the tests beside `DescribedKeys` and `BoxedSvgKeys` hold the check to;
-    2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), a
-    `<template>` in an `<svg>`'s `<desc>` or `<title>` is HTML's and its content is not found, and
-    one in an `<svg>` is SVG's and its content is, as the tests beside `DescTemplateKeys` and
-    `OuterSvgKeys` hold the check to;
-    2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), a
-    `<noscript>`'s content is not found, an `<svg>`'s `<template>` content is, and `&#128;`,
-    `&#+97;`, `&#97`, `&nbsp;`, `&#0;`, `&#xD800;` and `&#x110000;` read as U+20AC, the text itself,
-    `a`, U+00A0 and U+FFFD, which the check now leaves out rather than decode;
-    2026-11-14, the debug check's keys against what the runtime finds in Chromium 156.0.8078.4,
-    Firefox 157.0 and WebKit 27.2: an element in a `<template>`'s content is not found, and
-    `key={true}` and `key=""`, and a carriage return and a line feed, are one key of the handler's
-    `Map`, as the tests beside
-    `TemplateKeys`, `NoscriptKeys`, `SvgTemplateKeys`, `RawKeys`, `NestedKeys`, `BlankKeys` and
-    `NewlineKeys` now hold the check to;
     2026-11-13, a ref without keys refused by a `Map<string, El>` parameter and a
     render with two equal keys stopped in a debug build, on the change for
     [#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329)
@@ -3991,6 +3994,84 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
+53. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser would not keep as written, where the
+    markup shows how a browser parses it, and acts nowhere else.** An element written in a
+    `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
+    `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
+    text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
+    HTML standard's rules for foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`,
+    `<span>`, `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`),
+    written straight into one, closed the drawing before it. Each compiled, and the view's author
+    found the text or the moved content only on the page. Now each is a compile error that says
+    what to write instead: the element beside the holder, or text meant to show tags as a string;
+    behavior in a `#[component(js)]`, styles in the component's CSS, or a data block's content as
+    a string literal, which a `<script>` or `<style>` writes as is; `<pre>` for preformatted
+    text; HTML in a drawing inside a `<foreignObject>` (`compile_fail` examples of `html!`). Text
+    and expressions in the elements read as text compile as before, written escaped; an expression
+    in a `<script>` or a `<style>` was refused already.
+
+    `html!` sees only its own markup, so it acts only where that markup shows how a browser
+    parses it, following the HTML standard's tree construction: HTML under an element that is
+    HTML's wherever it lands (one the rules for foreign content take out of an `<svg>`, a
+    document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>` (its HTML
+    integration points), and in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (its
+    text integration points) and an `<annotation-xml>` whose `encoding` is `text/html` or
+    `application/xhtml+xml`; SVG in a literal `<svg>`, where a `<textarea>`, `<title>` or `<style>`
+    is SVG's and holds elements; MathML in a literal `<math>`, outside those points, where nothing
+    is refused. At the top of a component's markup, which its parent may write into an `<svg>`,
+    among a component's children, which go where the component writes them, and in an
+    `<annotation-xml>` without such an `encoding`, it does not know, and refuses nothing. That is
+    the rule the refusals keep: markup that compiled before and that a browser keeps as written
+    still compiles, so a component that draws an SVG fragment without its `<svg>`
+    (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
+    the context it misses a mistake rather than refuse correct markup. Its limit is the
+    component's edge ([Limit 29](#limit-markup-context)). The accessible-name check and the named
+    link's `href` check keep their older rule, under which only an `<svg>`'s `<foreignObject>`
+    holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
+    moving them to the standard's integration points would refuse markup that compiled.
+
+    Not chosen: refusing where the markup does not show the context, which would refuse a
+    component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
+    context across components, which the macro does not see: each component's render would
+    report its namespace to the next, at a cost to every render for markup few apps write. A
+    check in the browser (`dev.js`): it would find the mistake only on a page someone loads, and
+    a compile error finds it in every build ([Rule 8](#rule-compile-errors)). Leaving it: the
+    markup is what a reader of the view sees, and it is not what the user gets.
+
+    Stands on: platform (the HTML standard's tree construction: the elements whose content a
+    browser parsing HTML reads as text, RCDATA `<textarea>` and `<title>`, RAWTEXT `<style>`,
+    `<xmp>`, `<iframe>`, `<noembed>` and `<noframes>`, and script data, `<script>`; `<plaintext>`;
+    the HTML integration points in SVG, the MathML text integration points and `<annotation-xml>`'s
+    two HTML encodings; and the start tags its rules for parsing tokens in foreign content take out
+    of an `<svg>` or a `<math>`, which `TEXT_ONLY`, `RAW_TEXT`, `SVG_HTML_POINTS`,
+    `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the browsers
+    Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
+    own `<title>`); reasoned (an `html!` sees its own markup and nothing around it, so what its top
+    and a component's children land in is not known; the refusals add no code to what `html!`
+    writes, so a view that compiles renders as before); value (correct output above the rest, the
+    README's conflict order 1, which is why a refusal never stops markup a browser keeps as
+    written; a mistake the compiler can see is a compile error, its 3 and Values 4).
+
+    Revisit when: the HTML standard changes the elements it reads as text, its integration points
+    or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or an
+    app is found to write one of the refused shapes across a component's edge (a component whose
+    top-level element lands in an `<svg>` and writes an element there a browser moves out, or
+    children a component writes into a `<textarea>`), when following the context across
+    components ([Limit 29](#limit-markup-context)) would have to be weighed against its cost to
+    every render.
+
+    Last checked: 2026-11-15, the HTML standard's tree construction (its tokenization states for
+    RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points and
+    its rules for parsing tokens in foreign content), read that day, against the lists in
+    `crates/corten-macros/src/html.rs` on `6575d4d8c`, as its tests and the examples of `html!`
+    hold the parse and the refusals to; 2026-11-14, a one-off probe, not a repository check: a
+    page written by hand (not by `html!`, which refuses most of it) loaded in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), reading
+    `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
+    in the body and in an `<svg>`'s `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` and a
+    `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
+    it, load such a page in the three engines and count the matches.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -4433,3 +4514,18 @@ by design; where it is known, a limit says what would lift it or why it is so.
     of the count.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.
+29. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
+    or where a component writes its children, so `html!`'s refusals of markup a browser does not
+    keep as written ([Choice 53](#choice-html-parse-refusals)) and the debug check of a keyed ref's
+    keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
+    it, and where it does not they let a mistake pass rather than stop correct markup. At the top
+    of a component's markup, which its parent may write into an `<svg>`, an element a browser moves
+    out of an `<svg>` and an element in a `<title>` or `<textarea>` are not refused, and keys in a
+    `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
+    `<noframes>` there are not checked, though in an `<svg>` the runtime finds them. Among a
+    component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless
+    they are in an `<svg>` the children write themselves. An expression that writes an element a
+    browser moves out of an `<svg>` into one is not refused, and the check takes what follows for
+    the drawing's. Following the parsing context across components would lift this: each
+    component's render would tell the next what it is written into, at a cost to every render,
+    for markup few apps write.

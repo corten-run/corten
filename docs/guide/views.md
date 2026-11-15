@@ -38,11 +38,15 @@ foreign content take out of an `<svg>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table
 others it lists, and a `<font>` with `color`, `face` or `size`), written straight into one,
 would close the drawing before it: HTML in a drawing goes in a `<foreignObject>`. The markup
 shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`, a document's
-`<head>`) and in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`; inside an `<svg>`
-a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements. At the top of a component's
-markup (its parent may write it into an `<svg>`), among a component's children (they go where the
-component writes them) and in a `<math>`, it does not show, and nothing here is refused, so a
-component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an `<svg>` compiles.
+`<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`, and in a `<math>`'s `<mi>`,
+`<mo>`, `<mn>`, `<ms>` and `<mtext>` and an `<annotation-xml>` whose `encoding` is `text/html`
+or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
+`<title>` or `<style>` is an element of the drawing or the formula and holds elements. At the top
+of a component's markup (its parent may write it into an `<svg>`) and among a component's
+children (they go where the component writes them), it does not show, and nothing here is
+refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
+`<svg>` compiles ([design Choice 53](../design.md#choice-html-parse-refusals),
+[Limit 29](../design.md#limit-markup-context)).
 
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns
