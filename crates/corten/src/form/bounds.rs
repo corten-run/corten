@@ -399,32 +399,34 @@ macro_rules! float {
                     return None;
                 }
                 let (from, by) = (Decimal::of(min)?, Decimal::of(step)?);
+                // The last step is the last below `max`, or, when not even `min` is below `max`,
+                // the last below `min`, so the drawn range is empty as the bounds are.
+                let (end, nearest) = if last {
+                    let nearest = Decimal::of(max)?.steps_below(from, by)?;
+                    if nearest < 0 { (min, -1) } else { (max, nearest) }
+                } else {
+                    (min, 1)
+                };
                 // A step finer than the float tells apart at the end reads as the end for a while:
                 // within the float's spacing there, and the decimal `min` is written as (the
                 // steps' origin) is within half of it. What a step reads as only grows with it, so
                 // the step wanted is found by halving that span.
-                let spacing = if last { max - max.next_down() } else { min.next_up() - min };
+                let spacing = if last { end - end.next_down() } else { end.next_up() - end };
                 let span = (spacing as f64 / step as f64).ceil() + 1.0;
                 if !span.is_finite() || span >= 1e30 {
                     return None;
                 }
                 let span = span as i128;
-                // Whether the `k`th step from `min` reads inside the end: `None` past an i128.
+                // Whether the `k`th step from `min` reads inside `end`: `None` past an i128.
                 let inside = |k: i128| {
                     let (digits, exponent) = from.plus_steps(by, k)?;
                     let value = format!("{digits}e{exponent}").parse::<$t>().ok()?;
-                    Some(if last { value < max } else { value > min })
+                    Some(if last { value < end } else { value > end })
                 };
-                let (mut lo, mut hi) = if last {
-                    let nearest = Decimal::of(max)?.steps_below(from, by)?;
-                    if nearest < 0 {
-                        // Not even `min` is below `max`: a step under `min`, so the drawn range
-                        // is empty as the bounds are.
-                        return from.plus_steps(by, -1);
-                    }
-                    ((nearest - span).max(0), nearest)
-                } else {
-                    (1, span)
+                let (mut lo, mut hi) = match (last, nearest) {
+                    (true, -1) => (-1 - span, -1),
+                    (true, _) => ((nearest - span).max(0), nearest),
+                    (false, _) => (1, span),
                 };
                 // The first step inside above `min`, or the last one below `max`.
                 if !inside(if last { lo } else { hi })? {
@@ -750,6 +752,12 @@ mod tests {
             assert_eq!(out, attrs);
             assert!(min > max && !ends.holds(1.0), "{attrs}");
         }
+        // A step finer than the float at equal ends: the drawn max is the last step that reads
+        // below the min, not one step under it, which reads as the min.
+        let fine = Bounds::new(1.0, 1.0).step(1e-18).exclusive_max();
+        let (out, (min, max)) = drawn(fine);
+        assert!(max < min && !fine.holds(1.0), "{out}");
+        assert_eq!(max, 1.0f64.next_down(), "{out}");
         // Digits that do not line up in an i128: the end itself, which these bounds refuse even
         // when it is inclusive, as they do every value near it (the 38-digit limit above).
         let wide = Bounds::new(1e30, 2e30).step(1e-9);
