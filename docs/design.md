@@ -3993,13 +3993,14 @@ rules something out.
 
     What it costs, in instructions per request on the request path (the release test
     `what_a_page_with_posts_costs`, callgrind, the difference between 1,200 and 200 requests):
-    a write that is a named post, `/desk?page=3&do=price`, is 22,861 where the same write at a
-    route of its own, `/desk/price?page=3`, was 21,882 before this change, 979 (4.5%) more: about
-    190 for the router finding `do` and the rest the handler's `Params` decoding one more query
-    pair, which it reads and drops. The page's plain `post` beside named posts is 22,002 against
-    21,805 (197 more, the router reading the query), and drawing the page, whose forms now write
+    a write that is a named post, `/desk?page=3&do=price`, is 22,928 where the same write at a
+    route of its own, `/desk/price?page=3`, was 21,882 before this change, 1,046 (4.8%) more: the
+    router finding and reading `do` (about 190 of it when the name was compared undecoded, 78 more
+    to decode it as `Params` does) and the rest the handler's `Params` decoding one more query
+    pair, which it reads and drops. The page's plain `post` beside named posts is 22,010 against
+    21,805 (205 more, the router reading the query), and drawing the page, whose forms now write
     `/desk?page=3&amp;do=price` where they wrote `/desk/price?page=3`, 22,321 against 22,230 (91
-    more). A post to a route with no named post, mounted as before, is 21,898 against 21,882 (16
+    more). A post to a route with no named post, mounted as before, is 21,893 against 21,882 (11
     more, with none of this change's code on its path). The runtime is unchanged.
 
     Stands on: measured (instructions per request under callgrind, three runs of each case alternating between the
@@ -4021,8 +4022,9 @@ rules something out.
     app needs a query parameter named `do` on a page with posts.
 
     Last checked: 2026-11-15, instructions per request on `e69833f2c` against `dea1788d2`, three
-    runs of each case alternating between the two, and again on `40a9b4ecf` (each case within 11
-    of those); 2026-11-15, the watchlist and ui-gallery smokes on `40a9b4ecf` in Chromium 156,
+    runs of each case alternating between the two; 2026-11-15, three runs of each case on
+    `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
+    others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules
