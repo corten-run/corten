@@ -12,6 +12,17 @@ use corten::feed::Change;
 
 use super::*;
 
+#[test]
+fn nats_header_line_breaks_do_not_panic() {
+    // A received header's value is read into a `String` and appended through
+    // `IntoHeaderValue`, as here. On async-nats 0.50 that panicked on a carriage return,
+    // stopping the subscriber's connection task; 0.52 replaces it with a space.
+    let received = String::from("first\rsecond");
+    let mut headers = async_nats::HeaderMap::new();
+    headers.append("X-Test", received);
+    assert_eq!(headers.get("X-Test").unwrap().as_str(), "first second");
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Row)]
 struct Item {
     #[row(id)]
