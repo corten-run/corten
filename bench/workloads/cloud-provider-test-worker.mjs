@@ -9,6 +9,7 @@ import { basename, dirname } from "node:path";
 import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 
 const [mode, output] = process.argv.slice(2);
+if (process.env.NODE_OPTIONS === "--max-old-space-size=128") delete process.env.NODE_OPTIONS;
 // This test-only file entry substitutes for the stdin snapshot entry.
 process.stdin.resume();
 assert.ok(basename(dirname(output)).startsWith("cloud-diagnostic-test-"));
@@ -23,12 +24,17 @@ server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
 const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);
 const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure",
-  "post-link-shape", "post-link-count", "post-link-id", "post-link-rel",
-  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
+  "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type",
+  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
   state.requests++; state.calls.push({ method, path, originalCredential: credential === "SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL" }); save();
   if (mode === "hang" || mode === "hang-create" && method === "POST") return new Promise(() => {});
   if (mode === "reflect") return { status: 200, value: { account: { uuid: credential } } };
   if (path === "/v2/account") return { status: 200, value: { account: { uuid: "synthetic-user-0001", droplet_limit: 20 } } };
+  if (method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(path)) {
+    if (mode === "get-http-failure") return { status: 503, value: { raw: credential } };
+    return created && path === `/v2/droplets/${created.id}` ? { status: 200, value: { droplet: created } }
+      : { status: 404, value: { raw: credential } };
+  }
   if (path.startsWith("/v2/droplets?")) {
     const value = { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} };
     if (mode === "list-shape") value.droplets = { raw: credential };
@@ -39,6 +45,7 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
     if (mode === "list-pages") value.links.pages = credential;
     if (mode === "list-next") value.links.pages = { next: `https://foreign.invalid/${credential}` };
     if (mode === "list-count") value.meta.total = 1;
+    if (mode === "list-converges" && state.calls.filter((call) => call.path.startsWith("/v2/droplets?")).length <= 2) value.meta.total = 1;
     if (mode === "list-bounds") value.meta.total = 20001;
     return { status: 200, value };
   }
@@ -52,6 +59,8 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
     if (mode === "post-link-count") response.value.links.actions = [];
     if (mode === "post-link-id") response.value.links.actions[0].id = credential;
     if (mode === "post-link-rel") response.value.links.actions[0].rel = credential;
+    if (mode === "post-link-href-variant") response.value.links.actions[0].href = "https://api.digitalocean.com:443/v2/actions/456";
+    if (mode === "post-link-href-type") response.value.links.actions[0].href = { raw: credential };
     return response;
   }
   if (mode === "first-action-http-failure") return { status: 403, value: { raw: credential } };
@@ -62,7 +71,7 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
   return { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: "completed" } } };
 } : undefined;
 serveProviderWorker({ ...(syntheticRequest ? { request: syntheticRequest } : {}),
-  ...(mode === "pending-create" ? { now: () => clock, sleep: async (ms) => { clock += ms; } } : {}), spawn() {
+  ...(["pending-create", "list-count", "list-converges"].includes(mode) ? { now: () => clock, sleep: async (ms) => { clock += ms; } } : {}), spawn() {
   state.consumes++; save();
   if (mode === "worker-late-debug") process.env.NODE_DEBUG = "https";
   if (mode === "worker-late-report") process.report.reportOnSignal = true;

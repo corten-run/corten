@@ -5,9 +5,21 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Distinguish benchmark provider census refusal predicates with closed diagnostic
-  codes, without forwarding rejected values or changing census acceptance, the
-  one-retake limit, deadlines, cancellation, ownership or cleanup gates.
+- Stage grouped benchmark host admission behind the first required group's
+  source-bound common bootstrap, then admit remaining hosts serially while their
+  benchmark jobs overlap. Preserve the complete registry and all measurement gates.
+  Failed creates can be reconciled without provisioning and unused never-started
+  allocations and terminal pre-native setup failures retired through normal
+  collection with separate immutable evidence, one deletion intent and exact-ID
+  absence confirmation, never a successful baseline. Early failure packaging does
+  not depend on the Node installation or source clone that setup may not have made.
+  A valid common-setup marker remains provenance, not native-entry evidence or a
+  reason to strand a terminal host with an empty campaign.
+
+- Distinguish benchmark provider census refusal predicates and finite href/count
+  details without forwarding rejected values. Bound count-only census convergence
+  by the original deadline and shared request limit; use exact-ID host observations
+  after binding rather than repeated whole-account censuses.
 
 - Accept the documented droplet-scoped create action link only when both resource
   and action IDs match. Completion still uses the fixed global action endpoint;
@@ -39,8 +51,8 @@ Corten is pre-1.0, so any minor version may change the API.
   JSON, page or write response, retaining complete numeric schema and requested-ID
   checks without repeating validation on fixture reads or successful POSTs.
 
-- Permit one fresh complete benchmark provider census after a transient count or
-  total mismatch, within the original deadline and global request limit. Partial
+- Permit paced fresh complete benchmark provider censuses after transient count or
+  total mismatches within one original deadline and global request limit. Partial
   results remain rejected; HTTP errors and mutations are never retried.
 
 - The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
