@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Permit one fresh complete benchmark provider census after a transient count or
+  total mismatch, within the original deadline and global request limit. Partial
+  results remain rejected; HTTP errors and mutations are never retried.
+
 - Preserve sanitized provider diagnostics and control uncertainty from grouped
   benchmark workers in fleet failure receipts, without exposing raw errors or
   changing launch, settlement, lock or cleanup gates.
