@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { fork } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createProviderEngine as providerTransport } from "./cloud-engine-test-fixture.mjs";
-import { context } from "./cloud-fixtures.mjs";
+import { providerTransport as workerTransport } from "./cloud-provider.mjs";
+import { context, harness } from "./cloud-fixtures.mjs";
+import { tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -22,6 +29,182 @@ const publishedCreate = () => ({ status: 202, value: { droplet: { id: 3164444, s
   links: { actions: [{ id: 7515, rel: "create", href: "https://api.digitalocean.com/v2/actions/7515" }] } } });
 const createAction = (status = "completed", resource_id = 3164444) => ({ status: 200, value: {
   action: { id: 7515, type: "create", resource_type: "droplet", resource_id, status } } });
+
+const censusPage = (droplets, total, page) => ({ status: 200, value: { droplets, meta: { total }, links: page === undefined ? {}
+  : { pages: { next: `https://api.digitalocean.com/v2/droplets?page=${page}&per_page=200` } } } });
+function censusFixture(steps) {
+  const state = { clock: 0, cancelled: false, checkpointCost: 0 }, calls = [];
+  const run = providerTransport({ repo: resolve("."), spawn, now: () => state.clock, interrupted: () => {
+    state.clock += state.checkpointCost; state.checkpointCost = 0; return state.cancelled;
+  }, request({ method, path, timeout }) {
+    assert.equal(method, "GET"); assert.ok(path.startsWith("/v2/droplets?"));
+    const step = steps[calls.length]; assert.ok(step, "no unexpected census request"); calls.push({ path, timeout });
+    state.clock += step.cost ?? 0; state.checkpointCost = step.checkpointCost ?? 0;
+    state.cancelled = step.cancel === true;
+    if (step.transport) throw new Error("PRIVATE_FAKE_REQUEST");
+    return step.response;
+  } });
+  return { run, calls, state };
+}
+const censusFailure = (error) => error.providerDiagnostic?.code === "list-response";
+
+test("census retakes only a count mismatch as a fresh complete page1 under the original deadline", async () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1 }));
+  const h = censusFixture([{ response: censusPage(rows, 10), cost: 400 }, { response: censusPage(rows, 7), cost: 300 }]);
+  const result = JSON.parse((await h.run(list, 1000)).stdout);
+  assert.ok(isDeepStrictEqual(result, rows), "only the complete new census is returned");
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[0].timeout, 1000); assert.equal(h.calls[1].timeout, 600);
+  assert.equal(h.calls[1].path, "/v2/droplets?page=1&per_page=200"); assert.equal(h.state.clock, 700);
+});
+
+test("census changed total discards every old page, ID and total before the one retake", async () => {
+  const first = Array.from({ length: 200 }, (_, i) => ({ id: i + 1 })), stable = [{ id: 1 }, { id: 701 }];
+  const h = censusFixture([{ response: censusPage(first, 201, 2), cost: 400 },
+    { response: censusPage([{ id: 201 }, { id: 202 }], 202), cost: 300 }, { response: censusPage(stable, 2), cost: 200 }]);
+  const result = JSON.parse((await h.run(list, 1000)).stdout);
+  assert.ok(isDeepStrictEqual(result, stable), "no old census row, seen ID or total may carry over");
+  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].timeout, 300);
+  assert.equal(h.calls[2].path, "/v2/droplets?page=1&per_page=200");
+});
+
+test("census persistent second mismatch refuses instead of accepting partial rows or a third attempt", async () => {
+  const h = censusFixture([{ response: censusPage([{ id: 1 }], 2) }, { response: censusPage([], 1) }]);
+  await assert.rejects(h.run(list), censusFailure); assert.equal(h.calls.length, 2);
+});
+
+test("census malformed IDs, totals and links outrank a simultaneous count or total change", async () => {
+  const second = [censusPage([{ id: 1 }], 3), censusPage([{ id: "PRIVATE_ID" }], 3), censusPage([], "PRIVATE_TOTAL"),
+    censusPage([], -1), censusPage([], 20001), censusPage([], 1, 1), censusPage([], 3, 4),
+    { status: 200, value: { droplets: [], meta: { total: 3 }, links: null } },
+    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: [] } } },
+    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: { next: "https://synthetic.invalid/v2/droplets?page=3&per_page=200" } } } }];
+  for (const response of second) {
+    const h = censusFixture([{ response: censusPage([{ id: 1 }], 2, 2) }, { response }]);
+    await assert.rejects(h.run(list), (error) => censusFailure(error) && !JSON.stringify(error).includes("PRIVATE"));
+    assert.equal(h.calls.length, 2, "malformed data must not reach another page1");
+  }
+});
+
+test("census retains one global100GET ceiling across both complete attempts", async () => {
+  const steps = Array.from({ length: 99 }, (_, i) => ({ response: censusPage([{ id: i + 1 }], 20000, i === 98 ? undefined : i + 2) }));
+  steps.push({ response: censusPage([{ id: 999 }], 2, 2) });
+  const h = censusFixture(steps);
+  await assert.rejects(h.run(list), censusFailure); assert.equal(h.calls.length, 100);
+  assert.equal(h.calls[99].path, "/v2/droplets?page=1&per_page=200");
+});
+
+test("census complete second attempt may finish on the exact global100th GET", async () => {
+  const steps = [{ response: censusPage([], 1) }, ...Array.from({ length: 99 }, (_, i) => ({
+    response: censusPage([{ id: i + 1 }], 99, i === 98 ? undefined : i + 2) }))];
+  const h = censusFixture(steps);
+  assert.equal(JSON.parse((await h.run(list)).stdout).length, 99); assert.equal(h.calls.length, 100);
+});
+
+test("census deadline includes response/checkpoint cost and refuses equality, overshoot and reverse time", async () => {
+  for (const step of [
+    { response: censusPage([], 0), cost: 1000 }, { response: censusPage([], 0), cost: 1001 },
+    { response: censusPage([], 1), cost: 400, checkpointCost: 600 }, { response: censusPage([], 1), cost: -1 },
+  ]) {
+    const h = censusFixture([step]);
+    await assert.rejects(h.run(list, 1000), (error) => error.controlUncertain === true);
+    assert.equal(h.calls.length, 1, "expired or reversed proof cannot dispatch a retake");
+  }
+});
+
+test("census retake never retries HTTP, request errors or cancellation", async () => {
+  for (const [step, code] of [[{ response: { status: 429, value: null } }, "list-http"],
+    [{ transport: true }, "list-request"], [{ response: censusPage([], 1), cancel: true }, "list-request"]]) {
+    const h = censusFixture([step]);
+    await assert.rejects(h.run(list, 1000), (error) => error.providerDiagnostic?.code === code);
+    assert.equal(h.calls.length, 1);
+  }
+});
+
+test("census second request failure or cancellation never dispatches another retake", async () => {
+  for (const step of [{ transport: true }, { response: { status: 500, value: null } }, { response: censusPage([], 0), cancel: true }]) {
+    const h = censusFixture([{ response: censusPage([], 1) }, step]);
+    await assert.rejects(h.run(list, 1000)); assert.equal(h.calls.length, 2);
+  }
+});
+
+test("census retake deducts checkpoint time before the next native grant", async () => {
+  const h = censusFixture([{ response: censusPage([], 1), cost: 200, checkpointCost: 300 }, { response: censusPage([], 0), cost: 100 }]);
+  assert.equal(JSON.parse((await h.run(list, 1000)).stdout).length, 0);
+  assert.equal(h.calls[1].timeout, 500); assert.equal(h.state.clock, 600);
+});
+
+function censusWorker(t, mode, host = null) {
+  const root = mkdtempSync(join(tmpdir(), "census-worker-test-")), entry = join(root, "entry.mjs"), output = join(root, "counts.json");
+  const heapOptions = "--max-old-space-size=64 --max-semi-space-size=4";
+  // Test-only bootstrap consumes an exact harmless heap limit at Node startup,
+  // then removes that test option from env before the unchanged worker checks.
+  // It tests real handler/engine IPC, not the production stdin bootstrap entry.
+  writeFileSync(entry, `import assert from 'node:assert/strict';
+    import {writeFileSync} from 'node:fs'; import {getHeapStatistics} from 'node:v8';
+    import {serveProviderWorker} from ${JSON.stringify(new URL("cloud-provider-worker.mjs", import.meta.url).href)};
+    assert.equal(process.env.NODE_OPTIONS,${JSON.stringify(heapOptions)}); delete process.env.NODE_OPTIONS;
+    const state={consumes:0,censuses:0,posts:0,deletes:0,heapLimit:getHeapStatistics().heap_size_limit};
+    assert.ok(state.heapLimit<=80*1024*1024); const mode=${JSON.stringify(mode)},host=${JSON.stringify(host)};
+    const save=()=>writeFileSync(${JSON.stringify(output)},JSON.stringify(state)); save();
+    serveProviderWorker({spawn(){state.consumes++;save();return{status:0,stdout:Buffer.from('SYNTHETIC_CENSUS_IPC_CREDENTIAL\\n')};},
+      connect(){assert.fail('NO_NATIVE_HTTPS');},request({method,path}){
+        if(path==='/v2/account')return{status:200,value:{account:{uuid:'synthetic-user-0001',droplet_limit:20}}};
+        if(method==='DELETE'){state.deletes++;save();return{status:204,value:null};}
+        if(method==='POST'){state.posts++;save();throw new Error('NO_FAKE_CREATE_ALLOWED');}
+        assert.ok(method==='GET'&&path==='/v2/droplets?page=1&per_page=200');state.censuses++;save();
+        const mismatch=mode==='persistent'||mode==='transient'&&state.censuses===1||mode==='post-delete'&&state.deletes>0;
+        const droplets=state.deletes?[]:host?[host]:[];
+        return{status:200,value:{droplets,meta:{total:droplets.length+(mismatch?1:0)},links:{}}};
+      }});`);
+  let child;
+  const run = workerTransport({ repo: realpathSync(resolve(".")), launch(binary, args, options) {
+    assert.equal(binary, realpathSync(process.execPath)); assert.equal(args[0], "--input-type=module");
+    assert.equal(args[1], "-"); assert.ok(args[2].endsWith("cloud-provider-worker.mjs"));
+    child = fork(entry, [], { ...options, env: { ...options.env, NODE_OPTIONS: heapOptions } });
+    return child;
+  } });
+  t.after(async () => {
+    try { await run.close(); } catch (error) { assert.equal(error.controlTreeUncertain, true); }
+    assert.ok(!child || child.exitCode !== null || child.signalCode !== null, "owned IPC child must settle");
+    assert.equal(root.startsWith(join(tmpdir(), "census-worker-test-")), true); rmSync(root, { recursive: true, force: true });
+  });
+  return { run, counts: () => JSON.parse(readFileSync(output)), settled: () => child?.exitCode !== null || child?.signalCode !== null };
+}
+
+test("census transient mismatch stays inside the actual worker IPC and closes normally", { timeout: 15000 }, async (t) => {
+  const h = censusWorker(t, "transient");
+  assert.equal(JSON.parse((await h.run(list)).stdout).length, 0);
+  assert.ok(JSON.parse((await h.run(account)).stdout).uuid === "synthetic-user-0001", "same worker remains usable");
+  await h.run.close(); assert.equal(h.settled(), true);
+  const state = h.counts(); assert.equal(state.censuses, 2); assert.equal(state.consumes, 1);
+  assert.equal(state.posts, 0); assert.equal(state.deletes, 0); assert.ok(state.heapLimit <= 80 * 1024 * 1024);
+});
+
+test("census refused launch preserves caller locks and settlement with zero mutation", { timeout: 15000 }, async (t) => {
+  const h = harness(t), worker = censusWorker(t, "persistent");
+  const task = h.launch({ run: (binary, args, timeout, allowFail) => binary === "doctl"
+    ? worker.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail), settle: () => worker.run.close() });
+  await assert.rejects(task.launch(), (error) => censusFailure(error) && error.controlTreeUncertain === true);
+  assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+  assert.ok(existsSync(join(h.local, "operation.lock")) && existsSync(join(h.base, ".groups-launch.lock")));
+  const state = worker.counts(); assert.equal(state.censuses, 2); assert.equal(state.posts, 0); assert.equal(state.deletes, 0);
+  assert.equal(worker.settled(), true);
+  await assert.rejects(task.launch()); assert.equal(worker.counts().posts, 0);
+});
+
+test("census failure after acknowledged delete preserves intent and never replays the mutation", { timeout: 15000 }, async (t) => {
+  const h = harness(t); h.seed(); const saved = h.saved();
+  const host = { id: 123, name: saved.name, tags: [...tags, saved.tag], size_slug: saved.host.size,
+    region: { slug: saved.host.region }, networks: { v4: [{ type: "public", ip_address: saved.ip }] } };
+  const worker = censusWorker(t, "post-delete", host);
+  const task = h.task({ run: (binary, args, timeout, allowFail) => binary === "doctl"
+    ? worker.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail), settle: () => worker.run.close() });
+  await assert.rejects(task.collect(), (error) => censusFailure(error) && error.controlTreeUncertain === true);
+  const state = h.saved(); assert.ok(state.archiveSha256 && state.evidenceSha256 && state.deletionIntentAt);
+  assert.equal(state.destroyedAt, undefined); assert.equal(worker.counts().deletes, 1); assert.equal(worker.counts().posts, 0);
+  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.equal(worker.settled(), true);
+  await assert.rejects(task.collect()); assert.equal(worker.counts().deletes, 1);
+});
 
 test("create failures retain only bounded phase codes and HTTP status, never raw evidence", async () => {
   for (const mode of ["response", "link", "action", "pending", "http", "transport"]) {
@@ -190,7 +373,7 @@ test("complete bounded pagination retains hosts beyond page one and rejects inco
   ]) {
     let calls = 0;
     const bad = providerTransport({ repo: resolve("."), spawn, request() { calls++; return { status: 200, value }; } });
-    await assert.rejects(bad(list)); assert.equal(calls, 1);
+    await assert.rejects(bad(list)); assert.equal(calls, value.droplets.length === 0 ? 2 : 1);
   }
 });
 

@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Permit one fresh complete benchmark provider census after a transient count or
+  total mismatch, within the original deadline and global request limit. Partial
+  results remain rejected; HTTP errors and mutations are never retried.
+
 - The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
   at least `--control-height` tall wherever they are used (in a list, a table cell or a toolbar),
   as a button or field beside them is, so a theme that sets it to 2.75rem gives them a 44 px touch
