@@ -49,6 +49,7 @@ export function showAll(rows, rest, button) {
 | `let (rows, rest) = refs();`, `ref={rows}` on a `<tbody>` | a parameter `@param {HTMLTableSectionElement} rows` (`HTMLTableSectionElement[]`: every element with the ref; `Map<string, ..>`: every one by its `key={..}`; `Map<.., number>`: every one with the value it gives, `ref={row.with(cents)}`, [below](#lists-and-larger-components)) |
 | `on:click={js::showAll(..)}` | runs `showAll` on a click on that element |
 | `row.closest()` | the element with ref `row` around the event's target (the handler runs only inside one) |
+| `f.weight`, a `#[derive(Fields)]` field ([Form fields](#form-fields)) | its control in the handler's form, found by name when the handler runs: `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name |
 | `js::Selection { rows: row, count }` | a `@typedef` of elements: one object argument |
 | `event`, `target`, `signal`, `scope` | the event (`PointerEvent` for a click), the element with the `on:`, an `AbortSignal` that aborts when it leaves the page, the component's root element |
 | a Rust value: `&str`, a number, `bool`, a typed route, a slice, array or `Vec` of strings for `string[]`, a `corten::script::ElementId` (or a slice, array or `Vec` of them) for `ElementId` (`ElementId[]`) from `corten`, made only from a `#[derive(Id)]` type (`ElementId::of(&SalesId)`, never a string; corten-ui's `sorted(&SupplyId)` is one for a sorted table, and its `CopyButton` passes one), any `ToJson` (feature `json`) for a parameter typed `unknown` (which also takes a ref, `event`, `target`, `signal` or `scope`) | the JSON value (an integer past 2^53 stops debug builds, since a JavaScript number cannot hold it exactly: pass a 64-bit id as a string; a float for a `number` is written as `Display` writes it, [Numbers in JSON](app.md#numbers-in-json)). `unknown` claims nothing the call does not check, so the script narrows it before using it. Any other JSON shape (`{ count: number }`, `number[]`, `string \| null`, `object`, `any`, a `@typedef` of plain values) has no Rust type the call is checked against, so a call to that handler does not compile, and a warning on the call says why: type the value with a generated declaration (next row). The same holds for an element or an event in a shape no call is checked against (`MouseEvent \| KeyboardEvent`, `HTMLElement \| null`, `EventTarget`, `Node`): take an interface the rows above check (several events take the one they share, `UIEvent` or `Event`, and the script narrows it) |
@@ -464,6 +465,59 @@ A patch removes rows as well as replacing them: `req.patch(html! { for id in &do
 `view::Append(RowsId, rows)` (`<template id data-append>`). `RowId` is the
 `#[derive(Id)]` the row prints its id with ([typed ids](views.md#typed-links-and-messages)), so
 the two cannot drift.
+
+## Form fields
+
+A form's controls are often drawn by a component the form shares with forms that have no script
+(a package's fields in two editors), which then has no refs to give one. A handler takes such a
+control as its field instead: the markup passes the `#[derive(Fields)]` name, as `name={..}` does,
+and the script's parameter is the control.
+
+```rust,ignore
+let f = Shipment::FIELDS;
+html! {
+    <form>
+        <select name={f.service} on:change={js::fill(f.service, f.weight, f.size)}>..</select>
+        <PackageFields />  // draws the weight input and the size radios, with no refs
+    </form>
+}
+```
+
+```js
+/** @param {HTMLSelectElement} service @param {HTMLInputElement} weight @param {HTMLInputElement[]} sizes */
+export function fill(service, weight, sizes) {
+  weight.value = service.value === "air" ? "2" : "9";
+  for (const size of sizes) size.checked = size.value === "small";
+}
+```
+
+| The form draws | The parameter |
+|---|---|
+| an `<input>`, a checkbox (a `bool` field) | `HTMLInputElement` |
+| a `<select>` (`multiple` for a `Vec`) | `HTMLSelectElement` |
+| a `<textarea>` | `HTMLTextAreaElement` |
+| radios, or checkboxes that share a name (a `Vec`) | `HTMLInputElement[]`: every one, in the form's order; none is `[]` |
+
+The page gets `data-on='change:shipping.fill(~s"service",~i"weight",~*"size")'`. When the handler
+runs, the runtime finds the controls of that name in the form of the element with the `on:` (the
+form itself, the one the element belongs to, `form=` included, or the one around it), so a control a
+patch replaced is the new one. A field of a group or a row is passed the same way
+(`f.parcels.at(&1).weight`, `parcels[1].weight`), and so is one in a `@typedef` group. The name is
+the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,
+and a field where the handler takes text or another element, do not compile.
+
+What the compiler cannot see is the control. A field's name carries what it reads
+(`FieldName<Condition>`), not whether the form draws it as a select or as radios, and the markup
+that draws it may be another component's. So the runtime checks it: a call whose form has no
+control of that name, more than one where the handler takes one, or one of another kind, runs
+nothing and reports `corten: shipping.fill takes field weight, and its form has no such control`.
+Under `corten dev` the console says which as soon as the page draws such a call, before anything
+calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
+([design Limit 29](../design.md#limit-field-kind)). A group is an array, not the
+`RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
+controls of a name and the control itself for one, and a script cannot make one, so the handler
+could not count on its type. An element that is not one of the form's controls, or one the
+component draws itself, is a ref.
 
 ## Shared scripts
 

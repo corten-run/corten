@@ -41,6 +41,15 @@ export function keys(event, click, screen) {
   return key === "Control+s" || shortcut(event) === "p";
 }
 
+// A form field reaches its handler as the control its form draws (`js::weigh(f.weight)`, checked
+// against the parameter's element type when the crate compiles), never as a name to look up.
+/** @param {HTMLFormElement} form @param {HTMLInputElement} weight */
+export function weigh(form, weight) {
+  weight.value = "2";
+  // @ts-expect-error A field is given as its control, which is not a name: nothing looks it up by text.
+  form.elements.namedItem(weight);
+}
+
 // The values a ref's elements give (`ref={row.with(cents)}`): the call is checked against the
 // parameter's value type when the crate compiles, and the script reads each value from the map,
 // as the number the markup gave, never by an attribute's name.

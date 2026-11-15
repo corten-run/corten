@@ -64,6 +64,13 @@ division: end statements with `;` and keep a division on the line it continues.
    other scripts import may use one). Data a script searches or sorts in the browser (a set's
    products) is one such argument, a `ToJson` struct holding the list: it goes in `data-on`, a
    single-quoted attribute, as its JSON with the quotes as they are, so it costs about its size.
+   A form's control is passed as its `#[derive(Fields)]` field, `on:change={js::fill(f.weight)}`,
+   and the parameter is the control: `HTMLInputElement` (an input or a checkbox),
+   `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes
+   sharing the name. The runtime finds it by name in the handler's form when the handler runs, so
+   the component that draws the field needs no ref. Never pass a field's name as text and look it
+   up with `form.elements.namedItem`. The compiler cannot see which control the form draws: a
+   call whose form lacks it, or has another kind, throws, and `corten dev` reports it on draw.
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
    is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,
    `noUncheckedIndexedAccess` (an element or record value read by index is `T | undefined`: read

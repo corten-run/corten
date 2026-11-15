@@ -32,6 +32,7 @@
 
 import { patchOf, snapshotOf } from "./feed.js";
 import { parseOn } from "./on.js";
+import { field } from "./field.js";
 
 // Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
 // the worker's URL reach the DOM only through this policy, which only this module holds, so it
@@ -499,6 +500,12 @@ function resolve(arg, el, event, binding) {
       return new Map(findRefs(el, arg.owner, arg.name).map((found) => [found, JSON.parse(attrOf(found, "data-ref-value") ?? "null")]));
     case "^":
       return closestRef(el, arg.owner, arg.name, event) ?? SKIP;
+    case "~": {
+      // What the form has instead is told under `corten dev`, when the page draws the call.
+      const found = field(el, arg);
+      if (!found) throw new Error(`corten: ${binding.module}.${binding.name} takes field ${arg.name}, and its form has no such control`);
+      return found;
+    }
     case "{": {
       /** @type {Record<string, unknown>} */
       const group = {};

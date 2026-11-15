@@ -54,6 +54,41 @@ fn Priced(t: Msg) -> impl Render {
     html! { <output ref={out} on:connect={shared::priced(out, t.js().number(), t.js().money(USD), when)}></output> }
 }
 
+/// A form's fields, which handlers are given as their controls: each kind, a row's field, and a
+/// name `#[serde(rename)]` gave a character `data-on` escapes.
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Shipment {
+    weight: String,
+    format: String,
+    note: String,
+    size: String,
+    #[serde(rename = "it's")]
+    odd: String,
+    #[fields(rows)]
+    #[serde(default)]
+    parcels: std::collections::BTreeMap<String, Parcel>,
+}
+
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Parcel {
+    weight: String,
+}
+
+/// Handlers given a form's fields, alone and in a group.
+#[component]
+fn Shipping<'a>(key: &'a String) -> impl Render {
+    let f = Shipment::FIELDS;
+    let parcel = shared::Parcel { weight: f.parcels.at(key).weight, sizes: f.odd };
+    html! {
+        <form>
+            <button type="button" on:click={shared::fill(f.weight, f.format, f.note, f.size)}>"Fill"</button>
+            <button type="button" on:click={shared::pack(parcel)}>"Pack"</button>
+        </form>
+    }
+}
+
 /// A `string[]` parameter takes a slice, an array or a `Vec` of strings, with no feature.
 #[component]
 fn Named<'a>(list: &'a [&'a str]) -> impl Render {
@@ -956,6 +991,7 @@ fn handlers_write_the_shared_wire_vectors() {
         Count { t: Msg::for_locale("fr") }.to_html(),
         Priced { t: Msg::for_locale("en") }.to_html(),
         Priced { t: Msg::for_locale("fr") }.to_html(),
+        Shipping { key: &String::from("a b") }.to_html(),
     ];
     let mut written = Vec::new();
     for page in &pages {

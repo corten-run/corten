@@ -3,7 +3,8 @@
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
 //! argument and as the value an element gives its ref, a patch drawn with this area's
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
-//! `<details>` drawn closed that a form outside each asks for again.
+//! `<details>` drawn closed that a form outside each asks for again, and a form whose fields a
+//! handler is given as its controls.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -40,10 +41,15 @@ pub mod url {
     /// The page's `<details>` drawn open, as the answer to a form that asks for it.
     #[route("/smoke/sheet/more", get = open_more)]
     pub struct OpenMore;
+
+    /// A form whose fields a component without a script draws, and a handler given them as its
+    /// controls; two calls name a field their form does not have as they take it.
+    #[route("/smoke/fields", get = fields_page)]
+    pub struct FieldsPage;
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -141,6 +147,77 @@ async fn open_more(req: Req) -> HtmlResult {
             <summary>"More"</summary>
             <p>"Unfolded"</p>
         </details>
+    })
+}
+
+/// A shipment's package: drawn by `PackageFields`, which knows nothing of the script that fills it.
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Shipment {
+    service: String,
+    weight: String,
+    note: String,
+    #[serde(default)]
+    gift: bool,
+    size: String,
+    #[fields(rows)]
+    #[serde(default)]
+    parcels: std::collections::BTreeMap<u32, Parcel>,
+}
+
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Parcel {
+    weight: String,
+}
+
+/// The package's fields, as a component shared by forms with and without a script draws them: no
+/// refs to thread through.
+#[component]
+fn PackageFields() -> impl Render {
+    let f = Shipment::FIELDS;
+    html! {
+        <input name={f.weight} value="1">
+        <textarea name={f.note}></textarea>
+        <label><input type="checkbox" name={f.gift}>" Gift"</label>
+        <label><input type="radio" name={f.size} value="small" checked>" Small"</label>
+        <label><input type="radio" name={f.size} value="large">" Large"</label>
+        <input name={f.parcels.at(&1).weight} value="1">
+    }
+}
+
+#[derive(Id)]
+struct ShipFormId;
+
+/// Fills the package when the service changes, given the fields as their controls. The two
+/// buttons call a handler that takes an input with a field their form does not have as one: the
+/// note, a textarea, and the weight, in a form without it.
+#[component(js)]
+fn ShipForm() -> impl Render {
+    let f = Shipment::FIELDS;
+    let out = refs();
+    let parcel = f.parcels.at(&1).weight;
+    html! {
+        <div>
+            <form id={ShipFormId}>
+                <select name={f.service} on:change={js::fill(f.service, f.weight, f.note, f.gift, f.size, parcel, out)}>
+                    <option value="ground">"Ground"</option>
+                    <option value="air">"Air"</option>
+                </select>
+                <PackageFields />
+                <output ref={out}></output>
+                <button type="button" on:click={js::weigh(f.note)}>"Weigh the note"</button>
+            </form>
+            <form><button type="button" on:click={js::weigh(f.weight)}>"Weigh elsewhere"</button></form>
+        </div>
+    }
+}
+
+async fn fields_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Fields" viewer={None} head="">
+            <ShipForm />
+        </Layout>
     })
 }
 

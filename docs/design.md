@@ -3956,6 +3956,77 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
+53. <a id="choice-field-arguments"></a>**A handler is given a form's control by its `#[derive(Fields)]` field, which
+    the runtime finds by name in the handler's form when the handler runs.** A component that
+    draws a form's fields for forms with a script and without one (a package's fields in two
+    editors) has no refs to give the script, since refs do not reach outside a component, so a
+    script reached a control by `form.elements.namedItem("weight")`: a field name as text the
+    compiler did not check, of a type the script had to narrow
+    ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+    Now the markup passes the field, `on:change={js::fill(f.service, f.weight, f.size)}`, and
+    the handler's parameter is the control: `HTMLInputElement`, `HTMLSelectElement`,
+    `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name.
+    A field passes only where the handler takes one of those, and text or another element does not
+    pass where it takes one; each is a `compile_fail` doctest on `FieldName`, and the script that
+    hands a field to a string parameter is an `@ts-expect-error` line in the type fixture. The
+    call writes `~` with the kind (`i`, `s`, `t`, `*`) and the posted name as a JSON string
+    (`~i"parcels[1].weight"`), in `data-on`, a format only Corten's server and runtime read, so it
+    needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the runtime takes
+    the form of the element with the `on:` (the form itself, the one it belongs to, `form=`
+    included, or the one around it), reads that form's own `elements` (so a control named
+    `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
+    or every input of it for a group; a control a patch replaced is the new one, as a ref's is.
+    Anything else runs nothing and throws. Whether the form draws the field as the kind the
+    handler takes cannot be known when the crate compiles ([Limit 29](#limit-field-kind)), so
+    `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
+    on the page. Behavior is still a function the markup calls, and the field is an argument as a
+    ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
+
+    Not chosen: the field's name as text, `js::fill(f.weight.as_str())`, which is how a script
+    was given one before (corten-ui's `RequiredWhen` passes its control so): the name is right, but
+    the script still looks it up by a string and narrows what it finds, which is the issue. A
+    `RadioNodeList`, as `namedItem` gives: it gives a list only for two or more controls of a name
+    and the control itself for one, and a script cannot make one, so a handler could not count on
+    its type. Requiring refs: the component that draws the fields would take refs from every form
+    that uses it, with or without a script, and a ref does not cross a component's edge. Marking the
+    kind on the field (`#[fields(select)]`) so the compiler checks it: a concept on `Fields` that
+    still does not see the markup another component writes, so the runtime check would stay.
+    Finding the control once, when the handler connects: a patch that replaces it would leave the
+    handler with the old one. `RequiredWhen` keeps its name as text: its control may be a select,
+    radios or a checkbox, and it reads only the value, which no one element type covers.
+
+    What it costs: the runtime is 575 bytes larger raw, 178 with gzip (15,341 to 15,519) and 178
+    with brotli (13,846 to 14,024), paid once a release by every user; the lookup and its message
+    are most of it, the parser about 20 with gzip. A field argument writes its posted name where a
+    ref writes its own: a handler given four controls (an input, a select, a textarea and two
+    radios) writes `data-on` of 58 bytes with fields against 30 with refs, but the form with refs
+    also writes a `data-ref` on each control and a `data-scope` on its component, so the whole
+    form is 266 bytes with fields against 331 with refs. Rendering a field writes its posted name as a string argument does;
+    the item page's `render_cost`, which draws no field, is unchanged: its bytes are the same
+    (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
+    build and render of `<main>` in 19.2 us (15.6 to 20.8) before and 18.4 us (16.0 to 21.0) after,
+    each build's runs varying more than the two differ. The lookup is one pass
+    over the form's controls when the handler runs, reasoned, not measured.
+
+    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
+    defaults, once each build; a field's `data-on` and markup against a ref's for the same four
+    controls, once; the item page's `render_cost`, five alternated runs of each release build); platform (a form's `elements`
+    lists its controls in tree order, `form=` ones included, and a control's `localName` is its
+    tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (the posted name is
+    unique within a form's post, so the form is where it names one control; the kind a form draws
+    is another component's markup, which no one `html!` sees); value (README Value 4: the field
+    is typed at the seam and its name is the one `Fields` writes; Value 5: behavior stays a
+    function the markup calls; the bytes are Value 1's, below correctness in the conflict order).
+
+    Revisit when: `Fields` or `html!` comes to know the kind a form draws a field as, when the
+    kind check moves to the compiler and the runtime's goes; an app needs a control outside any
+    form, which is a ref's; or a handler is measured spending time in the lookup.
+
+    Last checked: 2026-11-15, the runtime's size on COMMIT against `c9ed56785`, a field's bytes
+    against a ref's, and the item page's `render_cost` on both; 2026-11-15, the smoke's field
+    checks on COMMIT in Chromium ENGINES (Playwright PW), and `corten dev`'s reports on
+    COMMIT in Chromium.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -3969,8 +4040,9 @@ rules something out.
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
    the browser.
-3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
-   `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
+3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, form fields (a form's
+   control by its `#[derive(Fields)]` name, found in the handler's form,
+   [Choice 53](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
@@ -4398,3 +4470,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     of the count.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.
+29. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
+    against the handler's parameter when the crate compiles, but whether its form draws that
+    control is checked only when the handler runs ([Choice 53](#choice-field-arguments)). A
+    field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a
+    select or as radios, a call may name a field no control on the page has, and the markup that
+    draws the control may be another component's, often in another crate, so no one expansion of
+    `html!` sees both the call and the control. A call whose form has no control of the name,
+    more than one where the handler takes one, or one of another kind runs nothing and throws
+    (`corten: shipping.fill takes field weight, and its form has no such control`), and `corten
+    dev` reports it, with what the form has, when the page or a later draw puts the call on the
+    page, so the mistake shows on load rather than on the first event that calls it. It lifts when
+    the kind a form draws for a field is known where the call is checked.

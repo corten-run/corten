@@ -5,6 +5,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A handler is given a form's control by its `#[derive(Fields)]` field,
+  `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
+  `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
+  radios or checkboxes that share the name. The runtime finds it by name in the handler's form
+  when the handler runs, so a component that draws the fields for forms with and without a
+  script needs no ref, and the script looks nothing up by a name as text. Text where a field
+  belongs, and a field where the handler takes text or another element, do not compile; a call
+  whose form lacks the control, or has one of another kind, throws, and `corten dev` reports it
+  when the page draws it. The runtime is 178 bytes larger with gzip
+  ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into

@@ -2,6 +2,9 @@
 // Loaded by the runtime under `corten dev` only, from /corten/dev.js, which only a dev server
 // serves, as written: what it reports costs a production page nothing.
 import { ready } from "corten";
+import { TAGS, controls, field } from "./field.js";
+import { parseOn } from "./on.js";
+/** @import { Arg } from "./on.js" */
 
 const CONTROLS = "input,select,textarea";
 // A region a screen reader announces as it changes: the live roles and aria-live, unless
@@ -180,11 +183,52 @@ function inPlace(root) {
   }
 }
 
+/** Handlers whose form fields were reported. @type {WeakSet<Element>} */
+const fieldsReported = new WeakSet();
+
+/** A call's arguments, a group's fields among them. @param {Arg[]} args @returns {Arg[]} */
+const flat = (args) => args.flatMap((arg) => (arg.kind === "{" ? flat(arg.fields.map(([, f]) => f)) : [arg]));
+
+/**
+ * Reports each handler in or at `root`, or in the form around it, given a form field
+ * (`js::fill(f.weight)`) that its form does not have as the handler takes it: none of that name, or
+ * a control of another kind (a select where it takes an input). The compiler cannot see the
+ * control, which another component may draw, so this is reported when the page draws it, not on
+ * the first event that calls the handler, which the runtime refuses with the same message.
+ * @param {Element} root
+ */
+function fields(root) {
+  for (const el of within(root.closest("form") ?? root, "[data-on]")) {
+    if (fieldsReported.has(el)) continue;
+    /** @type {string[]} */
+    const wrong = [];
+    /** @type {ReturnType<typeof parseOn>} */
+    let calls;
+    try {
+      calls = parseOn(el.getAttribute("data-on") ?? "");
+    } catch {
+      continue; // The runtime reports an attribute it cannot read.
+    }
+    for (const b of calls) {
+      for (const arg of flat(b.args)) {
+        if (arg.kind !== "~" || field(el, arg)) continue;
+        const found = controls(el, arg.name);
+        const has = found ? `its form has ${found.map((c) => c.localName).join(", ") || "none"}` : "it is in no form";
+        wrong.push(`${b.module}.${b.name} takes field ${arg.name} as ${arg.control === "*" ? "every" : "one"} <${TAGS[arg.control]}>, and ${has}`);
+      }
+    }
+    if (!wrong.length) continue;
+    fieldsReported.add(el);
+    console.error(`corten: ${wrong.join("; ")}`, el);
+  }
+}
+
 /** @param {Element} root */
 function checkAll(root) {
   check(root);
   nested(root);
   inPlace(root);
+  fields(root);
 }
 
 // The page once its handlers have connected (a task after `ready`, as a script's

@@ -529,6 +529,52 @@ async function run(browser) {
     );
     await quoted.close();
   }
+  // A handler given a form's fields (`js::fill(f.weight, ..)`) gets their controls when it runs,
+  // found by name in its own form: a select, an input, a textarea, a checkbox, a radio group's
+  // inputs and a row's field (`parcels[1].weight`), which a component with no refs draws. A call
+  // whose form has no such control, or one of another kind, runs nothing and says which.
+  {
+    const shipped = await browser.newPage();
+    /** @type {string[]} */
+    const shipErrors = [];
+    shipped.on("pageerror", (e) => shipErrors.push(e.message));
+    await shipped.goto(`${base}/smoke/fields`);
+    const served = await (await shipped.request.get(`${base}/smoke/fields`)).text();
+    await shipped.selectOption('select[name="service"]', "air");
+    const filled = await shipped
+      .waitForFunction(() => document.querySelector("#ship-form output")?.textContent || null, undefined, { timeout: 5000 })
+      .then(
+        () =>
+          shipped.evaluate(() => {
+            const form = /** @type {HTMLFormElement} */ (document.getElementById("ship-form"));
+            /** @param {string} name */
+            const at = (name) => /** @type {HTMLInputElement} */ (form.querySelector(`[name="${name}"]`));
+            const size = /** @type {HTMLInputElement | null} */ (form.querySelector('[name="size"]:checked'));
+            return [form.querySelector("output")?.textContent, at("weight").value, at("note").value, at("gift").checked, size?.value, at("parcels[1].weight").value].join("|");
+          }),
+        () => null,
+      );
+    check(
+      "a handler gets a form's fields as their controls, each of the kind it takes, from the form it is in",
+      filled === "select,input,textarea,input,input,small,large|2|by air|true|small|2" &&
+        served.includes(`data-on='change:ship_form.fill(~s"service",~i"weight",~t"note",~i"gift",~*"size",~i"parcels[1].weight",@out)'`),
+      `${filled} ${/data-on='change:[^']*'/.exec(served)?.[0] ?? "no data-on"}`,
+    );
+    for (const [name, field] of [["Weigh the note", "note"], ["Weigh elsewhere", "weight"]]) {
+      const before = shipErrors.length;
+      await shipped.getByRole("button", { name }).click();
+      for (let waited = 0; shipErrors.length === before && waited < 5000; waited += 50) await shipped.waitForTimeout(50);
+      // Long enough for a second report, which would be a fault.
+      await shipped.waitForTimeout(100);
+      const said = shipErrors.slice(before);
+      check(
+        `a call given a form field its form does not have as the handler takes it runs nothing and says why (${name.toLowerCase()})`,
+        said.length === 1 && said[0].includes(`corten: ship_form.weigh takes field ${field}, and its form has no such control`) && (await shipped.inputValue('#ship-form [name="weight"]')) === "2",
+        said.join(" | "),
+      );
+    }
+    await shipped.close();
+  }
   // A data-patch form on a page outside an area whose handler is in it (Area::components): the
   // patch links the area's stylesheet, which the runtime loads before it puts the patch in place,
   // as a navigation into the area does. One that fails to load leaves the patch in place
