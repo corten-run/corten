@@ -843,6 +843,15 @@ Run as the inspecting user, without `set -x`, terminal recording or credential
 logging. Existing authentication and the verified known-hosts file stay in their
 existing locations, read-only; never copy them into the workspace. If these local
 permissions/resources are unavailable, stop, rather than using an unbounded folder.
+Use the trusted system Node binary, not a shell alias or an inherited Node startup
+configuration. The task-local `audit_node` below starts **every local Node command
+in this procedure**, including validation and controller preview/delivery, in a
+fresh allowlisted environment. It drops `NODE_OPTIONS`, `NODE_PATH`, preload/loader
+settings and other inherited startup variables before Node starts. Only approved
+system tool paths, locale, Git safety settings and existing credential/configuration
+locations survive; credential contents are neither copied nor logged. The existing
+saved account/context and host-key checks still apply. Do not run a bare `node`
+first to construct the clean environment.
 
 From the trusted measured checkout, provision a unique private workspace. The
 mount has both a kernel byte quota and an inode quota; a per-process file limit
@@ -852,6 +861,17 @@ the remaining steps. Nothing here changes campaign or measurement settings.
 ```sh
 set -eu
 umask 077
+AUDIT_PATH=/usr/local/bin:/usr/bin:/bin
+AUDIT_NODE=/usr/local/bin/node
+test -x "$AUDIT_NODE" || AUDIT_NODE=/usr/bin/node
+test -x "$AUDIT_NODE"
+readonly AUDIT_PATH AUDIT_NODE
+audit_node() {
+  /usr/bin/env -i PATH="$AUDIT_PATH" HOME="$HOME" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+    LANG=C.UTF-8 TZ=UTC GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+    "$AUDIT_NODE" "$@"
+}
 AUDIT_UID=$(id -u)
 AUDIT_GID=$(id -g)
 WORK_PARENT=$(mktemp -d /tmp/corten-audit.XXXXXXXX)
@@ -860,7 +880,7 @@ WORK="$WORK_PARENT/work"
 mkdir -m 700 -- "$WORK"
 sudo mount -t tmpfs -o "size=1073741824,nr_inodes=100000,mode=0700,uid=$AUDIT_UID,gid=$AUDIT_GID,nodev,nosuid,noexec" tmpfs "$WORK"
 test "$(findmnt -n -o FSTYPE --mountpoint "$WORK")" = tmpfs
-node --input-type=module - "$WORK" <<'JS'
+audit_node --input-type=module - "$WORK" <<'JS'
 import assert from 'node:assert/strict';
 import { lstatSync, readdirSync, statfsSync } from 'node:fs';
 import { physical } from './bench/workloads/isolated/evidence.mjs';
@@ -1056,14 +1076,14 @@ and counts. No credential, environment dump or raw source goes into these record
 
 ```sh
 remote_preflight() {
-  node --input-type=module - validate /bench "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+  audit_node --input-type=module - validate /bench "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
     "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" "$IP" "$KNOWN_HOSTS" < "$WORK/preflight.mjs"
-  env -i PATH="$PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+  env -i PATH="$AUDIT_PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
   timeout 45 ssh -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
   -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
   -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
   -oControlMaster=no -oControlPath=none "root@$IP" \
-  "cd /bench/repo && test \"\$(git rev-parse HEAD)\" = '$COMMIT' && git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --quiet '$COMMIT' -- && exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root LANG=C.UTF-8 TZ=UTC timeout -k 5 30 node --input-type=module - remote /bench '$ROUND' '$COMMIT' '$CAMPAIGN' '$GROUP' '$TOKEN' '$PLAN_SHA256' '$SUBJECT_SHA256' '$WAIT_EVENT'" \
+  "exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root LANG=C.UTF-8 TZ=UTC GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 /usr/bin/timeout -k 5 30 /bin/sh -c 'cd /bench/repo && test \"\$(git rev-parse HEAD)\" = \"\$2\" && git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --quiet \"\$2\" -- && exec node --input-type=module - remote /bench \"\$@\"' sh '$ROUND' '$COMMIT' '$CAMPAIGN' '$GROUP' '$TOKEN' '$PLAN_SHA256' '$SUBJECT_SHA256' '$WAIT_EVENT'" \
   < "$WORK/preflight.mjs"
 }
 test ! -e "$WORK/before.json"
@@ -1091,14 +1111,14 @@ case "$GROUP" in
   mixed-production) SUBJECT=mixed-audit-subject.json; SNAPSHOT=mixed-audit-sources ;;
   *) exit 2 ;;
 esac
-node --input-type=module - "$EXPORT" <<'JS'
+audit_node --input-type=module - "$EXPORT" <<'JS'
 import assert from 'node:assert/strict';
 import { opendirSync } from 'node:fs';
 const dir = opendirSync(process.argv[2]);
 try { assert.equal(dir.readSync(), null, 'export is not fresh'); } finally { dir.closeSync(); }
 JS
 test ! -e "$EXPORT/$SNAPSHOT" && test ! -L "$EXPORT/$SNAPSHOT"
-env -i PATH="$PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+env -i PATH="$AUDIT_PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
 prlimit --fsize=268435456:268435456 -- timeout 180 sftp -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
   -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
   -oServerAliveInterval=15 -oServerAliveCountMax=2 \
@@ -1138,7 +1158,7 @@ copy. Neither hashing nor a successful comparison is independent audit approval.
 ```sh
 test ! -e "$WORK/after.json" && test ! -e "$WORK/local.json"
 remote_preflight > "$WORK/after.json"
-node --input-type=module - local "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+audit_node --input-type=module - local "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
   "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" \
   < "$WORK/preflight.mjs" > "$WORK/local.json"
 cmp -- "$WORK/before.json" "$WORK/after.json"
@@ -1164,8 +1184,8 @@ cmp -- "$WORK/before.json" "$WORK/local.json"
    hash; never automatically feed preview output into execution:
 
 ```sh
-node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --print-approval
-node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --approve-reviewed-merged-ready REVIEWED_ACTION_SHA256
+audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --print-approval
+audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --approve-reviewed-merged-ready REVIEWED_ACTION_SHA256
 ```
 
 Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
