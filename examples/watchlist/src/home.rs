@@ -725,7 +725,7 @@ mod tests {
     }
 
     /// A document around `KeyedMarkup`: its head's `<title>` is the page's, in a document's head,
-    /// and a navigation asks for its parts (`Part::Page`, `Part::Title`).
+    /// and a navigation asks for its parts (`Part::Swap`, `Part::Title`).
     #[component]
     fn KeyedDocument<'a>(title: &'a str, ids: &'a [String]) -> impl Document {
         html! {
@@ -734,6 +734,7 @@ mod tests {
                 <head>
                     <meta charset="utf-8">
                     <title>{title}" | Watchlist"</title>
+                    <Corten />
                 </head>
                 <body>
                     <main><KeyedMarkup ids={ids} /></main>
@@ -760,7 +761,7 @@ mod tests {
         (0..rounds)
             .map(|_| {
                 let mut out = doc.to_html();
-                for part in [corten::view::Part::Page, corten::view::Part::Title] {
+                for part in [corten::view::Part::Swap, corten::view::Part::Title] {
                     corten::view::Document::render_part(&doc, &mut out, part);
                 }
                 std::hint::black_box(out).len()
