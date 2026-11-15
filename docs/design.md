@@ -2658,7 +2658,8 @@ rules something out.
     use the same checking options: `corten check` writes the app's config with a copy of the
     repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
     This compares options, not compiler versions: apps support TypeScript 6.0 or later, while
-    repository checks and the README's explicit benchmark type-check command use 7.0.2.
+    repository checks and the explicit benchmark type-check command in
+    [CONTRIBUTING (Tooling)](../CONTRIBUTING.md#tooling) use 7.0.2.
     Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
     `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
     `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own

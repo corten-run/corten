@@ -223,9 +223,9 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-/// The `tsc` that checks `whose` scripts (`find`'s), `None` when `skip` says not to look, or why
-/// `corten check` fails without one, with the two ways on. A `tsc` whose `--version` fails, a
-/// broken install, is not one.
+/// The supported compiler `find` selects for `whose` scripts, or `None` when `skip` is set.
+/// Preserve selection errors, including broken checkout installs; explain how to install or
+/// skip script checking when no runnable compiler is found.
 fn checker(skip: bool, find: impl FnOnce() -> Result<Option<Compiler>, String>, whose: &str) -> Result<Option<Compiler>, String> {
     if skip {
         return Ok(None);
@@ -248,7 +248,10 @@ fn find_tsc(homes: &[&Path], runtime: Option<&Path>) -> Result<Option<Compiler>,
         return version_output(&alias)
             .and_then(|output| compiler_from_output(&alias, &output))
             .map(Some)
-            .map_err(|error| format!("{error}; run npm ci in the Corten checkout (TypeScript 6.0 or later is required)"));
+            .map_err(|_| format!(
+                "the Corten checkout's TypeScript at {} did not report a supported version; run npm ci in the Corten checkout (TypeScript 6.0 or later is required)",
+                alias.display()
+            ));
     }
     let names: &[&str] = if cfg!(windows) { &["tsc.cmd", "tsc.exe", "tsc"] } else { &["tsc"] };
     let local = homes.iter().flat_map(|home| names.iter().map(move |n| home.join("node_modules").join(".bin").join(n)));
@@ -476,6 +479,9 @@ mod tests {
         assert_eq!(command.get_args().collect::<Vec<_>>(), [alias.as_os_str()]);
         assert_eq!(tsc_command(Path::new("tsc")).get_program(), "tsc");
         std::fs::remove_dir_all(base).unwrap();
+        assert!(error.contains("did not report a supported version") && error.contains(alias.to_str().unwrap()), "{error}");
+        assert!(!error.contains("--global"), "{error}");
+        assert_eq!(error.matches("TypeScript 6.0 or later").count(), 1, "{error}");
     }
 
     #[test]
