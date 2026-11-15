@@ -34,6 +34,12 @@ must supply an authorization policy, not a review JSON field. Serialized handles
 work. A second instance, round, restart or completed attempt cannot acquire that root.
 No lock release, native-directory deletion, automatic cleanup or retry API exists.
 
+The private campaign umask remains in effect for evidence. Native fixture writers
+publish only their synthetic input file as `0644` and its immediate read-only bind
+root as `0711`. This permits known-path reads by non-root image users without directory
+listing or access to private sibling evidence. No recursive permission change or
+container user override is needed, and serialized workload input bytes are unchanged.
+
 The optional final `--group GROUP` is one exact current registry name, not an app/case
 filter. `bindGroupCampaign` returns `benchmark-isolated-group-campaign/v1`, with order
 exactly `[group]` and the same complete native binding that group has in `bindCampaign`.

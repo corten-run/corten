@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Publish synthetic benchmark fixtures with explicit readable file permissions
+  and search-only bind roots, including under the private campaign umask. Keep
+  neighboring evidence private and contender users/read-only mounts unchanged.
+
 - Replay live group phases using the saved campaign's exact scope and group order,
   including ordinal zero on a dedicated host. Require the matching campaign plan,
   selected binding and host reservation without relaxing native/lifetime seals.
