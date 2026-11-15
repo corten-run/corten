@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Project benchmark create responses onto the positive droplet/action IDs rather
+  than gating on unused advisory link text. Fixed-origin action polling still
+  proves exact create completion; explicitly join its droplet ID to the freshly
+  observed owned host before provisioning. Keep one POST, original deadlines,
+  account/ownership, settlement and terminal-only cleanup gates unchanged.
+
 - Preserve closed production-controller failure stages through fleet workers and
   saved receipts, distinguishing pre-reservation source and Git failures from
   launch, collection and teardown without forwarding raw errors or changing gates.
@@ -35,9 +41,9 @@ Corten is pre-1.0, so any minor version may change the API.
   by the original deadline and shared request limit; use exact-ID host observations
   after binding rather than repeated whole-account censuses.
 
-- Accept the documented droplet-scoped create action link only when both resource
-  and action IDs match. Completion still uses the fixed global action endpoint;
-  foreign or malformed hints and incomplete/misbound actions remain refused.
+- Earlier droplet-scoped create-link compatibility and href diagnostics are
+  retained as historical evidence. The current ID projection above replaces hint
+  spelling checks; incomplete or misbound authoritative actions remain refused.
 
 - Distinguish five benchmark provider create-link refusal predicates with closed
   diagnostic codes, without forwarding rejected values or changing completion,

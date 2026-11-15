@@ -97,15 +97,15 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
-Create-link refusals distinguish five closed predicate codes: `create-link-shape`
-(actions is not an array), `create-link-count` (not exactly one entry),
-`create-link-id` (missing or invalid positive safe-integer ID), `create-link-rel`
-(supplied relation differs) and `create-link-href` (supplied URL differs).
+Create-link refusals distinguish three consumed-field predicates:
+`create-link-shape` (actions is not an array), `create-link-count` (not exactly one
+entry) and `create-link-id` (missing or invalid positive safe-integer ID).
 Only a failing predicate emits its subcode; deadline/cancellation checkpoints keep
-their coarse phase codes, including `create-link`. No rejected provider values are
-retained or forwarded. These diagnostics do not identify the cause of historical
-failures whose rejected responses were not retained, or change any acceptance,
-completion, ownership, retry or cleanup gate.
+their coarse phase codes, including `create-link`. Historical `create-link-rel`
+and `create-link-href` diagnostics remain readable but are no longer emitted:
+the create response is an ID projection, not a full validator of unused metadata.
+No rejected provider values are retained or forwarded, and old diagnostics do not
+establish the cause of an unretained response.
 
 Failures inside the production composition also retain one closed `controllerStage`
 code: `source-plan`, `exact-approval`, `remote-main-advertisement`,
@@ -117,7 +117,7 @@ Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
 launch authority. Raw Git errors, URLs, arguments and stderr remain private.
 
-The href diagnostic can additionally classify a refused representation as
+Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
 `semantically-same-canonical-uri`, `query-or-trailing-slash` or
 `wrong-action-or-resource`. These are a closed vocabulary, never the rejected URL,
@@ -126,16 +126,18 @@ Count refusals similarly retain only `total-changed` or
 `terminal-count-mismatch`. Historical failures without these observations remain
 unexplained; a synthetic reproduction does not establish their cause.
 
-When present, a create action's `href` must exactly match one of the provider's
-two documented action routes: `https://api.digitalocean.com/v2/actions/<action-id>`
-or `https://api.digitalocean.com/v2/droplets/<created-droplet-id>/actions/<action-id>`.
-The latter must bind both IDs; foreign origins, credentials, other resources,
-queries, fragments and noncanonical spellings remain refused. These are advisory
-identity checks, not URLs to fetch: completion still uses only the fixed global
-action GET and verifies its exact ID, type, resource and completed status.
-The [published action endpoint contract](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/dropletActions_get.yml)
-supports this second route; it does not establish what any unretained failed
-response contained or prove a historical failure's cause.
+Create completion consumes only the positive safe-integer droplet ID and unique
+positive safe-integer action ID from the bounded JSON response. Advisory `rel` and
+`href` values are not read, parsed, followed, logged or forwarded. Ignoring unused
+metadata does not declare it schema-conformant: a malformed URI is still malformed.
+It also grants no authority. Requests use only the fixed HTTPS origin and a
+canonical action path constructed from the numeric ID. The authoritative action
+response must match that ID, type `create`, resource type `droplet`, and, when
+completed, the POST's exact droplet ID. Pending null/zero resource IDs never prove
+completion. Before any provisioning SSH, the controller explicitly joins this
+completed-action/POST host ID to the freshly observed owned reservation host ID.
+Wrong IDs, account, ownership, action status, timeout and cancellation still fail
+closed without repeating POST. No optional hint can select another host or route.
 
 Collection reuses only saved identities and independently collects terminal hosts:
 
@@ -556,13 +558,18 @@ An `in-progress` create action may have `resource_id: null` or numeric zero;
 both remain pending, not ownership or completion proof. Completion still requires
 the exact positive droplet ID returned by the single POST, the matching action
 ID/type/resource type. The POST must still return exactly one action link with a
-positive safe-integer ID. Its advisory `rel` and `href` fields may be absent, as
-the [published action-link schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml)
-permits; when present they must be `create` and the exact fixed-origin action URL.
+positive safe-integer ID. Its advisory `rel` and `href` fields are not consumed.
+The [published action-link schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml)
+describes these optional fields, but this adapter deliberately validates only its
+consumed projection, not every property of that schema. It does not call malformed
+metadata a valid URI or use it as a fallback destination.
 Polling constructs `/v2/actions/ID` from the numeric ID, never fetches `href`, and
 requires the authoritative response to prove the action ID, create type, droplet
-resource type, exact POST droplet ID and completed status. This agrees with
-[godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go#L114-L117).
+resource type, exact POST droplet ID and completed status. Only the validated
+droplet ID is returned across provider IPC. The controller requires that ID to
+equal the fresh owned-host ID before any provisioning SSH. Numeric linked-action
+lookup also exists in
+[godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go).
 The [broader response schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/responses/droplet_create.yml)
 permits missing actions or IDs, but those still fail
 closed here: without a unique numeric action ID this adapter cannot prove
