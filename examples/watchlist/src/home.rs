@@ -724,6 +724,24 @@ mod tests {
         }
     }
 
+    /// A document around `KeyedMarkup`: its head's `<title>` is the page's, in a document's head,
+    /// and a navigation asks for its parts (`Part::Page`, `Part::Title`).
+    #[component]
+    fn KeyedDocument<'a>(title: &'a str, ids: &'a [String]) -> impl Document {
+        html! {
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <meta charset="utf-8">
+                    <title>{title}" | Watchlist"</title>
+                </head>
+                <body>
+                    <main><KeyedMarkup ids={ids} /></main>
+                </body>
+            </html>
+        }
+    }
+
     #[inline(never)]
     fn render_live_prices(stocks: &[Stock], rounds: usize) -> usize {
         let t = Msg::default();
@@ -735,12 +753,30 @@ mod tests {
         (0..rounds).map(|_| std::hint::black_box(KeyedMarkup { ids }.to_html()).len()).sum()
     }
 
+    /// The whole document, then the parts a navigation asks for.
+    #[inline(never)]
+    fn render_keyed_document(ids: &[String], rounds: usize) -> usize {
+        let doc = KeyedDocument { title: "Prices", ids };
+        (0..rounds)
+            .map(|_| {
+                let mut out = doc.to_html();
+                for part in [corten::view::Part::Page, corten::view::Part::Title] {
+                    corten::view::Document::render_part(&doc, &mut out, part);
+                }
+                std::hint::black_box(out).len()
+            })
+            .sum()
+    }
+
     /// What the debug key check (`docs/design.md#choice-ref-values`) costs a release render, which
-    /// should be nothing: `LivePrices` with 50 rows, each with two keyed cells, and `KeyedMarkup`,
-    /// rendered 1,000 times each. Instructions, from the release test binary under callgrind:
+    /// should be nothing: `LivePrices` with 50 rows, each with two keyed cells, `KeyedMarkup`, and
+    /// `KeyedDocument` around it, whole and in the parts a navigation asks for, 1,000 times each.
+    /// Instructions, from the release test binary under callgrind:
     /// `cargo test --release -p watchlist --no-run`, then
     /// `valgrind --tool=callgrind <test binary> --ignored --exact home::tests::key_check_cost`
-    /// and `callgrind_annotate --inclusive=yes` for `render_live_prices` and `render_keyed_markup`.
+    /// and `callgrind_annotate --inclusive=yes` for `render_live_prices`, `render_keyed_markup`
+    /// and `render_keyed_document`. To compare with a commit before the check, copy this test and
+    /// the components above it into that commit's `home.rs`.
     #[test]
     #[ignore]
     fn key_check_cost() {
@@ -759,6 +795,12 @@ mod tests {
         let rounds = 1_000;
         let prices = render_live_prices(&stocks, rounds);
         let keyed = render_keyed_markup(&ids, rounds);
-        println!("LivePrices: {} bytes a render, KeyedMarkup: {} bytes a render", prices / rounds, keyed / rounds);
+        let document = render_keyed_document(&ids, rounds);
+        println!(
+            "LivePrices: {} bytes a render, KeyedMarkup: {} bytes a render, KeyedDocument: {} bytes a render",
+            prices / rounds,
+            keyed / rounds,
+            document / rounds
+        );
     }
 }
