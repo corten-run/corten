@@ -353,9 +353,9 @@ it as it draws that page, swapping in `<main>` and each element around it that c
 document and at the same address; until it is in, a navigation reads the whole page, so one that
 leaves it on its way still shows what the write changed. With two writes out at once, whichever
 page is drawn last may be older than the other write, so the next navigation reads the whole page
-again. So does one after a write whose outcome the runtime cannot know: cut off before its answer
-(by that navigation, a newer submit or the network) or answered with a 5xx, either of which the
-server may have applied. A page the app's or an area's middleware makes with `Req` in the
+again. So does one after a write the runtime cut off before its answer (by that navigation or a
+newer submit), which the server may have applied. A write that failed in view (the network failed,
+a 5xx) leaves the page as it is, with its failure shown, for the user to send again. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
 within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is
 `<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer

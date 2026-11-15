@@ -509,11 +509,10 @@ Corten is pre-1.0, so any minor version may change the API.
   copy of the request's head for a page it may answer with), 8.0% of the watchlist's watch, a real
   write; any other request in such an app runs about 100 to 170 more (a navigation 22,374 where it
   took 22,206), and a patch in an app without layout reads 21,518 where it took 21,370. The
-  runtime is 286 bytes larger with gzip. A read an `Ahead` starts
+  runtime is 270 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, so the next navigation reads the whole page; so does one
-  after a write cut off before its answer or answered with a 5xx, which the server may have
-  applied. A page the app's or an area's middleware makes with `Req` in the route's place is
+  after a write the runtime cut off before its answer, which the server may have applied. A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; skip it only for a `GET`

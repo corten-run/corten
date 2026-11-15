@@ -3700,13 +3700,15 @@ rules something out.
     page's layout stands for those answered before it was asked for and the write it answers, and
     drawing it makes every other write answered since it was asked for undrawn again: with two
     writes out, whichever page is drawn last, its layout may be older than the other write, so the
-    next navigation reads the whole page. A write whose outcome the runtime cannot know counts too:
-    one sent with no answer back (a navigation or a newer submit cut it off, the network failed) or
-    answered with a 5xx, which the server may have applied; and a navigation that cuts off a write
-    still waiting for its answer reads the whole page. The limit: the server may still be running a
-    write that was cut off when that page is read, and the page may not show it; nothing marks the
-    layout stale after that page is drawn, so the change shows at the next whole page read for
-    another reason (another write, a reload). A page the app's or an area's
+    next navigation reads the whole page. A write the runtime cut off once it was sent (a navigation,
+    a newer submit), which the server may have applied, counts too, and a navigation that cuts off a
+    write still waiting for its answer reads the whole page. One that failed in view (the network
+    failed, a 5xx) does not: the page says so (a toast) and the user sends it again under the same
+    key, whose answer draws it, and reading the whole page would draw the failure away. The limit:
+    the server may have applied such a failed write, or may still be running a cut-off one when that
+    page is read, and the layout may not show it; nothing marks the layout stale after that page is
+    drawn, so the change shows at the next whole page read for another reason (another write, a
+    reload). A page the app's or an area's
     middleware makes with `Req` in the route's place is filled as the middleware answers, under the
     request's deadline and before the error page, from the head that `Req` was taken with, as the
     route's own page is. A
@@ -3743,7 +3745,7 @@ rules something out.
     21,370. The fill is boxed for the writes that carry it, a trade for the many requests that are
     not such writes: without the box a navigation ran 197 more and a patch without layout reads 204
     more, and a write in an action about 1,000 less (a patch with layout reads 26,971). The runtime
-    is 821 bytes larger raw and 286 with gzip (15,069 to 15,355), numbering the writes a layout
+    is 776 bytes larger raw and 270 with gzip (15,069 to 15,339), numbering the writes a layout
     draws.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
@@ -3768,7 +3770,7 @@ rules something out.
     Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `04000147b` with the harness tests
     added against `02ac51d9e`, three alternating rounds (earlier rounds: `e59c32c28` against
     `934c94367`, `e760a5385` and `de46e974b` against the change as it was), and the runtime's size
-    on `04000147b` against `02ac51d9e`; 2026-11-14, the writes a layout draws in either order and a
+    with the change as it now is against `02ac51d9e`; 2026-11-14, the writes a layout draws in either order and a
     write cut off before its answer by the watchlist smoke in Chromium and Firefox (WebKit, without
     the Navigation API, skips them) on `04000147b`, each failing on `3eeba8d8d` in Chromium, and a middleware's page filled under the
     deadline and before the error page by the crate's tests on `04000147b`, failing without it.

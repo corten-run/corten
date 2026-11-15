@@ -3045,10 +3045,8 @@ async function send(form, submitter, sends) {
       // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
       // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
       // every navigation reads the whole page, as after a write that redirects.
-      // A 5xx's answer is drawn too, but the write it hides may have been applied, so its change is
-      // left for a whole page to draw.
       const whole = !res.headers.has("corten-patch") && !res.headers.has("corten-page");
-      const write = method !== "GET" && (whole || res.status >= 500) ? ++writesIn : undefined;
+      const write = method !== "GET" && whole ? ++writesIn : undefined;
       if (write) undrawn.add(write);
       const body = await res.text();
       renew();
@@ -3072,8 +3070,6 @@ async function send(form, submitter, sends) {
       // 5xx, which may hide a write that was applied or not, under the same key.
       if (!res.ok && res.status !== 422) pending.next = undefined;
     } else {
-      // A write a 5xx answered may have been applied: what it changed is left for a whole page.
-      if (method !== "GET" && res.status >= 500) undrawn.add(++writesIn);
       // An answer the runtime does not draw is whole once its body has arrived too.
       await res.arrayBuffer();
       signal.throwIfAborted();
@@ -3095,9 +3091,11 @@ async function send(form, submitter, sends) {
       }
     }
   } catch (error) {
-    // A write sent with no answer back (cut off by a navigation or a newer submit, or the network
-    // failed): the server may have applied it, so what it changed is left for a whole page.
-    if (went && !pending.answered && method !== "GET") undrawn.add(++writesIn);
+    // A write the runtime cut off once it was sent (a navigation, a newer submit): the server may
+    // have applied it, so what it changed is left for a whole page. One that failed where the page
+    // says so (the network failed, as a 5xx does) is the user's to send again under the same key,
+    // and that answer draws it; reading the whole page now would draw away the failure shown.
+    if (went && !pending.answered && method !== "GET" && signal.aborted) undrawn.add(++writesIn);
     if (signal.aborted) return;
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
