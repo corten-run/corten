@@ -44,8 +44,8 @@ jobs:
       # app need not, and `json` builds without `types` (the schemas and `RawValue`).
       - run: cargo check -p corten-run --no-default-features --features json --all-targets
       - run: cargo check -p corten-run --no-default-features --features agent,feed
-      # corten check type-checks the app's scripts and fails without tsc: the version package.json
-      # pins under typescript7 (npm latest checked in the guide), on the smoke jobs' Node.
+      # Checkout-backed apps use the typescript7 alias. Install the same compiler globally
+      # for the separate PATH check below, which temporarily removes that alias.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -67,6 +67,17 @@ jobs:
           cd "$RUNNER_TEMP/app" && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
           "$GITHUB_WORKSPACE/target/debug/corten" ui init && "$GITHUB_WORKSPACE/target/debug/corten" ui add --all
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
+      - name: PATH compiler checks an app without the checkout alias
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').devDependencies.typescript7.split('@').at(-1)")
+          alias="$GITHUB_WORKSPACE/node_modules/typescript7"
+          mv "$alias" "$RUNNER_TEMP/typescript7-alias"
+          trap 'mv "$RUNNER_TEMP/typescript7-alias" "$alias"' EXIT
+          "$GITHUB_WORKSPACE/target/debug/corten" new "$RUNNER_TEMP/path-app" --corten-path "$GITHUB_WORKSPACE/crates/corten"
+          cd "$RUNNER_TEMP/path-app"
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/path-check.log"
+          grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/path-check.log"
       # Every published crate still packages and builds on its own from the .crate files, in a
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten-run 0.1.0.

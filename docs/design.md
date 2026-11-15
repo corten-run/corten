@@ -320,6 +320,10 @@ rules something out.
    outside the repository and runs that same config, so the minimum is continuously checked.
    The constructor-function and extra-arguments JavaScript probes were run with both:
    6.0.3 accepts them, while 7.0.2 reports TS2683, TS7009 and TS2554.
+   The minimum comparison uses semantic-version precedence: 6.0.0 prereleases are below
+   stable 6.0.0, while 6.0.1 and 7.0.0 prereleases are above it. The CLI's version-boundary
+   regression was reproduced with 6.0.0-dev.20250801 and the boundary cases checked at
+   `f46913f75` and the change.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

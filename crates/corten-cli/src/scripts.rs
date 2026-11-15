@@ -245,7 +245,10 @@ fn checker(skip: bool, find: impl FnOnce() -> Result<Option<Compiler>, String>, 
 /// Otherwise use the first local `tsc`, then the PATH (`tsc.cmd` on Windows).
 fn find_tsc(homes: &[&Path], runtime: Option<&Path>) -> Result<Option<Compiler>, String> {
     if let Some(alias) = runtime.and_then(alias_tsc) {
-        return compiler_from_output(&alias, &version_output(&alias)?).map(Some);
+        return version_output(&alias)
+            .and_then(|output| compiler_from_output(&alias, &output))
+            .map(Some)
+            .map_err(|error| format!("{error}; run npm ci in the Corten checkout (TypeScript 6.0 or later is required)"));
     }
     let names: &[&str] = if cfg!(windows) { &["tsc.cmd", "tsc.exe", "tsc"] } else { &["tsc"] };
     let local = homes.iter().flat_map(|home| names.iter().map(move |n| home.join("node_modules").join(".bin").join(n)));
@@ -282,14 +285,25 @@ fn version_output(tsc: &Path) -> Result<String, String> {
 
 fn compiler_from_output(tsc: &Path, output: &str) -> Result<Compiler, String> {
     let version = output.lines().find_map(|line| line.strip_prefix("Version ")).map(str::trim);
-    let major = version.and_then(|v| v.split('.').next()).and_then(|v| v.parse::<u32>().ok());
-    match major {
-        Some(6..) => Ok(Compiler { path: tsc.to_path_buf(), version: version.unwrap().to_owned() }),
-        _ => Err(format!(
+    let supported = version
+        .and_then(|v| {
+            // Build metadata does not affect precedence; a prerelease precedes its stable core.
+            let v = v.split('+').next()?;
+            let (core, prerelease) = v.split_once('-').map_or((v, false), |(core, _)| (core, true));
+            let mut parts = core.split('.');
+            let core =
+                (parts.next()?.parse::<u64>().ok()?, parts.next()?.parse::<u64>().ok()?, parts.next()?.parse::<u64>().ok()?);
+            parts.next().is_none().then_some(core > (6, 0, 0) || (core == (6, 0, 0) && !prerelease))
+        })
+        .unwrap_or(false);
+    if supported {
+        Ok(Compiler { path: tsc.to_path_buf(), version: version.unwrap().to_owned() })
+    } else {
+        Err(format!(
             "found TypeScript {} at {}; corten check requires TypeScript 6.0 or later. Run npm install --global typescript, or update the app's package.json",
             version.unwrap_or("with no Version line"),
             tsc.display()
-        )),
+        ))
     }
 }
 
@@ -402,11 +416,13 @@ mod tests {
         let error = compiler_from_output(&classic, &version_output(&classic).unwrap()).unwrap_err();
         assert!(error.contains("5.9.3") && error.contains("TypeScript 6.0 or later"), "{error}");
         assert!(error.contains(classic.to_str().unwrap()) && !error.contains("TypeScript Version"), "{error}");
-        if let Ok(Some(compiler)) = find_tsc(&[repo], Some(&repo.join("registry/corten-run-0.2.0/js"))) {
-            assert_ne!(compiler.path, tsc.path);
-        }
+        assert_eq!(
+            alias_tsc(&repo.join("registry/corten-run-0.2.0/js")),
+            None,
+            "a registry runtime cannot select the checkout alias"
+        );
         let target = std::env::temp_dir().join(format!("corten-template-types-{}", std::process::id()));
-        assert!(!target.exists(), "an old compiler must fail before writing or checking scripts");
+        assert!(!target.exists(), "the template check needs a fresh temporary directory");
         let result = run(Some(Plan {
             apps: vec![App { id: "template".into(), name: "template".into(), root }],
             whose: "the template's scripts".into(),
@@ -450,7 +466,8 @@ mod tests {
         }
         std::fs::write(base.join("package.json"), r#"{"name":"corten-tooling"}"#).unwrap();
         assert_eq!(alias_tsc(&runtime), Some(alias.clone()));
-        assert!(find_tsc(&[&app], Some(&runtime)).is_err(), "a broken checkout alias cannot fall back");
+        let error = find_tsc(&[&app], Some(&runtime)).unwrap_err();
+        assert!(error.contains("run npm ci in the Corten checkout") && error.contains("TypeScript 6.0 or later"), "{error}");
         assert_eq!(alias_tsc(&base.join("registry/corten-run-0.2.0/js")), None);
         assert_eq!(alias_tsc(&app.join("crates/corten/js")), None);
         assert_eq!(alias_tsc(&base.join("other/corten/js")), None);
@@ -463,8 +480,21 @@ mod tests {
 
     #[test]
     fn app_compilers_require_typescript_six_or_later() {
-        for version in ["Version 6.0.3", "Version 7.0.2", "Version 10.0.0-dev.1"] {
+        for version in [
+            "Version 6.0.0",
+            "Version 6.0.0+build.1",
+            "Version 6.0.1-beta",
+            "Version 6.0.1-rc",
+            "Version 6.0.3",
+            "Version 6.1.0-beta",
+            "Version 7.0.0-dev",
+            "Version 7.0.2",
+            "Version 10.0.0-dev.1",
+        ] {
             assert!(compiler_from_output(Path::new("local/tsc"), version).is_ok());
+        }
+        for version in ["Version 6.0.0-dev.20250801", "Version 6.0.0-beta", "Version 6.0.0-rc+build.1", "Version 5.99.0"] {
+            assert!(compiler_from_output(Path::new("local/tsc"), version).is_err(), "accepted {version}");
         }
         let compiler = compiler_from_output(Path::new("local/tsc"), "wrapper notice\nVersion 6.0.3\n").unwrap();
         assert_eq!(compiler.version, "6.0.3");

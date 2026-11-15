@@ -17,6 +17,7 @@ corten dev        # http://localhost:3000, rebuilds on save, open pages reload
 ```
 
 Apps with scripts need TypeScript 6.0 or later. The install above uses npm's newest stable release.
+The minimum is stable 6.0.0: a 6.0.0 prerelease is below it.
 
 `cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
 build first, download it as in [Verify a prebuilt binary](#verify-a-prebuilt-binary), using GitHub

@@ -51,10 +51,16 @@ Corten apps require TypeScript 6.0 or later. Framework CI pins TypeScript 7.0.2,
 `latest` verified on 2026-11-14, as the exact `typescript7` npm alias. Root `typescript`
 5.9.3 remains only for benchmark harness consumers of the classic compiler API.
 `npm run check:types` invokes the alias directly, not npm's colliding `tsc` bin.
+CI also type-checks `jsconfig.json` with TypeScript 6.0.3 installed outside the repository.
 `corten check` selects the alias only from the local Corten checkout supplying its runtime;
 standalone registry apps use their own local compiler or PATH, with the minimum checked.
 The parser checks use the alias's unstable native API
 ([Choice 5](docs/design.md#choice-handlers-checked-where-called)).
+
+After `npm ci` and the benchmark's normal build has generated `out/_gen/view/views.d.ts`,
+type-check the browser benchmark's view apps with the repository's pinned
+compiler: `node node_modules/typescript7/bin/tsc -p bench/browser/jsconfig.json`.
+The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 compiler instead.
 
 - Rust (stable; the supported floor is 1.89). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
 - Node 22 or later, for the runtime's type check, its minified build and the browser smoke

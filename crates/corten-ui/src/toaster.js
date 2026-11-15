@@ -123,7 +123,7 @@ export function connect(root, status, close, failed, seconds, signal) {
   /** @type {Navigation | undefined} */ (globalThis.navigation)?.addEventListener(
     "navigate",
     (e) => {
-      const event = /** @type {NavigateEvent} */ (e);
+      const event = e;
       const page = (/** @type {string} */ url) => url.split("#")[0];
       const own = event.hashChange || event.downloadRequest !== null || (event.destination.sameDocument && event.navigationType !== "traverse");
       if (!own && page(event.destination.url) !== page(location.href)) over();

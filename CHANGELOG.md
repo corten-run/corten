@@ -7,6 +7,7 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
+  Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
 
 - Corten's own checks use TypeScript 7.0.2, matching npm's newest stable release installed by the
   getting-started guide, and use its DOM declarations for the Navigation API. Move the
