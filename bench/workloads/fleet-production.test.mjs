@@ -1,5 +1,5 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
-// No native success evidence, real credentials, provider/network calls or containers.
+// Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -17,9 +17,18 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 
 function fixture(t, mode = "success") {
+  t.after(() => {
+    const rows = events(), starts = rows.filter((row) => row.boundary === "provider-child-start");
+    const exits = rows.filter((row) => row.boundary === "provider-child-exit");
+    assert.deepEqual(exits.map((row) => row.pid), starts.map((row) => row.pid), "every owned child reaped");
+    assert.ok(exits.every((row) => row.terminal));
+    assert.ok(!rows.some((row) => row.tokenIPC || row.boundary === "forbidden-native-https"));
+  });
   const h = harness(t), output = [], workers = [];
   const repo = path.join(h.temp, "captured"), trace = path.join(h.temp, "boundaries.jsonl"), hosts = path.join(h.temp, "provider.json");
   fs.mkdirSync(repo); fs.writeFileSync(trace, "");
+  fs.mkdirSync(path.join(repo, "bench/workloads"), { recursive: true });
+  fs.copyFileSync(new URL("./fleet-provider-test-worker.mjs", import.meta.url), path.join(repo, "bench/workloads/fleet-provider-test-worker.mjs"));
   const sources = fleetWorkerPaths.map((file) => {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     let source = committed.get(file);
@@ -38,7 +47,7 @@ function fixture(t, mode = "success") {
       source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
-import { createProviderEngine as syntheticEngine } from './cloud-provider-engine.mjs';
+import { fork as syntheticFork } from 'node:child_process';
 import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRead } from './cloud-remote.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
@@ -46,7 +55,7 @@ const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
   commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)}
-}, { fs: syntheticFs, path: syntheticPath, createProviderEngine: syntheticEngine,
+}, { fs: syntheticFs, path: syntheticPath, fork: syntheticFork, providerTransport,
   bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead });\n`;
     }
     fs.writeFileSync(target, source);
@@ -104,6 +113,10 @@ test("captured production composition reaches bound running hosts and propagates
     assert.ok(script.indexOf("/bench/bootstrap-ready.json") < script.indexOf("node 'bench/workloads/isolated/campaign-entry.mjs'"));
     const starts = events.filter((row) => row.group === group && row.boundary === "ssh" && row.options.input.includes(`systemctl start ${saved.unit}`));
     assert.equal(starts.length, 1);
+    const exited = events.filter((row) => row.group === group && row.boundary === "provider-child-exit");
+    assert.equal(exited.length, 1); assert.equal(exited[0].code, 0); assert.equal(exited[0].signal, null);
+    assert.ok(exited[0].terminal && exited[0].fleetLock && exited[0].launchLock && exited[0].operationLock);
+    assert.equal(events.filter((row) => row.group === group && row.boundary === "synthetic-credential").length, 1);
   }
   const first = p.saved(), marker = `${JSON.stringify(bootstrapMarker(first))}\n`;
   assert.equal(first.bootstrapReady.sha256, digest(marker)); assert.ok(Number.isFinite(Date.parse(first.bootstrapReady.observedAt)));
@@ -116,8 +129,8 @@ test("captured production composition reaches bound running hosts and propagates
     if (row.boundary === "ssh") { assert.equal(row.argv.at(-1), "/bin/bash -s"); assert.ok(row.options.input.startsWith("set -euo pipefail\n")); }
     else assert.equal(row.argv[0], "-B");
   }
-  for (const group of groupNames.slice(1)) assert.ok(events.findIndex((row) => row.group === group && row.method === "POST")
-    > events.findIndex((row) => row.group === groupNames[0] && row.boundary === "settlement-complete"));
+  for (let i = 1; i < groupNames.length; i++) assert.ok(events.findIndex((row) => row.group === groupNames[i] && row.method === "POST")
+    > events.findIndex((row) => row.group === groupNames[i - 1] && row.boundary === "provider-child-exit"));
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
@@ -134,21 +147,24 @@ test("captured production rejects Git advertisement before reservation or provid
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("first real provider refusal stops later admissions and settlement uncertainty preserves locks", { timeout: 30000 }, async (t) => {
-  for (const uncertain of [false, true]) {
-    const p = fixture(t, uncertain ? "provider-failure-unsettled" : "provider-failure");
+test("real provider refusal and withheld close retain locks and stop later admissions", { timeout: 30000 }, async (t) => {
+  for (const mode of ["provider-failure", "withhold-close"]) {
+    const p = fixture(t, mode);
     assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
-    assert.equal(p.workers.length, 1); assert.equal(p.saved().status, "reserved");
+    assert.equal(p.workers.length, 1); assert.equal(p.saved().status, mode === "provider-failure" ? "reserved" : "running");
     const requests = p.events().filter((row) => row.boundary === "provider");
-    assert.deepEqual(requests.map((row) => [row.method, row.path]), [["GET", "/v2/account"]]);
+    if (mode === "provider-failure") assert.deepEqual(requests.map((row) => [row.method, row.path]), [["GET", "/v2/account"]]);
+    else { assert.equal(requests.filter((row) => row.method === "POST").length, 1); assert.ok(p.events().some((row) => row.boundary === "withheld-close")); }
     const rows = p.output.at(-1).groups;
-    assert.equal(rows[0].outcome, "error"); assert.equal(rows[0].uncertain, uncertain);
-    assert.equal(rows[0].controllerStage, uncertain ? "provider-settlement" : "controller-launch");
-    if (!uncertain) assert.deepEqual(rows[0].providerDiagnostic, { code: "account-http", httpStatus: 403 });
+    assert.equal(rows[0].outcome, "error"); assert.equal(rows[0].uncertain, true);
+    assert.equal(rows[0].controllerStage, "provider-settlement");
+    if (mode === "provider-failure") assert.deepEqual(rows[0].providerDiagnostic, { code: "account-http", httpStatus: 403 });
+    else assert.equal(p.events().find((row) => row.boundary === "provider-child-exit").signal, "SIGKILL");
+    assert.equal(requests.filter((row) => row.method === "DELETE").length, 0);
     assert.ok(rows.slice(1).every((row) => row.outcome === "not-admitted" && row.reason === "prior-admission-failed"));
     for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
     for (const lock of [path.join(p.h.base, ".fleet-operation.lock"), path.join(p.h.base, groupNames[0], ".groups-launch.lock"),
-      path.join(p.h.base, groupNames[0], "groups-r21/operation.lock")]) assert.equal(fs.existsSync(lock), uncertain, lock);
+      path.join(p.h.base, groupNames[0], "groups-r21/operation.lock")]) assert.equal(fs.existsSync(lock), true, lock);
   }
 });
 

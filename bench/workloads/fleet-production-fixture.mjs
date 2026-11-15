@@ -1,10 +1,9 @@
 // Serialized into a captured production module by fleet-production.test.mjs.
 // Only external boundaries are synthetic. Never import this from a CLI module.
-export function syntheticDependencies(config, { fs, path, createProviderEngine, bootstrapMarker, bootstrapReadScript }) {
+export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, bootstrapReadScript }) {
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const local = path.join(config.stateDir, "groups-r21");
   const state = () => JSON.parse(fs.readFileSync(path.join(local, "state.json")));
-  const hosts = () => fs.existsSync(config.hosts) ? JSON.parse(fs.readFileSync(config.hosts)) : [];
   const record = (event) => fs.appendFileSync(config.trace, `${JSON.stringify({ group: config.group, ...event })}\n`);
   const spawn = (binary, argv, options) => {
     record({ boundary: binary, argv, options: { cwd: options.cwd, shell: options.shell, windowsHide: options.windowsHide,
@@ -39,44 +38,24 @@ export function syntheticDependencies(config, { fs, path, createProviderEngine, 
     sleep: async () => { throw new Error("unexpected synthetic sleep"); },
     providerFactory: ({ interrupted }) => {
       record({ boundary: "provider-factory" });
-      const run = createProviderEngine({ repo: config.repo, interrupted,
-        spawn: (binary, argv) => {
-          record({ boundary: "synthetic-credential", binary, argv });
-          if (binary !== "doctl" || argv[0] !== "auth" || argv[1] !== "token") throw new Error("synthetic credential boundary only");
-          return good("SYNTHETIC_FLEET_CREDENTIAL\n");
-        },
-        request: async ({ method, path: endpoint, body, credential }) => {
-          if (credential !== "SYNTHETIC_FLEET_CREDENTIAL") throw new Error("not a synthetic credential");
-          record({ boundary: "provider", method, path: endpoint, body });
-          if (endpoint === "/v2/account") return config.mode.startsWith("provider-failure")
-            ? { status: 403, value: null } : { status: 200, value: { account: { uuid: config.userId, droplet_limit: 20 } } };
-          if (method === "GET" && endpoint.startsWith("/v2/droplets?")) {
-            const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
-          }
-          if (method === "POST" && endpoint === "/v2/droplets") {
-            const saved = state();
-            if (saved.status !== "creating" || !saved.createIntentAt) throw new Error("create must follow durable intent");
-            const droplets = hosts(), id = droplets.length + 101;
-            const droplet = { id, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region },
-              networks: { v4: [{ type: "public", ip_address: `192.0.2.${id - 100}` }] } };
-            fs.writeFileSync(config.hosts, JSON.stringify([...droplets, droplet]));
-            return { status: 202, value: { droplet, links: { actions: [{ id: id + 1000, rel: "create", href: `https://api.digitalocean.com/v2/actions/${id + 1000}` }] } } };
-          }
-          if (method === "GET" && /^\/v2\/droplets\/\d+$/.test(endpoint)) {
-            return { status: 200, value: { droplet: hosts().find((row) => row.id === Number(endpoint.split("/").at(-1))) } };
-          }
-          if (method === "GET" && /^\/v2\/actions\/\d+$/.test(endpoint)) {
-            const id = Number(endpoint.split("/").at(-1));
-            return { status: 200, value: { action: { id, type: "create", resource_id: id - 1000, resource_type: "droplet", status: "completed" } } };
-          }
-          throw new Error("unexpected synthetic REST operation");
-        } });
-      let closing;
-      run.close = () => closing ??= (async () => {
-        record({ boundary: "settlement-enter" });
-        if (config.mode === "provider-failure-unsettled") throw Object.assign(new Error("synthetic unsettled provider"), { controlUncertain: true });
-        record({ boundary: "settlement-complete" });
-      })();
-      return run;
+      return providerTransport({ repo: config.repo, interrupted, launch(binary, argv, options) {
+        if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
+          || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
+        const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
+          [config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
+        record({ boundary: "provider-child-start", pid: child.pid });
+        const observe = (direction, message) => record({ boundary: "provider-ipc", direction,
+          schema: message?.schema, tokenIPC: JSON.stringify(message).includes("SYNTHETIC_FLEET_CREDENTIAL") });
+        child.on("message", (message) => observe("from-child", message));
+        const send = child.send.bind(child);
+        child.send = (message, ...rest) => { observe("to-child", message); return send(message, ...rest); };
+        child.once("exit", (code, signal) => record({ boundary: "provider-child-exit", pid: child.pid, code, signal,
+          terminal: child.exitCode !== null || child.signalCode !== null,
+          fleetLock: fs.existsSync(path.join(path.dirname(config.stateDir), ".fleet-operation.lock")),
+          launchLock: fs.existsSync(path.join(config.stateDir, ".groups-launch.lock")),
+          operationLock: fs.existsSync(path.join(local, "operation.lock")) }));
+        return child;
+      } });
     } };
 }
