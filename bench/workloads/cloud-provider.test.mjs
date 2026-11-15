@@ -68,7 +68,62 @@ function censusFixture(steps) {
   } });
   return { run, calls, state };
 }
-const censusFailure = (error) => error.providerDiagnostic?.code === "list-response";
+const censusFailure = (error) => error.providerDiagnostic?.code === "list-response-count";
+
+test("census predicate diagnostics isolate refusals without reflecting provider values", async (t) => {
+  const response = (value) => ({ status: 200, value });
+  const cases = [
+    ["shape", response(null)], ["shape", response({ droplets: { raw: credential } })],
+    ["bounds", censusPage(Array.from({ length: 201 }, (_, i) => ({ id: i + 1 })), 201)],
+    ...[undefined, null, credential, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((total) => ["total", censusPage([], total)]),
+    ["bounds", censusPage([], 20001)],
+    ...[undefined, null, credential, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["id", censusPage([{ id }], 1)]),
+    ["duplicate", censusPage([{ id: 1 }, { id: 1 }], 2)],
+    ...[null, [], credential].map((links) => ["links", response({ droplets: [], meta: { total: 0 }, links })]),
+    ...[null, [], credential].map((pages) => ["pages", response({ droplets: [], meta: { total: 0 }, links: { pages } })]),
+    ...[null, 2, credential, `https://foreign.invalid/${credential}`, "https://api.digitalocean.com/v2/droplets?page=2",
+      "https://api.digitalocean.com/v2/droplets?page=2&per_page=20", "https://api.digitalocean.com/v2/droplets?page=3&per_page=200",
+      "https://api.digitalocean.com/v2/droplets?page=2&page=2&per_page=200", "https://api.digitalocean.com/v2/droplets?page=2&per_page=200&raw=1",
+      "https://user:password@api.digitalocean.com/v2/droplets?page=2&per_page=200", "https://api.digitalocean.com/v2/other?page=2&per_page=200",
+      "https://api.digitalocean.com/v2/droplets?page=2&per_page=200#fragment"].map((next) =>
+      ["next", response({ droplets: [], meta: { total: 1 }, links: { pages: { next } } })]),
+    ["bounds", censusPage([{ id: 1 }], 1, 2)],
+  ];
+  for (const [i, [predicate, value]] of cases.entries()) await t.test(`${predicate}-${i}`, async () => {
+    const h = censusFixture([{ response: value }]);
+    await assert.rejects(h.run(list, 1000, true), (error) => {
+      assert.deepEqual(error.providerDiagnostic, { code: `list-response-${predicate}` });
+      assert.equal(error.controlUncertain, undefined);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+    });
+    assert.equal(h.calls.length, 1, "malformed data never dispatches a retake");
+  });
+  for (const [predicate, steps] of [
+    ["duplicate", [censusPage([{ id: 1 }], 2, 2), censusPage([{ id: 1 }], 3)]],
+    ["count", [censusPage([{ id: 1 }], 2), censusPage([{ id: 2 }], 3)]],
+    ["count", [censusPage([{ id: 1 }], 2, 2), censusPage([{ id: 2 }], 3),
+      censusPage([{ id: 3 }], 2, 2), censusPage([{ id: 4 }], 3)]],
+  ]) await t.test(`${predicate}-${steps.length}-GETs`, async () => {
+    const h = censusFixture(steps.map((value) => ({ response: value })));
+    await assert.rejects(h.run(list), (error) => error.providerDiagnostic?.code === `list-response-${predicate}`);
+    assert.equal(h.calls.length, steps.length);
+  });
+});
+
+test("census predicate diagnostics never replace coarse deadline or cancellation phases", async () => {
+  for (const [stopAt, cancel, code] of [[4, false, "list-response"], [5, false, "provider-output"], [4, true, "list-response"]]) {
+    let ticks = 0, cancelled = false, requests = 0;
+    const run = providerTransport({ repo: resolve("."), spawn, now() {
+      if (++ticks < stopAt) return 0;
+      if (cancel) { cancelled = true; return 0; } return 1000;
+    }, interrupted: () => cancelled, request() { requests++; return censusPage([], 0); } });
+    await assert.rejects(run(list, 1000), (error) => error.providerDiagnostic?.code === code && error.controlUncertain === true);
+    assert.equal(requests, 1);
+  }
+  const h = censusFixture([{ response: censusPage([], 1), cost: 400 }, { response: censusPage([], 0), cost: 600 }]);
+  await assert.rejects(h.run(list, 1000), (error) => error.providerDiagnostic?.code === "list-request" && error.controlUncertain === true);
+  assert.equal(h.calls.length, 2);
+});
 
 test("census retakes only a count mismatch as a fresh complete page1 under the original deadline", async () => {
   const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1 }));
@@ -95,14 +150,14 @@ test("census persistent second mismatch refuses instead of accepting partial row
 });
 
 test("census malformed IDs, totals and links outrank a simultaneous count or total change", async () => {
-  const second = [censusPage([{ id: 1 }], 3), censusPage([{ id: "PRIVATE_ID" }], 3), censusPage([], "PRIVATE_TOTAL"),
-    censusPage([], -1), censusPage([], 20001), censusPage([], 1, 1), censusPage([], 3, 4),
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: null } },
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: [] } } },
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: { next: "https://synthetic.invalid/v2/droplets?page=3&per_page=200" } } } }];
-  for (const response of second) {
+  const second = [["duplicate", censusPage([{ id: 1 }], 3)], ["id", censusPage([{ id: "PRIVATE_ID" }], 3)], ["total", censusPage([], "PRIVATE_TOTAL")],
+    ["total", censusPage([], -1)], ["bounds", censusPage([], 20001)], ["next", censusPage([], 1, 1)], ["next", censusPage([], 3, 4)],
+    ["links", { status: 200, value: { droplets: [], meta: { total: 3 }, links: null } }],
+    ["pages", { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: [] } } }],
+    ["next", { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: { next: "https://synthetic.invalid/v2/droplets?page=3&per_page=200" } } } }]];
+  for (const [predicate, response] of second) {
     const h = censusFixture([{ response: censusPage([{ id: 1 }], 2, 2) }, { response }]);
-    await assert.rejects(h.run(list), (error) => censusFailure(error) && !JSON.stringify(error).includes("PRIVATE"));
+    await assert.rejects(h.run(list), (error) => error.providerDiagnostic?.code === `list-response-${predicate}` && !JSON.stringify(error).includes("PRIVATE"));
     assert.equal(h.calls.length, 2, "malformed data must not reach another page1");
   }
 });
@@ -111,7 +166,7 @@ test("census retains one global100GET ceiling across both complete attempts", as
   const steps = Array.from({ length: 99 }, (_, i) => ({ response: censusPage([{ id: i + 1 }], 20000, i === 98 ? undefined : i + 2) }));
   steps.push({ response: censusPage([{ id: 999 }], 2, 2) });
   const h = censusFixture(steps);
-  await assert.rejects(h.run(list), censusFailure); assert.equal(h.calls.length, 100);
+  await assert.rejects(h.run(list), (error) => error.providerDiagnostic?.code === "list-response-bounds"); assert.equal(h.calls.length, 100);
   assert.equal(h.calls[99].path, "/v2/droplets?page=1&per_page=200");
 });
 

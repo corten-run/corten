@@ -154,21 +154,29 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         for (let attempt = 0; attempt < 2; attempt++) {
           const rows = [], seen = new Set(); let total;
           for (let page = 1; page <= 100; page++) {
-            assert.ok(requests < 100, "unbounded provider census"); requests++;
+            if (!(requests < 100)) throw stopped(false, { code: "list-response-bounds" }); requests++;
             const result = await call("list", "GET", `/v2/droplets?page=${page}&per_page=200`);
             code = "list-response";
-            assert.ok(Array.isArray(result?.droplets) && result.droplets.length <= 200);
-            assert.ok(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0 && result.meta.total <= 20000);
-            for (const droplet of result.droplets) { assert.ok(positive(droplet?.id) && !seen.has(droplet.id)); seen.add(droplet.id); rows.push(droplet); }
-            if (result.links !== undefined) assert.ok(result.links && typeof result.links === "object" && !Array.isArray(result.links));
-            if (result.links?.pages !== undefined) assert.ok(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages));
+            // Attach subcodes only at refused predicates, never to checkpoints.
+            if (!Array.isArray(result?.droplets)) throw stopped(false, { code: "list-response-shape" });
+            if (!(result.droplets.length <= 200)) throw stopped(false, { code: "list-response-bounds" });
+            if (!(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0)) throw stopped(false, { code: "list-response-total" });
+            if (!(result.meta.total <= 20000)) throw stopped(false, { code: "list-response-bounds" });
+            for (const droplet of result.droplets) {
+              if (!positive(droplet?.id)) throw stopped(false, { code: "list-response-id" });
+              if (seen.has(droplet.id)) throw stopped(false, { code: "list-response-duplicate" });
+              seen.add(droplet.id); rows.push(droplet);
+            }
+            if (result.links !== undefined && !(result.links && typeof result.links === "object" && !Array.isArray(result.links))) throw stopped(false, { code: "list-response-links" });
+            if (result.links?.pages !== undefined && !(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages))) throw stopped(false, { code: "list-response-pages" });
             const next = result.links?.pages?.next;
             if (next !== undefined) {
-              assert.equal(typeof next, "string"); const url = new URL(next);
-              assert.ok(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash);
+              if (typeof next !== "string") throw stopped(false, { code: "list-response-next" });
+              let url; try { url = new URL(next); } catch { throw stopped(false, { code: "list-response-next" }); }
+              if (!(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash)) throw stopped(false, { code: "list-response-next" });
               const fields = [...url.searchParams.keys()].sort();
-              assert.ok(fields.length === 2 && fields[0] === "page" && fields[1] === "per_page", "invalid provider census page parameters");
-              assert.ok(url.searchParams.get("page") === String(page + 1) && url.searchParams.get("per_page") === "200", "invalid provider census page sequence");
+              if (!(fields.length === 2 && fields[0] === "page" && fields[1] === "per_page")) throw stopped(false, { code: "list-response-next" });
+              if (!(url.searchParams.get("page") === String(page + 1) && url.searchParams.get("per_page") === "200")) throw stopped(false, { code: "list-response-next" });
             }
             listRemaining();
             // Only these two internal count conditions permit a fresh page1.
@@ -177,10 +185,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
             const changed = total !== undefined && result.meta.total !== total;
             total ??= result.meta.total;
             if (changed || next === undefined && rows.length !== total) {
-              assert.equal(attempt, 0, "provider census remained inconsistent"); break;
+              if (attempt !== 0) throw stopped(false, { code: "list-response-count" }); break;
             }
             if (next === undefined) { value = rows; break; }
-            assert.ok(rows.length < total && page < 100, "unbounded provider census");
+            if (!(rows.length < total && page < 100)) throw stopped(false, { code: "list-response-bounds" });
           }
           if (value !== undefined) break;
         }

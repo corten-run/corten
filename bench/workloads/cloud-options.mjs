@@ -4,6 +4,8 @@ import { roundName, selection, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "list-request", "list-http", "list-response",
+  "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
+  "list-response-links", "list-response-pages", "list-response-next", "list-response-count", "list-response-bounds",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
   "create-action-response", "create-action-pending", "delete-request", "delete-http"];

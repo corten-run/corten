@@ -20,6 +20,10 @@ Corten is pre-1.0, so any minor version may change the API.
   (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and the ui-gallery's draft
   use them.
 
+- Distinguish benchmark provider census refusal predicates with closed diagnostic
+  codes, without forwarding rejected values or changing census acceptance, the
+  one-retake limit, deadlines, cancellation, ownership or cleanup gates.
+
 - Accept the documented droplet-scoped create action link only when both resource
   and action IDs match. Completion still uses the fixed global action endpoint;
   foreign or malformed hints and incomplete/misbound actions remain refused.

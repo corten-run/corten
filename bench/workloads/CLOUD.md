@@ -133,6 +133,17 @@ HTTP or request error, cancellation or exhausted budget refuses. This is not an
 HTTP/network retry or permission to repeat POST/DELETE, replay an old operation,
 relax identity/absence checks or infer the cause of a historical failure.
 
+Census predicate refusals use the closed `list-response-` suffixes `shape`
+(droplet array), `total` (nonnegative safe-integer metadata), `id`, `duplicate`,
+`links`, `pages`, `next` (fixed-origin URL, path and exact next-page parameters),
+`count` (inconsistency on the second attempt), and `bounds` (row, total, page or
+shared request ceiling). They expose no rejected values or counts. The code is
+attached only at the failed predicate; intervening deadline and cancellation
+faults retain their coarse phase code. These diagnostics neither identify the
+historical failed response nor make an incomplete census valid. Concurrent
+allocations between complete single-page responses do not alone cause a count
+refusal; disagreement within a response or between pages is a separate condition.
+
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;
 the error contains a bounded message rather than either complete manifest.
