@@ -769,6 +769,45 @@ async fn patch_or_keeps_a_handler_send_with_a_view_of_cells() {
     assert_eq!(body, r#"<p id="msg">1</p>"#);
 }
 
+/// `patch_or_with` runs one side: the part for the runtime's read (`Mode::Action`), the page for
+/// every other mode (a first load, a navigation, a data client), so neither reads what only the
+/// other draws; and the part varies on `corten`, so a cache keeps it apart from the page at the
+/// same URL.
+#[tokio::test]
+async fn patch_or_with_runs_only_the_side_the_request_asks_for() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PARTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGES: AtomicUsize = AtomicUsize::new(0);
+    let routes = || {
+        Table::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.patch_or_with::<ForOne, crate::Patches, _, _, _, _>(
+                    || async {
+                        PARTS.fetch_add(1, Ordering::Relaxed);
+                        req.patch(html! { <p id={MsgId}>"picks"</p> })
+                    },
+                    || async {
+                        PAGES.fetch_add(1, Ordering::Relaxed);
+                        req.test_page("Home", html! { <p>"home"</p> })
+                    },
+                )
+                .await
+            }),
+        )
+    };
+    let count = || (PARTS.load(Ordering::Relaxed), PAGES.load(Ordering::Relaxed));
+    let (_, headers, body) = call(app(routes(), None), "GET", Some("action")).await;
+    assert_eq!((headers["corten-patch"].to_str().unwrap(), body.as_str(), count()), ("1", r#"<p id="msg">picks</p>"#, (1, 0)));
+    assert!(headers["vary"].to_str().unwrap().split(", ").any(|name| name == "corten"), "{headers:?}");
+    let (status, headers, body) = call(app(routes(), None), "GET", None).await;
+    assert_eq!((status, headers.contains_key("corten-patch"), count()), (StatusCode::OK, false, (1, 1)));
+    assert!(body.contains("<p>home</p>"), "{body}");
+    call(app(routes(), None), "GET", Some("nav")).await;
+    call_with(app(routes(), None), "GET", "/", None, Some("application/json")).await;
+    assert_eq!(count(), (1, 3));
+}
+
 #[cfg(feature = "json")]
 #[derive(crate::json::ToJson)]
 struct Data {
@@ -2714,6 +2753,43 @@ fn what_a_patch_or_request_costs() {
         for _ in 0..requests {
             let (status, headers, _) = call_with(router.clone(), "GET", "/part", (!page).then_some("action"), None).await;
             assert!(status == StatusCode::OK && headers.contains_key("corten-patch") != page, "{status} {headers:?}");
+        }
+    });
+}
+
+/// Instructions per request for a slow part's read, the two ways an app can send it: a route of
+/// its own whose `corten::live` stream sends the part once (`SLOW_PART=stream`, as before
+/// #1400), or the page's own route answering `corten: action` with `req.patch_or_with`'s part
+/// side. Count it as `what_a_patch_or_request_costs` says, with `SLOW_PART_REQUESTS=1200` and
+/// `200` and `--exact tests::what_a_slow_part_read_costs`.
+#[test]
+#[ignore]
+fn what_a_slow_part_read_costs() {
+    let requests: usize = std::env::var("SLOW_PART_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let stream = std::env::var("SLOW_PART").is_ok_and(|m| m == "stream");
+    fn picks() -> impl Patch {
+        html! { <ul id={MsgId}><li>"Halcyon Health (HLTH) 0.00%"</li><li>"Northgate Rail (NRTH) 0.00%"</li></ul> }
+    }
+    async fn send_part() -> LiveResponse {
+        crate::live(futures_util::stream::once(async { picks().to_html() }))
+    }
+    async fn read_part(req: Req) -> HtmlResult<crate::Patches> {
+        req.patch_or_with(|| async { req.patch(picks()) }, || async { req.test_page("Home", html! { <p>"home"</p> }) }).await
+    }
+    let router = if stream {
+        App::new(Routes::from(Table::new().route("/part", get(send_part)))).router()
+    } else {
+        App::new(Routes::from(Table::new().route("/part", get(read_part)))).router()
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = if stream {
+                call_with(router.clone(), "GET", "/part", None, Some("text/event-stream")).await
+            } else {
+                call_with(router.clone(), "GET", "/part", Some("action"), None).await
+            };
+            assert!(status == StatusCode::OK && body.contains("Northgate Rail"), "{status} {body}");
         }
     });
 }

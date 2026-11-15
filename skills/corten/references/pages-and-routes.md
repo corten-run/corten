@@ -69,7 +69,15 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    (`Area::route`) with a `get` that is not `HtmlResult<Patches>` (that one fails at
    `cargo build`, not `cargo check`). An answer type of the app's own says
    `type Kind = AnyAnswer;`; never claim `Patches`. Keep every other handler `HtmlResult`;
-   never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
+   never redirect only to show "saving". A slow part the page does not wait for (a slow read)
+   is drawn waiting with `{ReadAgain::now(url::Home::default())}` beside it (the page's own route,
+   which says `patches`), and that route's handler answers both:
+   `req.patch_or_with(|| async { req.patch(Part { .. }) }, || async { req.page(..) }).await`,
+   each side a closure that reads only what it draws; never a second route or a `<corten-live>`
+   stream for it. Its waiting line has a link to the page with the part read in (a query field the
+   handler reads it in for, `rel="nofollow"`), hidden under `@media (scripting: enabled)` and
+   shown on `[data-corten-read-failed]`, which the runtime sets when the read ends without a patch.
+   Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
    elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element

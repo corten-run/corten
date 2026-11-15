@@ -5,6 +5,26 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` beside the part
+  drawn waiting has the runtime read it once the page is on the screen (a GET with
+  `corten: action` to the page's own route, which says `patches`), and
+  `req.patch_or_with(part, page)` answers both, its two sides closures so the part's read runs
+  only for the part and the page's only for the page. Before, the part was a `<corten-live>`
+  stream of one item on a route of its own whose handler repeated the page's reads, with a second
+  waiting state; and a `patches` route whose part needed a read of its own could not answer its
+  page without building a patch it would not send. Tags that name one address are read once, so
+  two parts one read draws share it. The waiting elements are `aria-busy="true"` while the read
+  is on its way; a read that ends without a patch marks them `data-corten-read-failed`, where
+  the app's CSS shows its link to the page with the part read in (a browser without JavaScript
+  shows it already). An app with such a stream moves to this shape: drop the stream's route and
+  handler, put `ReadAgain::now` where the `<corten-live>` was, and key the link's CSS on
+  `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The runtime grows by
+  246 bytes gzipped (15,341 to 15,587). Choices 7 and 44 are rewritten: declarative shadow DOM
+  places a part streamed later without a script, but only with the page around it in a shadow root,
+  where the document's id lookups, fragment links and stylesheets do not reach it
+  ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
+  [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
   Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.

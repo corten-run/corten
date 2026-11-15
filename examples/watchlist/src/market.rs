@@ -30,7 +30,7 @@ const LISTED: [(&str, &str, u32); 8] = [
 pub const USD: Currency = Currency::new("USD");
 
 /// How long the analyst service takes to pick stocks for a visitor: long enough that the home page
-/// does not wait for it, so its picks are a slow part sent when they are ready.
+/// does not wait for it, so its picks are a slow part, read once the page is on the screen.
 pub const PICKS_TAKE: Duration = Duration::from_millis(600);
 
 #[derive(Clone)]

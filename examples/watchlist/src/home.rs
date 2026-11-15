@@ -286,15 +286,9 @@ fn PicksList<'a>(picks: &'a [Stock]) -> impl Patch {
     }
 }
 
-/// The whole watchlist screen, for a browser or a data client, with the list's cookie for a
-/// browser that had none.
-fn home_screen(req: &Req, viewer: Option<&Viewer>, watching: &mut Watching, home: &Home) -> HtmlResult {
-    let res = home_document(req, viewer, home)?;
-    Ok(watching.with_cookie(res))
-}
-
-/// The whole watchlist screen, for a browser or a data client.
-fn home_document(req: &Req, viewer: Option<&Viewer>, home: &Home) -> HtmlResult {
+/// The whole watchlist screen, for a browser or a data client; its callers add the list's cookie
+/// for a browser that had none (`Watching::with_cookie`).
+fn home_screen(req: &Req, viewer: Option<&Viewer>, home: &Home) -> HtmlResult {
     let view = home_view(home, req.t(), req.notice());
     req.screen(home, html! { <Layout req={req} title="Stocks" viewer={viewer} head="">{view}</Layout> })
 }
@@ -318,7 +312,7 @@ pub(crate) async fn page(
                     Some(true) => Some(market.picks(&watching.ids).await),
                     _ => None,
                 };
-                home_document(&req, viewer.as_deref(), &Home::new(&market, &watching, String::new(), picks))
+                home_screen(&req, viewer.as_deref(), &Home::new(&market, &watching, String::new(), picks))
             },
         )
         .await?;
@@ -386,7 +380,7 @@ async fn not_listed(req: &Req, viewer: Option<&Viewer>, market: &Market, watchin
     errors.add_form(NOT_LISTED);
     let home = &Home::new(market, watching, NOT_LISTED.into(), None);
     let form = WatchForm { others: &home.others, message: &home.message, notice: None };
-    req.invalid(&errors, form, || async move { home_screen(req, viewer, watching, home) }).await
+    req.invalid(&errors, form, || async move { Ok(watching.with_cookie(home_screen(req, viewer, home)?)) }).await
 }
 
 /// The answer to a change of the list: with JavaScript, the prices and the form as a patch; to a
@@ -401,7 +395,7 @@ fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut W
     }
     let home = Home::new(market, watching, message, None);
     if req.mode == Mode::Data {
-        return home_screen(req, viewer, watching, &home);
+        return Ok(watching.with_cookie(home_screen(req, viewer, &home)?));
     }
     let res = req.patch(html! {
         <LivePrices stocks={&home.stocks} t={req.t()} />

@@ -76,7 +76,10 @@ One handler serves every mode, and `req.mode` says which. A `data-patch` form's 
 both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the patch with
 JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch
 never loads what only the page shows. A patch that needs data of its own, which the page does not,
-or a status or headers of its own, checks `req.mode == Mode::Action` itself; a refusal whose
+is `req.patch_or_with(|| async { .. req.patch(view) }, || async { req.page(..) }).await`, where both
+sides are closures and only the one the request asks for runs (the part's may answer
+`req.patch_with_status`, or set headers on its response, for a status or headers of its own);
+a refusal whose
 form needs a read is `req.invalid_with` (below). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads only ([the document](views.md#the-document)); every page carries a key hashed from the
@@ -1809,7 +1812,7 @@ while it is still behind. The route's URL carries what the read waits for (the w
 since the page's address does not; its handler answers the part with `req.patch_or`, and so the
 page without JavaScript, at the same URL. The route says `patches`, and its `get` handler returns
 `HtmlResult<Patches>`, which only `req.patch`, `req.patch_with_status`, `req.patch_or`,
-`req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
+`req.patch_or_with`, `req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
 `patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
 and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
 build rather than the page. A route given by hand, a `#[derive(Route)]` struct, is not one: the
@@ -1890,6 +1893,14 @@ req.page(html! {
 ```
 
 `examples/watchlist`'s alerts page has all three.
+
+A part the page does not wait for at all (a slow read, such as recommendations) is read the same
+way, once and with no delay: `ReadAgain::now(route)` beside the part drawn waiting, and the page's
+own handler answers both with `req.patch_or_with(part, page)`, whose sides are closures, so the
+part's read is not the page's and the page's is not the part's. The runtime marks the waiting
+elements `aria-busy="true"` while the read is on its way and `data-corten-read-failed` if it ends
+without a patch, where a stylesheet shows the link to the page with the part read in that a
+browser without JavaScript follows ([A slow part](live-data.md#a-slow-part)).
 
 A page whose changing part a `<corten-live>` relays ([live data](live-data.md)) already keeps
 itself fresh with JavaScript; reading it whole would replace the `<corten-live>` and open its
