@@ -194,7 +194,8 @@ async fn home(req: Req, State(m): State<Market>) -> HtmlResult {
 ```
 
 A screen whose data a page's script reads names it on its route, `#[route("/sets/{set}", get = set, data = SetListing)]`,
-and its handler returns `HtmlResult<Screen<SetListing>>` (only `req.screen` with a `SetListing` makes one);
+and its handler returns `HtmlResult<corten::Screen<SetListing>>` (only `req.screen` with a `SetListing`, or a `&`, `Box`, `Rc` or `Arc` of one, makes one; `Screen` is not in the prelude);
+such a route says neither `patches` nor `rows`, and mounted again by hand it takes only a `get` that answers that data (else the app panics when built);
 the script reads it with `read()` ([scripts.md](scripts.md), A screen's data).
 
 ## A route with no screen

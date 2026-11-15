@@ -2020,7 +2020,7 @@ impl Req {
     ///     products: Vec<String>,
     /// }
     ///
-    /// async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+    /// async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
     ///     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
     ///     let name = &listing.name;
     ///     req.screen(&listing, html! { <html><head><title>{name}</title><Corten /></head><body><main>{name}</main></body></html> })
@@ -2037,7 +2037,7 @@ impl Req {
     /// #[derive(ToJson)]
     /// pub struct SetListing { name: String }
     ///
-    /// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+    /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
     ///     req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
     /// }
     /// ```
@@ -2050,7 +2050,7 @@ impl Req {
     /// #[derive(ToJson)]
     /// pub struct Order { id: String }
     ///
-    /// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+    /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
     ///     let order = Order { id: "7".into() };
     ///     req.screen(&order, html! { <html><head><title>"Order"</title><Corten /></head><body><main>"7"</main></body></html> })
     /// }
@@ -2076,6 +2076,69 @@ impl Req {
     ///     req.screen(&listing, html! { <html><head><title>"Sets"</title><Corten /></head><body><main>"Sets"</main></body></html> })
     /// }
     /// # fn main() { let _ = url::router(); }
+    /// ```
+    ///
+    /// The data may be the value, a reference to it, or a `Box`, `Rc` or `Arc` of it, whose JSON
+    /// is the value's (`req.screen(&listing, ..)` with `listing: &SetListing` or
+    /// `Arc<SetListing>`). The answer's kind is read from where it goes, as a patch's is: a
+    /// handler's return type, or a `Public` it is given to there.
+    ///
+    /// ```
+    /// use std::{sync::Arc, time::Duration};
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// fn set_page(name: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{name}</title><Corten /></head><body><main>{name}</main></body></html> }
+    /// }
+    ///
+    /// async fn shared(req: Req, listing: Arc<SetListing>) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&listing, set_page(&listing.name))
+    /// }
+    ///
+    /// async fn borrowed(req: &Req, listing: &SetListing) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&listing, set_page(&listing.name))
+    /// }
+    ///
+    /// async fn public(req: Req) -> Public<HtmlResult> {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(Duration::from_secs(60), req.screen(&listing, set_page(&listing.name)))
+    /// }
+    /// ```
+    ///
+    /// Where nothing says it (a closure that returns `Public::new(..)`), the call names it:
+    ///
+    /// ```compile_fail,E0283
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(Duration::from_secs(60), req.screen(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }))
+    /// };
+    /// # let _ = get(set);
+    /// ```
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(
+    ///         Duration::from_secs(60),
+    ///         req.screen::<_, corten::AnyAnswer, _>(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }),
+    ///     )
+    /// };
+    /// # let _: corten::Methods = get(set);
     /// ```
     #[cfg(feature = "json")]
     pub fn screen<For, Kind: crate::answer::ScreenKind<T>, T: crate::json::ToJson + ?Sized>(

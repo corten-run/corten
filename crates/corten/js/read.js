@@ -51,7 +51,11 @@ export async function read(url, { signal } = {}) {
       const body = await res.json();
       // The envelope is checked; the data is the route's own type, which the runtime trusts.
       if (body && typeof body === "object" && "data" in body) return /** @type {Data} */ (body.data);
-    } else status = res.status;
+    } else {
+      status = res.status;
+      // Its body is not read: cancelled, so the connection is not held for it.
+      res.body?.cancel().catch(() => {});
+    }
   } catch (error) {
     if (signal?.aborted) throw signal.reason;
     throw new ReadError(url, 0, error);

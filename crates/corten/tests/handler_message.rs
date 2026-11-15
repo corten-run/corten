@@ -194,7 +194,7 @@ fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
 }
 
 /// `patches` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
-/// parameter. Each is refused by the routes module with its own reason, which the `compile_fail`
+/// parameter, one that says `data` too. Each is refused by the routes module with its own reason, which the `compile_fail`
 /// doctests on `corten::routes` cannot tell apart (#1342).
 #[test]
 fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
@@ -219,6 +219,11 @@ fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
             "#[route(\"/alerts\", get = alerts, patches)]\n    pub struct Alerts<T> {\n        pub after: Option<T>,\n    }",
             patch,
             "Alerts has a type parameter, so it cannot say patches",
+        ),
+        (
+            "#[route(\"/alerts\", get = alerts, data = Alerted, patches)]\n    pub struct Alerts;",
+            patch,
+            "a route is one or the other, so say data or patches, not both",
         ),
     ] {
         let (ok, stderr) = build_main("patches-where-message", &app(route, handler));

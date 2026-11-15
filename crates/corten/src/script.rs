@@ -474,7 +474,7 @@
 //!     pub struct Set<'a> { pub set: &'a str }
 //! }
 //!
-//! async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+//! async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
 //!     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
 //!     req.screen(&listing, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
 //! }
@@ -541,7 +541,7 @@
 //!     pub struct Sets;
 //! }
 //!
-//! async fn sets(req: Req) -> HtmlResult<Screen<order::SetListing>> {
+//! async fn sets(req: Req) -> HtmlResult<corten::Screen<order::SetListing>> {
 //!     let listing = order::SetListing { id: "7".into() };
 //!     req.screen(&listing, html! { <html><head><title>"Sets"</title><Corten /></head><body><main>"Sets"</main></body></html> })
 //! }
@@ -550,6 +550,43 @@
 //! fn SetReader() -> impl Render {
 //!     let out = refs();
 //!     html! { <output ref={out} on:connect={js::show(out, url::Sets, signal)}></output> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! A screen's route says `data` alone: its `get` answers a screen, not a patch the runtime
+//! applies (`patches`) nor a feed's rows (`rows`), so either beside it does not compile:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! pub struct SetListing;
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets", get = sets, data = SetListing, patches)]
+//!     pub struct Sets;
+//! }
+//!
+//! async fn sets(req: Req) -> HtmlResult<Patches> {
+//!     req.patch(html! {})
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! pub struct SetListing;
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets", get = sets, data = SetListing, rows = SetListing)]
+//!     pub struct Sets;
+//! }
+//!
+//! async fn sets() -> &'static str {
+//!     "sets"
 //! }
 //! # fn main() { let _ = url::router; }
 //! ```

@@ -3958,13 +3958,20 @@ rules something out.
     is. So a route says `data = T`, and its `get` handler must return `HtmlResult<Screen<T>>`,
     which only `req.screen` given a `T` makes, checked at the handler's name in `#[route(..)]`
     (the methods that answer a patch, `patch_or`'s other side included, answer only as
-    `AnyAnswer` or `Patches`, so none of them reaches `Screen<T>`); the route is then a handler
-    argument of type `ScreenUrl<T>`, where `T` must be the declaration `corten::types` writes (a
-    type the script declares would match the Rust type by name alone), and `read(url, { signal })`
+    `AnyAnswer` or `Patches`, so none of them reaches `Screen<T>`); the same route mounted
+    again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a screen of
+    `T`, compared by `TypeId` when the app is built, since that comparison cannot be a `const`
+    on the Rust floor (README Value 4: what the compiler cannot see fails at startup); the route is then a handler
+    argument of type `ScreenUrl<T>`, where `T` must come from the declarations `corten::types`
+    writes (a type the script declares would match the Rust type by name alone; what is checked is
+    the path the name is imported from, `types/app`, so a file written by hand at that path is not
+    detected), and `read(url, { signal })`
     from `corten/read` asks it with `Accept: application/json` and resolves to `data`, typed as
     `T` by that declaration. The read is a `fetch` in the default cache mode, so the
     browser's HTTP cache does for it what it does for any `GET`: an answer it kept is asked about
-    with its weak `ETag` and an unchanged one is a 304 with no body, and a `Public` route's
+    with its weak `ETag` and an unchanged one is a 304 with no body (while nothing else fetched
+    that URL in between: the browser keeps one answer per URL, so the page fetched there again
+    replaces the data's and the next read gets the whole answer), and a `Public` route's
     `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
     from answering it. A redirect is not followed (`redirect: "error"`): what answers before the
     handler or replaces its answer (middleware sending a signed-out visitor to sign in) is not
@@ -3981,7 +3988,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 577 bytes, 394 with gzip and 327 with brotli,
+    `<link rel="modulepreload">`). The module is 608 bytes, 414 with gzip and 360 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -4001,7 +4008,8 @@ rules something out.
     `read` in the runtime itself (every user would download it to help the pages that read).
 
     Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
-    at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each; a
+    at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
+    module's again once it cancels a refused answer's body, 608, 414 and 360; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -4018,10 +4026,11 @@ rules something out.
     map, so its pages pay nothing; `data`'s type comes from the route's `data = T` and the
     declaration of `T`, so no script writes it, and a route whose handler can answer without a
     `T` does not compile, through `req.page`, a redirect or a patch-making method, which the
-    `compile_fail` doctests on `Req::screen` and `PatchingKind` show; what middleware answers or
-    a handler replaces through `DerefMut` is not checked, which is why a read follows no
-    redirect); value (a rich screen in the browser is as
-    possible as one the server draws, and only the apps that read pay for it, README Value 1;
+    `compile_fail` doctests on `Req::screen` and `PatchingKind` show, and mounted again by hand
+    with such a handler the app is not built, which the tests on a hand mount show; what
+    middleware answers or a handler replaces through `DerefMut` is not checked, which is why a
+    read follows no redirect); value (a rich screen in the browser is as possible as one the
+    server draws, and only the apps that read pay for it, README Value 1;
     types at the seam come from Rust, Value 4; one way to a screen's data, the route that answers
     it, with no second endpoint, Values 5 and 6).
 
@@ -4030,10 +4039,13 @@ rules something out.
     data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would
     pay (its Revisit when); Chromium or Firefox stops revalidating a read it kept, which the 304
     rests on; a `Req` method other than `req.screen` comes to answer as `Screen<T>`; or a
-    `req.screen` page's instructions a request move by more than 1%.
+    `req.screen` page's instructions a request move by more than 1%; or the Rust floor reaches a
+    version that compares a `TypeId` in a `const`, when a hand mount's check can move from
+    startup to the compiler.
 
     Last checked: 2026-11-15, the sizes, the instruction counts and the import-map entry on
-    `dea1788d2` and `4eb3d62d1`; 2026-11-15, the smoke's read checks on `4eb3d62d1` in Chromium
+    `dea1788d2` and `4eb3d62d1`, and the module's size and the hand mount's check on the change
+    that added it; 2026-11-15, the smoke's read checks on `4eb3d62d1` in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules

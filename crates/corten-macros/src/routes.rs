@@ -439,6 +439,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         if route.patches.is_some() {
             methods = q("::corten::Methods::__patches(__A0)", &[methods]);
         }
+        // `data = SetListing`: likewise, the methods answer a screen of it, as its `get` does.
+        if let Some(data) = &route.data {
+            methods = q("::corten::Methods::__screen::<__A1>(__A0)", &[methods, data.clone()]);
+        }
         // An unstaged route is added apart from the others, in an area's or API's module too: the
         // app serves it outside the stages, its host check aside.
         let template = if route.unstaged.is_some() {
@@ -504,7 +508,12 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
             feeds.extend(q(
                 "#[automatically_derived]
-                impl ::corten::route::__private::ScreenData<__A1> for __A0 {}",
+                impl ::corten::route::__private::ScreenData<__A1> for __A0 {}
+                #[automatically_derived]
+                impl ::corten::route::__private::RouteData for __A0 {
+                    const DATA: ::core::option::Option<fn() -> ::core::any::TypeId> =
+                        ::core::option::Option::Some(::core::any::TypeId::of::<__A1> as fn() -> ::core::any::TypeId);
+                }",
                 &[ty, data.clone()],
             ));
         }
@@ -1315,6 +1324,21 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             }
         }
     }
+    // A screen's data is one answer of its `get`: `req.screen`'s, not a patch the runtime
+    // applies nor a feed's rows, so a route says `data` alone of the three.
+    if let Some(data) = &serves.data {
+        if let Some(patches) = serves.patches {
+            return err(patches, format!("data says the get of \"{path}\" answers a screen with its data, and patches that it answers the runtime's read with a patch: a route is one or the other, so say data or patches, not both"));
+        }
+        if let Some(rows) = &serves.rows {
+            let at = rows
+                .clone()
+                .into_iter()
+                .next()
+                .map_or_else(|| data.clone().into_iter().next().map_or(Span::call_site(), |t| t.span()), |t| t.span());
+            return err(at, format!("data says the get of \"{path}\" answers a screen with its data, and rows that it is a feed: a route is one or the other, so say data or rows, not both"));
+        }
+    }
     // An unstaged route is not a page, so a link to it is not fetched ahead of a click: it says
     // `prefetch = false` for `#[derive(Route)]`, and refuses a `prefetch` of its own.
     if serves.unstaged.is_some() {
@@ -1332,6 +1356,15 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     // `Area::route` and `Api::route` hold the `get` they are given to.
     if serves.patches.is_some() {
         let mut marked: Vec<TokenTree> = q(", __patches", &[]).into_iter().collect();
+        marked.append(&mut keep);
+        keep = marked;
+    }
+    // `data = SetListing`, right after the path, for `#[derive(Route)]`: the route's
+    // `Route::DATA`, which `Area::route` and `Api::route` compare the `get` they are given with.
+    // The type is named where the routes module is declared, in `RouteData` (below), since the
+    // module may be declared in a function, whose items no path from inside it reaches.
+    if serves.data.is_some() {
+        let mut marked: Vec<TokenTree> = q(", __data", &[]).into_iter().collect();
         marked.append(&mut keep);
         keep = marked;
     }

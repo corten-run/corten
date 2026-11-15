@@ -1321,6 +1321,13 @@ pub trait Route {
     #[doc(hidden)]
     const PATCHES: bool = false;
 
+    /// The type of the data the route says its screen answers (`data = SetListing`) in its routes
+    /// module, which tells `#[derive(Route)]` so: [`crate::Area::route`] and [`crate::Api::route`]
+    /// then take it only with a `get` handler that answers a screen of that data
+    /// ([`crate::Screen`]), checked when the app is built. Not a public API.
+    #[doc(hidden)]
+    const DATA: Option<fn() -> std::any::TypeId> = None;
+
     /// Whether the runtime may fetch this URL ahead of a click (on a hover): `false` for a route
     /// declared `#[route("/..", prefetch = false)]`, a page costly to draw, so a link to it
     /// (`href={..}`, a nav's `{..req.nav(..)}` and `req.nav_of`, a `&dyn Href` prop) is written
@@ -1633,6 +1640,7 @@ impl<R: Route + ?Sized> Route for &R {
     const PATH: &'static str = R::PATH;
     const WRITTEN: &'static str = R::WRITTEN;
     const PATCHES: bool = R::PATCHES;
+    const DATA: Option<fn() -> std::any::TypeId> = R::DATA;
 
     fn write_href(&self, out: &mut String, html: bool) {
         (**self).write_href(out, html);
@@ -3737,6 +3745,14 @@ impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
     pub fn __patches(self) -> Methods<S, crate::Patches> {
         Methods(self.0, self.1, self.2, std::marker::PhantomData)
     }
+
+    /// Used by `#[corten::routes]` for a route that says `data = T`, once it has checked the
+    /// route's `get` handler answers a screen of `T` (`__private::screen`), so the route's other
+    /// methods (`__merge`) keep its `get`'s kind. Not a public API.
+    #[doc(hidden)]
+    pub fn __screen<T: ?Sized + 'static>(self) -> Methods<S, crate::answer::Screen<T>> {
+        Methods(self.0, self.1, self.2, std::marker::PhantomData)
+    }
 }
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
@@ -3755,8 +3771,10 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
 
 /// A route's handlers given by hand at `R` ([`crate::Area::route`], [`crate::Api::route`]) and
 /// by `#[corten::routes]` (`Routes::__route`): a route that says `patches` takes only a `get`
-/// that answers one (`K`, [`Methods`]), checked when the app is built. Its routes module checks
-/// its own `get` before this, with an error at the handler's name.
+/// that answers one (`K`, [`Methods`]), checked when the crate compiles, and one that says
+/// `data = T` only a `get` that answers a screen of `T`, checked when the app is built (a type's
+/// identity cannot be compared in a `const` on the Rust this crate supports). Its routes module
+/// checks its own `get` before this, with an error at the handler's name.
 #[inline]
 pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind>(_: &Methods<S, K>) {
     const {
@@ -3765,6 +3783,15 @@ pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind>(_
             "corten: the route named in mounted_with::<..> below says `patches`, and the handlers it is mounted with have no get that answers a patch (no get, or one that may answer the runtime's read with a page or a redirect): give it a get that returns HtmlResult<Patches> (req.patch_or), as its routes module does"
         )
     };
+    if let Some(data) = R::DATA {
+        if K::DATA.map(|answered| answered()) != Some(data()) {
+            panic!(
+                "corten: the route {} says `data`, and the handlers it is mounted with have no get that answers a screen of its data (their get answers as {}): give it a get that returns HtmlResult<corten::Screen<..>> of the type the route names, from req.screen, as its routes module does",
+                std::any::type_name::<R>(),
+                std::any::type_name::<K>()
+            );
+        }
+    }
 }
 
 /// The handler for `get` requests to a route, checked when the crate compiles; see [`Methods`],
@@ -4406,6 +4433,13 @@ pub mod __private {
         note = "a feed's route names its rows, #[route(\"/feed/levels\", get = levels, rows = Level)], and the script's parameter names the same type, @param {{FeedUrl<Level>}} feed"
     )]
     pub trait FeedRows<Row> {}
+
+    /// The type of a route's data (`data = SetListing`), written by its routes module where the
+    /// type is in scope, for the route's `Route::DATA`.
+    pub trait RouteData {
+        /// `Some(TypeId::of::<SetListing>)`.
+        const DATA: Option<fn() -> std::any::TypeId>;
+    }
 
     /// A route whose `get` answers a screen of `Data` (`data = SetListing`): what a script's
     /// `ScreenUrl<SetListing>` parameter takes.

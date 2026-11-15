@@ -192,7 +192,7 @@ fn Reader() -> impl Render {
     }
 }
 
-async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<Screen<Reading>> {
+async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<corten::Screen<Reading>> {
     if at.missing == Some(true) {
         return Err(Error::not_found());
     }

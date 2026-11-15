@@ -904,7 +904,7 @@ pub mod url {
     pub struct Set<'a> { pub set: &'a str }
 }
 
-async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
     let listing = SetListing::read(at.set).await?;
     req.screen(&listing, set_page(&req, &listing))
 }
@@ -935,17 +935,25 @@ The type goes from the route to the script, checked at each step, as a feed's ro
 must return `HtmlResult<Screen<SetListing>>`, which only `req.screen` and `req.screen_with_status`
 make, given a `SetListing`: a handler that answers a page or a redirect, or a screen of other
 data, does not compile at its name in `#[route(..)]`, since a script's read would get no data or
-the wrong data. `SetListing` in `ScreenUrl<SetListing>` must be the declaration `corten::types`
-writes, `import("../types/app").SetListing`, written there or named by a `@typedef` of it as
-above; a type the script declares itself does not compile, since it would match by name whatever
-its shape. It stands for the Rust type of that name in the component's module, so the call takes
+the wrong data. `Screen` is `corten::Screen`, not in the prelude, so an app's own `Screen` type
+is not made ambiguous. `req.screen` takes the data, or a reference, `Box`, `Rc` or `Arc` of
+it, whose JSON is the data's (`req.screen(&listing, ..)` with `listing: &SetListing`). A route
+says `data` without `patches` or `rows`: its `get` answers a screen, not a patch or a feed.
+
+`SetListing` in `ScreenUrl<SetListing>` must come from the declarations `corten::types` writes:
+`import("../types/app").SetListing` written there, `/** @import { SetListing } from "../types/app" */`
+(at any depth, `../../types/app`), or a `@typedef` of either as above; a type the script
+declares itself does not compile, since it would match by name whatever its shape. Corten checks
+the path the name comes from, not the file: a file written by hand at that path is not detected,
+so leave `types/app.d.ts` to `corten::types`. It stands for the Rust type of that name in the component's module, so the call takes
 only a route whose data is that type; a route that names no data, or other data, does not compile
 at the call. In the script a plain string is not a
 `ScreenUrl`, so `read("/sets/m21")` fails `tsc`, and so does a field the data does not have. A
 route says `data` only in its routes module, which mounts it with the `get` it checked; the same
-route mounted again by hand (`Area::route`) is not checked against its data, as one with `rows`
-is not checked against its feed, since a route does not carry its data's type for a mount to
-compare (it carries `patches` as a flag). A response a handler replaces through `DerefMut` or
+route mounted again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a
+screen of its data, and one that answers a page or other data stops the app when it is built
+(the check compares the two types' `TypeId`s, which the Rust version Corten supports cannot do
+while the crate compiles). A response a handler replaces through `DerefMut` or
 middleware answers instead is not checked either. The data must be a type without a borrowed lifetime (`SetListing`,
 not `SetListing<'a>`), since the handler's return type names it.
 
@@ -953,7 +961,9 @@ The read goes through the browser's HTTP cache. Corten tags a `200` it may be as
 with a weak `ETag` and sends it `private, no-cache` by default, so each read asks with the tag it
 kept and an unchanged answer is a `304` with no body; a `Public` route's `max-age` lets a read
 within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
-keeps a cached page from answering a read. A read rejects with a `ReadError` (from `corten/read`)
+keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
+while nothing else fetched that URL in between: once the page itself is fetched there again (a
+navigation back to it), the next read gets the whole answer. A read rejects with a `ReadError` (from `corten/read`)
 when the answer is not a success (`status` is its status, a 404 or a 503) or when there is none it
 can use (`status` 0, with the error as `cause`: offline, a redirect, or an answer that is not a
 screen's JSON), and with `signal`'s reason once it aborts. A redirect is not followed: middleware
@@ -962,12 +972,12 @@ longer needs is dropped when it leaves the page; the runtime reports a handler's
 so a handler whose element can leave while it reads catches the rejection and returns when
 `signal.aborted`, as `switchTo` does. The envelope is checked; the data is trusted as the route's own type, as a
 feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)). `read()` returns
-what the handler gives `req.screen`, and any script running with the user's cookie can read it,
-so give it only what the page itself may show that user.
+what the handler gives `req.screen`, and any script on this origin can read it with the user's
+cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (577 bytes, 394 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (608 bytes, 414 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

@@ -2634,6 +2634,109 @@ async fn opaque(
     part
 }
 
+/// A route that says `data = ShownListing` (#1399): its routes module mounts it with its `get`,
+/// and with a `post` beside it, whose merged methods keep the `get`'s kind.
+#[cfg(feature = "json")]
+#[crate::routes]
+mod url_screen {
+    #[route("/listing", get = listing, post = relist, data = ShownListing)]
+    pub struct Listing;
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::json::ToJson)]
+pub struct ShownListing {
+    name: &'static str,
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::json::ToJson)]
+pub struct OtherListing {
+    id: u32,
+}
+
+/// The listing's page, titled.
+#[cfg(feature = "json")]
+fn listing_page(name: &str) -> impl crate::Document + '_ {
+    html! { <html><head><title>"Listing"</title><Corten /></head><body><main>{name}</main></body></html> }
+}
+
+/// Given the data in an `Arc`, as an app that shares it would: its JSON is the listing's.
+#[cfg(feature = "json")]
+async fn listing(req: Req) -> HtmlResult<crate::Screen<ShownListing>> {
+    let shown = std::sync::Arc::new(ShownListing { name: "Ashen" });
+    req.screen(&shown, listing_page(shown.name))
+}
+
+#[cfg(feature = "json")]
+async fn relist(req: Req) -> HtmlResult {
+    req.redirect(&url_screen::Listing)
+}
+
+/// Given a reference to the data, as a helper that takes `&ShownListing` would.
+#[cfg(feature = "json")]
+async fn listing_by_ref(req: Req) -> HtmlResult<crate::Screen<ShownListing>> {
+    let shown = ShownListing { name: "Borrowed" };
+    let by_ref = &shown;
+    req.screen(&by_ref, listing_page(by_ref.name))
+}
+
+#[cfg(feature = "json")]
+async fn listing_page_only(req: Req) -> HtmlResult {
+    req.page(listing_page("Page"))
+}
+
+#[cfg(feature = "json")]
+async fn other_listing(req: Req) -> HtmlResult<crate::Screen<OtherListing>> {
+    req.screen(&OtherListing { id: 7 }, listing_page("Other"))
+}
+
+/// The area a route that says `data` is mounted again in, by hand.
+#[cfg(feature = "json")]
+#[derive(crate::Route)]
+#[route("/listing")]
+struct ListingArea;
+
+/// Its routes module mounts it, a `post` beside its `get`; a data client gets the listing's JSON,
+/// read from an `Arc` as from the listing itself; and mounted by hand with a `get` that answers
+/// a screen of the same data, given by reference, it is the same.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_route_that_says_data_answers_its_data_in_its_module_and_mounted_by_hand() {
+    let module = App::new(url_screen::router()).test();
+    let read = module.get(&url_screen::Listing).header(http::header::ACCEPT, "application/json").await;
+    assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Ashen"}}"#);
+    let by_hand = App::new(Routes::new())
+        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(listing_by_ref)))
+        .test();
+    let read = by_hand.get(&url_screen::Listing).header(http::header::ACCEPT, "application/json").await;
+    assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Borrowed"}}"#);
+}
+
+/// Mounted by hand (`Area::route`) with a `get` that answers a page, a route that says `data`
+/// would answer a script's read with no data: the app is not built.
+#[cfg(feature = "json")]
+#[test]
+#[should_panic(
+    expected = "says `data`, and the handlers it is mounted with have no get that answers a screen of its data (their get answers as corten::answer::AnyAnswer)"
+)]
+fn a_route_that_says_data_mounted_by_hand_with_a_page_is_refused() {
+    let _ = App::new(Routes::new())
+        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(listing_page_only)))
+        .router();
+}
+
+/// Nor with a `get` that answers a screen of other data, which the script's `ScreenUrl` would
+/// take for the route's.
+#[cfg(feature = "json")]
+#[test]
+#[should_panic(expected = "their get answers as corten::answer::Screen<corten::tests::OtherListing>")]
+fn a_route_that_says_data_mounted_by_hand_with_other_data_is_refused() {
+    let _ = App::new(Routes::new())
+        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(other_listing)))
+        .router();
+}
+
 /// `patch_or`, `invalid` and `invalid_with` answer `req.mode` as the handler leaves it, so a
 /// handler that sets it to `Mode::Document` answers the runtime's read of a route that says
 /// `patches` with the other side, here a redirect, and no patch: an escape

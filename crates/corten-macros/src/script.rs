@@ -512,6 +512,9 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
     // `@typedef {import("../types/app").SortBy} SortBy` and `@typedef {"a" | "b"} Mode`: a
     // handler parameter of that name is the type it names.
     let mut aliases: Vec<(String, String)> = Vec::new();
+    // `/** @import { SetListing } from "../types/app" */`: a name for a declaration
+    // `corten::types` writes, by the name it has there (local, declared).
+    let mut generated: Vec<(String, String)> = Vec::new();
     let mut imports: Vec<String> = Vec::new();
     let mut siblings: Vec<String> = Vec::new();
     let mut doc: Option<String> = None;
@@ -550,6 +553,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     "import typed events by name: /** @import { RowToggled } from \"corten/events\" */".into(),
                 ));
             }
+            generated.extend(jsdoc_generated_imports(&block));
             if let Some(names) = jsdoc_import(&block, "corten/events") {
                 for name in names {
                     let (class, local) =
@@ -719,10 +723,12 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             (ty.strip_prefix("ScreenUrl<").and_then(|t| t.strip_suffix('>')), param_type(&ty))
         {
             let inner = inner.trim();
-            return match generated_name(&resolve(inner)) {
+            let resolved = resolve(inner);
+            let imported = generated.iter().find(|(local, _)| *local == resolved).map(|(_, name)| name.clone());
+            return match generated_name(&resolved).or(imported) {
                 Some(name) => Param::Screen(name),
                 None => Param::Unreadable(format!(
-                    "ScreenUrl<{inner}>: a screen's data is the declaration corten::types writes for the route's data, import(\"../types/app\").Name, written there or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
+                    "ScreenUrl<{inner}>: a screen's data is the declaration corten::types writes for the route's data, import(\"../types/app\").Name, written there, imported from there (/** @import {{ Name }} from \"../types/app\" */) or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
                 )),
             };
         }
@@ -1742,6 +1748,33 @@ fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// Each name a JSDoc `@import { A, B as C } from "../types/app"` in a block brings in from the
+/// declarations `corten::types` writes (a path ending in `types/app`, `.js` or `.d.ts` too), as
+/// (local, declared): `("A", "A")`, `("C", "B")`.
+fn jsdoc_generated_imports(block: &str) -> Vec<(String, String)> {
+    let block = jsdoc_text(block);
+    let mut out = Vec::new();
+    for (at, _) in block.match_indices("@import") {
+        let Some(rest) = block[at + "@import".len()..].trim_start().strip_prefix('{') else { continue };
+        let Some((names, after)) = rest.split_once('}') else { continue };
+        let Some(from) = after.trim_start().strip_prefix("from").map(str::trim_start) else { continue };
+        let Some(quote) = from.chars().next().filter(|c| matches!(c, '"' | '\'')) else { continue };
+        let Some((path, _)) = from[1..].split_once(quote) else { continue };
+        let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
+        if !generated_path(path) {
+            continue;
+        }
+        for name in names.split(',').map(|n| n.split_whitespace().collect::<Vec<_>>()) {
+            match name.as_slice() {
+                [declared] => out.push((declared.to_string(), declared.to_string())),
+                [declared, "as", local] => out.push((local.to_string(), declared.to_string())),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Whether a block has a JSDoc namespace import of `module`, `@import * as name from "module"`,
 /// read one `@import` at a time, each with its own `from` (a namespace import of another module
 /// beside a named import of this one is not one).
@@ -2310,6 +2343,14 @@ function helper() {}
         )
         .unwrap();
         assert_eq!(handlers[0].params[0].1, Param::Screen("Listing".into()), "the Rust type an alias names");
+        // Imported by name from the declarations, at any depth, renamed or through a typedef.
+        let (handlers, _) = parse(
+            "/**\n * @import { Listing, Order as Bought } from \"../types/app\"\n * @import { Step } from '../../types/app.js'\n */\n/** @typedef {Bought} Shown */\n/** @param {ScreenUrl<Listing>} a @param {ScreenUrl<Bought>} b @param {ScreenUrl<Step>} c @param {ScreenUrl<Shown>} d */\nexport function f(a, b, c, d) {}",
+        )
+        .unwrap();
+        for (n, name) in ["Listing", "Order", "Step", "Order"].into_iter().enumerate() {
+            assert_eq!(handlers[0].params[n].1, Param::Screen(name.into()), "parameter {n}");
+        }
         for ty in ["ScreenUrl<Listing[]>", "ScreenUrl<Listing | null>", "ScreenUrl<>"] {
             let why = refusal(&format!("/** @param {{{ty}}} a */\nexport function f(a) {{}}"));
             assert!(why.contains("a screen's data is one named type"), "{ty}: {why}");
@@ -2320,6 +2361,9 @@ function helper() {}
             "/** @typedef {{ name: string }} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
             "/** @typedef {import(\"./listing.js\").Listing} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
             "/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Listing } from \"./listing.js\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Listing } from \"../mytypes/app\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Order } from \"../types/app\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
         ] {
             let why = refusal(source);
             assert!(why.contains("the declaration corten::types writes for the route's data"), "{source}: {why}");

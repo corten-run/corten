@@ -282,7 +282,7 @@ argument instead (no request).
 
 ```rust
 // In the routes module: #[route("/sets/{set}", get = set, data = SetListing)] pub struct Set<'a> { pub set: &'a str }
-async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
     let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
     req.screen(&listing, set_page(&req, &listing))
 }
@@ -295,7 +295,8 @@ import { read } from "corten/read";
 /** @typedef {import("../types/app").SetListing} SetListing */
 
 // ScreenUrl<SetListing> takes only a route with data = SetListing (checked when the crate compiles);
-// SetListing must be the generated declaration (above), never a @typedef of the script's own.
+// SetListing must come from ../types/app (the typedef above, or @import { SetListing } from it),
+// never a type of the script's own; leave types/app.d.ts to corten::types (a hand-written one is not caught).
 // read() asks it with Accept: application/json through the HTTP cache (a 304 when unchanged).
 /** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
 export async function switchTo(rows, set, signal) {
@@ -312,7 +313,9 @@ It rejects with a `ReadError` (`status` the answer's, or 0 with a `cause` when t
 could use, a redirect included: it follows none) and with `signal`'s reason once it aborts; a
 handler whose element can leave while it reads catches that and returns when `signal.aborted`.
 Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
-the handler gives `req.screen` to any script with the user's cookie: only what the page may show.
+the handler gives `req.screen` to any script on this origin, with the user's cookie: only what the
+page may show. The browser keeps one answer per URL, so a read after the page itself was fetched
+again there gets the whole answer, not a 304.
 A patch-making method (`req.patch`, `patch_or`, `invalid`) does not compile in a handler that
 returns `HtmlResult<Screen<T>>`.
 

@@ -500,8 +500,9 @@ impl Assets {
             if module_imports.values().any(|imports| imports.contains(module)) {
                 sources.push((own_url, Bytes::from_static(source.as_bytes())));
             } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
-                // The rule corten-macros applies to a listed script: any quoted or backticked name.
-                u.ends_with(".js") && names(body, specifier)
+                // The rule corten-macros applies to a listed script: any quoted or backticked name
+                // outside a comment, so a JSDoc `@import`, which only types the script, is none.
+                u.ends_with(".js") && names(&without_comments(body), specifier)
             }) {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -1136,12 +1137,55 @@ fn undeclared_properties(
 
 /// Whether a script's source names `module` quoted or backticked (`"corten/views"`): the rule
 /// corten-macros applies to a listed script's imports, so a dynamic `import()` counts too.
-/// Corten-macros strips a listed script's comments first; a static file is read as written.
+/// Corten-macros strips a listed script's comments first; a static file is read as written, or
+/// without its comments ([`without_comments`]) where a name in one would refuse the app.
 fn names(body: &[u8], module: &str) -> bool {
     let len = module.len() + 2;
     body.windows(len).any(|w| {
         matches!((w[0], w[len - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'`', b'`')) && &w[1..len - 1] == module.as_bytes()
     })
+}
+
+/// A static script's source without its comments, for [`names`]: a module named in a comment (a
+/// JSDoc `@import`, which only types the script) is not imported. Strings and template literals
+/// are kept as written. A regular expression is read as code, so a quote, `//` or `/*` inside
+/// one (`/"/`, `/a\/*/`) is misread: a comment after it may stay, or code after it be taken
+/// for a comment. Corten-macros reads a listed script's regular expressions; a static helper is
+/// only scanned here for the names of Corten's own modules.
+fn without_comments(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len());
+    let mut at = 0;
+    while at < body.len() {
+        match body[at] {
+            quote @ (b'"' | b'\'' | b'`') => {
+                let start = at;
+                at += 1;
+                while at < body.len() && body[at] != quote {
+                    match body[at] {
+                        b'\\' => at += 1,
+                        // A quoted string ends at its line; a template literal does not.
+                        b'\n' if quote != b'`' => break,
+                        _ => {}
+                    }
+                    at += 1;
+                }
+                at = (at + 1).min(body.len());
+                out.extend_from_slice(&body[start..at]);
+            }
+            b'/' if body.get(at + 1) == Some(&b'/') => {
+                at = body[at..].iter().position(|&b| b == b'\n').map_or(body.len(), |n| at + n);
+            }
+            b'/' if body.get(at + 1) == Some(&b'*') => {
+                at = body[at + 2..].windows(2).position(|w| w == b"*/").map_or(body.len(), |n| at + 2 + n + 2);
+                out.push(b' ');
+            }
+            b => {
+                out.push(b);
+                at += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Where a section's stylesheet is served: `sections/admin.css` for `/admin`, and
@@ -1666,6 +1710,23 @@ mod tests {
         let importer = vec![("scripts/app.js".to_string(), Bytes::from_static(b"import { read } from 'corten/read';"))];
         let error = Assets::build_with(importer, &[PLAIN], &[], "/assets").err().expect("nothing serves corten/read");
         assert!(error.to_string().contains("scripts/app.js imports corten/read"), "{error}");
+        // A static helper that names it only in a comment (a JSDoc `@import` of its types) imports
+        // nothing, and the app starts; one that imports it after a comment, or after a string with
+        // `//` or `/*` in it, does not.
+        let typed = vec![(
+            "scripts/helper.js".to_string(),
+            Bytes::from_static(b"/** @import { ScreenUrl } from \"corten/read\" */\n// import(\"corten/read\")\n/* 'corten/read' */ export const x = 1;\n"),
+        )];
+        assert!(Assets::build_with(typed, &[PLAIN], &[], "/assets").is_ok(), "a JSDoc import types the helper only");
+        for source in [
+            &b"/** @import { ScreenUrl } from \"corten/read\" */\nimport { read } from \"corten/read\";"[..],
+            b"const u = \"https://a/*b\"; const r = import(`corten/read`); // c",
+            b"const g = 'src/**/*.js'; import('corten/read');",
+        ] {
+            let helper = vec![("scripts/helper.js".to_string(), Bytes::copy_from_slice(source))];
+            let error = Assets::build_with(helper, &[PLAIN], &[], "/assets").err().expect("an import in code is one");
+            assert!(error.to_string().contains("scripts/helper.js imports corten/read"), "{error}");
+        }
         let taken = vec![("scripts/corten-read.js".to_string(), Bytes::from_static(b"export const read = 1;"))];
         let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
         assert!(error.to_string().contains("Corten's read module"), "{error}");

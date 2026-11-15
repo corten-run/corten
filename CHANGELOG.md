@@ -7,16 +7,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - A script reads a screen's data typed, from the route that answers it, with `read(url, { signal })`
   from the new `corten/read` module: a route that says `data = T` in `#[route(..)]` (its `get`
-  handler returning `HtmlResult<Screen<T>>`, which only `req.screen` given a `T` makes) is a
-  handler argument of type `ScreenUrl<T>`, and `read()` asks it with `Accept: application/json`
-  through the browser's HTTP cache (an unchanged answer is a 304) and resolves to its `data`, typed
-  as `T` from `corten::types` (the parameter must name that declaration,
-  `import("../types/app").T`, or a `@typedef` of it; a type the script declares itself does not
-  compile). It follows no redirect, and rejects with a `ReadError` (`status` the answer's, or 0
+  handler returning `HtmlResult<corten::Screen<T>>`, which only `req.screen` given a `T`, or a
+  reference, `Box`, `Rc` or `Arc` of one, makes) is a handler argument of type `ScreenUrl<T>`,
+  and `read()` asks it with `Accept: application/json` through the browser's HTTP cache (an
+  unchanged answer is a 304) and resolves to its `data`, typed as `T` from `corten::types` (the
+  parameter must name that declaration, `import("../types/app").T`, an
+  `@import { T } from "../types/app"` or a `@typedef` of either; a type the script declares
+  itself does not compile). A route says `data` without `patches` or `rows`, and the same route
+  mounted again by hand (`Area::route`, `Api::route`) with a `get` that answers a page or other
+  data stops the app when it is built. It follows no redirect, and rejects with a `ReadError` (`status` the answer's, or 0
   with a `cause`, a redirect included) and with `signal`'s reason once it aborts. `req.patch`,
   `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as `AnyAnswer` or
   `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
-  `HtmlResult<Screen<T>>` cannot answer through them. The module (577 bytes, 394 with gzip, 327
+  `HtmlResult<Screen<T>>` cannot answer through them. The module (608 bytes, 414 with gzip, 360
   with brotli) is served and preloaded only for apps whose scripts import it; the runtime is
   unchanged
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
@@ -25,7 +28,11 @@ Corten is pre-1.0, so any minor version may change the API.
   kind, `<For, Kind, T>`, so a call that names their types with a turbofish names three. Where
   `req.screen::<ForOne, _>(&data, doc)` was written, write
   `req.screen::<ForOne, corten::AnyAnswer, _>(&data, doc)` (or leave the types to the handler's
-  return type); calls without a turbofish are unchanged
+  return type); calls without a turbofish are unchanged, except a `req.screen(..)` given straight
+  to `Public::new` where no return type names the answer (a closure), which names the kind the
+  same way, `req.screen::<_, corten::AnyAnswer, _>(..)`. Code of an app's own that is generic over
+  an answer's kind and calls `req.patch`, `patch_with_status`, `patch_or`, `invalid` or
+  `invalid_with` bounds it `K: corten::answer::PatchingKind`, which they now require
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
 - Distinguish benchmark provider census refusal predicates with closed diagnostic
