@@ -3251,7 +3251,15 @@ rules something out.
     both, the same bytes, and both compile to the same instructions (1,809 lines each, differing
     only in the mangled name of `data_ref`, which names the key's type), and on `9be6fe5dc` against
     `1960d19f3`, which counts a key only against the render whose string it is written into, the
-    same counts and bytes and the same instructions to the line;
+    same counts and bytes and the same instructions to the line, and on `49f9751e3`, which counts no
+    key written into a `<textarea>` or the other elements read as text, against `8fbe60a59`, with a
+    `<textarea>` added to `KeyedMarkup` on both: 131,623,718 and 7,727,108 instructions in every run
+    of both, 23,408 and 2,976 bytes, and the same instructions to the line (1,834 lines each);
+    2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), an
+    element written in a `<textarea>`, an HTML `<title>` (in `<head>`, in the body, in an `<svg>`'s
+    `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` or a `<noframes>` is not found, and one in
+    an `<svg>`'s own `<title>` is, as the tests beside `TextOnlyKeys`, `NoteKeys` and `SvgTitleKeys`
+    and the `compile_fail` examples of `html!` hold `html!` and the check to;
     2026-11-14, a key a view writes into a string of its own (`html! { .. }.to_html()` and a
     `render` into a string of the app's as an attribute's value, and a component's
     `children.to_html()`) not counted against its component's render, and two equal keys in that
