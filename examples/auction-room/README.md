@@ -31,6 +31,14 @@ docker build -f examples/auction-room/Dockerfile -t corten-auction-room .
 docker run --rm -p 3000:8080 -e HOUSE_KEY=<a long random key> -v auction-data:/app/data corten-auction-room
 ```
 
+SQLx's `sqlite` feature builds its own SQLite into the server, a release affected by
+[RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html): a database file and
+its `-wal` file crafted by someone else can make queries return stale memory. This example opens
+only the database file its operator names in `DATABASE_URL`, never one a user supplies, so it is
+not exposed. Do not copy it to open a database a user
+uploads or another party could write; [Choice 51](../../docs/design.md#choice-msrv) records the
+exception and when it is revisited.
+
 Open it in two browsers (or a private window), sign in under two names, and bid against yourself.
 Sign in with the house key (`HOUSE_KEY`: set your own long random one so you know it) to end a lot
 early from the house's page. The house runs the auction, so it does

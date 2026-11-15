@@ -12,4 +12,5 @@ corten-ui = { path = "../../crates/corten-ui" }
 futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 # SQLite, built in (sqlx's `sqlite` feature bundles it), so the example needs no database server.
+# Its RUSTSEC-2026-0459 exception, and when it is revisited: docs/design.md#choice-msrv.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
