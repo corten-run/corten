@@ -19,7 +19,7 @@ Corten is pre-1.0, so any minor version may change the API.
   shows it already). An app with such a stream moves to this shape: drop the stream's route and
   handler, put `ReadAgain::now` where the `<corten-live>` was, and key the link's CSS on
   `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The runtime grows by
-  337 bytes gzipped (15,341 at `4dad0f513` to 15,678 at `1ed678c9c`). Choices 7 and 44 are
+  352 bytes gzipped (15,341 at `4dad0f513` to 15,693 at `4e03e933e`). Choices 7 and 44 are
   rewritten: declarative shadow DOM places a part streamed later without a script, but only with
   the page around it in a shadow root, where the document's id lookups, fragment links and
   stylesheets do not reach it
