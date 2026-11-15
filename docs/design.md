@@ -4079,8 +4079,8 @@ rules something out.
     draft) was not chosen either: a reload would show another scope than the screen did, the error
     the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 1,172 bytes larger raw, 368 with gzip (15,341 to 15,709) and
-    294 with brotli (13,846 to 14,140), paid once a release by every user. A GET `data-patch`
+    What it costs: the runtime is 1,163 bytes larger raw, 358 with gzip (15,341 to 15,699) and
+    291 with brotli (13,846 to 14,137), paid once a release by every user. A GET `data-patch`
     submit reads one attribute, a marked one's answer pushes an entry and forgets the entries it
     dropped, and a traversal looks two keys up in a set. Nothing changes on the server: `html!`'s
     output and the request path are as they were, and the check that refuses a misplaced mark runs
@@ -4114,8 +4114,8 @@ rules something out.
     back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
     mark goes.
 
-    Last checked: 2026-11-15, the runtime's size on `863085280` against `c9ed56785`; 2026-11-15,
-    the smoke's fourteen checks of the mark passing with `863085280`'s runtime in Chromium
+    Last checked: 2026-11-15, the runtime's size on `01dc604c3` against `c9ed56785`; 2026-11-15,
+    the smoke's fourteen checks of the mark passing with `01dc604c3`'s runtime in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
     path's count on `307d00bca` against `c9ed56785`.
