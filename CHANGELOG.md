@@ -6,15 +6,17 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
-  `--control-height` tall on one line, as tall as a button or field beside them, so a theme that
-  sets it to 2.75rem gives them a 44 px touch target too; before, the label stayed 20 px whatever
-  the theme said. A label that wraps grows, its box on the first line's middle. With the kit's
-  theme a `Checkboxes` or `RadioGroup` row is now 2.25rem tall, so its choices are 3rem apart
-  (2rem before), and the first choice's text .5rem further under the legend; a theme that wants
-  them closer sets `--choice-list-gap` lower. An app with a copied `checkbox.css`,
+  at least `--control-height` tall, as a button or field beside them is, so a theme that sets it to
+  2.75rem gives them a 44 px touch target too; before, the label stayed 20 px whatever the theme
+  said. A label that wraps grows, its box on the first line's middle. The label is border-box, so a
+  `min-height: var(--control-height)` an app gave it as a workaround adds nothing and can go. The
+  kit theme's `--choice-list-gap` drops from .75rem to .25rem, so with the kit's theme a
+  `Checkboxes` or `RadioGroup` row is 2.25rem tall and its choices are 2.5rem apart (2rem before),
+  the first choice's text .5rem further under the legend. An app with a copied `checkbox.css`,
   `radio_group.css` or `switch.css` takes the change with `corten ui add --force`, or `--merge`
-  for an edited copy (`corten ui diff` shows which); a rule of its own that gave the label a
-  `min-height` can go
+  for an edited copy (`corten ui diff` shows which). A theme `corten ui init` wrote before keeps its
+  own `choice-list-gap` of .75rem (choices 3rem apart once the copies are updated); set it to
+  .25rem in `tokens/ui.tokens.json` to match the kit
   ([#1388 Kit Checkbox, Radio and Switch ignore --control-height: their label, the whole target, stays 20 px when a theme makes every other control 44 px](https://github.com/corten-run/corten/issues/1388)).
 
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and

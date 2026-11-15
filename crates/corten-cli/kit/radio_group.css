@@ -1,10 +1,10 @@
 /* corten ui {{version}}: radio_group */
 .group { display: grid; gap: var(--choice-list-gap); margin: 0; padding: 0; border: 0; min-width: 0; }
 .group > legend { margin-bottom: var(--choice-list-legend-gap); padding: 0; font-size: .875rem; font-weight: 500; }
-/* The label is the whole target: its block padding is what one line leaves of --control-height, so
-   one line is a control's height (a 44 px touch target under a theme that sets it so), and the circle
-   sits on the first line's middle when the label wraps. */
-.radio { display: inline-flex; align-items: start; gap: .5rem; padding-block: max(0px, (var(--control-height) - 1.25rem) / 2); font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
+/* The label is the whole target, drawn as checkbox.css draws a checkbox's: at least --control-height,
+   border-box, its block padding what one line leaves of that height, the circle on the first line's
+   middle when the label wraps. */
+.radio { display: inline-flex; align-items: start; gap: .5rem; box-sizing: border-box; min-height: var(--control-height); padding-block: max(0px, (var(--control-height) - 1.25rem) / 2); font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .radio > input {
   appearance: none; flex: none; display: grid; place-content: center; margin: .125rem 0;
   width: 1rem; height: 1rem; border: 1px solid var(--input); border-radius: 50%;

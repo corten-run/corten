@@ -188,7 +188,10 @@ const tabTypeIsTheThemes = (t) =>
 // the labels `selector` finds: each one's height in rem with the kit's theme and with a theme that
 // sets 2.75rem, and under that theme how far the box's middle is from the label's (px), and a copy
 // whose label wraps: its height in rem, and how far its box is from where the one-line label has it,
-// from the label's top (px).
+// from the label's top (px). Then a dense theme's (1rem, shorter than a line, so the label is its line,
+// 1.25rem), and the kit's height under an app that still gives the label `min-height:
+// var(--control-height)` (the workaround before #1388) with no border-box reset, as `corten new`'s
+// app has none: its height in rem and how far the box's middle is from the label's (px).
 const choiceTargets = (/** @type {string} */ selector) => {
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
   const labels = /** @type {HTMLElement[]} */ (Array.from(document.querySelectorAll(selector)));
@@ -215,17 +218,30 @@ const choiceTargets = (/** @type {string} */ selector) => {
     copy.remove();
     return { height: t.height / rem, off: b.top - t.top - (one.top - oneLabel.top) };
   });
+  theme.replaceSync(":root { --control-height: 1rem; }");
+  const dense = heights();
+  // The app's own rule names the label's class, one class as the kit's does, in a later sheet.
+  const classes = [...new Set(labels.map((l) => l.classList[0]))];
+  // A label's own box as an app without the gallery's reset has it (content-box); its input keeps the
+  // browser's border-box, which the reset only repeats.
+  theme.replaceSync(`label { box-sizing: content-box } ${classes.map((c) => `.${c}`).join(", ")} { min-height: var(--control-height) }`);
+  const leftover = labels.map((l) => {
+    const [b, t] = [box(l), l.getBoundingClientRect()];
+    return { height: t.height / rem, off: (b.top + b.bottom) / 2 - (t.top + t.bottom) / 2 };
+  });
   document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
-  return { kit, touch, centered, wraps };
+  return { kit, touch, centered, wraps, dense, leftover };
 };
-/** @param {{ kit: number[], touch: number[], centered: number[], wraps: { height: number, off: number }[] }} t */
+/** @param {{ kit: number[], touch: number[], centered: number[], wraps: { height: number, off: number }[], dense: number[], leftover: { height: number, off: number }[] }} t */
 const choiceTargetsFit = (t) =>
   t.kit.length > 0 &&
   t.kit.every((h) => Math.abs(h - 2.25) < 0.02) &&
   t.touch.every((h) => Math.abs(h - 2.75) < 0.02) &&
   t.centered.every((off) => Math.abs(off) <= 0.5) &&
   // Two lines or more under the 2.75rem theme's padding: 1.25rem each, and .75rem around them.
-  t.wraps.every((w) => w.height >= 3.99 && Math.abs(w.off) <= 0.5);
+  t.wraps.every((w) => w.height >= 3.99 && Math.abs(w.off) <= 0.5) &&
+  t.dense.every((h) => Math.abs(h - 1.25) < 0.02) &&
+  t.leftover.every((l) => Math.abs(l.height - 2.25) < 0.02 && Math.abs(l.off) <= 0.5);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -1453,7 +1469,7 @@ async function run(browser) {
     JSON.stringify(kitLooks),
   );
   // Checkboxes and RadioGroup space their choices and their legend from two theme tokens
-  // (choice-list-gap, choice-list-legend-gap; .75rem each), so a theme that sets them moves both groups.
+  // (choice-list-gap, choice-list-legend-gap; .25rem and .75rem), so a theme that sets them moves both groups.
   const choiceSpacing = await page.evaluate(() => {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const measure = () =>
@@ -1472,12 +1488,12 @@ async function run(browser) {
   });
   check(
     "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
-    choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
+    choiceSpacing.kit.every((s) => s === "0.25 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
     JSON.stringify(choiceSpacing),
   );
   const boxTargets = await page.evaluate(choiceTargets, "label[class*='checkbox__checkbox'], label[class*='radio-group__radio']");
   check(
-    "Checkbox and Radio: the label, the whole target, is --control-height on one line (the kit's and a 44 px theme's), its box on the first line's middle when it wraps",
+    "Checkbox and Radio: the label, the whole target, is --control-height on one line (the kit's, a 44 px theme's, a dense theme's one line), its box on the first line's middle when it wraps, and an app's own min-height on it adds nothing",
     boxTargets.kit.length === 5 && choiceTargetsFit(boxTargets),
     JSON.stringify(boxTargets),
   );
@@ -4832,7 +4848,7 @@ async function run(browser) {
   );
   const switchTargets = await orders.evaluate(choiceTargets, "label[class*='switch__switch']");
   check(
-    "Switch: the label, the whole target, is --control-height on one line (the kit's and a 44 px theme's), the switch on the first line's middle when it wraps",
+    "Switch: the label, the whole target, is --control-height on one line (the kit's, a 44 px theme's, a dense theme's one line), the switch on the first line's middle when it wraps, and an app's own min-height on it adds nothing",
     switchTargets.kit.length === 1 && choiceTargetsFit(switchTargets),
     JSON.stringify(switchTargets),
   );

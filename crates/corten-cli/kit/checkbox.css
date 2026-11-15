@@ -1,10 +1,11 @@
 /* corten ui {{version}}: checkbox */
 /* A checkbox with role="switch" is a switch to a screen reader, so it is left to the browser's own
    look here: it belongs in the Switch component. */
-/* The label is the whole target: its block padding is what one line leaves of --control-height, so
-   one line is a control's height (a 44 px touch target under a theme that sets it so), and the box
-   sits on the first line's middle when the label wraps. */
-.checkbox { display: inline-flex; align-items: start; gap: .5rem; padding-block: max(0px, (var(--control-height) - 1.25rem) / 2); font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
+/* The label is the whole target, as tall as a button: at least --control-height (a 44 px touch
+   target under a theme that sets it so), border-box so an app's own min-height adds nothing, and its
+   block padding what one line leaves of that height. The box sits on the first line's middle when
+   the label wraps. */
+.checkbox { display: inline-flex; align-items: start; gap: .5rem; box-sizing: border-box; min-height: var(--control-height); padding-block: max(0px, (var(--control-height) - 1.25rem) / 2); font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .checkbox > input:not([role="switch"]) {
   appearance: none; flex: none; display: grid; place-content: center; margin: .125rem 0;
   width: 1rem; height: 1rem; border: 1px solid var(--input); border-radius: 4px;

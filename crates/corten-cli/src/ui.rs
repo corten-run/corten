@@ -2772,7 +2772,7 @@ mod tests {
         // The two choice lists each read the same two sizes, named once for both; a radio's label,
         // like a checkbox's and a switch's, is a control's height too (#1388).
         let both = [
-            r#""choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+            r#""choice-list-gap": { "$type": "dimension", "$value": { "value": 0.25, "unit": "rem" } }"#,
             r#""choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
         ];
         let height = r#""control-height": { "$type": "dimension", "$value": { "value": 2.25, "unit": "rem" } }"#;
