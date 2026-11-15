@@ -4549,6 +4549,65 @@ async function run(browser) {
       JSON.stringify(requested),
     );
     await sheet.evaluate(() => document.getElementById("smoke-wrap")?.remove());
+    // A submit that waits for a write: a form= button inside a dialog, pressed while the form's
+    // write is on its way, is sent once the write's answer is drawn. That answer moves the button
+    // outside the dialog, which the user closed meanwhile: where it was pressed is inside, so the
+    // waiting submit's answer keeps the dialog closed.
+    const queueAnswer = (/** @type {URL} */ url) => url.pathname === "/smoke/sheet/queued";
+    /** @type {() => void} */
+    let write_back = () => {};
+    let asked = false;
+    await sheet.route(queueAnswer, async (route) => {
+      const patch = (/** @type {string} */ body) => route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body });
+      if (route.request().postData()?.includes("act=ask")) {
+        asked = true;
+        return patch('<dialog id="smoke-queued" open><p>Asked</p></dialog>');
+      }
+      await new Promise((resolve) => (write_back = () => resolve(undefined)));
+      return patch('<span id="smoke-queue-in"></span><div id="smoke-queue-spot"><button form="smoke-queue" name="act" value="ask">Ask</button></div>');
+    });
+    await sheet.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML(
+          "beforeend",
+          __html(
+            '<form id="smoke-queue" method="post" action="/smoke/sheet/queued" data-patch><input name="v" value="1" aria-label="Queued"><button name="act" value="write">Write</button></form>' +
+              '<div id="smoke-queue-spot"></div><dialog id="smoke-queued"><p>Start</p><span id="smoke-queue-in"><button form="smoke-queue" name="act" value="ask">Ask</button></span></dialog>',
+          ),
+        ),
+    );
+    const wrote = sheet.waitForRequest((r) => queueAnswer(new URL(r.url())) && !!r.postData()?.includes("act=write"), { timeout: 5000 }).catch(() => null);
+    await sheet.getByRole("button", { name: "Write", exact: true }).click();
+    const writing = (await wrote) !== null;
+    await sheet.evaluate(() => {
+      const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-queued"));
+      dialog.showModal();
+      /** @type {any} */ (window).__queued = dialog;
+    });
+    await sheet.locator("#smoke-queued").getByRole("button", { name: "Ask", exact: true }).click();
+    await sheet.keyboard.press("Escape");
+    const queuedShut = await sheet
+      .waitForFunction(() => !(/** @type {HTMLDialogElement} */ (document.getElementById("smoke-queued")).open), undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    write_back();
+    await sheet.waitForFunction(() => document.getElementById("smoke-queued") !== /** @type {any} */ (window).__queued, undefined, { timeout: 5000 }).catch(() => {});
+    await sheet.unroute(queueAnswer);
+    const queued = await sheet.evaluate(() => {
+      const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-queued"));
+      return {
+        replaced: dialog !== /** @type {any} */ (window).__queued,
+        open: dialog.open,
+        text: dialog.querySelector("p")?.textContent,
+        moved: !!document.querySelector("#smoke-queue-spot button") && !dialog.querySelector("button"),
+      };
+    });
+    check(
+      "a submit from a form= button in a dialog that waited for the form's write keeps the dialog closed when the write's answer moved the button outside it",
+      writing && queuedShut && asked && queued.moved && queued.replaced && queued.text === "Asked" && !queued.open,
+      JSON.stringify({ writing, queuedShut, asked, ...queued }),
+    );
+    await sheet.evaluate(() => ["smoke-queue", "smoke-queue-spot", "smoke-queued"].forEach((id) => document.getElementById(id)?.remove()));
     await sheet.close();
   }
   await page.focus("#kept button");

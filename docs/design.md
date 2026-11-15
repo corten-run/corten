@@ -3773,8 +3773,10 @@ rules something out.
     `on:connect={corten_ui::dialog::modal(target)}` does when it joins the page (the issue's
     sheet does). The control that sent it is the submitter; when there is none (Enter in a form
     without a button, a script's `requestSubmit()`), the focused control if it is one of the
-    form's, else the form, so Enter in a field of a dialog that a form wraps is a press inside it.
-    A button inside a dialog that names a form outside it (`form=`) is a press inside the dialog.
+    form's, else the form, so Enter in a field of a dialog that a form with no submit button wraps
+    is a press inside it. With a submit button outside the dialog, Enter goes through that button,
+    which the browser makes the submitter, so it is a press outside. A button inside a dialog that
+    names a form outside it (`form=`) is a press inside the dialog.
     It only opens: one the user opened stays open whatever the answer draws, as the rule above
     keeps it, since the issue asks for what the user closed to be asked for again, not for an
     answer to close what they opened. Outside is where the control was when it was pressed: the
@@ -3785,7 +3787,9 @@ rules something out.
     the answer saw a removed button as outside every element and opened a dialog the user had
     closed). A press inside the element (a refused form in a dialog
     the user closed with Escape while it was on its way), the elements inside the one replaced,
-    and every redraw nobody asked for keep the user's. A dialog the user left open as the server
+    and every redraw nobody asked for keep the user's. A `data-patch` submit answered with a whole
+    page, not a patch, redraws `<main>` from the new markup, its dialogs and `<details>` as drawn,
+    as on main, while the layout's elements outside `<main>` keep the user's. A dialog the user left open as the server
     drew it, which new markup draws closed, is replaced closed with no `close` event and no focus
     returned to its opener, as on main; doing that as the browser does is
     [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455). A popover has no markup that shows it, so no answer can ask for one shown
@@ -3850,7 +3854,9 @@ rules something out.
     submit with no submitter read from focus, and `within` carried by a submit that waits for a
     write: the smoke's Enter and `requestSubmit()` checks failing on `fef11cb38` and passing with
     them, every open-state check passing, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2,
-    and the runtime's size against `8f11b7b35`.
+    and the runtime's size against `8f11b7b35`; 2026-11-14, the smoke's check of a submit that
+    waited for a write, its button moved outside the dialog by the write's answer, failing on
+    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
 ## Rules
 
