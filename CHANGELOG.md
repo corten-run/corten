@@ -23,6 +23,10 @@ Corten is pre-1.0, so any minor version may change the API.
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.
 
+- Validate Django marketplace fixtures at startup and fetched records before every
+  JSON, page or write response, retaining complete numeric schema and requested-ID
+  checks without repeating validation on fixture reads or successful POSTs.
+
 - Permit one fresh complete benchmark provider census after a transient count or
   total mismatch, within the original deadline and global request limit. Partial
   results remain rejected; HTTP errors and mutations are never retried.
