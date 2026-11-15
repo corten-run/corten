@@ -4342,22 +4342,25 @@ async function run(browser) {
   // A part whose read the server answers with an error page is marked failed, its link shown; one
   // the server redirects (`corten-location`, a sign-in) takes the page there, as a form's would (#1400).
   {
-    await page.route("**/smoke/broken-part", (route) =>
+    // In a page of its own: the browser logs the 500, which the main page's console check counts.
+    const broken = await (await browser.newContext()).newPage();
+    await broken.route("**/smoke/broken-part", (route) =>
       route.fulfill({ status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<!doctype html><title>Error</title><main><p>Something went wrong</p></main>" }),
     );
-    await page.evaluate(async () => {
+    await broken.goto(`${base}/`);
+    await broken.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="broken-1"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<div id="broken-1"><p id="broken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/broken-part" data-part="broken-a"></template></div>'));
     });
-    await page.waitForSelector("#broken-a[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+    await broken.waitForSelector("#broken-a[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
     check(
       "a part whose read gets an error page is marked failed, not left busy",
-      (await page.$("#broken-a[data-corten-read-failed]:not([aria-busy])")) !== null && (await page.textContent("#broken-a")) === "Waiting",
-      `${await page.evaluate(() => document.getElementById("broken-1")?.innerHTML)}`,
+      (await broken.$("#broken-a[data-corten-read-failed]:not([aria-busy])")) !== null && (await broken.textContent("#broken-a")) === "Waiting",
+      `${await broken.evaluate(() => document.getElementById("broken-1")?.innerHTML)}`,
     );
-    await page.evaluate(() => document.getElementById("broken-1")?.remove());
-    await page.unroute("**/smoke/broken-part");
+    await broken.unrouteAll({ behavior: "ignoreErrors" });
+    await broken.context().close();
 
     const redirected = await (await browser.newContext()).newPage();
     /** @type {string[]} */
