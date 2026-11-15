@@ -141,6 +141,26 @@ impl Chooser {
     }
 }
 
+/// A debug build's mark on a request to a route with named posts, which [`crate::page::Req`]
+/// reads to check the page it draws at one of their addresses.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+pub(crate) struct HasPosts;
+
+/// A route's handler for a method, marking its request [`HasPosts`] (a debug build's).
+#[cfg(debug_assertions)]
+struct Posts {
+    inner: Route,
+}
+
+#[cfg(debug_assertions)]
+impl Endpoint for Posts {
+    fn call(&self, mut req: Request) -> Answering {
+        req.extensions_mut().insert(HasPosts);
+        self.inner.call(req)
+    }
+}
+
 /// What a post's address names in its `do`.
 enum Named<'q> {
     None,
@@ -642,6 +662,12 @@ impl Router {
             if !methods.actions.is_empty() {
                 let actions = methods.actions.into_iter().map(|(name, slot)| (name, slot.route())).collect();
                 slots[POST] = Some(Arc::new(Chooser { plain: slots[POST].take(), actions }));
+                // A debug build marks the route's requests, so only a page of a route with named
+                // posts is checked for a post form that would send to one again (`Req`).
+                #[cfg(debug_assertions)]
+                {
+                    slots = slots.map(|slot| slot.map(|inner| Arc::new(Posts { inner }) as Route));
+                }
             }
             routes.push(Entry { path, slots, fallback: methods.fallback.map(Slot::route), allow, written, stages: around });
         }

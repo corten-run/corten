@@ -207,19 +207,19 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
 
 async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     let none = Errors::new();
-    let tab = q.tab.unwrap_or(MarketTab::Listings);
-    let period = q.period.unwrap_or(Period::Month);
-    gallery(
-        &req,
-        Gallery {
-            tab,
-            period,
-            sold: q.sold,
-            earlier: q.sales == Some(SalesPage::Earlier),
-            sale: q.sale == Some(Sale::Last),
-            ..listings(&req, &none)
-        },
-    )
+    gallery(&req, at_view(&req, &q, &none))
+}
+
+/// The gallery at the view the address names (tab, period, order, sheet), with nothing to report.
+fn at_view<'a>(req: &Req, q: &<url::Home as FromUrl>::Params, none: &'a Errors) -> Gallery<'a> {
+    Gallery {
+        tab: q.tab.unwrap_or(MarketTab::Listings),
+        period: q.period.unwrap_or(Period::Month),
+        sold: q.sold,
+        earlier: q.sales == Some(SalesPage::Earlier),
+        sale: q.sale == Some(Sale::Last),
+        ..listings(req, none)
+    }
 }
 
 #[derive(Fields)]
@@ -296,7 +296,7 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
 
 /// The draft's address a post was sent from (its view: tab, period, order), which a write sends the
 /// browser back to.
-fn here(q: <url::Home as FromUrl>::Params) -> url::Home {
+fn here(q: &<url::Home as FromUrl>::Params) -> url::Home {
     url::Home { tab: q.tab, sale: q.sale, period: q.period, sold: q.sold, sales: q.sales }
 }
 
@@ -304,7 +304,7 @@ fn here(q: <url::Home as FromUrl>::Params) -> url::Home {
 /// draft it was on, whose toaster says it once (`req.redirect_with_notice`).
 async fn save(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     const SAVED: &str = "Draft saved.";
-    req.patch_or(Toast { message: Some(SAVED), failed: false }, || async { req.redirect_with_notice(&here(q), SAVED) }).await
+    req.patch_or(Toast { message: Some(SAVED), failed: false }, || async { req.redirect_with_notice(&here(&q), SAVED) }).await
 }
 
 /// Refuses to publish the draft (409, the card sold meanwhile) with a failed toast: the toaster
@@ -329,10 +329,10 @@ pub struct RenameForm {
 pub const TAKEN: &str = "Holiday lot";
 
 /// A name is required, and not the other draft's: refused, the dialog comes back drawn open with
-/// the error, as a patch or in the whole page. A taken name is said for the whole form too
-/// (`FormAlert`), as it is about the other draft, not about what was typed.
+/// the error, as a patch or in the whole page at the view it was sent from. A taken name is said
+/// for the whole form too (`FormAlert`), as it is about the other draft, not about what was typed.
 async fn rename(req: Req, Params(q): Params<url::Home>, Form(form): Form<RenameForm>) -> HtmlResult {
-    let here = here(q);
+    let here = here(&q);
     let name = form.name.trim();
     let f = RenameForm::FIELDS;
     let mut errors = Errors::new();
@@ -345,16 +345,16 @@ async fn rename(req: Req, Params(q): Params<url::Home>, Form(form): Form<RenameF
         return req.redirect_with_notice(&here, format_args!("Renamed to {name}."));
     }
     let dialog = || RenameDialog { here, name, errors: &errors };
-    let page = || async { gallery(&req, Gallery { rename: dialog(), ..listings(&req, &errors) }) };
+    let page = || async { gallery(&req, Gallery { rename: dialog(), ..at_view(&req, &q, &errors) }) };
     req.invalid(&errors, dialog(), page).await
 }
 
 async fn archive(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
-    menu_action(req, here(q), "Archived.").await
+    menu_action(req, here(&q), "Archived.").await
 }
 
 async fn watch(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
-    menu_action(req, here(q), "Watching.").await
+    menu_action(req, here(&q), "Watching.").await
 }
 
 /// A menu item's write: its result as a patch, or back to the view the draft was on.
@@ -646,6 +646,18 @@ mod tests {
             home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#),
             "drawn closed: {home}"
         );
+        // Refused at another view of the draft, the page is that view, and its dialog sends the
+        // corrected name from there.
+        let offers = url::Home { tab: Some(MarketTab::Offers), period: Some(Period::Week), ..HOME };
+        let page = app.post(&offers.rename()).field(RenameForm::FIELDS.name, " ").await;
+        let page = page.text();
+        assert!(
+            page.contains(r#"href="/?tab=offers&amp;period=week" aria-controls="book-panel-1" aria-selected="true""#)
+                && page.contains(r#"action="/?tab=offers&amp;period=week&amp;do=rename""#),
+            "{page}"
+        );
+        let renamed = app.post(&offers.rename()).field(RenameForm::FIELDS.name, "Spring draft").await;
+        assert_eq!(renamed.headers()["location"], "/?tab=offers&period=week");
         assert!(!patch.contains("alert__destructive alert__soft\" role="), "a field's error alone draws no form alert: {patch}");
         // The other draft's name: the form says why, in the kit's destructive alert, and the field
         // is marked.

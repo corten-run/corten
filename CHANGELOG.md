@@ -16,7 +16,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `do` without a plain `post` is a 400; a `GET` of a post's address draws the page. A name with
   no handler, two handlers for one name, a route with posts but no `get` or in an API's module, a
   query parameter named `do`, and a redirect to a post's address do not compile. A debug build
-  answers a page drawn at a `do` address with a post form that has no `action` with a 500
+  answers a page of a route with named posts, drawn at a `do` address, with a post form that has no
+  `action` with a 500
   (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and the ui-gallery's draft
   use them.
 

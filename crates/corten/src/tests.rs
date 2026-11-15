@@ -15891,6 +15891,6 @@ async fn a_page_at_an_actions_address_with_a_post_form_without_action_is_an_erro
         get(|req: Req| async move { req.test_page("Form", html! { <form method="post"><button>"Go"</button></form> }) }),
     )))
     .test();
-    assert_eq!(elsewhere.get(&crate::Local::parse("/?view=list").unwrap()).await.status(), StatusCode::OK, "no do, no check");
-    assert_eq!(elsewhere.get(&crate::Local::parse("/?do=x").unwrap()).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // A route with no named posts may have a `do` of its own: its page is not read.
+    assert_eq!(elsewhere.get(&crate::Local::parse("/?do=x").unwrap()).await.status(), StatusCode::OK, "no named posts, no check");
 }

@@ -1934,6 +1934,30 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
+/// nor links to it (`href`, `src` and the other URL attributes but a form's `action` and a
+/// button's `formaction`):
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(hold) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main>
+///         <a href={url::Pricing.hold()}>"Hold"</a>
+///     </main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
 /// A page names only the actions it has a handler for:
 ///
 /// ```compile_fail,E0599

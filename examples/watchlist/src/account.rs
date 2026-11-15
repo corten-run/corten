@@ -131,6 +131,18 @@ impl Sessions {
             session.name = name.to_string();
         }
     }
+
+    /// Who `viewer` is now, as a write that changed them draws them: the session's name and
+    /// picture (one the server still has), which another write may have changed since `viewer`
+    /// was read (a name saved while a picture was on its way). One signed out meanwhile is as read.
+    fn now(&self, viewer: &Viewer, pictures: &Pictures) -> Viewer {
+        match self.find(&viewer.session) {
+            Some(Session { name, picture }) => {
+                Viewer { name, picture: picture.filter(|id| pictures.has(id)), session: viewer.session.clone() }
+            }
+            None => viewer.clone(),
+        }
+    }
 }
 
 /// Signs in as Ada, in a new session; one this browser already had ends, so a token it held
@@ -349,7 +361,7 @@ pub(crate) async fn avatar(
     };
     let id = pictures.keep(kind, bytes);
     sessions.set_picture(&viewer.session, &id);
-    let viewer = &Viewer { picture: Some(id.clone()), ..viewer.clone() };
+    let viewer = &sessions.now(&viewer, &pictures);
     let saved = &format!("Saved {name} as your picture.");
     req.patch_or(
         html! {
@@ -369,6 +381,7 @@ pub(crate) async fn avatar(
 pub(crate) async fn rename(
     req: Req,
     Caller(viewer): Caller<Viewer>,
+    State(pictures): State<Pictures>,
     State(sessions): State<Sessions>,
     Form(form): Form<NameForm>,
 ) -> HtmlResult {
@@ -381,7 +394,7 @@ pub(crate) async fn rename(
         };
     }
     sessions.set_name(&viewer.session, name);
-    let viewer = &Viewer { name: name.to_string(), ..viewer.clone() };
+    let viewer = &sessions.now(&viewer, &pictures);
     let saved = &format!("Your pages now say {name}.");
     req.patch_or(
         html! {
@@ -475,7 +488,7 @@ fn account_page(req: &Req, viewer: &Viewer, said: Said<'_>, status: StatusCode) 
 mod tests {
     use corten::{
         Mode,
-        http::{Method, Request, StatusCode},
+        http::{Bytes, Method, Request, StatusCode},
         prelude::{FromRef, Identify},
         testing::{Answer, Client},
     };
@@ -659,6 +672,22 @@ mod tests {
         let refused = rename(" ").mode(Mode::Action).await;
         assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(refused.text().contains(r#"id="name-result""#), "{}", refused.text());
+    }
+
+    /// A write draws who the viewer is now: a name saved while a picture was on its way is in the
+    /// upload's answer, and the picture in the name's.
+    #[test]
+    fn a_write_draws_the_viewer_as_the_session_has_them_now() {
+        let (sessions, pictures) = (Sessions::default(), Pictures::default());
+        let token = sessions.start("Ada");
+        let read = Viewer { name: "Ada".into(), picture: None, session: token.clone() };
+        sessions.set_name(&token, "Grace");
+        let id = pictures.keep("image/png", Bytes::from_static(PNG));
+        sessions.set_picture(&token, &id);
+        let now = sessions.now(&read, &pictures);
+        assert!(now.name == "Grace" && now.picture.as_deref() == Some(id.as_str()));
+        sessions.end(&token);
+        assert!(sessions.now(&read, &pictures).name == "Ada", "signed out meanwhile: as read");
     }
 
     /// A picture the server no longer has (forgotten past its limit) is not shown.

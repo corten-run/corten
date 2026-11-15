@@ -244,7 +244,13 @@ back to the page, not to its own address.
 A page drawn at a post's address (a refusal without JavaScript) stays there, so a post form in it
 without an `action` would send to that post again. A page with named posts gives every form its
 `action`, and a debug build answers such a page, drawn at an address with `do`, with a 500 that
-says so ([Limit 29](../design.md#limit-page-action-address)).
+says so (a route without named posts is not read, so it may have a `do` of its own) ([Limit 29](../design.md#limit-page-action-address)).
+
+A post's address is the view the page was drawn at. A tab or a choice that puts itself in the
+address in the browser (corten-ui's `TabGroup` and `Choice` replace the entry's URL) rewrites no
+form, so a named post sent after one goes back to the view the page was drawn at, not the tab
+shown. A write that should follow such a tab sends it as a field, or the tab is a link that draws
+the page at its view.
 
 ### Seeing what went over the wire
 

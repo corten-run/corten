@@ -45,7 +45,9 @@ per write to carry the page's query, and never write `?do=` by hand. A write sev
 a path of its own. Either answers `req.redirect` or `req.redirect_with_notice` once done, and
 draws a page only to refuse (`req.invalid`); a page with named posts gives every form an
 `action`. A debug build answers 500 to a successful page drawn at a path with no `GET`, and to a
-page drawn at a `do` address with a post form that has no `action`.
+page with named posts drawn at a `do` address with a post form that has no `action`. A post's
+address is the view the page was drawn at; a tab that changes the address in the browser rewrites
+no form, so send such a tab as a field if a write must follow it.
 
 A patch may hold several top-level elements; each replaces the element with the same `id`, so
 each needs one, a `#[derive(Id)]` type: `req.patch` and `req.invalid` take a `Patch`, and a view

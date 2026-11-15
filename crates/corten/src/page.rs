@@ -984,6 +984,10 @@ pub struct Req {
     fills: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
+    /// A debug build's: the request is to a route with named posts, at one of their addresses
+    /// (`do=..`), where the page it draws stays ([`Req::check_action_forms`]).
+    #[cfg(debug_assertions)]
+    at_post: bool,
 }
 
 /// What a write said on the page it redirected to ([`Req::redirect_with_notice`]): "Batch 3517
@@ -1189,6 +1193,8 @@ impl Req {
             fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
             shared,
             signal,
+            #[cfg(debug_assertions)]
+            at_post: extensions.get::<crate::router::HasPosts>().is_some() && at_action(uri.query()),
         }
     }
 
@@ -1651,7 +1657,7 @@ impl Req {
         #[cfg(debug_assertions)]
         if page {
             self.check_submit_keys(&out[start..])?;
-            if at_action(self.uri.query()) {
+            if self.at_post {
                 self.check_action_forms(&out[start..])?;
             }
         }
@@ -2513,7 +2519,7 @@ impl Req {
     }
 }
 
-/// Whether `query` names one of a page's posts (`do=..`), where a page drawn stays.
+/// Whether `query` has the key that names one of a page's posts (`do=..`).
 #[cfg(debug_assertions)]
 fn at_action(query: Option<&str>) -> bool {
     query.is_some_and(|query| {
