@@ -3266,7 +3266,17 @@ rules something out.
     same counts and bytes and the same instructions to the line, and on `49f9751e3`, which counts no
     key written into a `<textarea>` or the other elements read as text, against `8fbe60a59`, with a
     `<textarea>` added to `KeyedMarkup` on both: 131,623,718 and 7,727,108 instructions in every run
-    of both, 23,408 and 2,976 bytes, and the same instructions to the line (1,834 lines each);
+    of both, 23,408 and 2,976 bytes, and the same instructions to the line (1,834 lines each), and
+    on `8cee822d2`, which refuses an element in those only where the markup shows it is parsed as
+    HTML and refuses an element a browser takes out of an `<svg>` written straight into one,
+    against `e99410f45`: the same counts and bytes in every run of both and the same instructions to
+    the line (1,834 lines each);
+    2026-11-14, the elements a browser takes out of an `<svg>` as the HTML standard's rules for
+    parsing tokens in foreign content list them (its tree construction, read that day), and the
+    parsing an `html!` shows (HTML under such an element, a document's `<head>` or an `<svg>`'s
+    integration points, SVG in a literal `<svg>`, neither at the top of a component's markup,
+    among a component's children or in a `<math>`), on `8cee822d2`, as the tests in
+    `crates/corten-macros/src/html.rs` and the examples of `html!` hold it to;
     2026-11-14, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), an
     element written in a `<textarea>`, an HTML `<title>` (in `<head>`, in the body, in an `<svg>`'s
     `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` or a `<noframes>` is not found, and one in
