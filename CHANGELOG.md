@@ -5,6 +5,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
+  older installed compiler and the minimum version before checking the runtime's DOM types.
+  Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
+
+- Corten's own checks use TypeScript 7.0.2, matching npm's newest stable release installed by the
+  getting-started guide, and use its DOM declarations for the Navigation API. Move the
+  repository's AST checks off the removed JavaScript API, using the exactly pinned compiler's
+  unstable native parser API until a stable parsing entry point is available.
+  Keep navigation `info` checked in both the listener and its `startedBy` helper through one
+  shared narrowed event type, with compiler regression probes for both reads.
+  Select 7.0.2 explicitly through the `typescript7` npm alias; retain root TypeScript 5.9.3
+  only for benchmark tooling's classic compiler API, avoiding colliding `tsc` bins in Corten checks.
+  A broken checkout compiler directs contributors to `npm ci` in that checkout, not a global install.
+
 - Accept omitted optional `rel`/`href` fields on benchmark provider create links,
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.

@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { problems } from "./escapes.mjs";
+import { parseFiles } from "./typescript.mjs";
+
+test("a batched parse isolates files with the same basename and preserves declaration/JSDoc types", () => {
+  const files = [
+    { file: "one/a.js", text: "/** @type {any} */ let bad;" },
+    { file: "two/a.js", text: "/** @type {number} */ let good;" },
+    { file: "types/a.d.ts", text: "export declare const bad: any;" },
+  ];
+  assert.deepEqual(parseFiles(files, (file, text, source) => [file, source.text === text]), files.map(({ file }) => [file, true]));
+});
 
 const js = (/** @type {string} */ text) => problems("a.js", text).length;
 
@@ -20,6 +30,7 @@ test("an any in a JSDoc type is found, alone, inside another type or over severa
   // JSDoc's own spellings of it.
   assert.equal(js("/** @type {*} */\nlet s;"), 1);
   assert.equal(js("/** @type {?} */\nlet u;"), 1);
+  assert.equal(js("/** @type {Array<?>} */\nlet u;"), 1);
 });
 
 test("the word any in prose, a name, a string or a comment is not", () => {
@@ -27,6 +38,7 @@ test("the word any in prose, a name, a string or a comment is not", () => {
   assert.equal(js("/** @type {{ anyOf: string, company: number }} */\nlet o;"), 0);
   assert.equal(js('/** @type {"any" | "all"} */\nlet s;'), 0);
   assert.equal(js('const q = "any";'), 0);
+  assert.equal(js("/** @type {?number} */\nlet n;"), 0);
   assert.equal(problems("a.d.ts", "/* any\n   more any */\n/** The view of a row, if any. */\nexport declare function at(i: number): number; // or any").length, 0);
 });
 
@@ -38,6 +50,8 @@ test("a comment that turns the checker off is found, and the same words elsewher
   assert.equal(js("const a = 1; // @ts-ignore\nconst b = 2;"), 1);
   assert.equal(js("const a = 1; /* @ts-expect-error */\nconst b = 2;"), 1);
   assert.equal(js("x(); // @ts-nocheck"), 1);
+  assert.equal(js("function f() { return /* @ts-ignore */; }"), 1);
+  assert.equal(js("const n = 1;\n// @ts-ignore"), 1);
   assert.equal(js("/**\n * Text.\n * @ts-ignore\n */\nconst a = 1;"), 1);
   // TypeScript reads these as directives too: no word boundary after the name, any run of / and *.
   assert.equal(js("// @ts-ignored because\nconst a = 1;"), 1);
