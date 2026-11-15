@@ -198,24 +198,38 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   platform (TypeScript 5.9.3 and 7.0.2 check JSDoc types as they check annotations, except where
+   platform (apps require TypeScript 6.0 or later for the runtime's Navigation API DOM types;
+   TypeScript 7.0.2 is pinned for framework CI to match npm's newest stable release installed by
+   the getting-started guide. It checks JSDoc types as it checks annotations, except where
    JavaScript infers a type, in the cases probed so far: a property first given after an empty
    object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
    untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
    and `unknown` in TypeScript, which a JSDoc type fixes; a function called with `new` that sets
-   `this`'s properties, which 5.9.3 accepts in JavaScript and 7.0.2 refuses; a function that reads
-   `arguments`, which 5.9.3 lets take any number of arguments in JavaScript and 7.0.2 does not, and
-   a rest parameter fixes; and a property a class's constructor or method sets first, which
-   JavaScript takes as declared even when the class declares its fields, so a misspelled write is
+   `this`'s properties, and extra arguments to a function reading `arguments`: 6.x accepts these
+   in JavaScript and 7.0.2 refuses them (a class and a rest parameter fix them); and a property
+   a class's constructor or method sets first, which JavaScript takes as declared even when the
+   class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
-   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`);
+   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
+   TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
+   `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
+   The repository's AST checks import `typescript7/unstable/sync`, `typescript7/unstable/fs` and
+   `typescript7/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
+   and the lockfile as the `typescript7` npm alias, not a compatible-version range. The root
+   `typescript` 5.9.3 install remains only for `bench/**` consumers of the classic compiler API;
+   Corten's checks explicitly select the 7.0.2 alias, not npm's colliding `tsc` bin);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
    component behavior is exported functions, not classes; the runtime's one hand-written class,
    `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
    (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
    declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
-   was read, and none's value is used as a type it is not); measured (deck-builder's and
+   was read, and none's value is used as a type it is not; the unstable parser API lets
+   `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
+   maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
+   A second compiler install preserves benchmark tooling's classic API without changing
+   `bench/**` or downgrading Corten's checks. The exact pin and negative parser fixtures bound this dependency, but
+   do not make the API stable); measured (deck-builder's and
    seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
    bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
    serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
@@ -238,7 +252,14 @@ rules something out.
    reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
    function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
-   show.
+   show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
+   update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
+   off the classic compiler API, so the root 5.9.3 compatibility install can be removed; or the
+   benchmark harness isolates its classic API dependency in its own package, removing the need
+   for Corten's alias; or the `@typescript/typescript-<platform>-<arch>/lib/lib.dom.d.ts` package
+   layout that `scripts/events.mjs` resolves through the alias changes; or the runtime or kit
+   needs a DOM type unavailable at the TypeScript 6.0 minimum (CI checks both 6.0.3 and 7.0.2),
+   or TypeScript changes the checked-JavaScript inference differences at that minimum.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -265,7 +286,44 @@ rules something out.
    than a function reading `arguments` declares, which 7.0.2 refuses), and the repository's scripts
    searched for each, the first through the TypeScript copy (no TS2683 or TS7009), the second with
    `rg` for `arguments` (only in comments)
-   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
+   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040));
+   2026-11-14, TypeScript 7.0.2 on `4cbc5e627` and the change: `tsc -p jsconfig.json`, including
+   every `@ts-expect-error` in `scripts/typecheck-fixture.js`, passes. Moving the compiler reopens
+   the compiler premise, not the authoring format: the known inference limits above remain
+   reasons for precise JSDoc, not a serving-time syntax pass. Three sequential wall-time
+   runs on the same workstation: 5.9.3 took 4.532, 3.697 and 4.178 s, and 7.0.2 took 1.389, 1.064
+   and 0.962 s (medians 4.178 and 1.064 s, not alternated, not a controlled performance claim).
+   The event-map check now reads 7.0.2's own DOM library through its native AST API. `input`
+   remains `Event` because a select or checkbox fires a plain event, unlike a text edit's
+   `InputEvent`. The old JavaScript parser API is gone, so the event and unsafe-escape checks
+   use the native API too, with their existing negative fixtures retained.
+   The [HTML checkbox activation steps](https://html.spec.whatwg.org/multipage/input.html#checkbox-state-(type=checkbox))
+   were read for the plain `input` event (no interface override);
+   2026-11-14, TypeScript 7.0.2's installed `package.json` export map, `lib/version.cjs` and
+   root module exports inspected at `e8d4165cd`: only version information is stable, and all
+   parsing entry points are explicitly unstable. The exact pin is retained. The AST checks
+   and their negative parser fixtures are exercised by the root `npm run check`;
+   2026-11-14, at `face427ab` and the change: browser evidence's classic-API failure reproduced
+   in `binding-effects.test.mjs`. Root `typescript` 5.9.3 restored solely for those benchmark
+   consumers, with 7.0.2 under `typescript7` explicitly selected by Corten's CLI, root compiler
+   and AST checks. This corrects the earlier assumption that app-local pins covered all bench
+   consumers: the evidence harness also imports the root compiler;
+   2026-11-14, reopened at `727130519` and the change: apps require TypeScript 6.0 or later
+   (5.9.3 lacks the Navigation API declarations), the CLI rejects older versions explicitly,
+   and its alias lookup is confined to the checkout supplying `crates/corten/js`, never a
+   registry dependency or arbitrary ancestor. The escape scan parses all files in one native
+   session rather than starting a process per file. Three sequential wall-time runs of
+   `node scripts/escapes.mjs` before batching: 9.392, 8.134, 8.427 s, after: 2.431, 2.337,
+   2.255 s (medians 8.427 and 2.337 s on the same workstation, not controlled for load);
+   2026-11-14, at `630ceb703` and the change: external TypeScript 6.0.3 and pinned 7.0.2
+   run on `jsconfig.json`, including the runtime and kit (both pass). CI now installs 6.0.3
+   outside the repository and runs that same config, so the minimum is continuously checked.
+   The constructor-function and extra-arguments JavaScript probes were run with both:
+   6.0.3 accepts them, while 7.0.2 reports TS2683, TS7009 and TS2554.
+   The minimum comparison uses semantic-version precedence: 6.0.0 prereleases are below
+   stable 6.0.0, while 6.0.1 and 7.0.0 prereleases are above it. The CLI's version-boundary
+   regression was reproduced with 6.0.0-dev.20250801 and the boundary cases checked at
+   `f46913f75` and the change.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2597,8 +2655,11 @@ rules something out.
     `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
     next one, code after a `return` and a side-effect import of a module that is not there are
     mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
-    are checked the same way: `corten check` writes the app's config with a copy of the
+    use the same checking options: `corten check` writes the app's config with a copy of the
     repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
+    This compares options, not compiler versions: apps support TypeScript 6.0 or later, while
+    repository checks and the explicit benchmark type-check command in
+    [CONTRIBUTING (Tooling)](../CONTRIBUTING.md#tooling) use 7.0.2.
     Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
     `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
     `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
@@ -2635,7 +2696,11 @@ rules something out.
 
     Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
     sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
-    (Playwright 1.64.1) on 2026-11-08.
+    (Playwright 1.64.1) on 2026-11-08; 2026-11-14, reopened at `727130519` with TypeScript
+    7.0.2: its `tsc --help --all` checking options read against this Choice and the options in
+    `jsconfig.json`, and `tsc -p jsconfig.json` run. No additional checking flag beyond those
+    considered under 5.9.3 changes the choice.
+    The equal-options test is not evidence of equal compiler selection.
 
 40. <a id="choice-script-boundaries"></a>**What a script reads from outside the checker is `unknown` and checked where it
     enters, as much as the reader needs; a feed's rows are trusted as the server's.** `tsc`
@@ -2670,8 +2735,17 @@ rules something out.
     `corten:module` event each served module dispatches, which the runtime takes only from the
     module its page's own script tag loaded. Explicit `any` was removed from the runtime, the
     kit, the template and the examples (26 uses): where the DOM library has no type for an API
-    (the Navigation API, a service worker's global, `navigator.connection`) they declare the part
-    they use (`crates/corten/js/navigation.d.ts`) and cast once where the value enters; a form's
+    (a service worker's global, `navigator.connection`) they declare the part
+    they use and cast once where the value enters. TypeScript 7.0.2's DOM library now declares
+    the Navigation API, so the former `navigation.d.ts` is removed: only `NavigateEvent.info`
+    is narrowed to the runtime's own symbol-keyed `Info` at the listener boundary. The shared
+    `RuntimeNavigateEvent` typedef also types `startedBy`, so its separately annotated event
+    cannot restore the DOM's unchecked `info`. `scripts/navigation-types.test.mjs` compiles
+    misspelled source-property reads inside both functions in memory and requires TS2339,
+    without exporting the runtime's private symbol keys for a fixture. The DOM's
+    `NavigationResult` dictionary has optional fields; `go` asserts both returned promises,
+    which `navigate()` always supplies. These are type-only changes, with the same minified
+    runtime. A form's
     property read past a shadowing control is typed by its name (`HTMLFormElement[K]`); a
     format's function is `(value: never) => string`, its branches typed. Typing the Navigation
     API's `info` found a read the checker had not seen: the place a `data-keep-place`
@@ -2712,15 +2786,18 @@ rules something out.
     one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
     parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
     returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
-    TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
+    TypeScript 7.0.2's DOM library declares `window.navigation` always present, although not all
+    supported browsers have it, with `NavigateEvent.info` as `any` and `NavigationResult`'s promises
+    optional. The runtime widens navigation to `Navigation | undefined` at this boundary and
+    checks availability before use; `go` casts only after its caller's availability check);
+    reasoned (a value the checker
     did not see made is only as typed as its producer: the server's rows are, an older runtime's
     reading of a newer protocol and old storage are not); value (Correctness and reliability
     first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
     4; Fast, and proven fast, Values 1, which is why the rows are not checked).
 
-    Revisit when: the repository's TypeScript (5.9.3, `package.json`) moves to one whose DOM
-    library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
-    `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
+    Revisit when: TypeScript's DOM library gives `NavigateEvent.info` a checked type or changes
+    the Navigation API shapes the runtime uses; the browser gets a
     way to check JSON against a schema without a library; or a feed carries rows the server did
     not type (a feed relayed from another service); or open pages reload when a feed's generation
     changes, which ends the limit above.
@@ -2729,7 +2806,17 @@ rules something out.
     `scripts/escapes.mjs` on the change; 2026-11-10, TypeScript 5.9.3 on `560c4cf7` and the change
     (the explicit-`any` count, 26 and 0); 2026-11-08, TypeScript
     6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
-    again on 2026-11-09.
+    again on 2026-11-09; 2026-11-14, reopened for TypeScript 7.0.2 on `4cbc5e627` and the change:
+    its DOM declarations read, the redundant Navigation API declarations removed, the runtime
+    type-checked and its minified build checked unchanged, and the existing unsafe-escape
+    fixtures run through TypeScript 7's native parser API; 2026-11-14, TypeScript 7.0.2 on
+    `c34532753` and the change: the helper's unchecked `info` reproduced by the compiler probe,
+    then both helper and listener checked through the shared event typedef and the probes;
+    2026-11-14, at `727130519` and the change: the optional Navigation API boundary restored,
+    with a compiler probe requiring TS18048 for an unguarded read;
+    2026-11-14, at `630ceb703` and the change: dialog and toaster use lib.dom's Navigation
+    types rather than hand-declared shapes, with an optional boundary for older browsers.
+    Their scripts and the runtime checked with TypeScript 6.0.3 and 7.0.2 (both pass).
 
 41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
     `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept
@@ -4277,3 +4364,26 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `80dbd7db`'s own runs.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
+28. <a id="limit-keep-place-identity"></a>A navigation that keeps the user's place (a
+    `data-keep-place` form or link, or a page reading itself again for `ReadAgain`) restores
+    focus by the control's own id, else by its name (and value for a checkbox or radio) and its
+    index among the matching controls inside the nearest ancestor with an id, else `<main>`.
+    Inputs of `type="hidden"` are left out of that index. Disabled controls, ones with the
+    `hidden` attribute and ones inside an `inert` element are counted, so a preceding control
+    entering or leaving those states does not change the index. The control at that index is
+    focused if it can take focus; if it cannot, or the ancestor still holds matches but no match
+    at that index, focus is not restored. Only when nothing under the ancestor matches (the
+    ancestor is gone, or every match in it) is the control looked for in `<main>`, at the index it
+    had there before the swap. Without the control's own stable id, inserting, removing or
+    reordering matching controls ahead of it can leave focus unrestored or move it to another
+    control, and a matching field that switches to or from `type="hidden"` across the swap counts
+    as inserted or removed. Because the ancestor is tried first and `<main>` only when nothing
+    under it matches, two more shapes move focus: a control that leaves its ancestor while
+    another match enters it gives focus to that match (where the runtime once looked in `<main>`
+    and found the original), and a control that itself turns `type="hidden"`, leaving no match
+    under its ancestor, is looked for in `<main>` and may give focus to another form's copy. An
+    index does not identify an item through an order change. Give such a control its own stable
+    `#[derive(Id)]` id, which avoids all of these; an id on its form keeps other forms' copies out
+    of the count.
+    This limit is deliberate: inferring an identity from changing markup would
+    still guess where the app's id can state it.
