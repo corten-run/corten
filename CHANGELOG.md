@@ -17,6 +17,11 @@ Corten is pre-1.0, so any minor version may change the API.
   shared narrowed event type, with compiler regression probes for both reads.
   Select 7.0.2 explicitly through the `typescript7` npm alias; retain root TypeScript 5.9.3
   only for benchmark tooling's classic compiler API, avoiding colliding `tsc` bins in Corten checks.
+
+- Preserve sanitized provider diagnostics and control uncertainty from grouped
+  benchmark workers in fleet failure receipts, without exposing raw errors or
+  changing launch, settlement, lock or cleanup gates.
+
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
@@ -739,6 +744,18 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
+  the button that asked for it (or, with none, the focused control of the form, else the form) is
+  outside the dialog: the element a submit's answer replaces opens then, as drawn, as the press is
+  newer than the user's close, so a
+  Preview button beside a server-drawn sheet works on every press, not only the first, and a
+  `<details>` asked for unfolded unfolds. Where the button was is read when it is pressed, so
+  one removed, or a dialog redrawn, while the answer is on its way still counts as inside. A
+  submit from inside the element, the elements inside the one replaced, a live fragment, a
+  `ReadAgain` read and a script's `patch()` still keep what the user opened or closed, and a
+  popover stays as the user left it (design Choice 52). It only opens: a dialog the user opened
+  stays open when such an answer draws it closed. The runtime is 149 bytes larger with gzip.
 
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
   the answer links its handler's section stylesheets after its elements, as a navigation's

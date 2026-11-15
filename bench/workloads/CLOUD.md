@@ -70,6 +70,14 @@ approval binds that executable closure. The parent propagates cancellation to al
 children and keeps its lock until every worker exits; uncertainty retains the lock.
 It never terminates a possibly mutating child merely to make a timeout look clean.
 
+Failed worker results and fleet receipts retain only the existing allowlisted
+`providerDiagnostic` code and optional HTTP status, plus an explicit `uncertain`
+boolean for a reported operation failure. Raw errors, stacks, command arguments
+and credential material are never forwarded. Malformed worker messages still
+mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
+mutation, permit a retry or authorize cleanup; saved reservations, launch intents
+and the existing settlement/lock rules remain authoritative.
+
 Collection reuses only saved identities and independently collects terminal hosts:
 
 ```sh

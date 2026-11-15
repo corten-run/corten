@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
-let booted = false;
+let booted = false, providerFailure;
 try {
   assert.deepEqual(Object.keys(workerData).sort(), ["args", "cancellation", "entry", "sources"]);
   assert.ok(workerData.cancellation instanceof SharedArrayBuffer && workerData.cancellation.byteLength === 4);
@@ -36,6 +36,7 @@ try {
     assert.ok(approved.has(url), "fleet-unapproved-import");
     return { format: "module", source: approved.get(url), shortCircuit: true };
   } });
+  ({ providerFailure } = await import(new URL("./cloud-options.mjs", workerData.entry).href));
   const { parseProductionArgs, productionMain } = await import(new URL("./cloud-production.mjs", workerData.entry).href);
   booted = true;
   const { options, approval, preview } = parseProductionArgs(workerData.args);
@@ -48,7 +49,9 @@ try {
   assert.ok([0, 1, 3].includes(code));
   parentPort.postMessage({ schema: "benchmark-group-fleet-worker-result/v1", code });
 } catch (error) {
+  const diagnostic = providerFailure?.(error);
   parentPort.postMessage({ schema: "benchmark-group-fleet-worker-result/v1", error: booted ? "group-operation-failed" : "group-bootstrap-invalid",
-    uncertain: error?.controlTreeUncertain === true || error?.controlUncertain === true });
+    uncertain: error?.controlTreeUncertain === true || error?.controlUncertain === true,
+    ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) });
 }
 parentPort.close();
