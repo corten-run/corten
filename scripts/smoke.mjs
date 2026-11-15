@@ -3788,8 +3788,10 @@ async function run(browser) {
    * of writes sent by then (`writes`), its own included. Each request's mode for a path is recorded
    * in `asked`, and the writes answered are counted in `answers`; a write's answer waits for what
    * `hold` gives for its number. While `fail` is set, a write is done but its answer is dropped, as a
-   * network that fails after the server applied it. The page opened is `path`.
-   * @param {(body: string, writes: number) => string} edit @param {(body: string) => string} [before]
+   * network that fails after the server applied it. While `draws` is false, a write goes without
+   * `corten-draws`, as from a runtime from before it. A write's answer's headers are given to `edit`
+   * too, to change. The page opened is `path`.
+   * @param {(body: string, writes: number, headers?: Record<string, string>) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
    */
   const writtenPage = async (edit, before = (body) => body, path = "/smoke/written") => {
@@ -3797,6 +3799,7 @@ async function run(browser) {
     const seen = {
       written: false,
       fail: false,
+      draws: true,
       writes: 0,
       answers: 0,
       /** @type {string[]} */ asked: [],
@@ -3816,14 +3819,16 @@ async function run(browser) {
         if (write) seen.writes += 1;
         const writes = seen.writes;
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-        const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
+        const sent = { ...req.headers(), "accept-encoding": "identity" };
+        if (write && !seen.draws) delete sent["corten-draws"];
+        const res = await route.fetch({ headers: sent });
         const headers = res.headers();
         if (write) seen.answered = { ...headers };
         delete headers["content-encoding"];
         delete headers["content-length"];
         const text = await res.text();
         // A navigation's <main> is passed on as it is: it has no layout to change.
-        const body = mode === "nav" ? text : write || seen.written ? edit(text, writes) : before(text);
+        const body = mode === "nav" ? text : write || seen.written ? edit(text, writes, write ? headers : undefined) : before(text);
         seen.written ||= write;
         if (write && seen.fail) return route.abort("failed");
         if (write) await seen.hold(writes);
@@ -4105,7 +4110,9 @@ async function run(browser) {
   }
   // A write's own page whose frame differs from the page's draws <main> alone, and the layout's
   // elements that are the page's (the sector links, `page` in `html!`) with it, as a navigation
-  // does: the write's page has other sector links than the form's.
+  // does: the write's page has other sector links than the form's. This guards the fallback when the
+  // layout cannot be drawn (main, whose answer for the write was <main> and those parts, passes it
+  // too), not the drawing of the layout itself.
   {
     const section = (/** @type {string} */ name) => (/** @type {string} */ body) => body.replace(/(<nav\b[^>]*\bid="sector-nav"[^>]*>)/, `$1<a href="/news">${name} section</a>`);
     const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
@@ -4117,6 +4124,89 @@ async function run(browser) {
       "a write's own page in another frame draws <main> and the page's parts of the layout",
       first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
       JSON.stringify({ first: first.section, drawn, shown }),
+    );
+    await own.context().close();
+  }
+  // A write sent without `corten-draws`, as a runtime from before it sends one (a tab open across
+  // the deploy that brought it): the server answers <main> alone, as it did then, which that
+  // runtime draws, where a whole page would be an answer it does not draw (it would say the write
+  // failed). This runtime, given <main> alone for a write (a server from before), draws it and reads
+  // the next page whole, which shows what the write changed.
+  const oldName = "a write that does not say it draws the whole page gets <main> alone, and the next page is read whole";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(oldName, "without the Navigation API a link is a full load");
+  else {
+    const { own, seen } = await writtenPage(brand);
+    seen.draws = false;
+    await own.evaluate(() => addEventListener("corten:error", () => ((/** @type {any} */ (window)).__failed = true)));
+    await own.click("main form button");
+    const drawn = await writtenIn(own);
+    const between = await shownOf(own);
+    await own.click('main a[href="/smoke/quoted"]');
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const failed = await own.evaluate(() => !!(/** @type {any} */ (window)).__failed);
+    const shown = await shownOf(own);
+    check(
+      oldName,
+      drawn &&
+        "corten-page" in seen.answered &&
+        between.brand === "Watchlist" &&
+        !failed &&
+        arrived &&
+        shown.brand === "Watchlist, written" &&
+        shown.same &&
+        seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ drawn, page: seen.answered["corten-page"] ?? null, between: between.brand, failed, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write that answers a patch (here one for an element of the layout) is done once its answer
+  // comes, but drawn only once the scripts the patch names load. Left by a link in that window,
+  // the navigation cuts it off: the next page is read whole, with what the write changed.
+  const patchName = "a navigation that leaves a write's patch before it is drawn reads the next page whole";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(patchName, "without the Navigation API a link is a full load");
+  else {
+    const patched = (/** @type {string} */ body, /** @type {number} */ _writes, /** @type {Record<string, string> | undefined} */ headers) => {
+      if (!headers) return brand(body);
+      delete headers["corten-shell"];
+      headers["corten-patch"] = "";
+      return '<nav id="sector-nav" data-on="connect:quoted.show()">Patched section</nav>';
+    };
+    const { own, seen } = await writtenPage(patched);
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    /** @type {() => void} */
+    let asked = () => {};
+    const waiting = new Promise((resolve) => (asked = () => resolve(true)));
+    await own.route("**/scripts/quoted.js", async (route) => {
+      asked();
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    await own.click("main form button");
+    const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    await own.click('main a[href="/smoke/quoted"]');
+    release();
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    check(
+      patchName,
+      stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }

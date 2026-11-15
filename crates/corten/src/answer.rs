@@ -2250,7 +2250,7 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     }
     // A page with places from a route whose answer type says it is not one: a write's own page,
     // filled after its handler, starts no read for it, as such a route's `GET` does not
-    // (`crate::layout::fill_after`). Also a constant for a page route.
+    // (`crate::layout::fill_made_early`). Also a constant for a page route.
     if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
         res.extensions_mut().insert(crate::layout::NotAPageAnswer);
     }
@@ -2279,7 +2279,24 @@ where
                 signal.mark_for_everyone();
             }
         }
-        futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)
+        // A write the runtime sent whose own page is whole (#1370), in an app with layout reads:
+        // only a route whose answer type can be a page keeps the request's head for it, and fills
+        // it after the handler. Known here, as a constant: a route that answers patches alone
+        // (`HtmlResult<Patches>`), JSON or text keeps none. A `GET` or `HEAD` looks no further.
+        let page = O::PAGE && !<O::Kind as AnswerKind>::PATCHES && !self.shared;
+        let late = if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
+            None
+        } else {
+            crate::layout::at_late_route(&mut req, page)
+        };
+        let answer = futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>);
+        match late {
+            None => futures_util::future::Either::Left(answer),
+            // Boxed, so every other request's future stays the size it was.
+            Some(late) => futures_util::future::Either::Right(
+                Box::pin(crate::layout::fill_after(late, answer)) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>
+            ),
+        }
     }
 }
 

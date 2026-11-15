@@ -340,6 +340,8 @@ impl<'c, K> Call<'c, K> {
             }
             Mode::Action => {
                 headers.insert(MODE_HEADER, HeaderValue::from_static("action"));
+                // As the runtime sends a form: it draws a write's own page whole.
+                headers.insert(crate::page::DRAWS_HEADER, HeaderValue::from_static("whole"));
             }
             Mode::Data => {
                 let accept = headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));

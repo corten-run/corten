@@ -2065,28 +2065,13 @@ pub(crate) struct Next<'a, S: Steps> {
     steps: &'a S,
     scope: S::Scope<'a>,
     route: Option<Route>,
-    /// A write the runtime sent, in an app with layout reads, with the deadline its reads stop at:
-    /// its route keeps the request's head for a page it may answer with
-    /// ([`crate::layout::kept_for_its_page`]).
-    late: Late,
 }
-
-/// [`Next`]'s mark for a write the runtime sent, in an app with layout reads: `Some` with the
-/// request's deadline, if it has one.
-pub(crate) type Late = Option<Option<tokio::time::Instant>>;
 
 impl<'a, S: Steps> Next<'a, S> {
     // Not an `async fn`: a layer of its own would move the request once more.
     #[inline]
     pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
-        self.steps.run(req, self.route, self.scope, self.late)
-    }
-
-    /// For a write the runtime sent, in an app with layout reads, whose reads stop at `until`
-    /// (#1370).
-    #[inline]
-    pub(crate) fn late(self, until: Option<tokio::time::Instant>) -> Self {
-        Next { late: Some(until), ..self }
+        self.steps.run(req, self.route, self.scope)
     }
 }
 
@@ -2104,7 +2089,6 @@ pub(crate) trait Steps: Send + Sync + 'static {
         req: Request,
         route: Option<Route>,
         scope: Self::Scope<'a>,
-        late: Late,
     ) -> impl Future<Output = Response> + Send + 'a;
 }
 
@@ -2118,8 +2102,8 @@ impl<M: Middleware> Steps for Plain<M> {
     fn scope<'a>(&'a self, _: &'a Scope) {}
 
     #[inline]
-    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): (), late: Late) -> impl Future<Output = Response> + Send + 'a {
-        self.0.call(req, crate::middleware::Handle(route, late))
+    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
+        self.0.call(req, crate::middleware::Handle(route))
     }
 }
 
@@ -2140,12 +2124,11 @@ impl<M: Middleware> Steps for Scoped<M> {
         req: Request,
         route: Option<Route>,
         stack: Self::Scope<'a>,
-        late: Late,
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
         match stack {
-            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route, late))),
-            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route, late })),
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
         }
     }
 }
@@ -2373,7 +2356,7 @@ impl<S: Steps> Layer<S> {
         let watch = Watch(self.signal(req.headers(), body_limit));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::asked(req.headers());
-        let next = Next { steps: &self.steps, scope, route, late: None };
+        let next = Next { steps: &self.steps, scope, route };
         let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();
         (signal::follow(res, watch, self.zoned()), personal, mode)

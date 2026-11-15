@@ -405,6 +405,10 @@ async fn call_with(
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(mode) = mode {
         req = req.header("corten", mode);
+        // A form submit, as the runtime sends one: it draws a write's own page whole (#1370).
+        if mode == "action" {
+            req = req.header("corten-draws", "whole");
+        }
     }
     if let Some(accept) = accept {
         req = req.header("accept", accept);
@@ -13802,6 +13806,31 @@ mod layout_reads {
 
         #[route("/page-or-file", get = page_or_file)]
         pub struct PageOrFile;
+
+        #[route("/typed-write", post = typed_write)]
+        pub struct TypedWrite;
+
+        #[route("/patches-only", post = patches_only)]
+        pub struct PatchesOnly;
+
+        #[route("/any-patch", post = any_patch)]
+        pub struct AnyPatch;
+    }
+
+    /// A write named in a routes module that answers a patch, from a handler whose answer type
+    /// (`HtmlResult`) may be a page too.
+    async fn any_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <p id={MsgId}>"too short"</p> })
+    }
+
+    /// A write named in a routes module whose answer can be a page: drawn again with what it refused.
+    async fn typed_write(req: Req) -> HtmlResult {
+        refused(&req, "typed write")
+    }
+
+    /// A write named in a routes module that answers patches alone.
+    async fn patches_only(req: Req) -> HtmlResult<crate::Patches> {
+        req.patch(html! { <p id={MsgId}>"patched"</p> })
     }
 
     /// A handler's own check refuses the request (#890).
@@ -14582,10 +14611,66 @@ mod layout_reads {
         assert!(headers.contains_key("corten-patch"), "{headers:?}");
         let (status, headers, _) = call_with(router.clone(), "POST", "/away", Some("action"), None).await;
         assert!(status == StatusCode::NO_CONTENT && headers.contains_key("corten-location"), "{status} {headers:?}");
-        let (status, headers, body) = call_with(router, "POST", "/refused", Some("action"), None).await;
+        let (status, headers, body) = call_with(router.clone(), "POST", "/refused", Some("action"), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(headers.contains_key("corten-page") && body.contains("<p>403</p>") && !body.contains("count"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A runtime that does not say it draws a write's own page whole (one from before this, in
+        // a tab open across a deploy) gets `<main>` alone, as it always did, which it swaps in;
+        // a whole page it would take for an answer it cannot draw. No read starts for it.
+        for draws in [None, Some("main")] {
+            let mut req = Request::builder().method("POST").uri("/form").header("corten", "action");
+            if let Some(draws) = draws {
+                req = req.header("corten-draws", draws);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let (parts, body) = res.into_parts();
+            let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert_eq!(parts.status, StatusCode::OK, "{draws:?} {body}");
+            assert!(parts.headers.contains_key("corten-page"), "{draws:?} {:?}", parts.headers);
+            assert!(!body.contains("<!DOCTYPE") && !body.contains("<header>") && body.contains("<p>too short</p>"), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{draws:?}");
+        }
+    }
+
+    /// A write the runtime sent to a route of a routes module: one whose answer type can be a page
+    /// answers its own page whole, filled after the handler as the route answers, before the app's
+    /// middleware sees it; one that answers patches alone (`HtmlResult<Patches>`) keeps no head
+    /// and starts no read (#1370).
+    #[tokio::test]
+    async fn a_routes_module_write_fills_its_own_page_and_a_patches_route_keeps_nothing() {
+        let count = CartCount::default();
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), SeesFilled))
+            .router();
+        let (status, headers, body) = call_with(router.clone(), "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers["x-filled"] == "yes", "{headers:?}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+        assert!(body.contains("<main><p>typed write</p></main>") && !body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        let (status, headers, body) = call_with(router, "POST", "/patches-only", Some("action"), None).await;
+        assert!(
+            status == StatusCode::OK && headers.contains_key("corten-patch") && body.contains("patched"),
+            "{headers:?} {body}"
+        );
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "a patch starts no read");
+    }
+
+    /// The app's middleware, saying whether the page the route answered was filled by the time it
+    /// sees it (`x-filled`): no place for a layout read is left in it.
+    struct SeesFilled;
+
+    impl crate::Middleware for SeesFilled {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (mut head, body) = next.run(req).await.into_parts();
+            let bytes = body.collect().await.unwrap().to_bytes();
+            let filled = !String::from_utf8_lossy(&bytes).contains("corten-later");
+            head.headers.insert("x-filled", http::HeaderValue::from_static(if filled { "yes" } else { "no" }));
+            crate::response::Response::from_parts(head, Body::from(bytes))
+        }
     }
 
     /// The app's middleware, answering `/early` with a page of its own made with `Req`, before the
@@ -15361,40 +15446,115 @@ mod layout_reads {
         });
     }
 
-    /// What a write the runtime sent (`corten: action`) costs, answered with its own page (a form drawn
-    /// again) or, with `WRITE_ANSWER=patch`, a patch: `WRITE_REQUESTS` (200) requests in process, one
-    /// at a time, in an app with two layout reads or, with `WRITE_READS=0`, none. With
-    /// `WRITE_MODE=page` the same write comes from a browser without JavaScript (no `corten` header),
-    /// whose page is the same whole document. Counting it under callgrind at two numbers of requests
-    /// gives the instructions per request (#1370). Run in release:
+    /// What a write the runtime sent (`corten: action`) costs, to a route of a routes module, answered
+    /// with its own page (a form drawn again, `/typed-write`) or, with `WRITE_ANSWER=patch`, a patch
+    /// from a route whose answer type may be a page too (`HtmlResult`, `/any-patch`), or with
+    /// `WRITE_ANSWER=patches`, a patch from a route that answers patches alone
+    /// (`HtmlResult<Patches>`, `/patches-only`): `WRITE_REQUESTS` (200) requests in process, one at a
+    /// time, in an app with two layout reads or, with `WRITE_READS=0`, none. With `WRITE_MODE=page`
+    /// the same write comes from a browser without JavaScript (no `corten` header), whose page is the
+    /// same whole document; with `WRITE_MODE=main` from a runtime that does not draw a write's own
+    /// page whole (no `corten-draws`), which gets `<main>`. With `WRITE_MIDDLEWARE=req` the app's
+    /// middleware takes `Req` before the route. Counting it under callgrind at two numbers of
+    /// requests gives the instructions per request (#1370). Run in release:
     /// `WRITE_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_write_answering_in_an_action_costs`
     #[test]
     #[ignore]
     fn what_a_write_answering_in_an_action_costs() {
         let requests: usize = std::env::var("WRITE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
-        let patch = std::env::var("WRITE_ANSWER").is_ok_and(|v| v == "patch");
+        let answer = std::env::var("WRITE_ANSWER").unwrap_or_default();
+        let path = match answer.as_str() {
+            "patch" => "/any-patch",
+            "patches" => "/patches-only",
+            _ => "/typed-write",
+        };
         let reads = !std::env::var("WRITE_READS").is_ok_and(|v| v == "0");
-        let mode = if std::env::var("WRITE_MODE").is_ok_and(|v| v == "page") { None } else { Some("action") };
-        let routes = Table::new().route(
-            "/form",
-            crate::router::post(move |req: Req| async move {
-                if patch {
-                    req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"too short"</p> })
-                } else {
-                    refused(&req, "too short")
-                }
-            }),
-        );
-        let app = App::new(Routes::from(routes));
+        let mode = std::env::var("WRITE_MODE").unwrap_or_default();
+        let app = App::new(shop_url::router());
         let app = if reads { app.layout_read(CartCount::default()).layout_read(SignedIn) } else { app };
-        let router = app.middleware(AsViewer(Some("ada"))).router();
+        let router = if std::env::var("WRITE_MIDDLEWARE").is_ok_and(|v| v == "req") {
+            app.middleware((AsViewer(Some("ada")), TakesReq)).router()
+        } else {
+            app.middleware(AsViewer(Some("ada"))).router()
+        };
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..requests {
-                let (status, _, body) = call_with(router.clone(), "POST", "/form", mode, None).await;
-                assert!(status == StatusCode::OK && body.contains("too short"), "{status} {body}");
+                let mut req = Request::builder().method("POST").uri(path);
+                match mode.as_str() {
+                    "page" => {}
+                    "main" => req = req.header("corten", "action"),
+                    _ => req = req.header("corten", "action").header("corten-draws", "whole"),
+                }
+                let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                let status = res.status();
+                let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+                assert!(
+                    status == StatusCode::OK
+                        && (body.contains("too short") || body.contains("patched") || body.contains("typed write")),
+                    "{status} {body}"
+                );
             }
         });
+    }
+
+    /// What a write's own page costs at the user's end, in time and bytes, against the `<main>` a
+    /// runtime that does not draw it whole gets (main's answer before #1370): `WRITE_TIMES` (25)
+    /// writes of each, alternating, in an app whose count read takes `WRITE_READ_MS` (20) ms. The
+    /// whole page waits for the read, which starts once the handler has answered; `<main>` starts
+    /// none. Prints the median and range of each, and each answer's bytes. Run in release:
+    /// `cargo test --release -p corten-run --all-features --lib -- --ignored --nocapture what_a_writes_own_page_costs_in_time_and_bytes`
+    #[test]
+    #[ignore]
+    fn what_a_writes_own_page_costs_in_time_and_bytes() {
+        let times: usize = std::env::var("WRITE_TIMES").ok().and_then(|n| n.parse().ok()).unwrap_or(25);
+        let read: u64 = std::env::var("WRITE_READ_MS").ok().and_then(|n| n.parse().ok()).unwrap_or(20);
+        let count = CartCount { delay: Duration::from_millis(read), ..CartCount::default() };
+        let router =
+            App::new(shop_url::router()).layout_read(count).layout_read(SignedIn).middleware(AsViewer(Some("ada"))).router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (mut whole, mut main, mut sizes) = (Vec::new(), Vec::new(), (0, 0));
+        runtime.block_on(async {
+            for _ in 0..times {
+                for draws in [true, false] {
+                    let mut req = Request::builder().method("POST").uri("/typed-write").header("corten", "action");
+                    if draws {
+                        req = req.header("corten-draws", "whole");
+                    }
+                    let began = std::time::Instant::now();
+                    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                    let body = res.into_body().collect().await.unwrap().to_bytes();
+                    let took = began.elapsed().as_secs_f64() * 1000.0;
+                    if draws {
+                        whole.push(took);
+                        sizes.0 = body.len();
+                    } else {
+                        main.push(took);
+                        sizes.1 = body.len();
+                    }
+                }
+            }
+        });
+        let say = |name: &str, mut ms: Vec<f64>, bytes: usize| {
+            ms.sort_by(f64::total_cmp);
+            println!("{name}: median {:.2} ms [{:.2}-{:.2}], {bytes} bytes", ms[ms.len() / 2], ms[0], ms[ms.len() - 1]);
+        };
+        say("own page whole", whole, sizes.0);
+        say("<main>", main, sizes.1);
+    }
+
+    /// The app's middleware, taking `Req` before the route (as one that may answer with a page in
+    /// the route's place does) and passing the request on.
+    struct TakesReq;
+
+    impl crate::Middleware for TakesReq {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let taken = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            drop(taken);
+            next.run(crate::http::Request::from_parts(parts, body)).await
+        }
     }
 
     /// A page the app's middleware throws away after it was filled, answering an error itself: the

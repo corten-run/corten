@@ -293,8 +293,10 @@ A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothin
 runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
 the layout read starts), swaps in `<main>` and replaces each element around it that
 the server now draws otherwise, in the same document. The header shows the count the write made,
-with JavaScript as without, and only the navigation after a write pays the layout's reads; every
-other navigation still keeps the header. When that page reads itself again
+with JavaScript as without, and only a navigation that may follow a change the layout has not
+drawn pays the layout's reads (the one after a write, one that cuts a write off and the one after
+it, the first to another page after a write that failed in view, below); every other navigation
+still keeps the header. When that page reads itself again
 ([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
 catches up), each read is whole too, until one that no longer asks: a count the layout could not
 read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
@@ -370,16 +372,22 @@ within the request's deadline, and a failure to fill it gets the error page. Onl
 costs the layout's markup and its reads; a page that differs from the one on screen in more than
 such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
 the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
-navigation reads the whole page.
+navigation reads the whole page. Where a navigation's page would load in full instead (a section
+stylesheet that does not load, a page element with no place on screen), so does the write's: its
+address is loaded, which draws the page there, not the write's answer (a refused form's messages
+and values), though its notice is kept. The runtime says it draws the whole page
+(`corten-draws: whole` on the write); a runtime that does not (a tab open across the deploy that
+brought this) gets `<main>` alone, as it did before, and keeps its layout until a full load. A
+runtime that gets `<main>` alone for a write (a server from before, halfway through a deploy) has
+the next navigation read the whole page.
 
 A patch is not a page: it carries elements by id and fills no layout read's place, and a read's
 `view` drawn at two places has no id to carry. So a write whose answer must change a layout read
 answers its page, not a patch: `req.page(..)`, with the read's value given or read again. A patch
 changes the layout only through an element the layout draws with an id, from a value the handler
 passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
-can carry (an `#[derive(Id)]` on it), and the write reads the value directly, not through the
-extractor above, and only for the patch: without JavaScript the redirect's next page is a full
-load that reads it.
+can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
+only for the patch: without JavaScript the redirect's next page is a full load that reads it.
 
 ```rust,ignore
 #[component]

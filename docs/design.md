@@ -481,7 +481,13 @@ rules something out.
    named to it in `corten-location`, as to a navigation, since `fetch` follows a 303 without its
    `#id` and cannot read another origin's answer. So a redirect varies on `corten`, and an
    answer to that fetch is the browser's alone, as a navigation's is. The mode would move to a
-   standard header that says "part of a page" and that a script may set.
+   standard header that says "part of a page" and that a script may set. A write the runtime sends
+   also says, with `corten-draws: whole`, that it draws its own page whole
+   ([Choice 53](#choice-write-own-page-whole)): a runtime from before that (a tab open across a
+   deploy) gets `<main>` alone, an answer it draws, and a server from before reads the request as
+   it did. It is a header beside `corten`, not a value of it, since a server that does not know a
+   value of `corten` reads the request as a whole document's; only a write reads it, and a write's
+   answer is not one a cache stores (no validator, no freshness), so no `Vary` names it. It goes with the mode to a standard header that says what the client draws.
 
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot
    set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
@@ -3956,7 +3962,12 @@ rules something out.
     closed for a write that redirects
     ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
     Now a write's `req.page` (any method but `GET` and `HEAD`) is the whole document with
-    JavaScript as without: the layout reads it draws start once the handler has answered with it
+    JavaScript as without, for a runtime that says it draws it (`corten-draws: whole`,
+    [Choice 11](#choice-corten-request-header)): a runtime from before (a tab open across the deploy)
+    gets `<main>` alone, as it did, since it would take a whole page for an answer it does not
+    draw, say the write failed, and a resend would be a new write; and a runtime given `<main>` for
+    a write (a server from before) has the next navigation read the whole page. The layout reads it
+    draws start once the handler has answered with it
     (nothing runs beside the handler, whose reads must see what it wrote), `give` is honored, and
     the runtime applies it with the comparison it runs on the page a write redirects to
     ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
@@ -3966,8 +3977,9 @@ rules something out.
     page's layout stands for those answered before it was asked for and the write it answers, and
     drawing it makes every other write answered since it was asked for undrawn again: with two
     writes out, whichever page is drawn last, its layout may be older than the other write, so the
-    next navigation reads the whole page. A navigation that cuts off a write still waiting for its
-    answer (only a navigation does: a newer submit of the form waits for it) reads the whole page,
+    next navigation reads the whole page. A navigation that cuts off a write not yet drawn (waiting
+    for its answer, or a patch that took it whose scripts are loading; only a navigation does: a
+    newer submit of the form waits for it) reads the whole page,
     and the write, which the server may have applied, counts too, numbered as the navigation starts
     and after the writes that page draws: the server may still be running it as that page is read,
     so the navigation after reads the whole page again. One that failed in view (the network failed,
@@ -3985,6 +3997,9 @@ rules something out.
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
     full, as the redirect's page does, since loading the address would not draw the write's answer.
+    The limit: where a navigation's page loads in full (a section stylesheet that fails to load, a
+    page element with no place on screen), so does the write's, as its `<main>` did before: its
+    address is loaded and its answer is lost (a refused form's messages and values), its notice kept.
 
     Not chosen: a patch that gives a value (`req.patch(..)?.give::<CartCount>(n)`) filling each
     place on screen. Every page with a layout read would carry a marker per place for the runtime to

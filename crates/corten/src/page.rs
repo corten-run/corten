@@ -39,6 +39,13 @@ use crate::{
 /// Request header the runtime sets: `nav` for navigations, `action` for form submits, `page` for
 /// the whole page it fetches after a write.
 pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
+/// Request header a runtime that draws a write's own page whole sends with each form submit
+/// (`corten-draws: whole`). A write the runtime sent without it (a tab whose runtime predates
+/// this, open across a deploy) gets its own page as `<main>`, which such a runtime swaps in; a
+/// whole page it would take for an answer it cannot draw (#1370). A header of its own, not a
+/// second value of `corten`, so a server that predates it (a fleet halfway through a deploy) reads
+/// `corten: action` as it always did.
+pub(crate) const DRAWS_HEADER: HeaderName = HeaderName::from_static("corten-draws");
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
 const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
@@ -124,6 +131,15 @@ impl Mode {
             _ => (Mode::Document, false),
         }
     }
+}
+
+/// A write the runtime sent (`mode`, `method`) that answers its own page whole: one whose runtime
+/// says it draws one ([`DRAWS_HEADER`]). Looked up only for such a write.
+#[inline]
+pub(crate) fn own_page_whole(mode: Mode, method: &http::Method, headers: &HeaderMap) -> bool {
+    mode == Mode::Action
+        && !matches!(*method, http::Method::GET | http::Method::HEAD)
+        && headers.get(DRAWS_HEADER).is_some_and(|value| value.as_bytes() == b"whole")
 }
 
 /// How long a hover prefetch may take before a debug build names its page.
@@ -981,15 +997,19 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// A write the runtime sent whose runtime draws its own page whole ([`own_page_whole`]): its
+    /// page is the whole document, as without JavaScript (#1370).
+    own_whole: bool,
     /// The runtime sent it ([`Mode::asked`]): a redirect to a place or another site is then
     /// named in `corten-location`, as `fetch` cannot follow one (#1034).
     fetched: bool,
     /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
     /// app with some. Otherwise they are removed as the page is rendered.
     fills: bool,
-    /// For a write the runtime sent whose own page is filled after it answers, taken before its
-    /// route (by the app's or an area's middleware): the request's head as it was then, which a
-    /// page this makes carries, so its reads start from it (`layout::fill_made_early`).
+    /// For a write the runtime sent whose own page is filled after it answers, taken where no route
+    /// kept the head for it (the app's or an area's middleware before the route, a route given by
+    /// hand): the request's head as it was then, which a page this makes carries, so its reads
+    /// start from it (`layout::fill_made_early`).
     early: Option<Arc<Parts>>,
     shared: Arc<Shared>,
     signal: crate::Signal,
@@ -1165,8 +1185,9 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         // page's GET.
         let mut req =
             Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
-        // Taken by middleware before a write's route, whose own page is filled after it answers:
-        // a page made with it is filled from this head, as the route's is from its own (#1370).
+        // Taken where no route kept the head of a write whose own page is filled after it answers
+        // (middleware before the route, a route given by hand): a page made with it is filled from
+        // this head, as a page route's is from the one it kept (#1370).
         if req.fills && req.signal.late_write() == Some(false) {
             req.early = Some(Arc::new(parts.clone()));
         }
@@ -1189,6 +1210,7 @@ impl Req {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let (mode, fetched) = Mode::asked(headers);
+        let own_whole = write && own_page_whole(mode, method, headers);
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -1201,6 +1223,7 @@ impl Req {
             },
             plain_write: write && !shared.https_only && plain_origin(headers),
             write,
+            own_whole,
             fetched,
             fills: !shared.layout_reads.is_empty()
                 && (signal.late_write().is_some() || extensions.get::<crate::layout::StartHere>().is_some()),
@@ -1391,8 +1414,8 @@ impl Req {
         static FULL: AtomicUsize = AtomicUsize::new(16 * 1024);
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
         // A write's own page is whole, as without JavaScript and as the page a write redirects to,
-        // so what the write changed around `<main>` is drawn (#1370).
-        let swap = self.mode.swaps() && !(self.write && self.mode == Mode::Action);
+        // so what the write changed around `<main>` is drawn, for a runtime that draws one (#1370).
+        let swap = self.mode.swaps() && !self.own_whole;
         let (part, size) = if swap { (Part::Swap, &SWAP) } else { (Part::Full, &FULL) };
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
@@ -2713,8 +2736,9 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
-    // A write the runtime sent may answer its own page, which is whole (#1370).
-    let action_write = mode == Mode::Action && !matches!(*req.method(), http::Method::GET | http::Method::HEAD);
+    // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
+    // (#1370).
+    let action_write = own_page_whole(mode, req.method(), req.headers());
     if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
@@ -2727,9 +2751,10 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
     // A write the runtime sent runs no read beside its handler, whose reads must see what it wrote:
-    // its page route keeps the request's head, and only a page it answers with starts the reads
-    // that page draws and is filled (`layout::kept_for_its_page`). A patch or a redirect starts none, and
-    // its error page is a swap of `<main>`, which draws none.
+    // a route whose answer can be a page keeps the request's head, and only a page it answers with
+    // starts the reads that page draws and is filled (`layout::at_late_route`). A route that answers
+    // patches alone (`HtmlResult<Patches>`) or no page (JSON, text) keeps none, and a patch or a
+    // redirect starts no read; its error page is a swap of `<main>`, which draws none.
     // A page the app's or an area's middleware made with `Req` before the route is filled as the
     // middleware answers ([`FillsLate`]), under the deadline and before the error page, as the
     // route's own page was filled as the route answered. Anything else passes with one look at its
@@ -2739,8 +2764,8 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // each ran about 200 more instructions, most of them copying, where the box costs each such
     // write about 1,000 (callgrind, #1370).
     if action_write {
-        signal.mark_late();
-        let next = FillsLate { next: next.late(until), shared, until };
+        signal.mark_late(until);
+        let next = FillsLate { next, shared, until };
         let late: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> =
             Box::pin(page_or_error(shared, req, next, deadline, signal, (mode, fetched)));
         return late.await;

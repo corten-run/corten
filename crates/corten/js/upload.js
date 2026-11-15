@@ -19,6 +19,7 @@ export function upload(url, method, body, signal, progress) {
     const xhr = new XMLHttpRequest();
     xhr.open(method, url);
     xhr.setRequestHeader("corten", "action");
+    xhr.setRequestHeader("corten-draws", "whole");
     xhr.responseType = "arraybuffer";
     xhr.upload.onprogress = progress;
     xhr.onload = () => {

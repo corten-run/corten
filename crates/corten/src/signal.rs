@@ -149,15 +149,18 @@ struct Inner {
     body_limit: usize,
     /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
     /// answers (#1370), here for the same reason: 0 for any other request, [`LATE`] until its
-    /// route is reached, [`HEAD_KEPT`] once its route has kept the request's head for a page it may
-    /// answer with ([`crate::layout::kept_for_its_page`]). A byte, in the padding beside the others.
+    /// route is reached, [`HEAD_KEPT`] once its route is reached (and, if its answer can be a page,
+    /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
+    /// padding beside the others.
     late: AtomicU8,
+    /// Such a write's deadline, which the reads its page starts stop at, set with [`Inner::late`].
+    late_until: std::sync::OnceLock<Option<tokio::time::Instant>>,
 }
 
 /// [`Inner::late`]: a write whose own page is filled after it answers, its route not reached yet,
 /// so a page the app's or an area's middleware makes with `Req` carries the head it was made with.
 const LATE: u8 = 1;
-/// [`Inner::late`]: its route kept the head.
+/// [`Inner::late`]: its route is reached, and kept the head if it needs one.
 const HEAD_KEPT: u8 = 2;
 
 impl Signal {
@@ -239,13 +242,21 @@ impl Signal {
     }
 
     /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
-    /// answers (`page::render_errors`), so a page made with `Req` writes its places.
-    pub(crate) fn mark_late(&self) {
+    /// answers (`page::render_errors`), so a page made with `Req` writes its places; its reads stop
+    /// at `until`, the request's deadline.
+    pub(crate) fn mark_late(&self, until: Option<tokio::time::Instant>) {
+        let _ = self.0.late_until.set(until);
         self.0.late.store(LATE, Ordering::Relaxed);
     }
 
-    /// Its route keeps the head for a page it may answer with ([`crate::layout::kept_for_its_page`]),
-    /// or the head a page was made with is kept to fill it: a `Req` taken after this keeps none.
+    /// The deadline [`Signal::mark_late`] was given.
+    pub(crate) fn late_until(&self) -> Option<tokio::time::Instant> {
+        self.0.late_until.get().copied().flatten()
+    }
+
+    /// Its route is reached, and keeps the head for a page it may answer with
+    /// ([`crate::layout::at_late_route`]), or the head a page was made with is kept to fill it: a
+    /// `Req` taken after this keeps none.
     pub(crate) fn keep_head(&self) {
         self.0.late.store(HEAD_KEPT, Ordering::Relaxed);
     }

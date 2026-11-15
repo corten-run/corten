@@ -517,7 +517,7 @@ struct Here {
     given: Vec<Gift>,
 }
 
-/// A page route's answer to a write the runtime sent ([`kept_for_its_page`]), filled when it is a
+/// A page route's answer to a write the runtime sent ([`at_late_route`]), filled when it is a
 /// page with places: the reads it draws start now, after the handler, from the request's head
 /// `kept` as the route was called, and are waited for as a whole document's are. Anything else (a
 /// patch, a redirect, an error) is returned as it is.
@@ -530,13 +530,7 @@ pub(crate) async fn fill_after(
         return res;
     }
     let here = StartHere::new(shared, until);
-    {
-        let mut here = here.lock();
-        here.kept = Some(kept);
-        if res.extensions().get::<NotAPageAnswer>().is_some() {
-            here.state = State::NotAPage;
-        }
-    }
+    here.lock().kept = Some(kept);
     here.fill(res).await
 }
 
@@ -546,18 +540,21 @@ pub(crate) async fn fill_after(
 #[derive(Clone)]
 pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
 
-/// A page with places that the route did not fill, for a write the runtime sent in an app with
-/// layout reads: one the app's or an area's middleware made with `Req` before the route (a sign-in
-/// page in its place, a refusal drawn as a page). Its reads start now, from the head that `Req`
-/// was taken with ([`EarlyHead`]), as a plain write's page made there starts them from the head
-/// its `Req` kept ([`StartHere::extracted`]).
+/// A page with places that no route filled, for a write the runtime sent in an app with layout
+/// reads: one the app's or an area's middleware made with `Req` before the route (a sign-in page
+/// in its place, a refusal drawn as a page), or a route given by hand made. Its reads start now,
+/// from the head that `Req` was taken with ([`EarlyHead`]), as a plain write's page made there
+/// starts them from the head its `Req` kept ([`StartHere::extracted`]). One from a route whose
+/// answer type says it is no page, or that is `Public`, starts none.
 pub(crate) async fn fill_made_early(
     shared: Arc<crate::page::Shared>,
     until: Option<tokio::time::Instant>,
     mut res: Response,
 ) -> Response {
     let here = StartHere::new(shared, until);
-    if let Some(EarlyHead(head)) = res.extensions_mut().remove::<EarlyHead>() {
+    if res.extensions().get::<NotAPageAnswer>().is_some() {
+        here.lock().state = State::NotAPage;
+    } else if let Some(EarlyHead(head)) = res.extensions_mut().remove::<EarlyHead>() {
         let parts = Arc::unwrap_or_clone(head);
         // A read that takes `Req` itself keeps no head of its own.
         if let Some(signal) = parts.extensions.get::<crate::Signal>() {
@@ -569,27 +566,37 @@ pub(crate) async fn fill_made_early(
 }
 
 /// On a page with places whose route's answer type says it is not a page (`Answer::PAGE`): no
-/// read is started for it, as none is for such a route's `GET` ([`fill_after`]).
+/// read is started for it, as none is for such a route's `GET` ([`fill_made_early`]).
 #[derive(Clone, Copy)]
 pub(crate) struct NotAPageAnswer;
 
-/// On a write the runtime sent (`Mode::Action`) in an app with layout reads, whose own page is
-/// whole (#1370), as its route is called: the request's head, kept for the page the handler may
-/// answer with, and the app and deadline its reads need. Nothing runs beside the handler, whose
-/// reads must see what it wrote, and nothing is started for a patch, a redirect or an error, which
-/// answer with no page; the route keeps the head only because `HtmlResult` does not say which it
-/// answers. A `Public` answer, or a page from a route whose answer type is not one, starts no read
-/// ([`NotAPageAnswer`]). No other
-/// request comes here (`page::render_errors` says which do, as the route's `Next`); the mark the
-/// route reads is the request's `Signal`, so its extensions stay within their first allocation.
+/// As a route of a `#[corten::routes]` module is called for a write that is not a `GET`: for a
+/// write the runtime sent in an app with layout reads, whose own page is whole (#1370), the route
+/// is marked reached, so a `Req` its handler takes keeps no head of its own, and when its answer
+/// type can be a page (`page`: `Answer::PAGE`, not `HtmlResult<Patches>`, not `Public`) the
+/// request's head is kept for the page the handler may answer with, with the app and deadline its
+/// reads need. Nothing runs beside the handler, whose reads must see what it wrote, and nothing is
+/// started for a patch, a redirect or an error, which answer with no page; an `HtmlResult` route
+/// keeps the head because it may answer either. A route that answers patches alone, or no page
+/// (JSON, text), keeps none: a page it still makes (an answer type of the app's own that wraps one
+/// and does not say so) is filled with none of its reads ([`NotAPageAnswer`]). Any other request
+/// passes with one look at its extensions: the mark is the request's `Signal`, so its extensions
+/// stay within their first allocation.
 #[inline(never)]
-pub(crate) fn kept_for_its_page(
+pub(crate) fn at_late_route(
     req: &mut crate::http::Request,
-    until: Option<tokio::time::Instant>,
+    page: bool,
 ) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
     let signal = req.extensions().get::<crate::Signal>()?;
-    let shared = signal.shared()?.clone();
+    if signal.late_write() != Some(false) {
+        return None;
+    }
     signal.keep_head();
+    if !page {
+        return None;
+    }
+    let shared = signal.shared()?.clone();
+    let until = signal.late_until();
     let (parts, body) = std::mem::take(req).into_parts();
     let kept = parts.clone();
     *req = crate::http::Request::from_parts(parts, body);

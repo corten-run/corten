@@ -94,7 +94,8 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    the runtime draws the layout again (a layout value is a `LayoutRead`, never an `Ahead`, which starts before the handler, on every write, and may not see it);
    give the value it read after the write with `.give::<CartCount>(n)`. A patch is not a page and
    fills no layout read (a `later` in it is a debug error), so a write whose answer must change one
-   answers its page, never a patch of the read's view. Write each nav link from
+   answers its page, never a patch of the read's view. A write route that answers patches alone
+   says so, `HtmlResult<Patches>`, and keeps nothing for a page it never answers. Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and
    `aria-current` separately.
