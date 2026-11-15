@@ -3102,10 +3102,11 @@ rules something out.
     A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's read is
     on its way: each whole read would replace the part and its read, so a part slower than the
     page's interval would never come, and not once a part's answer has asked for it to be read
-    again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside what it
-    drew when the tag it answered was inside the part it replaced, never in place of another part's
+    again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside the part
+    it was in, as drawn again, when the tag it answered was inside the part it replaced, never in place of another part's
     (inside it when that part is `<main>` or one of the layout's elements that are the page's).
-    A part read again stops its read, and its listener, when its part leaves the page, and its
+    A part read again stops its read, and its listener, when its part leaves the page (or its tag,
+    when its answer was that tag alone), and its
     answer is checked again once its stylesheets have loaded, as a slow part's is. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
     stops, its listeners go, and its other parts lose their busy mark and show their link at once,

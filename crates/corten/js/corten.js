@@ -1054,7 +1054,10 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
     const beside = asked?.isConnected ? asked : inside ? null : partTagBeside(put);
     if (beside) beside.replaceWith(again);
     else if (inside) {
-      const drawn = put.find(inPage);
+      // The element the tag was in, drawn again under its id: not whatever else the answer drew.
+      let was = /** @type {Element} */ (asked);
+      while (was.parentElement) was = was.parentElement;
+      const drawn = put.find((el) => inPage(el) && !!was.id && el.id === was.id) ?? put.find(inPage);
       if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) drawn.append(again);
       else drawn?.after(again);
     }
@@ -1093,7 +1096,9 @@ function partTagBeside(put) {
  */
 function readPatchAgain(tag, put) {
   const page = swapped;
-  const here = () => page === swapped && put.every(inPage);
+  // An answer that is only its tag (a part with nothing new) lasts while that tag is there.
+  const held = put.length ? put : [tag];
+  const here = () => page === swapped && held.every(inPage);
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.
   readLater(Math.max(1, Number(tag.getAttribute("data-corten-read-again")) || 0), here, async () => {
@@ -1104,7 +1109,7 @@ function readPatchAgain(tag, put) {
     // a page was swapped in): its fetch stops then, and the listener it adds goes, even while its
     // answer waits for a stylesheet that never loads.
     const reading = new AbortController();
-    for (const el of put) signalOf(el).addEventListener("abort", () => reading.abort(), { signal: reading.signal });
+    for (const el of held) signalOf(el).addEventListener("abort", () => reading.abort(), { signal: reading.signal });
     countLeaving(reading.signal);
     try {
       for (;;) {
@@ -1350,13 +1355,14 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   }
   // Firefox ends a page's fetches once a navigation to another document begins, before it knows
   // the page stays (a 204, a download): read again a second later, when a page that left no longer
-  // runs (a timer waits in the back-forward cache too). The read again counts from then, so one cut
-  // with no navigation since is a failure.
+  // runs (a timer waits in the back-forward cache too). Still on its way meanwhile, so the page is
+  // not read whole over its part. The read again counts from then, so one cut with no navigation
+  // since is a failure.
   if (cut && leavingPage && visits !== visited && !stop.signal.aborted) {
-    setTimeout(() => {
-      for (const el of waiting) unmarkBusy(el, mine);
-      retry(true);
-    }, 1000);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (stop.signal.aborted) return;
+    for (const el of waiting) unmarkBusy(el, mine);
+    retry(true);
     return;
   }
   // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the

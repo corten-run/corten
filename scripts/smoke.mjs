@@ -1619,6 +1619,33 @@ async function run(browser) {
       pollAsked && pollListening === 1 && pollLeft === 0 && polledStopped,
       `asked ${pollAsked}, ${pollListening} listening while it waited, ${pollLeft} after, fetch stopped ${polledStopped}`,
     );
+    // And one whose answer was only its tag to read it again (nothing new), which lasts while that
+    // tag is on the page: once a form's answer takes it away, its stalled read stops.
+    let tagOnlyStopped = false;
+    shared.on("requestfailed", (r) => r.url().endsWith("/smoke/tag-only-stalled") && (tagOnlyStopped = true));
+    let tagOnlyAsked = false;
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await shared.route("**/smoke/tag-only-first", (route) => route.fulfill(patchOf('<p id="tag-only-a">Read</p><template data-corten-read-again="1" data-from="/smoke/tag-only-poll"></template>')));
+    await shared.route("**/smoke/tag-only-poll", (route) => route.fulfill(patchOf('<template data-corten-read-again="1" data-from="/smoke/tag-only-stalled"></template>')));
+    await shared.route("**/smoke/tag-only-stalled", () => void (tagOnlyAsked = true));
+    await shared.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="tag-only-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="tag-only-0"><p id="tag-only-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/tag-only-first" data-part="tag-only-a"></template></div>'));
+    });
+    for (let waited = 0; !tagOnlyAsked && waited < 6000; waited += 50) await shared.waitForTimeout(50);
+    const tagOnlyListening = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
+    await shared.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="tag-only-0"><p id="tag-only-a">Drawn by a form</p></div>'));
+    });
+    for (let waited = 0; !tagOnlyStopped && waited < 2000; waited += 50) await shared.waitForTimeout(50);
+    const tagOnlyLeft = await shared.evaluate(() => /** @type {any} */ (window).__unloads);
+    check(
+      "a part read again whose answer was only its tag stops its read and its listener once that tag is taken away",
+      tagOnlyAsked && tagOnlyListening === 1 && tagOnlyLeft === 0 && tagOnlyStopped,
+      `asked ${tagOnlyAsked}, ${tagOnlyListening} listening while it waited, ${tagOnlyLeft} after, fetch stopped ${tagOnlyStopped}`,
+    );
     await shared.unrouteAll({ behavior: "ignoreErrors" });
     await shared.context().close();
   }
@@ -2064,7 +2091,9 @@ async function run(browser) {
       delete headers["content-length"];
       const waiting = `<p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/${id}" data-part="${id}"></template>`;
       const page = await res.text();
-      const body = (shell === "main" ? page.replace(/<main([^>]*)>/, `<main id="${id}"$1>${waiting}`) : page.replace("<main", `<aside id="${id}" data-corten-page>${waiting}</aside><main`))
+      // With an element outside it the answer also draws, before the part.
+      const note = `<p id="${id}-note">Old</p>`;
+      const body = (shell === "main" ? page.replace(/<main([^>]*)>/, `${note}<main id="${id}"$1>${waiting}`) : page.replace("<main", `${note}<aside id="${id}" data-corten-page>${waiting}</aside><main`))
         .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
@@ -2074,7 +2103,7 @@ async function run(browser) {
         .fulfill({
           status: 200,
           headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
-          body: `<${shell} id="${id}"${shell === "aside" ? " data-corten-page" : ""}><p id="${id}-p">Root drawn</p></${shell}><template data-corten-read-again="30" data-from="/smoke/${id}"></template>`,
+          body: `<p id="${id}-note">New</p><${shell} id="${id}"${shell === "aside" ? " data-corten-page" : ""}><p id="${id}-p">Root drawn</p></${shell}><template data-corten-read-again="30" data-from="/smoke/${id}"></template>`,
         })
         .catch(() => {});
     });
