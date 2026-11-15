@@ -207,7 +207,9 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         // action GET below proves type/resource/completion; supplied hints must
         // still agree, and no provider-supplied href is ever fetched.
         if (!(actions[0].rel === undefined || actions[0].rel === "create")) throw stopped(false, { code: "create-link-rel" });
-        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`)) throw stopped(false, { code: "create-link-href" });
+        // Both documented action endpoints identify this same action/resource.
+        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`
+          || actions[0].href === `${origin}/v2/droplets/${result.droplet.id}/actions/${actions[0].id}`)) throw stopped(false, { code: "create-link-href" });
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
           code = "create-action-response";

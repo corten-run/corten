@@ -88,6 +88,17 @@ retained or forwarded. These diagnostics do not identify the cause of historical
 failures whose rejected responses were not retained, or change any acceptance,
 completion, ownership, retry or cleanup gate.
 
+When present, a create action's `href` must exactly match one of the provider's
+two documented action routes: `https://api.digitalocean.com/v2/actions/<action-id>`
+or `https://api.digitalocean.com/v2/droplets/<created-droplet-id>/actions/<action-id>`.
+The latter must bind both IDs; foreign origins, credentials, other resources,
+queries, fragments and noncanonical spellings remain refused. These are advisory
+identity checks, not URLs to fetch: completion still uses only the fixed global
+action GET and verifies its exact ID, type, resource and completed status.
+The [published action endpoint contract](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/dropletActions_get.yml)
+supports this second route; it does not establish what any unretained failed
+response contained or prove a historical failure's cause.
+
 Collection reuses only saved identities and independently collects terminal hosts:
 
 ```sh

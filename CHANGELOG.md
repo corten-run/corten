@@ -19,11 +19,16 @@ Corten is pre-1.0, so any minor version may change the API.
   shows it already). An app with such a stream moves to this shape: drop the stream's route and
   handler, put `ReadAgain::now` where the `<corten-live>` was, and key the link's CSS on
   `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The runtime grows by
-  252 bytes gzipped (15,341 to 15,593). Choices 7 and 44 are rewritten: declarative shadow DOM
-  places a part streamed later without a script, but only with the page around it in a shadow root,
-  where the document's id lookups, fragment links and stylesheets do not reach it
+  252 bytes gzipped (15,341 at `4dad0f513` to 15,593 at `ad91fb377`). Choices 7 and 44 are
+  rewritten: declarative shadow DOM places a part streamed later without a script, but only with
+  the page around it in a shadow root, where the document's id lookups, fragment links and
+  stylesheets do not reach it
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+
+- Accept the documented droplet-scoped create action link only when both resource
+  and action IDs match. Completion still uses the fixed global action endpoint;
+  foreign or malformed hints and incomplete/misbound actions remain refused.
 
 - Distinguish five benchmark provider create-link refusal predicates with closed
   diagnostic codes, without forwarding rejected values or changing completion,
