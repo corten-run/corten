@@ -2658,7 +2658,15 @@ pub struct OtherListing {
 /// The listing's page, titled.
 #[cfg(feature = "json")]
 fn listing_page(name: &str) -> impl crate::Document + '_ {
-    html! { <html><head><title>"Listing"</title><Corten /></head><body><main>{name}</main></body></html> }
+    html! {
+        <html>
+            <head>
+                <title>"Listing"</title>
+                <Corten />
+            </head>
+            <body><main>{name}</main></body>
+        </html>
+    }
 }
 
 /// Given the data in an `Arc`, as an app that shares it would: its JSON is the listing's.
