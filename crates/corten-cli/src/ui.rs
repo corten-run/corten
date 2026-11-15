@@ -2769,13 +2769,19 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
-        // The two choice lists each read the same two sizes, named once for both.
+        // The two choice lists each read the same two sizes, named once for both; a radio's label,
+        // like a checkbox's and a switch's, is a control's height too (#1388).
         let both = [
             r#""choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
             r#""choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
         ];
-        for pieces in [&[piece("checkboxes")][..], &[piece("radio_group")], &[piece("checkboxes"), piece("radio_group")]] {
-            assert_eq!(undeclared(&dir, &app_now, pieces).sizes, both, "{}", pieces.len());
+        let height = r#""control-height": { "$type": "dimension", "$value": { "value": 2.25, "unit": "rem" } }"#;
+        assert_eq!(undeclared(&dir, &app_now, &[piece("checkboxes")]).sizes, both);
+        for pieces in [&[piece("radio_group")][..], &[piece("checkboxes"), piece("radio_group")]] {
+            assert_eq!(undeclared(&dir, &app_now, pieces).sizes, [both[0], both[1], height], "{}", pieces.len());
+        }
+        for name in ["checkbox", "switch"] {
+            assert_eq!(undeclared(&dir, &app_now, &[piece(name)]).sizes, [height], "{name}");
         }
         // A figure's weights and tracking are named with its sizes; its face and its label's case,
         // which the stylesheet reads with a fallback, are the app's to declare or not.
