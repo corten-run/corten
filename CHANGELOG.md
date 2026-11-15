@@ -97,6 +97,17 @@ Corten is pre-1.0, so any minor version may change the API.
   OpenSSH can initialize with the sanitized environment. Git/doctl environments and
   credential handling are unchanged; local configuration-only checks make no connection.
 
+- A navigation that keeps the user's place (`data-keep-place`, or a page reading itself again for
+  `ReadAgain`) finds the focused control by name inside its nearest ancestor with an id and leaves
+  inputs of `type="hidden"` out of its index, so a repeated filter field in a hidden input no
+  longer takes its place, nor does a copy in another form when the filter's form or rail has an
+  id. Disabled controls, ones with the `hidden` attribute and ones inside an `inert` element still
+  count, and the control is looked for again in `<main>` only when nothing under its ancestor
+  matches. A matching field that switches to or from `type="hidden"` across the swap now counts as
+  inserted or removed, so focus may be left unrestored or go to another field; give the control
+  its own id ([Limit 28](docs/design.md#limit-keep-place-identity))
+  ([#1372 A data-keep-place navigation gives focus to a hidden input with the focused control's name and value: placeOf matches any input in main by index](https://github.com/corten-run/corten/issues/1372)).
+
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run
   ([#1368 A new app resolves matchit 0.8.6 while Corten tests on 0.8.4, and the two match an empty path segment differently](https://github.com/corten-run/corten/issues/1368)).

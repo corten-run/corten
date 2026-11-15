@@ -4277,3 +4277,26 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `80dbd7db`'s own runs.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
+28. <a id="limit-keep-place-identity"></a>A navigation that keeps the user's place (a
+    `data-keep-place` form or link, or a page reading itself again for `ReadAgain`) restores
+    focus by the control's own id, else by its name (and value for a checkbox or radio) and its
+    index among the matching controls inside the nearest ancestor with an id, else `<main>`.
+    Inputs of `type="hidden"` are left out of that index. Disabled controls, ones with the
+    `hidden` attribute and ones inside an `inert` element are counted, so a preceding control
+    entering or leaving those states does not change the index. The control at that index is
+    focused if it can take focus; if it cannot, or the ancestor still holds matches but no match
+    at that index, focus is not restored. Only when nothing under the ancestor matches (the
+    ancestor is gone, or every match in it) is the control looked for in `<main>`, at the index it
+    had there before the swap. Without the control's own stable id, inserting, removing or
+    reordering matching controls ahead of it can leave focus unrestored or move it to another
+    control, and a matching field that switches to or from `type="hidden"` across the swap counts
+    as inserted or removed. Because the ancestor is tried first and `<main>` only when nothing
+    under it matches, two more shapes move focus: a control that leaves its ancestor while
+    another match enters it gives focus to that match (where the runtime once looked in `<main>`
+    and found the original), and a control that itself turns `type="hidden"`, leaving no match
+    under its ancestor, is looked for in `<main>` and may give focus to another form's copy. An
+    index does not identify an item through an order change. Give such a control its own stable
+    `#[derive(Id)]` id, which avoids all of these; an id on its form keeps other forms' copies out
+    of the count.
+    This limit is deliberate: inferring an identity from changing markup would
+    still guess where the app's id can state it.
