@@ -1113,11 +1113,14 @@ function readPatchAgain(tag, put) {
           if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
           return;
         }
-        const html = await res.text();
-        if (!here()) return;
+        // Its body is cut short when it stops: nothing to draw.
+        const html = await res.text().catch(() => {});
+        if (html === undefined || !here()) return;
         // Changed while the read was on its way: its answer is drawn for what was, so read again.
         if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
-        await apply(html, undefined, null, undefined, true, tag, undefined, visited);
+        // Checked again once the answer's modules and stylesheets have loaded, right before it is
+        // drawn: one stopped meanwhile (its part replaced, a page swapped in) is not.
+        await apply(html, { get aborted() { return reading.signal.aborted || !here(); } }, null, undefined, true, tag, undefined, visited);
         return;
       }
     } finally {
@@ -1267,7 +1270,14 @@ function countLeaving(signal) {
   if (navigation || signal.aborted) return;
   if (!leaving++) {
     leavingStop = new AbortController();
-    addEventListener("beforeunload", () => void (visits += 1), { signal: leavingStop.signal });
+    addEventListener(
+      "beforeunload",
+      () => {
+        visits += 1;
+        leavingPage = true;
+      },
+      { signal: leavingStop.signal },
+    );
   }
   signal.addEventListener("abort", () => --leaving || leavingStop.abort(), { once: true });
 }
@@ -2441,8 +2451,10 @@ function prefetch(target) {
 let fetching = null;
 /**
  * Whether the page has begun to leave on a navigation the browser makes itself (another site's
- * link, a reload): no part's redirect is followed after it, even by a read started since. Cleared
- * when the browser shows the page again from its back-forward cache.
+ * link, a reload, a full load without the Navigation API seen while a read lasts): no part's
+ * redirect is followed after it, even by a read started since, and the part shows its link
+ * instead. Cleared when the runtime starts a navigation of its own (the browser's did not happen)
+ * or the browser shows the page again from its back-forward cache.
  */
 let leavingPage = false;
 /**
@@ -2477,6 +2489,9 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  */
 async function visit(url, signal, redirected, again, place, source, written, precommit) {
   visits += 1;
+  // A page the runtime draws after one the browser began to load: that load did not happen (a 204,
+  // a prompt the user said no to).
+  leavingPage = false;
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.

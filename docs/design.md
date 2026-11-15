@@ -3087,8 +3087,10 @@ rules something out.
     its way: a link to another site the browser loads itself and a full load without the Navigation
     API (counted from `beforeunload` while a read, a part's or a part read again's, is on its way)
     too, and for a part a read's answer draws waiting, counted from that read's first attempt: the
-    user's link wins. Without the Navigation API a full load that began before any read did is not
-    seen, as listening for `beforeunload` all the time would keep the page out of some browsers'
+    user's link wins; once the browser has begun to load another page, no part's redirect is
+    followed until the runtime makes a navigation of its own, which shows the browser's did not
+    happen. Without the Navigation API a full load that began before any read did is not seen, as
+    listening for `beforeunload` all the time would keep the page out of some browsers'
     back-forward caches), and a
     read whose fetch or body the browser ended by hiding the page (its back-forward cache) is made
     again when the page is shown, not marked failed, if its parts are still the ones it waited for.
@@ -3097,7 +3099,8 @@ rules something out.
     page's interval would never come, and not once a part's answer has asked for it to be read
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside what it
     drew when the tag it answered was inside the part it replaced, never in place of another part's.
-    A part read again stops its read, and its listener, when its part leaves the page. A read is over, and stops putting
+    A part read again stops its read, and its listener, when its part leaves the page, and its
+    answer is checked again once its stylesheets have loaded, as a slow part's is. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
     stops, its listeners go, and its other parts lose their busy mark and show their link at once,
     so neither a read the server never answers nor an answer waiting for a stylesheet that never
@@ -3166,9 +3169,11 @@ rules something out.
     beside it, two such parts side by side each keeping its tag, a read whose part a form replaced stopped so its page's read again goes on, whether
     its server never answered or its answer waited for a stylesheet that never loaded, and the
     other part of such a stalled shared read shown failed at once and its `beforeunload` listener
-    gone, as for a part read again whose part is replaced while its read is on its way, a redirect
-    for a part drawn waiting while a navigation is on its way or after a link to another site not
-    followed, a read cut by a hidden page read
+    gone, as for a part read again whose part is replaced while its read is on its way, its answer
+    not drawn when its stylesheet loads after that and its body cut short with no error, a redirect
+    for a part drawn waiting while a navigation is on its way, after a link to another site or a
+    full load without the API not followed, and one after a link to another site answered 204 and a
+    navigation since followed, a read cut by a hidden page read
     again when shown and not over a part a form replaced meanwhile (`pagehide` and `pageshow`
     dispatched by the test), a client navigation away
     leaving nothing marked, a page left whole and come back to with its part, a part in a layout

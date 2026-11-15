@@ -1343,6 +1343,7 @@ async function run(browser) {
       : []),
     { native: true },
     { native: true, polled: true },
+    { native: true, late: true },
   ]) {
     const overtaken = await (await browser.newContext()).newPage();
     // A full load in place of a swap, where the runtime has no Navigation API.
@@ -1393,7 +1394,9 @@ async function run(browser) {
     // is drawn (`ReadAgain::from`), whose answer then draws a part waiting.
     // A part read again takes the place of the tag beside what its patch draws, so it stays on the
     // page, where a script may move its address.
-    if (!late) {
+    // Without the Navigation API, a read on its way when the link is followed (it is what listens
+    // for the page being left) comes first, as a part drawn later is the case.
+    if (!late || native) {
       await overtaken.evaluate(async (polled) => {
         document
           .querySelector("main")
@@ -1434,6 +1437,7 @@ async function run(browser) {
     /** @type {[boolean, string][]} */
     const names = [
       [late && cross, "nor one of a part drawn waiting after the link to another site was followed"],
+      [late && native, "nor one of a part drawn waiting after a full load began, without the Navigation API"],
       [late, "nor one of a part drawn waiting while the user's navigation is on its way"],
       [polled && moved, "nor one a part read again drew after it was read again at the address a script moved it to"],
       [polled && native, "nor one a part read again drew waiting, where the link is a full load"],
@@ -1647,6 +1651,92 @@ async function run(browser) {
     await polls.unrouteAll({ behavior: "ignoreErrors" });
     await polls.context().close();
   }
+  // A part read again whose answer waits for a stylesheet, or whose body is still coming, when a
+  // form's answer replaces the part: the old answer is not drawn over the new one once the
+  // stylesheet loads, and the body cut short is no error (#1400).
+  {
+    const later = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const unhandled = [];
+    later.on("pageerror", (error) => unhandled.push(String(error)));
+    await later.addInitScript(() => {
+      addEventListener("unhandledrejection", (event) => console.error("unhandled", String(event.reason)));
+      // An answer whose headers come at once and whose body never ends, until the read stops.
+      const own = window.fetch;
+      window.fetch = (input, init) => {
+        if (!String(input).endsWith("/smoke/poll-body")) return own(input, init);
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('<p id="later-b">Old'));
+            init?.signal?.addEventListener("abort", () => controller.error(new DOMException("stopped", "AbortError")));
+          },
+        });
+        return Promise.resolve(new Response(body, { headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" } }));
+      };
+    });
+    later.on("console", (m) => m.type() === "error" && m.text().startsWith("unhandled") && unhandled.push(m.text()));
+    let releaseStyle = () => {};
+    let styleAsked = false;
+    await later.route("**/smoke/later.css", async (route) => {
+      styleAsked = true;
+      await new Promise((resolve) => (releaseStyle = () => resolve(undefined)));
+      await route.fulfill({ status: 200, headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+    });
+    await later.route("**/smoke/poll-style", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+        body: '<link rel="stylesheet" href="/smoke/later.css" data-corten-style><p id="later-a">Old answer</p>',
+      }),
+    );
+    await later.goto(`${base}/`);
+    await later.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="later-0"><div id="later-1"></div><template data-corten-read-again="60" data-from="/smoke/none"></template></div><div id="later-2"><div id="later-3"></div><template data-corten-read-again="60" data-from="/smoke/none"></template></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="later-1"><p id="later-a">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/poll-style"></template>'));
+      await corten.patch(__html('<div id="later-3"><p id="later-b">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/poll-body"></template>'));
+    });
+    for (let waited = 0; !styleAsked && waited < 5000; waited += 50) await later.waitForTimeout(50);
+    await later.waitForTimeout(300);
+    await later.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="later-1"><p id="later-a">Drawn by a form</p></div>'));
+      await corten.patch(__html('<div id="later-3"><p id="later-b">Drawn by a form</p></div>'));
+    });
+    releaseStyle();
+    await later.waitForTimeout(600);
+    const texts = await later.evaluate(() => [document.getElementById("later-a")?.textContent, document.getElementById("later-b")?.textContent]);
+    check(
+      "a part read again whose answer waited for a stylesheet is not drawn over the part a form drew meanwhile",
+      styleAsked && texts[0] === "Drawn by a form",
+      JSON.stringify(texts),
+    );
+    check("and a read again whose body is cut short when its part is replaced throws no error", texts[1] === "Drawn by a form" && unhandled.length === 0, JSON.stringify({ texts, unhandled }));
+    await later.unrouteAll({ behavior: "ignoreErrors" });
+    await later.context().close();
+  }
+  // A link to another site the browser does not leave for (it answers 204): the runtime's next
+  // navigation shows the page stayed, so a part's redirect after it is followed (#1400).
+  if (swaps && crossBase) {
+    const stayed = await (await browser.newContext()).newPage();
+    await stayed.route(`${crossBase}/smoke/no-content`, (route) => route.fulfill({ status: 204 }));
+    await stayed.route("**/smoke/after-cancel", (route) => route.fulfill({ status: 204, headers: { "corten-location": "/news?after=1", vary: "corten" } }));
+    await stayed.goto(`${base}/`);
+    await stayed.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="stayed-away" href="${href}">Away</a>`)), `${crossBase}/smoke/no-content`);
+    await stayed.click("#stayed-away", { noWaitAfter: true });
+    await stayed.waitForTimeout(500);
+    await stayed.click('header nav a[href="/news"]');
+    await stayed.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }).catch(() => {});
+    await stayed.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="stayed-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="stayed-0"><p id="stayed-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/after-cancel" data-part="stayed-a"></template></div>'));
+    });
+    await stayed.waitForFunction(() => location.search === "?after=1", null, { timeout: 5000 }).catch(() => {});
+    check("a part's redirect after a link the browser did not leave for, and a navigation since, is followed", new URL(stayed.url()).search === "?after=1", stayed.url());
+    await stayed.unrouteAll({ behavior: "ignoreErrors" });
+    await stayed.context().close();
+  } else skip("a part's redirect after a link the browser did not leave for, and a navigation since, is followed", swaps ? "the app is not at localhost" : noSwaps);
   // Two independent slow parts beside each other, the second with its tag inside the element it
   // waits for: each answer's tag to read it again goes beside its own part, so the second does not
   // take the place of the first's (#1400).
