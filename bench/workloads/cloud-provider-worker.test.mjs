@@ -22,7 +22,8 @@ function harness(t, mode = "success", transform = (value) => value, interrupted 
     assert.deepEqual(options.execArgv, []); assert.equal(options.stdio[0], "pipe");
     assert.equal(options.stdio[1], "ignore"); assert.equal(options.stdio[2], "ignore");
     assert.ok(!Object.keys(options.env).some((name) => /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i.test(name)));
-    child = fork(fileURLToPath(new URL("cloud-provider-test-worker.mjs", import.meta.url)), [mode, output], options);
+    child = fork(fileURLToPath(new URL("cloud-provider-test-worker.mjs", import.meta.url)), [mode, output],
+      { ...options, env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=128" } });
     const emit = child.emit.bind(child);
     child.emit = (name, ...args) => emit(name, ...(name === "message" ? [receive(args[0]), ...args.slice(1)] : args));
     child.on("message", (value) => { tokenIPC ||= JSON.stringify(value).includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"); });
@@ -82,7 +83,7 @@ test("bounded create classifications survive real worker IPC and cached teardown
     ["post-link-count", { code: "create-link-count" }, 1],
     ["post-link-id", { code: "create-link-id" }, 1],
     ["post-link-rel", { code: "create-link-rel" }, 1],
-    ["post-link-failure", { code: "create-link-href" }, 1],
+    ["post-link-failure", { code: "create-link-href", detail: "foreign-origin" }, 1],
     ["first-action-invalid", { code: "create-action-response" }, 2],
     ["pending-create", { code: "create-action-pending" }, 2],
     ["first-action-http-failure", { code: "create-action-http", httpStatus: 403 }, 2],
@@ -106,11 +107,35 @@ test("bounded create classifications survive real worker IPC and cached teardown
   });
 });
 
+test("closed census predicate diagnostics survive real worker IPC and cached teardown", async (t) => {
+  for (const predicate of ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"]) await t.test(predicate, async (t) => {
+    const h = harness(t, `list-${predicate}`), diagnostic = { code: `list-response-${predicate}`,
+      ...(predicate === "count" ? { detail: "terminal-count-mismatch" } : {}) };
+    const check = (error) => {
+      assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
+      assert.deepEqual(error.providerDiagnostic, diagnostic);
+      assert.ok(publicError(error).includes(`Provider failure: ${diagnostic.code}.`));
+      assert.ok(!`${publicError(error)}${error.stack}${JSON.stringify(error)}`.includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"));
+      return true;
+    };
+    await assert.rejects(h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)], predicate === "count" ? 200000 : 1000), check);
+    await assert.rejects(h.run.close(), check); await assert.rejects(h.run.close(), check);
+    const state = h.state(); assert.equal(state.requests, predicate === "count" ? 100 : 1);
+    assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
+    assert.ok(state.calls.every((call) => call.method === "GET" && call.path === "/v2/droplets?page=1&per_page=200"));
+    assert.ok(h.child.exitCode !== null || h.child.signalCode !== null);
+  });
+});
+
 test("unknown, extra or non-table IPC diagnostic values fail closed without public reflection", async (t) => {
   const raw = "SYNTHETIC_RAW_BODY";
   for (const result of [{ code: raw }, { code: "create-link", raw }, { code: "create-action-http", httpStatus: raw },
     { code: "create-action-http", httpStatus: 499 }, { code: "create-link", httpStatus: 403 }, ["create-link"],
-    { code: "create-link-href", raw }, { code: "create-link-id", httpStatus: 403 }, { code: "create-link-private" }]) {
+    { code: "create-link-href", raw }, { code: "create-link-id", httpStatus: 403 }, { code: "create-link-private" },
+    { code: "list-response-next", raw }, { code: "list-response-count", httpStatus: 403 }, { code: "list-response-private" },
+    { code: "create-link-href", detail: raw }, { code: "create-link-href", detail: { raw } },
+    { code: "create-link-href", detail: "foreign-origin", raw }, { code: "create-link-href", detail: "foreign-origin", httpStatus: 403 },
+    { code: "get-http", httpStatus: 404, detail: "foreign-origin" }, { code: "list-response-count", detail: "foreign-origin" }]) {
     const h = harness(t, "reflect", undefined, undefined, (message) => message.ok === false ? { ...message, result } : message);
     await assert.rejects(h.run(account), (error) => {
       assert.equal(error.controlUncertain, true); assert.equal(error.providerDiagnostic, undefined);
@@ -141,6 +166,78 @@ test("permitted HTTP failure carries only its diagnostic and leaves the worker u
   assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-action-http", httpStatus: 403 } });
   assert.equal((await h.run(account)).status, 0); await h.run.close();
   assert.equal(h.state().consumes, 1); assert.equal(h.launches, 1);
+});
+
+test("supported lifecycle real worker retains one private credential through known create refusals and recovery GET", async (t) => {
+  for (const [mode, code] of [["post-link-shape", "create-link-shape"], ["post-link-count", "create-link-count"],
+    ["post-link-id", "create-link-id"], ["post-link-rel", "create-link-rel"], ["post-link-failure", "create-link-href"],
+    ["first-action-invalid", "create-action-response"]]) await t.test(mode, async (t) => {
+    const h = harness(t, mode), suffix = account.slice(-2);
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+      "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+    assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: {
+      code, ...(mode === "post-link-failure" ? { detail: "foreign-origin" } : {}) } });
+    assert.equal((await h.run(account)).status, 0);
+    const rows = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...suffix])).stdout);
+    assert.equal(rows.length, 1); assert.equal(rows[0].id, 123);
+    const exact = JSON.parse((await h.run(["compute", "droplet", "get", "123", "--output", "json", ...suffix])).stdout);
+    assert.equal(exact.length, 1); assert.equal(exact[0].id, 123);
+    await h.run.close();
+    const state = h.state(); assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
+    assert.ok(state.calls.every((call) => call.originalCredential));
+    assert.equal(state.calls.filter((call) => call.method === "POST").length, 1);
+    assert.equal(state.calls.some((call) => call.method === "DELETE"), false);
+    assert.ok(h.child.exitCode !== null || h.child.signalCode !== null);
+  });
+});
+
+test("supported lifecycle real worker GET404 is explicit absence and does not poison the credential worker", async (t) => {
+  const h = harness(t), get = ["compute", "droplet", "get", "123", "--output", "json", ...account.slice(-2)];
+  assert.deepEqual(await h.run(get, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
+  assert.equal((await h.run(account)).status, 0); await h.run.close();
+  assert.equal(h.state().consumes, 1); assert.equal(h.state().requests, 2); assert.equal(h.launches, 1);
+  assert.ok(h.state().calls.every((call) => call.method === "GET" && call.originalCredential));
+});
+
+test("supported lifecycle GET failure or malformed grammar never becomes absence in real IPC", async (t) => {
+  for (const kind of ["http503", "404-not-allowed", "id", "unsafe-integer", "url", "suffix"]) await t.test(kind, async (t) => {
+    const h = harness(t, kind === "http503" ? "get-http-failure" : "success");
+    const get = ["compute", "droplet", "get", { id: "01", "unsafe-integer": "9007199254740992", url: "https://foreign.invalid" }[kind] ?? "123", "--output", "json", ...account.slice(-2)];
+    if (kind === "suffix") get.splice(4, 2, "--url", "https://foreign.invalid");
+    await assert.rejects(h.run(get, 1000, kind !== "404-not-allowed"), (error) => error.controlUncertain === true);
+    assert.equal(h.state().requests, ["http503", "404-not-allowed"].includes(kind) ? 1 : 0);
+    assert.equal(h.launches, 1);
+  });
+});
+
+test("supported lifecycle IPC rejects an unpermitted status1 or non404 GET failure result", async (t) => {
+  for (const kind of ["not-allowed", "wrong-status", "wrong-code"]) await t.test(kind, async (t) => {
+    const diagnostic = kind === "wrong-code" ? { code: "create-http", httpStatus: 404 } : { code: "get-http", httpStatus: 503 };
+    const h = harness(t, "success", undefined, undefined, (message) => message.ok && message.sequence > 0
+      ? { ...message, result: { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic } } : message);
+    const args = kind === "not-allowed" ? account : ["compute", "droplet", "get", "123", "--output", "json", ...account.slice(-2)];
+    await assert.rejects(h.run(args, 1000, kind !== "not-allowed"), (error) => error.controlUncertain === true);
+    assert.equal(h.launches, 1);
+  });
+});
+
+test("supported lifecycle real worker count convergence passes its third observation and closes normally", async (t) => {
+  const h = harness(t, "list-converges");
+  assert.equal(JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)], 5000)).stdout).length, 0);
+  assert.equal((await h.run(account)).status, 0); await h.run.close();
+  assert.equal(h.state().requests, 4); assert.equal(h.state().consumes, 1); assert.equal(h.launches, 1);
+});
+
+test("supported lifecycle finite href detail survives real IPC without accepting the refused representation", async (t) => {
+  for (const [mode, detail] of [["post-link-href-variant", "semantically-same-canonical-uri"], ["post-link-href-type", "non-string"]]) await t.test(mode, async (t) => {
+    const h = harness(t, mode);
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+      "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+    assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-link-href", detail } });
+    assert.equal((await h.run(account)).status, 0); await h.run.close();
+    assert.equal(h.state().requests, 2); assert.equal(h.state().consumes, 1);
+    assert.equal(h.state().calls.filter((call) => call.method === "POST").length, 1);
+  });
 });
 
 test("success IPC cannot smuggle diagnostics, unknown fields or nonempty failed output", async (t) => {
@@ -186,6 +283,22 @@ test("controller exposes no direct credential-taking REST constructor", () => {
   assert.equal(provider.restRequest, undefined);
 });
 
+test("normal collect retires a refused create through the actual worker without another POST", async (t) => {
+  const h = controllerHarness(t, { missingUnit: true }), w = harness(t, "post-link-failure");
+  const run = (binary, args, timeout, allowFail) => binary === "doctl" ? w.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail);
+  await assert.rejects(h.launch({ run }).launch(), /create completion/);
+  assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().id, "123");
+  assert.equal(h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), false);
+  assert.equal(await h.task({ run }).collect(), 1);
+  assert.equal(h.saved().status, "retired"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().archiveSha256, undefined); assert.equal(h.saved().validation, undefined);
+  assert.equal(await h.task({ run }).collect(), 1);
+  assert.equal(w.state().consumes, 1);
+  assert.equal(w.state().calls.filter(({ method }) => method === "POST").length, 1);
+  assert.equal(w.state().calls.filter(({ method }) => method === "DELETE").length, 1);
+  assert.ok(w.state().calls.filter(({ path }) => path === "/v2/droplets/123").length > 1);
+});
+
 test("approved productionMain reaps the actual clean worker and retains locks for uncertain create", async (t) => {
   for (const mode of ["success", "hang-create", "withhold-close", "post-link-failure", "first-action-http-failure", "zero-resource-create", "create-http-failure"]) await t.test(mode, async (t) => {
   const h = controllerHarness(t), workers = [];
@@ -210,13 +323,13 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
   assert.equal(workers[0].launches, 0);
   const launched = productionMain([...args, "--approve-reviewed-merged-ready", approval], deps);
-  const completed = ["success", "first-action-http-failure", "zero-resource-create"].includes(mode);
+  const completed = ["success", "zero-resource-create"].includes(mode);
   if (completed) assert.equal(await launched, 3);
   else await assert.rejects(launched, (error) => {
-    assert.equal(error.controlTreeUncertain === true, mode !== "create-http-failure");
+    assert.equal(error.controlTreeUncertain === true, ["hang-create", "withhold-close"].includes(mode));
     if (mode === "post-link-failure") {
-      assert.deepEqual(error.providerDiagnostic, { code: "create-link-href" });
-      assert.ok(publicError(error).includes("Provider failure: create-link-href."));
+      assert.deepEqual(error.providerDiagnostic, { code: "create-link-href", detail: "foreign-origin" });
+      assert.ok(publicError(error).includes("Provider failure: create-link-href"));
     }
     if (mode === "create-http-failure") {
       assert.deepEqual(error.providerDiagnostic, { code: "create-http", httpStatus: 422 });
@@ -226,17 +339,18 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   });
   const worker = workers[1]; assert.equal(worker.state().consumes, 1);
   assert.equal(worker.state().calls.filter((value) => value.method === "POST").length, 1);
-  const earlyFailure = ["hang-create", "post-link-failure", "create-http-failure"].includes(mode);
-  assert.equal(h.saved().status, earlyFailure ? "creating" : "running");
-  if (earlyFailure) {
-    assert.equal(Object.hasOwn(h.saved(), "id"), false);
+  const unboundFailure = ["hang-create", "create-http-failure"].includes(mode);
+  const knownFailure = ["post-link-failure", "first-action-http-failure"].includes(mode);
+  assert.equal(h.saved().status, unboundFailure ? "creating" : knownFailure ? "preparing" : "running");
+  if (unboundFailure || knownFailure) {
+    assert.equal(Object.hasOwn(h.saved(), "id"), knownFailure);
     assert.equal(h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), false);
-    assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, 0);
+    if (mode !== "first-action-http-failure") assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, 0);
   }
   if (mode === "first-action-http-failure" || mode === "zero-resource-create")
     assert.equal(worker.state().calls.filter(({ path }) => path === "/v2/actions/456").length, mode === "zero-resource-create" ? 2 : 1);
   assert.ok(worker.child.exitCode !== null || worker.child.signalCode !== null);
-  if (!completed && mode !== "create-http-failure") {
+  if (["hang-create", "withhold-close"].includes(mode)) {
     assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   } else {
     assert.equal(existsSync(join(h.local, "operation.lock")), false); assert.equal(existsSync(join(h.base, ".groups-launch.lock")), false);

@@ -22,7 +22,8 @@ or remove Corten's features to manufacture parity.
 ## Implementation status
 
 The [grouped cloud controller](CLOUD.md) supports a dedicated fresh host for each complete
-registry group. The fleet launches those hosts in parallel; each host runs only its group's
+registry group. The fleet stages admission behind the first group's common setup,
+then admits remaining hosts serially while their remote jobs overlap. Each host runs only its group's
 native entries. The [campaign procedure](isolated/CAMPAIGN.md) retains independent source-audit
 waits and terminal-only evidence collection for each host. A separate fleet gate requires
 every current group before reporting a complete round. These are separate from the legacy marketplace

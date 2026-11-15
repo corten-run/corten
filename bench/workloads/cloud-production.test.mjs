@@ -125,7 +125,7 @@ test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch f
 });
 
 test("approved composed transport provisions fixed files and starts exactly once", async (t) => {
-  const p = productionHarness(t, { active: true, createRejected: true }), approval = await p.approve("--detach");
+  const p = productionHarness(t, { active: true }), approval = await p.approve("--detach");
   assert.equal(await productionMain(approval, p.deps), 3); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
   assert.equal(p.calls.filter(([b, , o]) => b === "ssh" && o.input.includes("systemctl start")).length, 1);
   assert.equal(p.calls.filter(([b, , o]) => b === "ssh" && o.input.includes("sha256sum --check")).length, 3);
@@ -200,7 +200,7 @@ test("account changes during the absence query also preserve deletion uncertaint
   const flags = { deleteUnconfirmed: true }, p = productionHarness(t, flags); p.h.seed();
   await assert.rejects(productionMain(await p.approve(), p.deps));
   flags.hook = (binary, args) => {
-    if (binary === "doctl" && args[2] === "list") { flags.accountId = "00000000-0000-4000-8000-000000000002"; p.h.hosts([]); }
+    if (binary === "doctl" && args[2] === "get") { flags.accountId = "00000000-0000-4000-8000-000000000002"; p.h.hosts([]); }
   };
   await assert.rejects(productionMain(await p.approve(), p.deps), /account identity/);
   assert.ok(!p.h.saved().destroyedAt); assert.equal(p.h.deletes, 1);
@@ -251,7 +251,8 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 17);
+  assert.equal(controllerPaths.length, 18);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));

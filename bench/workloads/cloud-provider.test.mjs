@@ -43,11 +43,10 @@ test("create-link diagnostics isolate each refused predicate without reflecting 
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
       calls.push({ method, path }); return response;
     } });
-    await assert.rejects(run(create, 1000, true), (error) => {
-      assert.equal(error.providerDiagnostic?.code, `create-link-${predicate}`);
-      assert.deepEqual(Object.keys(error.providerDiagnostic), ["code"]);
-      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
-    });
+    const result = await run(create, 1000, true);
+    assert.equal(result.status, 1); assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
+    assert.deepEqual(result.providerDiagnostic, { code: `create-link-${predicate}`, ...(predicate === "href" ? { detail: "foreign-origin" } : {}) });
+    assert.ok(!JSON.stringify(result).includes(credential));
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
   });
 });
@@ -58,7 +57,7 @@ function censusFixture(steps) {
   const state = { clock: 0, cancelled: false, checkpointCost: 0 }, calls = [];
   const run = providerTransport({ repo: resolve("."), spawn, now: () => state.clock, interrupted: () => {
     state.clock += state.checkpointCost; state.checkpointCost = 0; return state.cancelled;
-  }, request({ method, path, timeout }) {
+  }, sleep: async (ms) => { state.clock += ms; }, request({ method, path, timeout }) {
     assert.equal(method, "GET"); assert.ok(path.startsWith("/v2/droplets?"));
     const step = steps[calls.length]; assert.ok(step, "no unexpected census request"); calls.push({ path, timeout });
     state.clock += step.cost ?? 0; state.checkpointCost = step.checkpointCost ?? 0;
@@ -68,41 +67,95 @@ function censusFixture(steps) {
   } });
   return { run, calls, state };
 }
-const censusFailure = (error) => error.providerDiagnostic?.code === "list-response";
+const censusFailure = (error) => error.providerDiagnostic?.code === "list-response-count";
+
+test("census predicate diagnostics isolate refusals without reflecting provider values", async (t) => {
+  const response = (value) => ({ status: 200, value });
+  const cases = [
+    ["shape", response(null)], ["shape", response({ droplets: { raw: credential } })],
+    ["bounds", censusPage(Array.from({ length: 201 }, (_, i) => ({ id: i + 1 })), 201)],
+    ...[undefined, null, credential, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((total) => ["total", censusPage([], total)]),
+    ["bounds", censusPage([], 20001)],
+    ...[undefined, null, credential, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["id", censusPage([{ id }], 1)]),
+    ["duplicate", censusPage([{ id: 1 }, { id: 1 }], 2)],
+    ...[null, [], credential].map((links) => ["links", response({ droplets: [], meta: { total: 0 }, links })]),
+    ...[null, [], credential].map((pages) => ["pages", response({ droplets: [], meta: { total: 0 }, links: { pages } })]),
+    ...[null, 2, credential, `https://foreign.invalid/${credential}`, "https://api.digitalocean.com/v2/droplets?page=2",
+      "https://api.digitalocean.com/v2/droplets?page=2&per_page=20", "https://api.digitalocean.com/v2/droplets?page=3&per_page=200",
+      "https://api.digitalocean.com/v2/droplets?page=2&page=2&per_page=200", "https://api.digitalocean.com/v2/droplets?page=2&per_page=200&raw=1",
+      "https://user:password@api.digitalocean.com/v2/droplets?page=2&per_page=200", "https://api.digitalocean.com/v2/other?page=2&per_page=200",
+      "https://api.digitalocean.com/v2/droplets?page=2&per_page=200#fragment"].map((next) =>
+      ["next", response({ droplets: [], meta: { total: 1 }, links: { pages: { next } } })]),
+    ["bounds", censusPage([{ id: 1 }], 1, 2)],
+  ];
+  for (const [i, [predicate, value]] of cases.entries()) await t.test(`${predicate}-${i}`, async () => {
+    const h = censusFixture([{ response: value }]);
+    await assert.rejects(h.run(list, 1000, true), (error) => {
+      assert.deepEqual(error.providerDiagnostic, { code: `list-response-${predicate}` });
+      assert.equal(error.controlUncertain, undefined);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+    });
+    assert.equal(h.calls.length, 1, "malformed data never dispatches a retake");
+  });
+  for (const [predicate, steps] of [
+    ["duplicate", [censusPage([{ id: 1 }], 2, 2), censusPage([{ id: 1 }], 3)]],
+    ["count", Array.from({ length: 100 }, () => censusPage([{ id: 1 }], 2))],
+    ["count", Array.from({ length: 100 }, (_, i) => i % 2 === 0 ? censusPage([{ id: 1 }], 2, 2) : censusPage([{ id: 2 }], 3))],
+  ]) await t.test(`${predicate}-${steps.length}-GETs`, async () => {
+    const h = censusFixture(steps.map((value) => ({ response: value })));
+    await assert.rejects(h.run(list, 200000), (error) => error.providerDiagnostic?.code === `list-response-${predicate}`);
+    assert.equal(h.calls.length, steps.length);
+  });
+});
+
+test("census predicate diagnostics never replace coarse deadline or cancellation phases", async () => {
+  for (const [stopAt, cancel, code] of [[4, false, "list-response"], [5, false, "provider-output"], [4, true, "list-response"]]) {
+    let ticks = 0, cancelled = false, requests = 0;
+    const run = providerTransport({ repo: resolve("."), spawn, now() {
+      if (++ticks < stopAt) return 0;
+      if (cancel) { cancelled = true; return 0; } return 1000;
+    }, interrupted: () => cancelled, request() { requests++; return censusPage([], 0); } });
+    await assert.rejects(run(list, 1000), (error) => error.providerDiagnostic?.code === code && error.controlUncertain === true);
+    assert.equal(requests, 1);
+  }
+  const h = censusFixture([{ response: censusPage([], 1), cost: 400 }, { response: censusPage([], 0), cost: 600 }]);
+  await assert.rejects(h.run(list, 2000), (error) => error.providerDiagnostic?.code === "list-request" && error.controlUncertain === true);
+  assert.equal(h.calls.length, 2);
+});
 
 test("census retakes only a count mismatch as a fresh complete page1 under the original deadline", async () => {
   const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1 }));
   const h = censusFixture([{ response: censusPage(rows, 10), cost: 400 }, { response: censusPage(rows, 7), cost: 300 }]);
-  const result = JSON.parse((await h.run(list, 1000)).stdout);
+  const result = JSON.parse((await h.run(list, 3000)).stdout);
   assert.ok(isDeepStrictEqual(result, rows), "only the complete new census is returned");
-  assert.equal(h.calls.length, 2); assert.equal(h.calls[0].timeout, 1000); assert.equal(h.calls[1].timeout, 600);
-  assert.equal(h.calls[1].path, "/v2/droplets?page=1&per_page=200"); assert.equal(h.state.clock, 700);
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[0].timeout, 3000); assert.equal(h.calls[1].timeout, 1600);
+  assert.equal(h.calls[1].path, "/v2/droplets?page=1&per_page=200"); assert.equal(h.state.clock, 1700);
 });
 
-test("census changed total discards every old page, ID and total before the one retake", async () => {
+test("census changed total discards every old page, ID and total before a retake", async () => {
   const first = Array.from({ length: 200 }, (_, i) => ({ id: i + 1 })), stable = [{ id: 1 }, { id: 701 }];
   const h = censusFixture([{ response: censusPage(first, 201, 2), cost: 400 },
     { response: censusPage([{ id: 201 }, { id: 202 }], 202), cost: 300 }, { response: censusPage(stable, 2), cost: 200 }]);
-  const result = JSON.parse((await h.run(list, 1000)).stdout);
+  const result = JSON.parse((await h.run(list, 3000)).stdout);
   assert.ok(isDeepStrictEqual(result, stable), "no old census row, seen ID or total may carry over");
-  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].timeout, 300);
+  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].timeout, 1300);
   assert.equal(h.calls[2].path, "/v2/droplets?page=1&per_page=200");
 });
 
-test("census persistent second mismatch refuses instead of accepting partial rows or a third attempt", async () => {
-  const h = censusFixture([{ response: censusPage([{ id: 1 }], 2) }, { response: censusPage([], 1) }]);
-  await assert.rejects(h.run(list), censusFailure); assert.equal(h.calls.length, 2);
+test("census persistent mismatch refuses at the shared100GET bound instead of accepting partial rows", async () => {
+  const h = censusFixture(Array.from({ length: 100 }, () => ({ response: censusPage([], 1) })));
+  await assert.rejects(h.run(list, 200000), censusFailure); assert.equal(h.calls.length, 100);
 });
 
 test("census malformed IDs, totals and links outrank a simultaneous count or total change", async () => {
-  const second = [censusPage([{ id: 1 }], 3), censusPage([{ id: "PRIVATE_ID" }], 3), censusPage([], "PRIVATE_TOTAL"),
-    censusPage([], -1), censusPage([], 20001), censusPage([], 1, 1), censusPage([], 3, 4),
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: null } },
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: [] } } },
-    { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: { next: "https://synthetic.invalid/v2/droplets?page=3&per_page=200" } } } }];
-  for (const response of second) {
+  const second = [["duplicate", censusPage([{ id: 1 }], 3)], ["id", censusPage([{ id: "PRIVATE_ID" }], 3)], ["total", censusPage([], "PRIVATE_TOTAL")],
+    ["total", censusPage([], -1)], ["bounds", censusPage([], 20001)], ["next", censusPage([], 1, 1)], ["next", censusPage([], 3, 4)],
+    ["links", { status: 200, value: { droplets: [], meta: { total: 3 }, links: null } }],
+    ["pages", { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: [] } } }],
+    ["next", { status: 200, value: { droplets: [], meta: { total: 3 }, links: { pages: { next: "https://synthetic.invalid/v2/droplets?page=3&per_page=200" } } } }]];
+  for (const [predicate, response] of second) {
     const h = censusFixture([{ response: censusPage([{ id: 1 }], 2, 2) }, { response }]);
-    await assert.rejects(h.run(list), (error) => censusFailure(error) && !JSON.stringify(error).includes("PRIVATE"));
+    await assert.rejects(h.run(list), (error) => error.providerDiagnostic?.code === `list-response-${predicate}` && !JSON.stringify(error).includes("PRIVATE"));
     assert.equal(h.calls.length, 2, "malformed data must not reach another page1");
   }
 });
@@ -111,7 +164,7 @@ test("census retains one global100GET ceiling across both complete attempts", as
   const steps = Array.from({ length: 99 }, (_, i) => ({ response: censusPage([{ id: i + 1 }], 20000, i === 98 ? undefined : i + 2) }));
   steps.push({ response: censusPage([{ id: 999 }], 2, 2) });
   const h = censusFixture(steps);
-  await assert.rejects(h.run(list), censusFailure); assert.equal(h.calls.length, 100);
+  await assert.rejects(h.run(list), (error) => error.providerDiagnostic?.code === "list-response-bounds"); assert.equal(h.calls.length, 100);
   assert.equal(h.calls[99].path, "/v2/droplets?page=1&per_page=200");
 });
 
@@ -145,14 +198,14 @@ test("census retake never retries HTTP, request errors or cancellation", async (
 test("census second request failure or cancellation never dispatches another retake", async () => {
   for (const step of [{ transport: true }, { response: { status: 500, value: null } }, { response: censusPage([], 0), cancel: true }]) {
     const h = censusFixture([{ response: censusPage([], 1) }, step]);
-    await assert.rejects(h.run(list, 1000)); assert.equal(h.calls.length, 2);
+    await assert.rejects(h.run(list, 3000)); assert.equal(h.calls.length, 2);
   }
 });
 
 test("census retake deducts checkpoint time before the next native grant", async () => {
   const h = censusFixture([{ response: censusPage([], 1), cost: 200, checkpointCost: 300 }, { response: censusPage([], 0), cost: 100 }]);
-  assert.equal(JSON.parse((await h.run(list, 1000)).stdout).length, 0);
-  assert.equal(h.calls[1].timeout, 500); assert.equal(h.state.clock, 600);
+  assert.equal(JSON.parse((await h.run(list, 3000)).stdout).length, 0);
+  assert.equal(h.calls[1].timeout, 1500); assert.equal(h.state.clock, 1600);
 });
 
 function censusWorker(t, mode, host = null) {
@@ -168,9 +221,10 @@ function censusWorker(t, mode, host = null) {
     const state={consumes:0,censuses:0,posts:0,deletes:0,heapLimit:getHeapStatistics().heap_size_limit};
     assert.ok(state.heapLimit<=80*1024*1024); const mode=${JSON.stringify(mode)},host=${JSON.stringify(host)};
     const save=()=>writeFileSync(${JSON.stringify(output)},JSON.stringify(state)); save();
-    serveProviderWorker({spawn(){state.consumes++;save();return{status:0,stdout:Buffer.from('SYNTHETIC_CENSUS_IPC_CREDENTIAL\\n')};},
+    serveProviderWorker({now:()=>0,sleep:async()=>{},spawn(){state.consumes++;save();return{status:0,stdout:Buffer.from('SYNTHETIC_CENSUS_IPC_CREDENTIAL\\n')};},
       connect(){assert.fail('NO_NATIVE_HTTPS');},request({method,path}){
         if(path==='/v2/account')return{status:200,value:{account:{uuid:'synthetic-user-0001',droplet_limit:20}}};
+        if(method==='GET'&&path==='/v2/droplets/123')return state.deletes?{status:503,value:null}:{status:200,value:{droplet:host}};
         if(method==='DELETE'){state.deletes++;save();return{status:204,value:null};}
         if(method==='POST'){state.posts++;save();throw new Error('NO_FAKE_CREATE_ALLOWED');}
         assert.ok(method==='GET'&&path==='/v2/droplets?page=1&per_page=200');state.censuses++;save();
@@ -209,19 +263,20 @@ test("census refused launch preserves caller locks and settlement with zero muta
   await assert.rejects(task.launch(), (error) => censusFailure(error) && error.controlTreeUncertain === true);
   assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
   assert.ok(existsSync(join(h.local, "operation.lock")) && existsSync(join(h.base, ".groups-launch.lock")));
-  const state = worker.counts(); assert.equal(state.censuses, 2); assert.equal(state.posts, 0); assert.equal(state.deletes, 0);
+  const state = worker.counts(); assert.equal(state.censuses, 100); assert.equal(state.posts, 0); assert.equal(state.deletes, 0);
   assert.equal(worker.settled(), true);
   await assert.rejects(task.launch()); assert.equal(worker.counts().posts, 0);
 });
 
-test("census failure after acknowledged delete preserves intent and never replays the mutation", { timeout: 15000 }, async (t) => {
+test("exact-ID GET failure after acknowledged delete preserves intent and never replays the mutation", { timeout: 15000 }, async (t) => {
   const h = harness(t); h.seed(); const saved = h.saved();
   const host = { id: 123, name: saved.name, tags: [...tags, saved.tag], size_slug: saved.host.size,
     region: { slug: saved.host.region }, networks: { v4: [{ type: "public", ip_address: saved.ip }] } };
   const worker = censusWorker(t, "post-delete", host);
   const task = h.task({ run: (binary, args, timeout, allowFail) => binary === "doctl"
     ? worker.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail), settle: () => worker.run.close() });
-  await assert.rejects(task.collect(), (error) => censusFailure(error) && error.controlTreeUncertain === true);
+  await assert.rejects(task.collect(), (error) => error.providerDiagnostic?.code === "get-http"
+    && error.providerDiagnostic.httpStatus === 503 && error.controlTreeUncertain === true);
   const state = h.saved(); assert.ok(state.archiveSha256 && state.evidenceSha256 && state.deletionIntentAt);
   assert.equal(state.destroyedAt, undefined); assert.equal(worker.counts().deletes, 1); assert.equal(worker.counts().posts, 0);
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.equal(worker.settled(), true);
@@ -247,7 +302,7 @@ test("create failures retain only bounded phase codes and HTTP status, never raw
     const code = { response: "create-response", link: "create-link-href", action: "create-action-response", pending: "create-action-pending",
       http: "create-action-http", transport: "create-action-request" }[mode];
     await assert.rejects(run(create, 2500), (error) => {
-      assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}) });
+      assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}), ...(mode === "link" ? { detail: "foreign-origin" } : {}) });
       assert.equal(error.controlUncertain === true, ["pending", "transport"].includes(mode));
       assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential));
       return true;
@@ -360,7 +415,7 @@ test("unbound zero action cannot complete, poll past the deadline, or repeat POS
       if (method === "POST") return publishedCreate();
       const response = createAction(); response.value.action.resource_id = resource_id; return response;
     } });
-    await assert.rejects(terminal(create, 1000, true)); assert.equal(requests, 2);
+    await assert.rejects(terminal(create, 1000)); assert.equal(requests, 2);
   }
 });
 
@@ -392,7 +447,7 @@ test("accepted create rejects ambiguous links before any action read and never r
       "/v2/droplets/3164444/actions/7515"].map((href) => ["href", [{ id: link.id, href }]])]) {
     const calls = [], response = publishedCreate(); response.value.links.actions = actions;
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
-    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === `create-link-${predicate}`);
+    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === `create-link-${predicate}`);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
   }
 });
@@ -410,7 +465,7 @@ test("droplet-scoped create href cannot qualify a wrong, failed or unbound actio
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
       calls.push({ method, path }); return method === "POST" ? response : action;
     } });
-    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === "create-action-response");
+    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === "create-action-response");
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
   }
 });
@@ -440,7 +495,7 @@ test("first action failures after accepted POST stop without retry or leaking pr
         assert.deepEqual(result.providerDiagnostic, { code: "create-action-http", httpStatus: response.status });
         assert.ok(!JSON.stringify(result).includes(credential));
       } else {
-        await assert.rejects(run(create, 1000, true), (error) => {
+        await assert.rejects(run(create, 1000), (error) => {
           assert.equal(error.message, "provider control failed; preserve state/evidence/host");
           assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request" : "create-action-response");
           assert.equal(error.controlUncertain === true, response === null);
@@ -531,8 +586,8 @@ test("complete bounded pagination retains hosts beyond page one and rejects inco
     { droplets: [{ id: 1 }], meta: { total: 2 }, links: { pages: { next: "https://api.digitalocean.com/v2/droplets?page=1&per_page=200" } } },
   ]) {
     let calls = 0;
-    const bad = providerTransport({ repo: resolve("."), spawn, request() { calls++; return { status: 200, value }; } });
-    await assert.rejects(bad(list)); assert.equal(calls, value.droplets.length === 0 ? 2 : 1);
+    const bad = providerTransport({ repo: resolve("."), spawn, sleep: async () => {}, request() { calls++; return { status: 200, value }; } });
+    await assert.rejects(bad(list)); assert.equal(calls, value.droplets.length === 0 ? 100 : 1);
   }
 });
 
