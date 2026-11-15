@@ -73,7 +73,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                         [] => {}
                         // What `#[corten::routes]` passes for a route that says `patches`, for one
                         // with actions (`post(sku) = ..`), and for one that says `data = SetListing`.
-                        [TokenTree::Ident(i)] if i.to_string() == "__patches" || i.to_string() == "__actions" || i.to_string() == "__data" => {}
+                        [TokenTree::Ident(i)]
+                            if i.to_string() == "__patches" || i.to_string() == "__actions" || i.to_string() == "__data" => {}
                         [key, ..] if is_ident(Some(key), "prefetch") => {
                             if prefetched {
                                 return err(key.span(), "prefetch is named twice");
