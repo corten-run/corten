@@ -3992,7 +3992,11 @@ rules something out.
     with brotli (13,846 to 14,027), paid once a release by every user. A GET `data-patch` submit
     reads one attribute, a marked one's answer pushes an entry, and a traversal looks two keys up
     in a set. Nothing changes on the server: `html!`'s output and the request path are as they
-    were, and the check that refuses a misplaced mark runs when the markup compiles. On the
+    were, and the check that refuses a misplaced mark runs when the markup compiles. The request
+    a marked form and its Back send, a `corten: action` GET answered by `req.patch_or`
+    (`what_a_patch_or_request_costs`, release, jemalloc, 1,200 requests less 200), took 17,969.73,
+    17,969.70 and 17,969.63 instructions on `c9ed56785` and 17,969.64, 17,969.70 and 17,969.65 on
+    `307d00bca`, alternated: the same. On the
     smoke's scope screen (a panel and 120 rows besides), Back and Forward between the form's
     entries asked 323 bytes of body, 1,196 on the wire with headers, against 11,077 and 1,586 for
     the page an app's own `pushState` made Back read; their times on a local server were the same
