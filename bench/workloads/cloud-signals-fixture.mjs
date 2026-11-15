@@ -27,7 +27,7 @@ const spawn = (binary, argv, options) => {
         : scenario === "install" ? script.startsWith("bash -n")
           : scenario === "start" ? script.startsWith("systemctl start")
             : scenario === "final-unit" ? script.startsWith("systemctl show") && h.units === 2
-              : scenario === "final-ownership" ? binary === "doctl" && args[2] === "list" && h.units === 2
+              : scenario === "final-ownership" ? binary === "doctl" && args[2] === "get" && h.units === 2
                 : scenario === "delete" ? binary === "doctl" && args[2] === "delete"
                   : scenario === "audit-upload" ? binary === "scp" : false;
   if (match && !sent) {
