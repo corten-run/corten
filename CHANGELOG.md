@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Validate Django marketplace fixtures at startup and fetched records before every
+  JSON, page or write response, retaining complete numeric schema and requested-ID
+  checks without repeating validation on fixture reads or successful POSTs.
+
 - Accept omitted optional `rel`/`href` fields on benchmark provider create links,
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.

@@ -238,6 +238,11 @@ No configuration declares that a store exists or that an adapter passes.
 
 ## Native Contract
 
+Django validates complete marketplace records and their requested IDs at the source
+boundary: fixtures once at startup, API records on every fetch before JSON, page or
+write handling. This does not replace independent exact-source/image audit or
+functional qualification.
+
 Every repetition uses the unchanged `bench/workloads/mixed.mjs` effective plan: 53 primary
 operations, both sources, three page locales, numeric JSON, listing sorts/prefix filtering,
 accepted/rejected localized writes, slow completion, server deadline and client cancellation.
