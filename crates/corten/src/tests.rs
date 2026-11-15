@@ -3864,6 +3864,235 @@ fn rows_read_only_their_own_keys_and_scale_with_their_count() {
     assert_eq!(serde_json::to_string(&errors).unwrap(), r#"{"domains[seller-portal].contact.zip":"Five digits."}"#);
 }
 
+#[derive(Debug, PartialEq, Fields)]
+struct Serial {
+    code: String,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Part {
+    qty: u32,
+    #[fields(group)]
+    ship_to: Address,
+    #[fields(rows)]
+    #[serde(default)]
+    serials: std::collections::BTreeMap<u32, Serial>,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct OrderLine {
+    sku: String,
+    #[fields(rows)]
+    #[serde(default)]
+    parts: std::collections::BTreeMap<String, Part>,
+    #[fields(map)]
+    #[serde(default)]
+    counts: std::collections::BTreeMap<u32, u32>,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Order {
+    #[fields(rows)]
+    #[serde(default)]
+    lines: std::collections::BTreeMap<u32, OrderLine>,
+}
+
+/// A row holds rows (and a map, and a group in an inner row): each field is named through every
+/// row it is in, read back into the nested maps, and has its own message.
+#[test]
+fn rows_in_rows_name_each_field_through_its_rows() {
+    let f = Order::FIELDS;
+    let key = "a b".to_string();
+    let part = f.lines.at(&7).parts.at(&key);
+    assert_eq!(f.lines.at(&7).sku.to_string(), "lines[7].sku");
+    assert_eq!(part.qty.to_string(), "lines[7].parts[a%20b].qty");
+    assert_eq!(part.ship_to.zip.to_string(), "lines[7].parts[a%20b].ship_to.zip");
+    assert_eq!(part.serials.at(&3).code.to_string(), "lines[7].parts[a%20b].serials[3].code");
+    assert_eq!(f.lines.at(&7).counts.at(&2).to_string(), "lines[7].counts[2]");
+    assert!(part.serials.at(&3).code == "lines[7].parts[a%20b].serials[3].code");
+    assert_eq!(part.qty, f.lines.at(&7).parts.at(&key).qty);
+    assert_ne!(part.qty, f.lines.at(&8).parts.at(&key).qty);
+    assert_ne!(part.qty, f.lines.at(&7).parts.at(&"a".to_string()).qty);
+
+    let body = "lines%5B7%5D.sku=X&lines%5B7%5D.parts%5Ba%2520b%5D.qty=2&lines%5B7%5D.parts%5Ba%2520b%5D.ship_to.street=Elm\
+        &lines%5B7%5D.parts%5Ba%2520b%5D.serials%5B3%5D.code=S3&lines%5B7%5D.parts%5Ba%2520b%5D.serials%5B1%5D.code=S1\
+        &lines%5B7%5D.parts%5Bc%5D.qty=1&lines%5B7%5D.parts%5Bc%5D.ship_to.street=Oak&lines%5B7%5D.counts%5B2%5D=5\
+        &lines%5B9%5D.sku=Y";
+    let order: Order = crate::form::from_bytes(body.as_bytes()).expect("reads");
+    let line = &order.lines[&7];
+    assert_eq!((line.sku.as_str(), line.counts[&2]), ("X", 5));
+    let part = &line.parts["a b"];
+    assert_eq!((part.qty, part.ship_to.street.as_str()), (2, "Elm"));
+    assert_eq!(part.serials.iter().map(|(k, s)| (*k, s.code.as_str())).collect::<Vec<_>>(), [(1, "S1"), (3, "S3")]);
+    assert_eq!(line.parts["c"].qty, 1);
+    assert!(order.lines[&9].parts.is_empty() && order.lines[&9].counts.is_empty());
+    let err = crate::form::from_bytes::<Order>(
+        b"lines%5B7%5D.sku=X&lines%5B7%5D.parts%5Bc%5D.qty=x&lines%5B7%5D.parts%5Bc%5D.ship_to.street=a",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.starts_with("lines[7].parts[c].qty: invalid"), "{err}");
+    let err = crate::form::from_bytes::<Order>(b"lines%5B7%5D.sku=X&lines%5B7%5D.parts%5Bc%5D.serials%5Bx%5D.code=a")
+        .unwrap_err()
+        .to_string();
+    assert!(err.starts_with("lines[7].parts[c].serials[x]: key: "), "{err}");
+
+    // A message marks that one field: not the same field of another inner or outer row.
+    let deep = f.lines.at(&7).parts.at(&key).serials.at(&3).code;
+    let mut errors = Errors::new();
+    errors.add(deep, "Unknown serial.");
+    errors.add(f.lines.at(&7).parts.at(&key).ship_to.zip, "Five digits.");
+    errors.add(f.lines.at(&7).counts.at(&2), "Too many.");
+    assert!(errors.has(deep) && errors.has(f.lines.at(&7).counts.at(&2)));
+    assert!(!errors.has(f.lines.at(&7).parts.at(&key).serials.at(&1).code));
+    assert!(!errors.has(f.lines.at(&8).parts.at(&key).serials.at(&3).code));
+    assert!(!errors.has(f.lines.at(&7).parts.at(&"c".to_string()).serials.at(&3).code));
+    assert!(!errors.has(f.lines.at(&7).parts.at(&key).ship_to.street));
+    assert!(!errors.has(f.lines.at(&7).sku));
+    assert_eq!(errors.get(deep), Some("Unknown serial."));
+    assert!(errors.iter().next().is_some_and(|(name, _)| name == deep && name == "lines[7].parts[a%20b].serials[3].code"));
+    let e = errors.within(LimitsFormId);
+    assert_eq!(
+        html! { <input name={deep} {..e.aria(deep)}> }.to_html(),
+        r#"<input name="lines[7].parts[a%20b].serials[3].code" aria-invalid="true" aria-describedby="limits-form-lines[7].parts[a%20b].serials[3].code-error">"#
+    );
+    assert_eq!(
+        errors.to_string(),
+        "lines[7].parts[a%20b].serials[3].code: Unknown serial.; lines[7].parts[a%20b].ship_to.zip: Five digits.; lines[7].counts[2]: Too many."
+    );
+    #[cfg(feature = "json")]
+    assert_eq!(
+        serde_json::to_string(&errors).unwrap(),
+        r#"{"lines[7].parts[a%20b].serials[3].code":"Unknown serial.","lines[7].parts[a%20b].ship_to.zip":"Five digits.","lines[7].counts[2]":"Too many."}"#
+    );
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Condition {
+    kind: String,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Rule {
+    #[fields(rows)]
+    #[serde(default)]
+    conditions: std::collections::BTreeMap<u32, Condition>,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Rules {
+    #[fields(rows)]
+    #[serde(default)]
+    rules: std::collections::BTreeMap<u32, Rule>,
+}
+
+/// Many rows in one row find their messages as many rows of the form do: by their own entry of
+/// the index, which holds that row's messages and no other's, so adding and finding each costs
+/// about the same however many rows the row holds (a client can send tens of thousands).
+#[test]
+fn rows_in_one_row_find_their_errors_as_the_forms_own_rows_do() {
+    let f = Rules::FIELDS;
+    let mut errors = Errors::new();
+    for row in 0..20_000u32 {
+        errors.add(f.rules.at(&1).conditions.at(&row).kind, "Unknown condition.");
+        errors.add(f.rules.at(&1).conditions.at(&row).kind, "dropped: the row has one");
+    }
+    assert_eq!(errors.len(), 20_000);
+    assert_eq!(errors.most_in_a_row(), 1, "each inner row's message in an entry of its own");
+    assert_eq!(errors.get(f.rules.at(&1).conditions.at(&19_999).kind), Some("Unknown condition."));
+    assert!(!errors.has(f.rules.at(&1).conditions.at(&20_000).kind));
+    // The same key in another outer row, and keys swapped between the two levels, are other rows.
+    assert!(!errors.has(f.rules.at(&2).conditions.at(&7).kind));
+    errors.add(f.rules.at(&7).conditions.at(&1).kind, "Swapped.");
+    assert_eq!(errors.get(f.rules.at(&1).conditions.at(&7).kind), Some("Unknown condition."));
+    assert_eq!(errors.get(f.rules.at(&7).conditions.at(&1).kind), Some("Swapped."));
+
+    let mut outer = Errors::new();
+    for row in 0..20_000u32 {
+        outer.add(Numbered::FIELDS.lines.at(&row).qty, "Too many.");
+    }
+    assert_eq!(outer.most_in_a_row(), 1);
+}
+
+/// What adding `ROW_ERRORS` messages to rows costs (2,000 if unset): the form's own rows, or with
+/// `ROW_ERRORS_IN=inner` rows in one row. Measured with callgrind on the release build, as
+/// `what_reading_a_form_costs` is.
+#[test]
+fn what_row_errors_cost() {
+    let count: u32 = std::env::var("ROW_ERRORS").ok().and_then(|n| n.parse().ok()).unwrap_or(2_000);
+    let mut errors = Errors::new();
+    if std::env::var("ROW_ERRORS_IN").as_deref() == Ok("inner") {
+        let f = Rules::FIELDS;
+        for row in 0..count {
+            errors.add(std::hint::black_box(f.rules.at(&1).conditions.at(&row).kind), "Unknown condition.");
+        }
+    } else {
+        let f = Numbered::FIELDS;
+        for row in 0..count {
+            errors.add(std::hint::black_box(f.lines.at(&row).qty), "Too many.");
+        }
+    }
+    assert_eq!(std::hint::black_box(errors).len(), count as usize);
+}
+
+/// What redrawing a refused form with `ROW_DRAWS` of its own rows costs (2,000 if unset), each
+/// row's field with a message: the lookups that find it (`has`, `get`, the control's ARIA) and
+/// its name drawn through its row (`Row::render`). Measured with callgrind on the release build,
+/// collecting in `draw_rows` alone (`--toggle-collect='*draw_rows*'`), against main.
+#[test]
+fn what_redrawing_rows_costs() {
+    #[inline(never)]
+    fn draw_rows(errors: &Errors, count: u32) -> (usize, String) {
+        let f = Numbered::FIELDS;
+        let e = errors.within(LimitsFormId);
+        let found = (0..count).filter(|row| errors.has(f.lines.at(row).qty) && errors.get(f.lines.at(row).qty).is_some()).count();
+        let drawn = html! {
+            for row in 0..count {
+                let qty = f.lines.at(&row).qty;
+                <input {..e.control(qty)}>
+                {e.message(qty)}
+            }
+        };
+        (found, drawn.to_html())
+    }
+    let count: u32 = std::env::var("ROW_DRAWS").ok().and_then(|n| n.parse().ok()).unwrap_or(2_000);
+    let mut errors = Errors::new();
+    for row in 0..count {
+        errors.add(Numbered::FIELDS.lines.at(&row).qty, "Too many.");
+    }
+    let (found, drawn) = draw_rows(std::hint::black_box(&errors), std::hint::black_box(count));
+    assert_eq!(found, count as usize);
+    assert_eq!(drawn.matches(r#"aria-invalid="true""#).count(), count as usize);
+}
+
+/// A form's input is a `FromJson` and an agent tool's input too: rows in a row are read from JSON
+/// objects in objects, and the schema describes each level.
+#[cfg(feature = "json")]
+#[test]
+fn rows_in_rows_read_from_json_as_from_a_form() {
+    let rules: Rules =
+        crate::json::from_str(r#"{"rules":{"1":{"conditions":{"0":{"kind":"price"},"4":{"kind":"stock"}}},"2":{}}}"#)
+            .expect("reads");
+    assert_eq!(rules.rules[&1].conditions[&0].kind, "price");
+    assert_eq!(rules.rules[&1].conditions[&4].kind, "stock");
+    assert!(rules.rules[&2].conditions.is_empty());
+    #[cfg(feature = "types")]
+    {
+        let schema = crate::json::schema::Generator::root_for_read::<Rules>();
+        assert_eq!(
+            schema["properties"]["rules"]["additionalProperties"],
+            serde_json::json!({ "$ref": "#/$defs/Rule" }),
+            "{schema}"
+        );
+        assert_eq!(
+            schema["$defs"]["Rule"]["properties"]["conditions"]["additionalProperties"],
+            serde_json::json!({ "$ref": "#/$defs/Condition" }),
+            "{schema}"
+        );
+        assert_eq!(schema["$defs"]["Condition"]["properties"]["kind"], serde_json::json!({ "type": "string" }), "{schema}");
+    }
+}
+
 #[test]
 fn field_names_follow_serde_and_reach_markup() {
     assert_eq!((SignUp::FIELDS.email.as_str(), SignUp::FIELDS.password.as_str()), ("email", "pw"));

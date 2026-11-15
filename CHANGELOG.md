@@ -36,6 +36,20 @@ Corten is pre-1.0, so any minor version may change the API.
   `invalid_with` bounds it `K: corten::answer::PatchingKind`, which they now require
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
+- Preserve closed production-controller failure stages through fleet workers and
+  saved receipts, distinguishing pre-reservation source and Git failures from
+  launch, collection and teardown without forwarding raw errors or changing gates.
+  Refuse later-host admission when its service is already terminal; preserve its
+  started identity and evidence for collection instead of saving a false running state.
+
+- A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
+  BTreeMap<u32, Condition>` in the type of a form's rows names
+  `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
+  the maps inside the map and gives it its own error, so a list whose items own a list needs no
+  key the app joins and splits by hand. Rows go as deep as the types do; a type whose rows reach
+  its own type does not compile
+  ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
+
 - Stage grouped benchmark host admission behind the first required group's
   source-bound common bootstrap, then admit remaining hosts serially while their
   benchmark jobs overlap. Preserve the complete registry and all measurement gates.
