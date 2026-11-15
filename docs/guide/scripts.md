@@ -518,7 +518,8 @@ calls it: `corten: shipping.fill takes field weight as one <input>, and its form
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
 could not count on its type. An element that is not one of the form's controls, or one the
-component draws itself, is a ref.
+component draws itself, is a ref; so is an `<input type="image">`, which the browser leaves out of
+a form's controls since it is a submit button that posts `name.x` and `name.y`, never its field.
 
 ## Shared scripts
 
