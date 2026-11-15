@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/corten-run/corten/actions/workflows/ci.yml/badge.svg)](https://github.com/corten-run/corten/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
+[![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](Cargo.toml)
 
 [Getting started](docs/guide/getting-started.md) |
 [Guides](#documentation) |
@@ -343,7 +343,7 @@ In the order to read them; each README says how to run it and where each piece i
 
 ## Status
 
-Corten is 0.2: usable and tested, on Rust 1.88 or later, and built for
+Corten is 0.2: usable and tested, on Rust 1.89 or later, and built for
 [Chase Sets](https://chasesets.com). The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md)
 lists what changed. A release publishes every crate at one version on crates.io and attaches a
 prebuilt `corten` for Linux, macOS and Windows to the GitHub release. The framework's package is

@@ -5,6 +5,27 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
+  listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
+  return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
+  spurious missing-heartbeat errors. [Choice 51](docs/design.md#choice-msrv) records when the
+  floor moves and why SQLx stays on 0.8.
+
+- **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
+  `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
+  `From<String>` for `HeaderValue`; use `HeaderValue::try_from`, `from_lossy` or the
+  `insert`/`append` methods that take a string. Such an app also takes 0.51's changes: new
+  error-kind variants, new public consumer fields, websocket errors as tokio-websockets 0.13
+  types, recreated ordered consumers named `{name}_{n}` and the JetStream context timeout as
+  the only bound on its API requests (upstream's breaking changes for
+  [0.52](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes) and [0.51](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes-1), and 0.51's
+  [behaviour changes](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#behaviour-changes-1)).
+
+- Record RUSTSEC-2026-0459 in auction-room's bundled SQLite as an explained exception
+  ([Choice 51](docs/design.md#choice-msrv)): it needs a database file a less trusted party
+  wrote, and the example opens only the file its operator names in `DATABASE_URL`, never a
+  user-supplied one.
+
 - Bind dedicated workload-group hosts to a complete current-registry fleet roster,
   exact source and provider identity. Preserve native group defaults and complete
   contenders; permit only exact reserved sibling hosts, require room for the whole
@@ -716,7 +737,7 @@ Corten is pre-1.0, so any minor version may change the API.
   one removed, or a dialog redrawn, while the answer is on its way still counts as inside. A
   submit from inside the element, the elements inside the one replaced, a live fragment, a
   `ReadAgain` read and a script's `patch()` still keep what the user opened or closed, and a
-  popover stays as the user left it (design Choice 51). It only opens: a dialog the user opened
+  popover stays as the user left it (design Choice 52). It only opens: a dialog the user opened
   stays open when such an answer draws it closed. The runtime is 149 bytes larger with gzip.
 
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:

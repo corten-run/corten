@@ -9,7 +9,7 @@ version = "0.2.0"
 license = "MIT"
 repository = "https://github.com/corten-run/corten"
 homepage = "https://corten.run"
-rust-version = "1.88"
+rust-version = "1.89"
 
 # The crates depend on each other at exactly the workspace version: a path for building here,
 # the version for crates.io. Bump these with `workspace.package.version`. `corten` comes without its
