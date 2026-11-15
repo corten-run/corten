@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Distinguish five benchmark provider create-link refusal predicates with closed
+  diagnostic codes, without forwarding rejected values or changing completion,
+  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
   Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.

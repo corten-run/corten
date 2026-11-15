@@ -199,12 +199,15 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(positive(result.droplet?.id));
         code = "create-link";
         const actions = result.links?.actions;
-        assert.ok(Array.isArray(actions) && actions.length === 1 && positive(actions[0]?.id));
+        // Subcodes describe only a refused predicate, never a later checkpoint.
+        if (!Array.isArray(actions)) throw stopped(false, { code: "create-link-shape" });
+        if (actions.length !== 1) throw stopped(false, { code: "create-link-count" });
+        if (!positive(actions[0]?.id)) throw stopped(false, { code: "create-link-id" });
         // rel/href are optional in the published action-link model. The exact
         // action GET below proves type/resource/completion; supplied hints must
         // still agree, and no provider-supplied href is ever fetched.
-        assert.ok(actions[0].rel === undefined || actions[0].rel === "create");
-        assert.ok(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`);
+        if (!(actions[0].rel === undefined || actions[0].rel === "create")) throw stopped(false, { code: "create-link-rel" });
+        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`)) throw stopped(false, { code: "create-link-href" });
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
           code = "create-action-response";
