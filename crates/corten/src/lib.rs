@@ -555,7 +555,7 @@ use crate::{
 pub use ahead::Ahead;
 pub use answer::{
     Answer, AnyAnswer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Patches,
-    Public, Relay,
+    Public, Relay, Screen,
 };
 #[cfg(feature = "json")]
 pub use answer::{JsonError, JsonResponse, JsonResult};
@@ -807,7 +807,7 @@ pub mod prelude {
         view::Id,
         Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
         FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
-        ReadAgain, Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        ReadAgain, Refused, Render, Req, Route, Routes, Screen, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};
@@ -853,13 +853,13 @@ pub fn runtime_path() -> &'static str {
 }
 
 /// The import map's JSON: `corten`, `corten/events` (the app's typed events) when `events` is the
-/// URL of their module, `corten/views` (the app's view classes) when `views` is, and
-/// `corten/keys` when `keys` is.
-pub(crate) fn import_map(events: Option<&str>, views: Option<&str>, keys: Option<&str>) -> String {
+/// URL of their module, `corten/views` (the app's view classes) when `views` is, and each of
+/// Corten's modules the app's scripts import (`corten/keys`, `corten/read`) at its URL in `own`.
+pub(crate) fn import_map(events: Option<&str>, views: Option<&str>, own: &[(&str, String)]) -> String {
     let events = events.map(|url| format!(r#","corten/events":"{url}""#)).unwrap_or_default();
     let views = views.map(|url| format!(r#","corten/views":"{url}""#)).unwrap_or_default();
-    let keys = keys.map(|url| format!(r#","corten/keys":"{url}""#)).unwrap_or_default();
-    format!(r#"{{"imports":{{"corten":"{}"{events}{views}{keys}}}}}"#, runtime_path())
+    let own: String = own.iter().map(|(specifier, url)| format!(r#","{specifier}":"{url}""#)).collect();
+    format!(r#"{{"imports":{{"corten":"{}"{events}{views}{own}}}}}"#, runtime_path())
 }
 
 /// Streams fragments to `<corten-live src="...">` as server-sent events. Each item is applied like a

@@ -10,7 +10,7 @@ or HTML, and server-sent events, which every platform has built in.
 
 | Contract | What it is | Web (today) | Native screen | Agent |
 |---|---|---|---|---|
-| Screen | a route whose page struct is its view model | HTML from the page's `html!` view | `Accept: application/json`, `{"title","data"}` from `req.screen` | the same JSON, as a read tool or resource |
+| Screen | a route whose page struct is its view model | HTML from the page's `html!` view; the JSON to a script's `read()` | `Accept: application/json`, `{"title","data"}` from `req.screen` | the same JSON, as a read tool or resource |
 | Action | a `POST` route with typed form input | `<form data-patch>`, patch or redirect | the same `POST`, JSON screen back | the same `POST`, as a tool call |
 | Feed | keyed rows: snapshot plus numbered patches | `subscribe()` in `corten.js` | `corten_protocol::Replica` through UniFFI | `Replica`, or the raw SSE stream |
 

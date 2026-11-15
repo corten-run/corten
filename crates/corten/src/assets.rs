@@ -488,24 +488,26 @@ impl Assets {
             sources.push((url, crate::script::served(name, crate::script::UPLOAD_JS).into_bytes().into()));
             registered.insert(name.to_string());
         }
-        // `corten/keys`, for the apps with a script that imports it: preloaded with that script (it
-        // is one of its imports), so no page without one fetches it. Only a listed script brings
-        // it, since only those are read when the crate compiles: a static script that imports it
-        // alone would fail in the browser, so it is an error now.
-        let keys_url = format!("scripts/{}.js", crate::script::KEYS_MODULE);
-        if sources.iter().any(|(u, _)| *u == keys_url) {
-            return Err(clash(format!("the static directory has a {keys_url}, the name of Corten's keys module")));
-        }
-        if module_imports.values().any(|imports| imports.contains(&crate::script::KEYS_MODULE)) {
-            sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
-        } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
-            // The rule corten-macros applies to a listed script: any quoted or backticked name.
-            u.ends_with(".js") && names(body, "corten/keys")
-        }) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{url} imports corten/keys, which Corten serves only when a listed component or script! module imports it: move the shortcut's handler into one"),
-            ));
+        // `corten/keys` and `corten/read`, each for the apps with a script that imports it:
+        // preloaded with that script (it is one of its imports), so no page without one fetches
+        // it. Only a listed script brings it, since only those are read when the crate compiles: a
+        // static script that imports it alone would fail in the browser, so it is an error now.
+        for (specifier, module, source, what) in crate::script::IMPORTED {
+            let own_url = format!("scripts/{module}.js");
+            if sources.iter().any(|(u, _)| *u == own_url) {
+                return Err(clash(format!("the static directory has a {own_url}, the name of Corten's {what} module")));
+            }
+            if module_imports.values().any(|imports| imports.contains(module)) {
+                sources.push((own_url, Bytes::from_static(source.as_bytes())));
+            } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
+                // The rule corten-macros applies to a listed script: any quoted or backticked name.
+                u.ends_with(".js") && names(body, specifier)
+            }) {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{url} imports {specifier}, which Corten serves only when a listed component or script! module imports it: move the code that imports it into one"),
+                ));
+            }
         }
         // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
         // compiles, so whether it imports the views is found here. It is read as written,
@@ -768,8 +770,20 @@ impl Assets {
 
     /// The URL of `corten/keys`, when a script of the app imports it.
     pub fn keys(&self) -> Option<String> {
-        let file = format!("scripts/{}.js", crate::script::KEYS_MODULE);
+        self.own(crate::script::KEYS_MODULE)
+    }
+
+    /// The URL Corten's module `module` (`corten-keys`) is served at, when a script of the app
+    /// imports it.
+    fn own(&self, module: &str) -> Option<String> {
+        let file = format!("scripts/{module}.js");
         self.files.contains_key(&file).then(|| format!("{}{file}", self.prefix))
+    }
+
+    /// Each of Corten's modules a script of the app imports by name (`corten/keys`,
+    /// `corten/read`), with its URL, for the import map.
+    pub(crate) fn imported(&self) -> Vec<(&'static str, String)> {
+        crate::script::IMPORTED.iter().filter_map(|(specifier, module, ..)| Some((*specifier, self.own(module)?))).collect()
     }
 
     /// The URL of the views' module, when the app lists any `#[component(view)]`.
@@ -1618,6 +1632,43 @@ mod tests {
         let taken = vec![("scripts/corten-keys.js".to_string(), Bytes::from_static(b"export const shortcut = 1;"))];
         let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
         assert!(error.to_string().contains("Corten's keys module"), "{error}");
+    }
+
+    /// `corten/read` is served the same way, and the import map names each module served.
+    #[test]
+    fn corten_read_is_served_only_for_a_listed_script_that_imports_it() {
+        const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
+            Component {
+                name,
+                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports }),
+                style: None,
+                event: None,
+                view: None,
+                anchor: &0,
+            }
+        }
+        const READER: Component = script("reader", &[crate::script::READ_MODULE]);
+        const PLAIN: Component = script("plain", &[]);
+        let assets = Assets::build(None, &[READER, PLAIN], "/assets").unwrap();
+        let dir = &assets.scripts_dir;
+        assert_eq!(assets.imported(), [("corten/read", format!("{dir}corten-read.js"))]);
+        assert_eq!(assets.keys(), None, "keys only when imported");
+        assert!(assets
+            .module("reader")
+            .unwrap()
+            .0
+            .ends_with(&format!(r#"<link rel="modulepreload" href="{dir}corten-read.js">"#)));
+        assert!(!assets.module("plain").unwrap().0.contains("corten-read"));
+        assert!(
+            crate::import_map(None, None, &assets.imported()).ends_with(&format!(r#","corten/read":"{dir}corten-read.js"}}}}"#))
+        );
+        assert!(Assets::build(None, &[PLAIN], "/assets").unwrap().imported().is_empty());
+        let importer = vec![("scripts/app.js".to_string(), Bytes::from_static(b"import { read } from 'corten/read';"))];
+        let error = Assets::build_with(importer, &[PLAIN], &[], "/assets").err().expect("nothing serves corten/read");
+        assert!(error.to_string().contains("scripts/app.js imports corten/read"), "{error}");
+        let taken = vec![("scripts/corten-read.js".to_string(), Bytes::from_static(b"export const read = 1;"))];
+        let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
+        assert!(error.to_string().contains("Corten's read module"), "{error}");
     }
 
     /// `corten/views` is mapped only for an app with a view, though `tsc` sees `rows()` and

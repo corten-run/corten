@@ -13,7 +13,7 @@ CopyButton follows this rule; it cannot cancel the clipboard write itself.
 
 | Where | The signal | Aborts when |
 |---|---|---|
-| a handler | the `signal` keyword: `on:connect={js::watch(signal)}` | the element with the `on:` leaves the page; pass it to `addEventListener`, `fetch`, `subscribe` and `mount`, which is the only cleanup |
+| a handler | the `signal` keyword: `on:connect={js::watch(signal)}` | the element with the `on:` leaves the page; pass it to `addEventListener`, `fetch`, `subscribe`, `read` and `mount`, which is the only cleanup |
 | a `<form data-patch>` submit | the runtime's, per form | a navigation, so a late reply never patches the wrong page, and for a GET a newer submit of the same form (a submit made while a write is pending waits for it instead) |
 | a client navigation | the Navigation API's `event.signal` | another navigation starts |
 | a request on the server | `req.signal()`, or `signal: corten::Signal` as an extractor | the response was sent (`Abort::Responded`), the client left (`Disconnected`), or the deadline passed (`Deadline`) |

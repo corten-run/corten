@@ -193,6 +193,10 @@ async fn home(req: Req, State(m): State<Market>) -> HtmlResult {
 }
 ```
 
+A screen whose data a page's script reads names it on its route, `#[route("/sets/{set}", get = set, data = SetListing)]`,
+and its handler returns `HtmlResult<Screen<SetListing>>` (only `req.screen` with a `SetListing` makes one);
+the script reads it with `read()` ([scripts.md](scripts.md), A screen's data).
+
 ## A route with no screen
 
 Webhooks, OAuth callbacks, calls from other services and public APIs answer only JSON: their

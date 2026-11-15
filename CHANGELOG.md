@@ -5,6 +5,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A script reads a screen's data typed, from the route that answers it, with `read(url, { signal })`
+  from the new `corten/read` module: a route that says `data = T` in `#[route(..)]` (its `get`
+  handler returning `HtmlResult<Screen<T>>`, which only `req.screen` given a `T` makes) is a
+  handler argument of type `ScreenUrl<T>`, and `read()` asks it with `Accept: application/json`
+  through the browser's HTTP cache (an unchanged answer is a 304) and resolves to its `data`, typed
+  as `T` from `corten::types`. It rejects with a `ReadError` (`status` the answer's, or 0 with a
+  `cause`) and with `signal`'s reason once it aborts. The module (560 bytes, 387 with gzip, 320
+  with brotli) is served and preloaded only for apps whose scripts import it; the runtime is
+  unchanged. `req.screen` and `req.screen_with_status` gained a type parameter for the answer's
+  kind, so a call that named their types with a turbofish names three now
+  (`req.screen::<ForOne, AnyAnswer, _>`); other calls are unchanged
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
 - Accept omitted optional `rel`/`href` fields on benchmark provider create links,
   while still requiring one positive action ID and exact droplet-bound completed
   action proof. Conflicting supplied fields remain rejected; no mutation is retried.

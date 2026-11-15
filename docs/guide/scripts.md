@@ -881,3 +881,78 @@ through [views](#views):
 |---|---|---|
 | Live rows | `corten::feed::Feed<Row>`: `write(\|tx\| ...)`, `snapshot()`, `live(since)` (feature `feed`), at a route with `rows = Row` | `subscribe(feed, { snapshot, patch, status }, { signal })` in an `on:connect` handler, `feed` a `FeedUrl<Row>` parameter |
 | Rendering | the rows, rendered with `html!` as `#[component(view)]`s | `rows(body, Row).get(row.id).price = row.price` for each changed row, in the same handler |
+
+## A screen's data
+
+A script that needs data the page did not draw (another set's products, the package for another
+shipping service) reads it from the route that already answers it, typed. A route's `req.screen`
+answers a data client (`Accept: application/json`) with `{"title", "data"}`; `read()` from
+`corten/read` asks it for that, the way a native screen does, and returns `data` typed by the
+route:
+
+| Piece | Server | Browser |
+|---|---|---|
+| The data | a `ToJson` view model, added with `Types::add` | `import("../types/app").SetListing` |
+| The route | `#[route("/sets/{set}", get = set, data = SetListing)]`, whose `get` handler returns `HtmlResult<Screen<SetListing>>` from `req.screen(&listing, doc)` | a handler parameter `@param {ScreenUrl<SetListing>} set` (from `corten/read`), given `url::Set { set }` in the markup |
+| The read | the same handler: a browser gets the page, a script the JSON | `await read(set, { signal })`, which resolves to a `SetListing` |
+
+```rust,ignore
+#[corten::routes]
+pub mod url {
+    #[route("/sets/{set}", get = set, data = SetListing)]
+    pub struct Set<'a> { pub set: &'a str }
+}
+
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+    let listing = SetListing::read(at.set).await?;
+    req.screen(&listing, set_page(&req, &listing))
+}
+
+// In another page's markup: a button per set it can switch to.
+<button type="button" on:click={js::switchTo(rows, url::Set { set: &s.code }, signal)}>{&s.name}</button>
+```
+
+```js
+import { read } from "corten/read";
+/** @import { ScreenUrl } from "corten/read" */
+/** @typedef {import("../types/app").SetListing} SetListing */
+
+/** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
+export async function switchTo(rows, set, signal) {
+  const listing = await read(set, { signal });
+  // listing.products is SetListing's, as the server declared it.
+}
+```
+
+The type goes from the route to the script, checked at each step, as a feed's rows do
+([Live rows](#live-rows)). The route names its data (`data = SetListing`), and its `get` handler
+must return `HtmlResult<Screen<SetListing>>`, which only `req.screen` and `req.screen_with_status`
+make, given a `SetListing`: a handler that answers a page or a redirect, or a screen of other
+data, does not compile at its name in `#[route(..)]`, since a script's read would get no data or
+the wrong data. `SetListing` in `ScreenUrl<SetListing>` is the Rust type of that name in the
+component's module, so the call takes only a route whose data is that type; a route that names
+no data, or other data, does not compile at the call. In the script a plain string is not a
+`ScreenUrl`, so `read("/sets/m21")` fails `tsc`, and so does a field the data does not have. A
+route mounted by hand (`Area::route`) is not checked against its data, as one with `rows` is not
+checked against its feed. The data must be a type without a borrowed lifetime (`SetListing`,
+not `SetListing<'a>`), since the handler's return type names it.
+
+The read goes through the browser's HTTP cache. Corten tags a `200` it may be asked about again
+with a weak `ETag` and sends it `private, no-cache` by default, so each read asks with the tag it
+kept and an unchanged answer is a `304` with no body; a `Public` route's `max-age` lets a read
+within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
+keeps a cached page from answering a read. A read rejects with a `ReadError` (from `corten/read`)
+when the answer is not a success (`status` is its status, a 404 or a 503) or when there is none it
+can use (`status` 0, with the error as `cause`: offline, or an answer that is not a screen's JSON),
+and with `signal`'s reason once it aborts. In a handler pass `signal`, so a read the element no
+longer needs is dropped when it leaves the page; the runtime reports a handler's rejected promise,
+so a handler whose element can leave while it reads catches the rejection and returns when
+`signal.aborted`. The envelope is checked; the data is trusted as the route's own type, as a
+feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)).
+
+Data the page needs when it loads is a handler argument, which costs no request; data it may never
+need, or that a choice the user makes picks, is a read; a change to what the server draws is a
+`data-patch` form. `corten/read` is a module of its own (560 bytes, 387 gzipped), served only to
+apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
+not download it and the runtime is unchanged
+([why a read and not a data block](../design.md#choice-screen-read)).

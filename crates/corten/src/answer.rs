@@ -191,6 +191,10 @@ impl AnswerKind for Patches {
     const PATCHES: bool = true;
 }
 
+impl<T: ?Sized> AnswerKind for Screen<T> {
+    const PATCHES: bool = false;
+}
+
 /// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer, and
 /// [`Patches`] only for `HtmlResult<Patches>` and `Public<..>` or `NoStore<..>` of it, the
 /// answers only the `Req` methods that answer a patch make. Sealed, so a route that says
@@ -216,6 +220,15 @@ impl<A> KindOf<A> for AnyAnswer {
     where
         A: Shareable;
     type InNoStore = AnyAnswer;
+}
+
+impl<A: sealed::ScreenAnswer<T>, T: ?Sized> KindOf<A> for Screen<T> {
+    type InResult = Screen<T>;
+    type InPublic
+        = Screen<T>
+    where
+        A: Shareable;
+    type InNoStore = Screen<T>;
 }
 
 impl<A: sealed::PatchAnswer> KindOf<A> for Patches {
@@ -382,6 +395,22 @@ pub struct AnyAnswer;
 /// ```
 pub struct Patches;
 
+/// A screen whose data is `T`: what `Req::screen` (feature `json`) answers a data client
+/// (`Accept: application/json`) with, `{"title", "data"}`, and the page otherwise. A handler names
+/// it in its return type, `HtmlResult<Screen<SetListing>>`, for a route that says
+/// `data = SetListing` ([`crate::routes`]), whose URL a script reads with `read()` from
+/// `corten/read`, typed by the declaration `corten::types` writes for `SetListing`. Only
+/// `req.screen` and `req.screen_with_status`, given a `T`, make one, so a route's data is what its
+/// `get` handler answers (the examples are on `Req::screen`).
+pub struct Screen<T: ?Sized>(PhantomData<fn(&T)>);
+
+/// The kinds `Req::screen` answers as, given data of type `T`:
+/// [`AnyAnswer`], for a handler that returns `HtmlResult`, and [`Screen<T>`], for one whose route
+/// says `data = T`. Sealed.
+pub trait ScreenKind<T: ?Sized>: sealed::Kind {}
+impl<T: ?Sized> ScreenKind<T> for AnyAnswer {}
+impl<T: ?Sized> ScreenKind<T> for Screen<T> {}
+
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
     message = "a `Public` answer is the same for everyone, so it cannot set a cookie",
@@ -393,7 +422,7 @@ pub trait SetsCookies: sealed::Sealed {}
 impl SetsCookies for ForOne {}
 
 pub(crate) mod sealed {
-    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Shareable};
+    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Screen, Shareable};
 
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
@@ -401,10 +430,25 @@ pub(crate) mod sealed {
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
+    impl<T: ?Sized> Kind for Screen<T> {}
 
     pub trait KindOf<A> {}
     impl<A> KindOf<A> for AnyAnswer {}
     impl<A: PatchAnswer> KindOf<A> for Patches {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> KindOf<A> for Screen<T> {}
+
+    /// An answer that is a screen of `T`: the answers whose [`super::Answer::Kind`] can be
+    /// [`Screen<T>`] ([`super::KindOf`]). Only Corten's: `Req::screen` makes the first.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot say `Kind = Screen<{T}>`: only req.screen's answers can",
+        label = "this answer says `Kind = Screen<..>`",
+        note = "only `HtmlResult<Screen<T>>` (and `Public<..>` or `NoStore<..>` of it), which req.screen and req.screen_with_status make, is a screen of T; an answer type of the app's own says `type Kind = AnyAnswer;`"
+    )]
+    pub trait ScreenAnswer<T: ?Sized> {}
+    impl<For, T: ?Sized> ScreenAnswer<T> for HtmlResponse<For, Screen<T>> {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> ScreenAnswer<T> for Result<A, Error> {}
+    impl<A: ScreenAnswer<T> + Shareable, T: ?Sized> ScreenAnswer<T> for Public<A> {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> ScreenAnswer<T> for NoStore<A> {}
 
     /// An answer that is a patch whenever the runtime asked: the answers whose
     /// [`super::Answer::Kind`] can be [`Patches`] ([`super::KindOf`]). Only Corten's.
@@ -563,6 +607,15 @@ impl Answer for HtmlResponse<ForOne, Patches> {
     type Kind = Patches;
 }
 
+/// A screen: the page for a browser, its data for a data client ([`Screen`]).
+impl<T: ?Sized> Answer for HtmlResponse<ForOne, Screen<T>> {
+    const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
+    type Inputs = AnyInputs;
+    type Rows = NotAFeed;
+    type Kind = Screen<T>;
+}
+
 /// An answer that can be [`Public`], and what it is there: the same answer, made for everyone.
 /// An [`HtmlResult`] becomes a `Result<HtmlResponse<ForAll>>`, so the `Req` methods that make
 /// it make it for everyone and it cannot set a cookie; an answer that cannot set one (text, JSON,
@@ -663,6 +716,10 @@ impl Shareable for HtmlResponse<ForOne, AnyAnswer> {
 
 impl Shareable for HtmlResponse<ForOne, Patches> {
     type ForAll = HtmlResponse<ForAll, Patches>;
+}
+
+impl<T: ?Sized> Shareable for HtmlResponse<ForOne, Screen<T>> {
+    type ForAll = HtmlResponse<ForAll, Screen<T>>;
 }
 
 impl<A: Shareable> Shareable for Result<A, Error> {

@@ -263,6 +263,39 @@ last patch after a disconnect. Across several instances, use `corten-cluster`. A
 mirrors a log is `Feed::follow(generation, seq, rows)`, its generation ASCII letters, digits, `.`
 and `_` only (`deploy.3`, never `deploy:3` or base64): it panics on anything else.
 
+## A screen's data
+
+A script that needs data the page did not draw (another set's rows, picked by the user) reads it
+from the route that answers it as a screen. Data the page needs when it loads is a handler
+argument instead (no request).
+
+```rust
+// In the routes module: #[route("/sets/{set}", get = set, data = SetListing)] pub struct Set<'a> { pub set: &'a str }
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+    let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
+    req.screen(&listing, set_page(&req, &listing))
+}
+// another page's markup: <button type="button" on:click={js::switchTo(rows, url::Set { set: &s.code }, signal)}>
+```
+
+```js
+import { read } from "corten/read";
+/** @import { ScreenUrl } from "corten/read" */
+/** @typedef {import("../types/app").SetListing} SetListing */
+
+// ScreenUrl<SetListing> takes only a route with data = SetListing (checked when the crate compiles);
+// read() asks it with Accept: application/json through the HTTP cache (a 304 when unchanged).
+/** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
+export async function switchTo(rows, set, signal) {
+  const listing = await read(set, { signal }); // a SetListing
+}
+```
+
+It rejects with a `ReadError` (`status` the answer's, or 0 with a `cause` when there was none it
+could use) and with `signal`'s reason once it aborts; a handler whose element can leave while it
+reads catches that and returns when `signal.aborted`. Never `fetch` a screen's JSON by hand or
+write its type: the route types it.
+
 ## Many rows: views
 
 A row component a script changes often is a `#[component(view)]`: each parameter that is an

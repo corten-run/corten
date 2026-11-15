@@ -1,0 +1,2 @@
+// Corten read (MIT). Built from crates/corten/js/read.js by scripts/build-js.mjs; do not edit.
+var t=class extends Error{constructor(t,a,e){super(`corten: ${t} answered ${a||"nothing it could read"}`,{cause:e}),this.name="ReadError",this.status=a}};async function a(a,{signal:e}={}){let r=0;try{let t=await fetch(a,{headers:{accept:"application/json"},signal:e});if(t.ok){let a=await t.json();if(a&&"object"==typeof a&&"data"in a)return a.data}else r=t.status}catch(r){throw e?.aborted?e.reason:new t(a,0,r)}throw new t(a,r)}export{t as ReadError,a as read};

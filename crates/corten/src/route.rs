@@ -4407,6 +4407,38 @@ pub mod __private {
     )]
     pub trait FeedRows<Row> {}
 
+    /// A route whose `get` answers a screen of `Data` (`data = SetListing`): what a script's
+    /// `ScreenUrl<SetListing>` parameter takes.
+    #[diagnostic::on_unimplemented(
+        message = "{Self} is not the URL of a screen whose data is {Data}",
+        label = "the handler's JSDoc says ScreenUrl<{Data}>, and this route names other data or none",
+        note = "a screen's route names its data, #[route(\"/sets/{{set}}\", get = set, data = SetListing)], its get handler returns HtmlResult<Screen<SetListing>>, and the script's parameter names the same type, @param {{ScreenUrl<SetListing>}} set"
+    )]
+    pub trait ScreenData<Data: ?Sized> {}
+
+    /// The kind of an answer that is a screen of `D` ([`crate::answer::Screen`]), which only
+    /// `req.screen` makes given a `D`: what the `get` handler of a route that says `data = D`
+    /// returns, checked by its routes module on its [`crate::Answer::Kind`].
+    #[diagnostic::on_unimplemented(
+        message = "the route says `data = {D}`, and its get handler's answer is not a screen of {D} (its kind is `{Self}`)",
+        label = "this handler",
+        note = "return `HtmlResult<Screen<{D}>>`, which only req.screen and req.screen_with_status make, given a {D}; a page or a redirect would answer a script's read with no data"
+    )]
+    pub trait ScreenOf<D: ?Sized> {}
+    impl<D: ?Sized> ScreenOf<D> for crate::answer::Screen<D> {}
+
+    /// `data = D`: the route's `get` handler answers a screen of `D` ([`ScreenOf`]). A `const`
+    /// with nothing to run: the bounds are the check, at the handler's name in `#[route(..)]`.
+    #[inline]
+    pub const fn screen<H, T, S, D: ?Sized>(_: &H)
+    where
+        H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Out: crate::Answer,
+        <<H as crate::answer::Signature<T>>::Out as crate::Answer>::Kind: ScreenOf<D>,
+    {
+    }
+
     /// A route with a `post` (or `any`) handler in a module that requires no caller: one a
     /// browser can post a report to (`Policy::report_to`).
     pub trait Posts {}

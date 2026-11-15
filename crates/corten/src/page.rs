@@ -908,7 +908,7 @@ impl Shared {
         let import_map = crate::import_map(
             assets.as_ref().and_then(|a| a.events()).as_deref(),
             assets.as_ref().and_then(|a| a.views()).as_deref(),
-            assets.as_ref().and_then(|a| a.keys()).as_deref(),
+            &assets.as_ref().map(|a| a.imported()).unwrap_or_default(),
         );
         let mut hasher = std::hash::DefaultHasher::new();
         crate::runtime_version().hash(&mut hasher);
@@ -1992,20 +1992,104 @@ impl Req {
     /// [`Mode::Data`] request gets `{"title": ..., "data": data}`, the title being the text of the
     /// document's `<title>`. `data` is the screen's view model, so a native screen or an agent sees
     /// exactly what the view shows; for it, only the document's `<title>` renders.
+    ///
+    /// Its answer is any `HtmlResult`, or the `HtmlResult<Screen<T>>` of a route that says
+    /// `data = T` ([`crate::Screen`]), whose URL a page's script can read the data from, typed
+    /// (`read()` from `corten/read`, [Scripts](https://github.com/corten-run/corten/blob/main/docs/guide/scripts.md#a-screens-data)):
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/sets/{set}", get = set, data = SetListing)]
+    ///     pub struct Set<'a> {
+    ///         pub set: &'a str,
+    ///     }
+    /// }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing {
+    ///     name: String,
+    ///     products: Vec<String>,
+    /// }
+    ///
+    /// async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<Screen<SetListing>> {
+    ///     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
+    ///     let name = &listing.name;
+    ///     req.screen(&listing, html! { <html><head><title>{name}</title><Corten /></head><body><main>{name}</main></body></html> })
+    /// }
+    /// # let _ = App::new(url::router()).router();
+    /// ```
+    ///
+    /// A page, a redirect or a screen of other data is not the route's data, so none compiles
+    /// there:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+    ///     req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: String }
+    ///
+    /// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+    ///     let order = Order { id: "7".into() };
+    ///     req.screen(&order, html! { <html><head><title>"Order"</title><Corten /></head><body><main>"7"</main></body></html> })
+    /// }
+    /// ```
+    ///
+    /// The route checks its `get` handler at its name, so one that may answer without the data
+    /// does not compile where the route says `data`:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     req.screen(&listing, html! { <html><head><title>"Sets"</title><Corten /></head><body><main>"Sets"</main></body></html> })
+    /// }
+    /// # fn main() { let _ = url::router(); }
+    /// ```
     #[cfg(feature = "json")]
-    pub fn screen<For, T: crate::json::ToJson + ?Sized>(&self, data: &T, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
+    pub fn screen<For, Kind: crate::answer::ScreenKind<T>, T: crate::json::ToJson + ?Sized>(
+        &self,
+        data: &T,
+        doc: impl Document,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         self.screen_with_status(StatusCode::OK, data, doc)
     }
 
+    /// [`Req::screen`] with another status.
     #[cfg(feature = "json")]
-    pub fn screen_with_status<For, T: crate::json::ToJson + ?Sized>(
+    pub fn screen_with_status<For, Kind: crate::answer::ScreenKind<T>, T: crate::json::ToJson + ?Sized>(
         &self,
         status: StatusCode,
         data: &T,
         doc: impl Document,
-    ) -> crate::Result<HtmlResponse<For>> {
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         if self.mode != Mode::Data {
-            return self.page_with_status(status, doc);
+            return Ok(self.page_with_status(status, doc)?.of());
         }
         use crate::json::ToJson;
         let mut title = String::new();
