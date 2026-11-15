@@ -2869,7 +2869,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2905,11 +2905,15 @@ function patchSubmit(event) {
 }
 
 /**
- * The ids of the dialogs and details `el` is in (a form's submitter, else the form), read when it
- * is pressed, so its answer knows what it was asked from inside ({@link opened}).
- * @param {Element} el @returns {Set<string>}
+ * The ids of the dialogs and details the control that sent `form`'s submit is in, read when it is
+ * pressed, so its answer knows what it was asked from inside ({@link opened}). The control is the
+ * submitter; with none (Enter in a form without a button, a script's `requestSubmit()`), the
+ * focused control if it is one of the form's, else the form.
+ * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @returns {Set<string>}
  */
-function asking(el) {
+function asking(form, submitter) {
+  const focused = document.activeElement;
+  const el = submitter ?? (focused && Array.from(formProperty(form, "elements")).includes(focused) ? focused : form);
   const ids = new Set();
   for (let at = closestOf(el, "dialog, details"); at; at = at.parentElement && closestOf(at.parentElement, "dialog, details")) {
     const id = attrOf(at, "id");
@@ -2922,9 +2926,10 @@ function asking(el) {
  * Sends a `data-patch` form's submit, by `submitter`, as `sends` says (its method, action and
  * encoding).
  * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @param {ReturnType<typeof sendsAs>} sends
+ * @param {Set<string>} [within] where it was pressed ({@link asking}): read now, unless it waited
+ *   for a write's answer, which read it at the press
  */
-async function send(form, submitter, sends) {
-  const within = asking(submitter ?? form);
+async function send(form, submitter, sends, within = asking(form, submitter)) {
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -2938,6 +2943,7 @@ async function send(form, submitter, sends) {
     // button that waits is busy with the write's marks, one it replaced no longer.
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
+    previous.nextWithin = within;
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
@@ -2956,7 +2962,7 @@ async function send(form, submitter, sends) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3073,8 +3079,8 @@ async function send(form, submitter, sends) {
     if (current) {
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
-      const next = pending.next;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next));
+      const { next, nextWithin } = pending;
+      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
     }
   }
 }
@@ -3085,10 +3091,11 @@ async function send(form, submitter, sends) {
  * validation again (the server checks what it gets). A form the answer replaced is found by its
  * id; one it removed (its row is gone) sends nothing, and so does one without an id that is no
  * longer on the page, whose values are the ones from before the answer.
- * The button is the one pressed, or the one the answer put in its place.
- * @param {HTMLFormElement} form @param {HTMLElement | null} submitter
+ * The button is the one pressed, or the one the answer put in its place; where it was is where it
+ * was pressed (`within`), not where the answer drew it.
+ * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
-function sendAgain(form, submitter) {
+function sendAgain(form, submitter, within) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
@@ -3101,7 +3108,7 @@ function sendAgain(form, submitter) {
             el.localName === submitter.localName &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by !== undefined) send(now, by, sendsAs(now, by));
+  if (by !== undefined) send(now, by, sendsAs(now, by), within);
 }
 
 /**

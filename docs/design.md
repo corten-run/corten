@@ -3694,15 +3694,23 @@ rules something out.
     differed from what the server had sent
     ([#1371 A data-patch answer to a trigger outside a dialog cannot open it again once the user closed it: the patch keeps the user's closed state over the answer's open](https://github.com/corten-run/corten/issues/1371)).
     The press is newer than the close. So when a `data-patch` submit's answer replaces a
-    `<dialog>` or `<details>` the user closed, draws it `open`, and the control that sent it (the
-    submitter, else the form) is outside that element, it opens; a dialog the user had modal opens
-    modal again. It only opens: one the user opened stays open whatever the answer draws, as the
-    rule above keeps it, since the issue asks for what the user closed to be asked for again, not
-    for an answer to close what they opened. Outside is where the control was when it was pressed: the ids of the dialogs and
-    `<details>` around it are read at the press, so removing it, redrawing the dialog, or replacing
-    its form earlier in the same answer while the answer is on its way does not make a press
-    inside one outside (a check at the answer saw a removed button as outside every element and
-    opened a dialog the user had closed). A press inside the element (a refused form in a dialog
+    `<dialog>` or `<details>` the user closed, draws it `open`, and the control that sent it is
+    outside that element, it opens, as drawn: a dialog markup draws `open` is not modal, so one
+    the user had modal opens modal only when the app makes it so, as
+    `on:connect={corten_ui::dialog::modal(target)}` does when it joins the page (the issue's
+    sheet does). The control that sent it is the submitter; when there is none (Enter in a form
+    without a button, a script's `requestSubmit()`), the focused control if it is one of the
+    form's, else the form, so Enter in a field of a dialog that a form wraps is a press inside it.
+    A button inside a dialog that names a form outside it (`form=`) is a press inside the dialog.
+    It only opens: one the user opened stays open whatever the answer draws, as the rule above
+    keeps it, since the issue asks for what the user closed to be asked for again, not for an
+    answer to close what they opened. Outside is where the control was when it was pressed: the
+    ids of the dialogs and `<details>` around it are read at the press, and a submit that waits
+    for a write's answer carries them until it is sent, so removing the control, redrawing the
+    dialog, replacing its form earlier in the same answer, or the write's answer redrawing the
+    button, while the answer is on its way, does not make a press inside one outside (a check at
+    the answer saw a removed button as outside every element and opened a dialog the user had
+    closed). A press inside the element (a refused form in a dialog
     the user closed with Escape while it was on its way), the elements inside the one replaced,
     and every redraw nobody asked for keep the user's. A dialog the user left open as the server
     drew it, which new markup draws closed, is replaced closed with no `close` event and no focus
@@ -3710,7 +3718,8 @@ rules something out.
     [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455). A popover has no markup that shows it, so no answer can ask for one shown
     and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
     outside it is on its way opens when the answer comes: the runtime knows the press, not what the
-    user meant by the close after it.
+    user meant by the close after it. A script's `requestSubmit()` while focus is outside the
+    form is a press outside, as the form is.
 
     Not chosen: keeping the user's state only while the server's markup of the element is what it
     was, so a dialog the server draws `open` again counts as the server changing it. It is wider
@@ -3727,10 +3736,10 @@ rules something out.
     replaces the closed dialog with an empty element before each submit, is the per-page script
     this removes.
 
-    What it costs: the runtime is 252 bytes larger raw, 104 with gzip (15,069 to 15,173) and 87
-    with brotli (13,601 to 13,688), paid once a release by every user. A submit reads the
+    What it costs: the runtime is 386 bytes larger raw, 149 with gzip (15,069 to 15,218) and 124
+    with brotli (13,601 to 13,725), paid once a release by every user. A submit reads the
     `closest` dialog or `<details>` around its control, once per one it is in (usually none),
-    into a set; a patch pays an argument passed down, and the test runs for the patch's own root
+    into a set, and with no submitter looks the focused element up among the form's controls; a patch pays an argument passed down, and the test runs for the patch's own root
     only, after the checks that already find the user changed it, as one `Set.has`. All of this
     is reasoned, not measured: a few calls where the root's state is already read.
 
@@ -3738,8 +3747,8 @@ rules something out.
     defaults, once each build); platform (a `<dialog>`'s and a `<details>`' open state is their
     `open` attribute, which markup sets and closing removes, while a popover's shown state has no
     attribute; the smoke's dialog, `<details>` and live checks in Chromium, Firefox and WebKit);
-    reasoned (a submitter or form outside the element it asks for is the user asking for that
-    element, and nothing else the runtime sees is; where it was is fixed by the press, not by
+    reasoned (a submitter, or with none the focused control of the form or the form, outside the
+    element it asks for is the user asking for that element, and nothing else the runtime sees is; where it was is fixed by the press, not by
     what the page became while the answer was on its way; the cost is a few calls in the cases it
     changes);
     value (a control pressed again that does nothing visible is wrong output, the README's conflict
@@ -3764,7 +3773,11 @@ rules something out.
     redrawn-dialog and form-first checks passing in Chromium 156.0.8078.4; 2026-11-14, the rule
     narrowed to opening only on `6011ef751`: the runtime's size against `8f11b7b35`, and the
     smoke's open-state checks, the one that keeps a dialog the user opened open among them,
-    passing in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2.
+    passing in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2; 2026-11-14, the control of a
+    submit with no submitter read from focus, and `within` carried by a submit that waits for a
+    write: the smoke's Enter and `requestSubmit()` checks failing on `fef11cb38` and passing with
+    them, every open-state check passing, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2,
+    and the runtime's size against `8f11b7b35`.
 
 ## Rules
 
@@ -3869,7 +3882,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    asked again from outside for one they closed ([Choice 51](#choice-asked-open-state)). One
    without an id is matched by place only for a `<details>`, so an anonymous dialog or popover in
    a redrawn element takes the new markup's state (a dialog the user closed opens again when the
-   new markup draws it open), and a `<details>` that moved takes another's state. Other
+   new markup draws it open, and one they opened closes when it draws it closed), and a
+   `<details>` that moved takes another's state. A dialog the server drew open, which the user
+   closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
+   a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
    browser state inside a replaced element (scroll position) resets, so keep targets small.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that

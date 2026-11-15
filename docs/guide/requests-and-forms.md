@@ -843,12 +843,15 @@ was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
 the server sent open and now sends closed closes (replaced closed: no `close` event fires, and
 focus does not go back to what opened it). A dialog or `<details>` the user closed opens again
-when a `data-patch` answer replaces it drawn `open` and the form that asked for it, or the button
-that sent it, is outside it: pressing it is newer than the user's close, so a Preview button
-beside a dialog opens it on every press, not only the first. It only opens: one the user opened
-stays open even when such an answer draws it closed. Outside is where the button was when it was
-pressed, so removing it, redrawing the dialog or replacing its form earlier in the same answer
-while the answer is on its way does not make a press inside one outside. A submit from inside
+when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
+did, the focused control of the form, else the form) is outside it: pressing it is newer than
+the user's close, so a Preview button beside a dialog opens it on every press, not only the
+first. It opens as drawn, so not modal; `on:connect={corten_ui::dialog::modal(target)}` makes it
+modal again. A button inside a dialog with `form=` naming a form outside it counts as inside, and
+so does Enter in a field of a dialog that a form wraps. It only opens: one the user opened stays
+open even when such an answer draws it closed. Outside is where the button was when it was
+pressed, so removing it, redrawing the dialog, replacing its form earlier in the same answer, or
+a write's answer redrawing it while its submit waits, does not make a press inside one outside. A submit from inside
 the element (a form in the dialog, sent before the user pressed Escape), an element inside the
 one replaced, a `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()` keep what
 the user left. A popover stays as the user left it, since no markup shows one. A dialog the server draws `open` is open but not
