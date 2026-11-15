@@ -6,17 +6,19 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
-  at least `--control-height` tall, as a button or field beside them is, so a theme that sets it to
-  2.75rem gives them a 44 px touch target too; before, the label stayed 20 px whatever the theme
-  said. A label that wraps grows, its box on the first line's middle. The label is border-box, so a
-  `min-height: var(--control-height)` an app gave it as a workaround adds nothing and can go. The
-  kit theme's `--choice-list-gap` drops from .75rem to .25rem, so with the kit's theme a
-  `Checkboxes` or `RadioGroup` row is 2.25rem tall and its choices are 2.5rem apart (2rem before),
-  the first choice's text .5rem further under the legend. An app with a copied `checkbox.css`,
-  `radio_group.css` or `switch.css` takes the change with `corten ui add --force`, or `--merge`
-  for an edited copy (`corten ui diff` shows which). A theme `corten ui init` wrote before keeps its
-  own `choice-list-gap` of .75rem (choices 3rem apart once the copies are updated); set it to
-  .25rem in `tokens/ui.tokens.json` to match the kit
+  at least `--control-height` tall wherever they are used (in a list, a table cell or a toolbar),
+  as a button or field beside them is, so a theme that sets it to 2.75rem gives them a 44 px touch
+  target too; before, the label stayed 20 px whatever the theme said. A dense row sets a lower
+  `--control-height` on its container. A label that wraps grows, its box on the first line's
+  middle. The label is border-box, so a `min-height: var(--control-height)` an app gave it as a
+  workaround adds nothing and can go. The kit theme's `--choice-list-gap` drops from .75rem to
+  .25rem, so with the kit's theme a `Checkboxes` or `RadioGroup` row is 2.25rem tall and its
+  choices are 2.5rem apart (2rem before), the first choice's text .5rem further under the legend.
+  An app with a copied `checkbox.css`, `radio_group.css` or `switch.css` takes the change with
+  `corten ui add --force`, or `--merge` for an edited copy (`corten ui diff` shows which). A theme
+  that declares `choice-list-gap` at the kit's old .75rem (one `corten ui init` wrote, or one that
+  took `corten ui add`'s suggested line) keeps it, so once its copies are updated its rows are 3rem
+  apart unless it sets .25rem in `tokens/ui.tokens.json`
   ([#1388 Kit Checkbox, Radio and Switch ignore --control-height: their label, the whole target, stays 20 px when a theme makes every other control 44 px](https://github.com/corten-run/corten/issues/1388)).
 
 - Preserve sanitized provider diagnostics and control uncertainty from grouped
