@@ -1301,6 +1301,86 @@ async function run(browser) {
     await both.unrouteAll({ behavior: "ignoreErrors" });
     await both.context().close();
   }
+  // A part slower than the page's own read again, on a page whose data changes each time it is
+  // read: the page is not read whole while the part's read is on its way, since each whole read
+  // would replace the part and its read with it, and the part would never come (#1400).
+  {
+    const slower = await (await browser.newContext()).newPage();
+    let wholeAnswers = 0;
+    await slower.route(`${base}/`, async (route) => {
+      if (route.request().headers().corten === "action") {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        return route.continue().catch(() => {});
+      }
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      wholeAnswers++;
+      const body = (await res.text()).replace(
+        "</title>",
+        `</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript><!--read ${wholeAnswers}-->`,
+      );
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    await slower.goto(`${base}/`);
+    const came = await slower
+      .waitForSelector("ul#picks li", { state: "attached", timeout: 7000 })
+      .then(() => true)
+      .catch(() => false);
+    check("a part slower than the page's read again comes, as the page waits for it before reading itself whole", came, `drawn ${came}, page read ${wholeAnswers} times`);
+    await slower.unrouteAll({ behavior: "ignoreErrors" });
+    await slower.context().close();
+  }
+  // A part's read the server redirects (`corten-location`) after the user followed a link, whose
+  // page is still on its way: the user's navigation goes on, and the redirect is not followed (#1400).
+  if (swaps) {
+    const overtaken = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const asked = [];
+    overtaken.on("request", (r) => asked.push(new URL(r.url()).pathname + new URL(r.url()).search));
+    let releasePart = () => {};
+    let partAsked = () => {};
+    const partSent = new Promise((resolve) => (partAsked = () => resolve(undefined)));
+    await overtaken.route("**/smoke/overtaken", async (route) => {
+      partAsked();
+      await new Promise((resolve) => (releasePart = () => resolve(undefined)));
+      await route.fulfill({ status: 204, headers: { "corten-location": "/?overtaken=1", vary: "corten" } }).catch(() => {});
+    });
+    /** @type {(() => void)[]} */
+    const newsHeld = [];
+    let newsOpen = false;
+    await overtaken.route(`${base}/news`, async (route) => {
+      if (!newsOpen) await new Promise((resolve) => newsHeld.push(() => resolve(undefined)));
+      await route.continue().catch(() => {});
+    });
+    const releaseNews = () => {
+      newsOpen = true;
+      for (const release of newsHeld) release();
+    };
+    await overtaken.goto(`${base}/`);
+    await overtaken.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>'));
+    });
+    await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
+    await overtaken.click('header nav a[href="/news"]', { noWaitAfter: true });
+    // The user's navigation is on its way, its page held.
+    await overtaken.waitForFunction(() => !!(/** @type {any} */ (window).navigation?.transition), null, { timeout: 5000 }).catch(() => {});
+    releasePart();
+    await overtaken.waitForTimeout(500);
+    releaseNews();
+    await overtaken.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }).catch(() => {});
+    await overtaken.waitForTimeout(300);
+    check(
+      "a part's redirect that comes after the user followed a link does not take the page from it",
+      new URL(overtaken.url()).pathname === "/news" && !asked.includes("/?overtaken=1"),
+      `${overtaken.url()} asked ${asked.filter((p) => p.includes("overtaken") || p.startsWith("/news")).join(", ")}`,
+    );
+    await overtaken.unrouteAll({ behavior: "ignoreErrors" });
+    await overtaken.context().close();
+  } else skip("a part's redirect that comes after the user followed a link does not take the page from it", noSwaps);
   // A navigation away while the part's read is on its way: a client navigation stops the read and
   // leaves nothing marked failed on the page it draws; a page the browser left whole (and may keep
   // in its back-forward cache) has the part read when it is back, never marked failed (#1400).
@@ -1346,6 +1426,64 @@ async function run(browser) {
     );
     await away.unrouteAll({ behavior: "ignoreErrors" });
     await away.context().close();
+  }
+  // A read the browser ends by hiding the page (the back-forward cache) is read again once the page
+  // is shown, but not over a part a form's answer replaced meanwhile. Playwright does not always
+  // keep a page in the cache, so the browser's two events are dispatched here (#1400).
+  {
+    const hidden = await (await browser.newContext()).newPage();
+    /** @type {Record<string, number>} */
+    const hiddenAsked = {};
+    /** @type {(() => void)[]} */
+    const hiddenHeld = [];
+    await hidden.route("**/smoke/hidden-*", async (route) => {
+      const name = new URL(route.request().url()).pathname.slice("/smoke/".length);
+      hiddenAsked[name] = (hiddenAsked[name] ?? 0) + 1;
+      if (hiddenAsked[name] === 1) {
+        await new Promise((resolve) => hiddenHeld.push(() => resolve(undefined)));
+        return route.abort().catch(() => {});
+      }
+      await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<p id="${name}">Read when shown</p>` }).catch(() => {});
+    });
+    await hidden.goto(`${base}/`);
+    await hidden.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="hidden-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="hidden-0"><p id="hidden-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/hidden-a" data-part="hidden-a"></template><p id="hidden-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/hidden-b" data-part="hidden-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; hiddenHeld.length < 2 && waited < 5000; waited += 50) await hidden.waitForTimeout(50);
+    await hidden.evaluate(async () => {
+      dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="hidden-b">Drawn by a form</p>'));
+    });
+    for (const release of hiddenHeld) release();
+    await hidden.waitForTimeout(400);
+    await hidden.evaluate(() => dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+    await hidden.waitForFunction(() => document.getElementById("hidden-a")?.textContent === "Read when shown", null, { timeout: 5000 }).catch(() => {});
+    await hidden.waitForTimeout(300);
+    const after = await hidden.evaluate(() =>
+      ["hidden-a", "hidden-b"].map((id) => {
+        const el = document.getElementById(id);
+        return [el?.textContent, el?.getAttribute("data-corten-read-failed") ?? null, el?.getAttribute("aria-busy") ?? null];
+      }),
+    );
+    check(
+      "a part whose read ended when the browser hid the page is read again once it is shown",
+      after[0][0] === "Read when shown" && after[0][1] === null && hiddenAsked["hidden-a"] === 2,
+      JSON.stringify({ after, hiddenAsked }),
+    );
+    check(
+      "but not a part a form's answer replaced while the page was hidden",
+      after[1][0] === "Drawn by a form" && after[1][1] === null && after[1][2] === null && hiddenAsked["hidden-b"] === 1,
+      JSON.stringify({ after, hiddenAsked }),
+    );
+    await hidden.unrouteAll({ behavior: "ignoreErrors" });
+    await hidden.context().close();
   }
   // A page the browser prerenders reads its parts once it is shown, not before: the server's slow
   // read is for a page someone sees (#1400). Playwright's headless Chromium did not prerender a

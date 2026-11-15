@@ -3083,8 +3083,12 @@ rules something out.
     them, and so does a patch that draws a part waiting for the address that patch answers, which
     would ask for itself again. A redirect (a sign-in's `corten-location`) is followed, as a
     form's is, by a read the page still waits for (not one whose part was replaced or whose address
-    moved meanwhile), and a read whose fetch or body the browser ended by hiding the page (its
-    back-forward cache) is made again when the page is shown, not marked failed. Not `aria-busy="false"`: busy says an element is being
+    moved meanwhile, nor one a navigation started since has overtaken: the user's link wins), and a
+    read whose fetch or body the browser ended by hiding the page (its back-forward cache) is made
+    again when the page is shown, not marked failed, if its parts are still the ones it waited for.
+    A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's read is
+    on its way: each whole read would replace the part and its read, so a part slower than the
+    page's interval would never come. Not `aria-busy="false"`: busy says an element is being
     updated, and false is also the state of every element that is not, so a part that read fine
     but was not replaced (an empty patch) would look failed. A `data-` attribute, as Values 2
     extends a standard: the waiting element is the app's, any element, where an attribute of
@@ -3141,7 +3145,10 @@ rules something out.
     marked with the link shown, the link's page with the picks read in, two parts one read draws,
     only the named part busy with a cell and a live row beside it patched during its read, a waiting
     part in a part's answer and in a part read again read, one for its answer's own address marked
-    failed, a redirect followed and one for a part replaced meanwhile not, a client navigation away
+    failed, a redirect followed and one for a part replaced meanwhile or overtaken by the user's
+    link not, a part slower than its page's read again drawn, a read cut by a hidden page read
+    again when shown and not over a part a form replaced meanwhile (`pagehide` and `pageshow`
+    dispatched by the test), a client navigation away
     leaving nothing marked, a page left whole and come back to with its part, a part in a layout
     element that is the page's, a prerendered page read once shown (`document.prerendering` and
     `prerenderingchange` stood in for: Playwright's headless Chromium 156 did not prerender a

@@ -1203,24 +1203,54 @@ function readTags(tags) {
  * asked, every waiting part still there when the read ends without drawing (offline, the server
  * unreachable, an error page, a page, or one of the parts gone) is marked
  * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript gets,
- * so none is left waiting for nothing. A redirect (`corten-location`) is followed, and a read
- * that ended while the browser hid the page is made again once it is shown. The fetch stops once
- * every tag and part has left the page, so the server stops reading.
+ * so none is left waiting for nothing. A redirect (`corten-location`) is followed unless a
+ * navigation has started since, and a read that ended while the browser hid the page is made again
+ * once it is shown, if its parts are still the ones it waited for. While one is on its way the page
+ * is not read whole ({@link readAgainLater}). The fetch stops once every tag and part has left the
+ * page, so the server stops reading.
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting
  */
 async function readPart(from, tags, waiting) {
+  partReads += 1;
+  // Its listeners on the tags and parts go when it ends, so a tag read again does not gather them.
+  const done = new AbortController();
+  try {
+    await readPartOnce(from, tags, waiting, done.signal);
+  } finally {
+    partReads -= 1;
+    done.abort();
+  }
+}
+
+/** How many of {@link readPart}'s reads are on their way: the page is not read whole meanwhile. */
+let partReads = 0;
+
+/**
+ * {@link readPart}'s read, whose listeners last while `done` does.
+ * @param {string} from @param {Element[]} tags @param {Element[]} waiting @param {AbortSignal} done
+ */
+async function readPartOnce(from, tags, waiting, done) {
   const page = swapped;
+  const visited = visits;
   // A script may change a tag's address while the read is on its way (corten-ui's rows::sort puts
   // a table's order in it): the answer is drawn for what was, so it is read again.
   const moved = () => tags.some((tag) => inPage(tag) && attrOf(tag, "data-from") !== from);
   const here = () => page === swapped && waiting.every(inPage) && !moved();
+  // Read again (at an address a script moved it to, or once a page the browser hid is shown) only
+  // while its parts are the ones it waited for: one a form's answer replaced meanwhile is not read
+  // over, and the rest are marked failed, as when a patch is not drawn over them.
+  const retry = () => {
+    if (page !== swapped) return;
+    if (waiting.every(inPage)) readNow(tags.filter(inPage));
+    else for (const el of waiting) if (inPage(el)) markFailed(el);
+  };
   // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.
   const mine = {};
   // The fetch stops when the last of the tags and parts leaves (after it ends, that does nothing).
   const stop = new AbortController();
   const held = [...tags, ...waiting];
   let holding = held.length;
-  for (const el of held) signalOf(el).addEventListener("abort", () => --holding || stop.abort());
+  for (const el of held) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
   for (const el of waiting) markBusy(el, mine);
   const leftAt = left;
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
@@ -1233,14 +1263,14 @@ async function readPart(from, tags, waiting) {
   // to bring.
   if (cut && left !== leftAt && !stop.signal.aborted) {
     for (const el of waiting) unmarkBusy(el, mine);
-    const again = () => page === swapped && readNow(tags.filter(inPage));
-    if (away) addEventListener("pageshow", again, { once: true });
-    else again();
+    if (away) addEventListener("pageshow", retry, { once: true });
+    else retry();
     return;
   }
   // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the
-  // read the page still waits for: not one whose part was replaced or whose address moved.
-  if (res && to && here()) {
+  // read the page still waits for: not one whose part was replaced or whose address moved, nor one
+  // a navigation started since has overtaken (the user's link, on its way).
+  if (res && to && here() && visits === visited) {
     for (const el of waiting) unmarkBusy(el, mine);
     const url = new URL(to, res.url).href;
     if (navigation) go(url, { info: { [LOAD]: true } });
@@ -1256,7 +1286,7 @@ async function readPart(from, tags, waiting) {
   if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0]).catch(reportError);
   for (const el of waiting) unmarkBusy(el, mine);
   if (drew || page !== swapped) return;
-  if (moved()) return readNow(tags.filter(inPage));
+  if (moved()) return retry();
   for (const el of waiting) if (inPage(el)) markFailed(el);
 }
 
@@ -2345,6 +2375,8 @@ function prefetch(target) {
 
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
+/** How many visits have started: a part's read started before the newest follows no redirect. */
+let visits = 0;
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
@@ -2371,6 +2403,7 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
 async function visit(url, signal, redirected, again, place, source, written, precommit) {
+  visits += 1;
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
@@ -2544,7 +2577,8 @@ const READ_AGAIN = Symbol("corten.readAgain");
  * navigation to another history entry (or a page that no longer asks) stops it, and one on its
  * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript. A
- * part it waits for (`ReadAgain::now`) is read once, so it does not stop the page's reads.
+ * part it waits for (`ReadAgain::now`) is read once, so it does not stop the page's reads; one on
+ * its way puts the next off.
  */
 function readAgainLater() {
   const page = ++readAgainPage;
@@ -2558,6 +2592,9 @@ function readAgainLater() {
     seconds,
     () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
     () => {
+      // A part the page waits for is read first: the page read whole meanwhile would replace the
+      // part, and its read with it, as often as it is read again (a part slower than that never came).
+      if (partReads) return readAgainLater();
       if (!navigation) return reload();
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read
