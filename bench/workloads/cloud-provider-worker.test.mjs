@@ -37,7 +37,8 @@ function harness(t, mode = "success", transform = (value) => value, interrupted 
 }
 
 test("clean worker uses one immutable private credential across account/create/action/list/delete", async (t) => {
-  const h = harness(t);
+  for (const mode of ["success", "scoped-create-link"]) await t.test(mode, async (t) => {
+  const h = harness(t, mode);
   assert.equal(JSON.parse((await h.run(account)).stdout).uuid, "synthetic-user-0001");
   const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
@@ -45,9 +46,11 @@ test("clean worker uses one immutable private credential across account/create/a
   await h.run(["compute", "droplet", "delete", "123", "--force", ...account.slice(-2)]);
   const state = h.state(); assert.equal(state.consumes, 1); assert.equal(state.requests, 5); assert.equal(h.launches, 1);
   assert.deepEqual(state.calls.map((value) => value.method), ["GET", "POST", "GET", "GET", "DELETE"]);
+  assert.equal(state.calls[2].path, "/v2/actions/456", "href hints must never select the action GET path");
   assert.ok(state.calls.every((value) => value.originalCredential));
   await h.run.close(); assert.notEqual(h.child.exitCode, null);
   await assert.rejects(h.run(account));
+  });
 });
 
 test("strict worker grammar/source handshake refuses URL/sequence/context changes without fallback", async (t) => {

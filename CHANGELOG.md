@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Accept the documented droplet-scoped create action link only when both resource
+  and action IDs match. Completion still uses the fixed global action endpoint;
+  foreign or malformed hints and incomplete/misbound actions remain refused.
+
 - Distinguish five benchmark provider create-link refusal predicates with closed
   diagnostic codes, without forwarding rejected values or changing completion,
   ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
