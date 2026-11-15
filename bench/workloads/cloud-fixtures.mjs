@@ -8,6 +8,7 @@ import { controller } from "./droplet.mjs";
 import { host, reservation, selection, tags } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
+import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { selectedApps } from "./registry.mjs";
 
 export const commit = "a".repeat(40), campaign = "r21-0123456789abcdef", subject = "d".repeat(64);
@@ -73,6 +74,11 @@ export function harness(t, flags = {}) {
       if (args[0] === "account") return good(JSON.stringify({ uuid: flags.accountId ?? userId,
         ...(flags.teamId === undefined ? {} : { team: { uuid: flags.teamId } }), droplet_limit: flags.noCapacity ? 0 : 20 }));
       if (args[2] === "list") { if (flags.listError) throw new Error("fake list failure"); return good(JSON.stringify(droplets)); }
+      if (args[2] === "get") {
+        if (flags.listError) throw new Error("fake host read failure");
+        const rows = droplets.filter((d) => String(d.id) === args[3]);
+        return rows.length ? good(JSON.stringify(rows)) : { ...good(), status: 1, providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+      }
       if (args[2] === "create") {
         creates++; s = JSON.parse(readFileSync(statePath)); assert.equal(s.status, "creating"); assert.ok(s.createIntentAt);
         droplets = flags.createMissing ? [] : flags.createAmbiguous ? [d(), { ...d(), id: 124 }] : [d()];
@@ -81,7 +87,8 @@ export function harness(t, flags = {}) {
       }
       if (args[2] === "delete") {
         deletes++; assert.equal(args[3], "123"); const saved = JSON.parse(readFileSync(statePath));
-        assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.deletionIntentAt); assert.equal(saved.fullGroupQualified, false);
+        assert.ok(saved.deletionIntentAt && (saved.retirement?.kind === "unused" ? saved.retirement.evidenceSha256
+          : saved.archiveSha256 && saved.evidenceSha256)); assert.equal(saved.fullGroupQualified, false);
         if (flags.deleteError) throw new Error("fake deletion error");
         if (!flags.deleteUnconfirmed) droplets = [];
         if (flags.deleteLost) throw new Error("fake deletion acknowledgement lost"); return flags.deleteRejected ? { ...good(), status: 1 } : good();
@@ -90,6 +97,16 @@ export function harness(t, flags = {}) {
     if (binary === "ssh") {
       const script = args.at(-1);
       assert.ok(args.includes(`root@${JSON.parse(readFileSync(statePath)).ip}`));
+      if (script === bootstrapReadScript) {
+        if (flags.bootstrapError) return { ...good(), status: 1 };
+        if (flags.bootstrapPending) { flags.bootstrapPending--; return { ...good(), status: 3 }; }
+        return good(JSON.stringify(flags.bootstrapMarker ?? bootstrapMarker(JSON.parse(readFileSync(statePath)))));
+      }
+      if (script.includes("benchmark-unused-host/v1")) {
+        const saved = JSON.parse(readFileSync(statePath));
+        const proof = { schema: "benchmark-unused-host/v1", hostId: saved.id, unit: saved.unit, unused: true, observedAtMs: Date.now() };
+        return good(JSON.stringify(Object.hasOwn(flags, "unusedProof") ? flags.unusedProof : proof));
+      }
       if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
       if (script.startsWith("systemctl show")) {
         units++; if (flags.unitError) throw new Error("fake unit failure");
@@ -133,6 +150,7 @@ export function syntheticProviderRequest(h, run = h.run) {
     let args;
     if (path === "/v2/account") args = ["account", "get", "--output", "json"];
     else if (method === "GET" && path.startsWith("/v2/droplets?")) args = ["compute", "droplet", "list", "--output", "json"];
+    else if (method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(path)) args = ["compute", "droplet", "get", path.split("/").at(-1), "--output", "json"];
     else if (method === "POST" && path === "/v2/droplets") args = ["compute", "droplet", "create", body.name, "--size", body.size, "--region", body.region,
       "--image", body.image, "--ssh-keys", String(body.ssh_keys[0]), "--tag-names", body.tags.join(","), "--wait", "--output", "json"];
     else if (method === "DELETE") args = ["compute", "droplet", "delete", path.split("/").at(-1), "--force"];
@@ -142,10 +160,11 @@ export function syntheticProviderRequest(h, run = h.run) {
     }
     const result = await run("doctl", [...args, "--context", context], timeout, true);
     if (result.error || result.signal || !Number.isInteger(result.status)) throw new Error("synthetic request uncertain");
-    if (result.status !== 0) return { status: 500, value: null };
+    if (result.status !== 0) return { status: result.providerDiagnostic?.httpStatus ?? 500, value: null };
     if (path === "/v2/account") return { status: 200, value: { account: JSON.parse(result.stdout) } };
     if (method === "GET") {
-      const droplets = JSON.parse(result.stdout); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
+      const droplets = JSON.parse(result.stdout);
+      return { status: 200, value: args[2] === "get" ? { droplet: droplets[0] } : { droplets, meta: { total: droplets.length }, links: {} } };
     }
     if (method === "DELETE") return { status: 204, value: null };
     const state = h.saved();

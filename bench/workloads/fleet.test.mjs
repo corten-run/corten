@@ -17,13 +17,17 @@ import { parseProductionArgs, productionMain, productionPlan } from "./cloud-pro
 import { readFleet } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 
+// The fake committed tree is fixed for this process, like the captured loader.
+// Concurrent worktree edits are not changes to that synthetic Git object.
+const committedSources = new Map(fleetWorkerPaths.map((path) => [path, readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n")]));
+
 function fixture(t, flags = {}) {
   const h = harness(t), output = [], calls = [], children = [], completions = [];
   const args = (mode) => ["r21", "--fleet-root", h.base, mode];
   const prepare = () => [...args("--prepare"), "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   const spawn = (binary, argv) => {
     calls.push([binary, argv]); assert.equal(binary, "git", "synthetic local boundary only");
-    if (argv[0] === "show") return { status: 0, stdout: flags.wrongSource ? "wrong" : readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
+    if (argv[0] === "show") return { status: 0, stdout: flags.wrongSource ? "wrong" : committedSources.get(argv[1].slice(41)) };
     if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M synthetic" };
     if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stdout: "", stderr: "PRIVATE_FETCH_ARGV" };
     return h.run(binary, argv, 60000);
@@ -43,6 +47,7 @@ function fixture(t, flags = {}) {
     const state = { ...reservation({ round: "r21", commit, token: fleet.jobs[i].token, group, fleet }),
       status: "running", createIntentAt: "2026-11-14T01:00:00.000Z", id: String(i + 1), ip: `192.0.2.${i + 1}`,
       provider: fleet.provider, fullGroupQualified: false };
+    if (group === fleet.jobs[0].group) state.bootstrapReady = { sha256: "a".repeat(64), observedAt: "2026-11-14T01:01:00.000Z" };
     change(state); writeFileSync(join(local, "state.json"), JSON.stringify(state)); return state;
   }
   async function approve(mode) {
@@ -79,9 +84,128 @@ test("preview binds complete exact production subjects without writes or child e
   assert.deepEqual(p.children, []); assert.ok(!existsSync(join(p.h.base, "receipts")));
 });
 
-test("every child is actually pending concurrently; one rejection never abandons siblings or permits another launch", async (t) => {
+test("first admission failure never invokes another child's create path", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  const approved = await p.approve("--detach");
+  let posts = 0;
+  flags.child = ({ group }) => {
+    posts++; // The synthetic child stands in for one complete launch/POST path.
+    if (group === groupNames[0]) throw new Error("PRIVATE_FIRST_CREATE");
+    p.seed(group); return 3;
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  assert.equal(posts, 1, "stop admitting after the first failed create path");
+  assert.deepEqual(p.children, groupNames.slice(0, 1));
+  const result = p.output.at(-1);
+  assert.equal(result.groups[0].outcome, "error");
+  assert.ok(result.groups.slice(1).every((row) => row.outcome === "not-admitted"));
+  assert.ok(!JSON.stringify(result).includes("PRIVATE_FIRST_CREATE"));
+  for (const row of result.groups.slice(1)) {
+    assert.equal(row.reason, "prior-admission-failed");
+    assert.ok(!existsSync(join(p.h.base, row.group)), "no reservation for a child that was not admitted");
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name))), row));
+  }
+  assert.equal(JSON.parse(readFileSync(join(p.h.base, "launch-intent.json"))).children.length, groupNames.length);
+  await assert.rejects(fleetMain(approved, p.deps), /already-attempted/);
+  assert.equal(posts, 1);
+});
+
+test("a running first group without common-bootstrap proof never opens later admissions", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  const approved = await p.approve("--detach");
+  flags.child = ({ group }) => { p.seed(group, (state) => { delete state.bootstrapReady; }); return 3; };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  assert.deepEqual(p.children, groupNames.slice(0, 1));
+  assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+});
+
+test("malformed first bootstrap proof refuses before another admission", async (t) => {
+  for (const proof of [null, true, {}, { sha256: "a".repeat(63), observedAt: "2026-11-14T01:01:00.000Z" },
+    { sha256: "a".repeat(64), observedAt: "invalid" }, { sha256: "a".repeat(64), observedAt: 1 }]) {
+    const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+    const approved = await p.approve("--detach");
+    flags.child = ({ group }) => { p.seed(group, (state) => { state.bootstrapReady = proof; }); return 3; };
+    assert.equal(await fleetMain(approved, p.deps), 2);
+    assert.deepEqual(p.children, groupNames.slice(0, 1));
+    assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+    assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+  }
+});
+
+test("detach admits the complete official roster serially only after bound running state and child settlement", async (t) => {
   const flags = {}, p = fixture(t, flags), pending = [];
   await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const preview = p.output.at(-1);
+  assert.deepEqual(preview.subject.admission, { mode: "serial", firstGroup: groupNames[0], gate: "running-bound-host",
+    firstGroupGate: "common-bootstrap-marker", nativeReadiness: false });
+  flags.child = ({ group, options, approval }) => new Promise((resolve) => {
+    assert.equal(approval, preview.subject.jobs.find((j) => j.group === group).approvalSha256);
+    assert.equal(options.stateDir, join(p.h.base, group));
+    pending.push({ group, resolve });
+  });
+  let finished = false;
+  const operation = fleetMain(approved, p.deps).then((code) => { finished = true; return code; });
+  for (const [i, group] of groupNames.entries()) {
+    while (pending.length <= i) await turn();
+    assert.equal(pending.length, i + 1); assert.equal(pending[i].group, group);
+    p.seed(group); await turn(); await turn();
+    assert.equal(pending.length, i + 1, "a running state alone is not child/credential-worker settlement");
+    assert.equal(finished, false); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+    p.completions.push(group); pending[i].resolve(3);
+  }
+  assert.equal(await operation, 3); assert.deepEqual(p.children, groupNames);
+  assert.deepEqual(p.completions, groupNames);
+  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === "pending"));
+  assert.equal(p.output.at(-1).fullGroupQualified, false);
+  assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
+});
+
+test("later admission failure preserves running siblings and never admits the remaining roster", async (t) => {
+  for (const uncertain of [false, true]) {
+    const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+    const approved = await p.approve("--detach");
+    flags.child = ({ group }) => {
+      if (group === groupNames[2]) throw Object.assign(new Error("PRIVATE_LATE_CREATE"), { controlUncertain: uncertain });
+      p.seed(group); return 3;
+    };
+    assert.equal(await fleetMain(approved, p.deps), 2);
+    assert.deepEqual(p.children, groupNames.slice(0, 3));
+    const rows = p.output.at(-1).groups;
+    assert.ok(rows.slice(0, 2).every((row) => row.outcome === "pending"));
+    assert.equal(rows[2].outcome, "error");
+    assert.ok(rows.slice(3).every((row) => row.outcome === "not-admitted"));
+    for (const group of groupNames.slice(0, 2)) assert.equal(JSON.parse(readFileSync(join(p.h.base, group, "groups-r21/state.json"))).status, "running");
+    assert.equal(existsSync(join(p.h.base, ".fleet-operation.lock")), uncertain);
+  }
+});
+
+test("detach refuses a return code without valid running unique host state", async (t) => {
+  for (const kind of ["missing", "preparing", "locked", "code0", "code1", "duplicate-id", "duplicate-ip"]) {
+    const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+    const approved = await p.approve("--detach");
+    flags.child = ({ group }) => {
+      if (group !== groupNames[1]) { p.seed(group); return 3; }
+      if (kind !== "missing") p.seed(group, (s) => {
+        if (kind === "preparing") s.status = "preparing";
+        if (kind === "duplicate-id") s.id = "1";
+        if (kind === "duplicate-ip") s.ip = "192.0.2.1";
+      });
+      if (kind === "locked") writeFileSync(join(p.h.base, group, "groups-r21/operation.lock"), "synthetic-unsettled");
+      return kind === "code0" ? 0 : kind === "code1" ? 1 : 3;
+    };
+    assert.equal(await fleetMain(approved, p.deps), 2);
+    assert.deepEqual(p.children, groupNames.slice(0, 2));
+    assert.equal(p.output.at(-1).groups[1].error, "group-state-invalid");
+    assert.ok(p.output.at(-1).groups.slice(2).every((row) => row.outcome === "not-admitted"));
+  }
+});
+
+test("collection children remain concurrent; one rejection never abandons siblings", async (t) => {
+  const flags = {}, p = fixture(t, flags), pending = [];
+  await fleetMain(p.prepare(), p.deps); for (const group of groupNames) p.seed(group);
+  const approved = await p.approve("--collect");
   flags.child = ({ group, options, approval }) => new Promise((resolve, reject) => {
     assert.equal(approval, p.output.at(-1).subject.jobs.find((j) => j.group === group).approvalSha256);
     assert.equal(options.stateDir, join(p.h.base, group));
@@ -92,15 +216,13 @@ test("every child is actually pending concurrently; one rejection never abandons
   while (pending.length !== groupNames.length) await turn();
   assert.equal(pending.length, groupNames.length); assert.equal(finished, false);
   assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  assert.ok(existsSync(join(p.h.base, "launch-intent.json")));
+  assert.ok(!existsSync(join(p.h.base, "launch-intent.json")));
   pending[0].reject(new Error("PRIVATE_PROVIDER_ARGV")); await turn();
   assert.equal(finished, false); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
   for (const child of pending.slice(1)) child.resolve();
   assert.equal(await operation, 2); assert.equal(p.completions.length, groupNames.length - 1);
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_ARGV"));
   assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
-  await assert.rejects(fleetMain(approved, p.deps), /already-attempted/);
-  await assert.rejects(p.approve("--detach"), /already-attempted/);
   assert.equal(p.children.length, groupNames.length);
 });
 
@@ -140,16 +262,57 @@ test("lock spans cancellation and every pending settlement; uncertainty leaves d
     const approved = await p.approve("--detach");
     flags.child = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
     const result = fleetMain(approved, p.deps); const rejection = assert.rejects(result, /cancelled/);
-    while (pending.length < groupNames.length) await turn();
+    while (pending.length < 1) await turn();
+    assert.equal(pending.length, 1);
     flags.cancelled = true; await turn(); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
     if (uncertain) pending[0].reject(Object.assign(new Error("private"), { controlTreeUncertain: true }));
     else pending[0].resolve(3);
     for (const child of pending.slice(1)) child.resolve(3);
     await rejection;
+    assert.deepEqual(p.children, groupNames.slice(0, 1));
+    const rows = readdirSync(join(p.h.base, "receipts")).map((name) => JSON.parse(readFileSync(join(p.h.base, "receipts", name))));
+    assert.equal(rows.filter((row) => row.outcome === "not-admitted" && row.reason === "cancelled").length, groupNames.length - 1);
     assert.equal(existsSync(join(p.h.base, ".fleet-operation.lock")), uncertain);
     flags.cancelled = false;
     if (uncertain) await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
   }
+});
+
+test("cancellation before first admission or between admissions durably skips every untouched child", async (t) => {
+  for (const phase of ["before-first", "between", "sticky"]) {
+    const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+    const approved = await p.approve("--detach");
+    p.deps.interrupted = () => {
+      if (phase === "before-first") return existsSync(join(p.h.base, "launch-intent.json"));
+      const value = !!flags.cancelled;
+      if (phase === "sticky") flags.cancelled = false;
+      return value;
+    };
+    flags.child = ({ group }) => { p.seed(group); flags.cancelled = true; return 3; };
+    await assert.rejects(fleetMain(approved, p.deps), /cancelled/);
+    const admitted = phase === "before-first" ? 0 : 1;
+    assert.equal(p.children.length, admitted);
+    assert.deepEqual(p.children, groupNames.slice(0, admitted));
+    const rows = readdirSync(join(p.h.base, "receipts")).map((name) => JSON.parse(readFileSync(join(p.h.base, "receipts", name))));
+    assert.equal(rows.length, groupNames.length);
+    assert.equal(rows.filter((row) => row.outcome === "not-admitted" && row.reason === "cancelled").length, groupNames.length - admitted);
+    assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
+  }
+});
+
+test("a failed admission receipt stops dispatch even after a child saved valid running state", async (t) => {
+  const p = fixture(t); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const write = p.deps.write;
+  p.deps.write = (value) => {
+    const row = JSON.parse(value);
+    if (row.group === groupNames[0]) throw new Error("PRIVATE_OUTPUT_FAILURE");
+    write(value);
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  assert.deepEqual(p.children, groupNames.slice(0, 1));
+  assert.equal(p.output.at(-1).groups[0].error, "group-receipt-failed");
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+  assert.equal(JSON.parse(readFileSync(join(p.h.base, groupNames[0], "groups-r21/state.json"))).status, "running");
 });
 
 test("partial collection launches no missing/ambiguous/busy job, and does not wait for a live sibling", async (t) => {
@@ -167,6 +330,69 @@ test("partial collection launches no missing/ambiguous/busy job, and does not wa
   assert.ok(!existsSync(join(p.h.base, "launch-intent.json")));
 });
 
+test("collection reports unused retirement as incomplete, never as native qualification", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  for (const group of groupNames) p.seed(group);
+  const approved = await p.approve("--collect"), unusedBytes = JSON.stringify({ syntheticUnused: true });
+  flags.child = ({ group }) => {
+    p.seed(group, (state) => {
+      state.status = "retired"; state.retirement = { kind: "unused", evidenceSha256: digest(unusedBytes) };
+      delete state.bootstrapReady;
+      state.deletionIntentAt = state.destroyedAt = "2026-11-14T02:00:00.000Z";
+    });
+    writeFileSync(join(p.h.base, group, "groups-r21/unused-host.json"), unusedBytes);
+    return 1;
+  };
+  assert.equal(await fleetMain(approved, p.deps), 1);
+  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === "unused-retired"));
+  assert.equal(p.output.at(-1).fullGroupQualified, false);
+  assert.ok(!existsSync(join(p.h.base, "launch-intent.json")));
+});
+
+test("a pending collection sibling never delays another host's confirmed unused retirement", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  for (const group of groupNames) p.seed(group);
+  const approved = await p.approve("--collect"); let release, finished = false;
+  flags.child = ({ group }) => {
+    if (group === groupNames[0]) return new Promise((resolve) => { release = resolve; });
+    if (group === groupNames[1]) {
+      p.seed(group, (state) => {
+        state.status = "retired"; state.retirement = { kind: "unused", evidenceSha256: digest("synthetic-unused") };
+        delete state.bootstrapReady;
+        state.deletionIntentAt = state.destroyedAt = "2026-11-14T02:00:00.000Z";
+      });
+      writeFileSync(join(p.h.base, group, "groups-r21/unused-host.json"), "synthetic-unused");
+      return 1;
+    }
+    return 3;
+  };
+  const operation = fleetMain(approved, p.deps).then((code) => { finished = true; return code; });
+  while (!p.output.some((row) => row.group === groupNames[1] && row.outcome === "unused-retired")) await turn();
+  assert.equal(finished, false); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  assert.equal(p.children.length, groupNames.length);
+  release(3); assert.equal(await operation, 3);
+  assert.equal(p.output.at(-1).groups[1].outcome, "unused-retired");
+});
+
+test("unconfirmed or wrong-code unused retirement cannot masquerade as collection success", async (t) => {
+  for (const kind of ["no-absence", "code0", "code3", "wrong-evidence"]) {
+    const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+    p.seed(groupNames[0]); const approved = await p.approve("--collect");
+    flags.child = ({ group }) => {
+      p.seed(group, (state) => {
+        state.status = "retired"; state.retirement = { kind: "unused", evidenceSha256: kind === "wrong-evidence" ? "invalid" : "a".repeat(64) };
+        delete state.bootstrapReady;
+        state.deletionIntentAt = "2026-11-14T02:00:00.000Z";
+        if (kind !== "no-absence") state.destroyedAt = state.deletionIntentAt;
+      });
+      return kind === "code0" ? 0 : kind === "code3" ? 3 : 1;
+    };
+    assert.equal(await fleetMain(approved, p.deps), 2);
+    assert.equal(p.output.at(-1).groups[0].outcome, "error");
+    assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+  }
+});
+
 test("actual productionMain close uncertainty retains the fleet lock after all child worker settlements", async (t) => {
   const flags = {}, p = fixture(t, flags), pending = [];
   await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
@@ -176,21 +402,54 @@ test("actual productionMain close uncertainty retains the fleet lock after all c
   });
   let finished = false;
   const result = fleetMain(approved, p.deps).then((v) => { finished = true; return v; });
-  while (pending.length < groupNames.length) await turn();
-  assert.equal(pending.length, groupNames.length); assert.equal(finished, false);
+  while (pending.length < 1) await turn();
+  assert.equal(pending.length, 1); assert.equal(finished, false);
   assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
   pending[0].reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
-  await turn(); assert.equal(finished, false);
-  for (const child of pending.slice(1)) child.resolve();
   assert.equal(await result, 2); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  assert.equal(pending.length, 1);
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
   assert.equal(p.calls.filter(([binary]) => binary !== "git").length, 0);
 });
 
-test("real isolated worker event loops overlap synchronous blocking tasks and drain before unlocking", async (t) => {
+test("real detach workers exit before the next admission without terminating a running remote group", async (t) => {
+  const p = fixture(t); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const controls = new SharedArrayBuffer((3 + groupNames.length) * 4), shared = new Int32Array(controls);
+  let spawned = 0, active = 0, maximumActive = 0;
+  class SyntheticWorker extends Worker {
+    constructor(url, options) {
+      const slot = spawned++;
+      assert.ok(url.href.startsWith("data:text/javascript;base64,"));
+      super(new URL("./fleet-worker-fixture.mjs", import.meta.url), { ...options,
+        resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8 },
+        workerData: { ...options.workerData, controls, slot, holdExit: slot === 0 } });
+      maximumActive = Math.max(maximumActive, ++active);
+      this.once("exit", () => { active--; });
+    }
+  }
+  delete p.deps.main; p.deps.WorkerClass = SyntheticWorker;
+  const operation = fleetMain(approved, p.deps);
+  try {
+    const deadline = Date.now() + 15000;
+    while (Atomics.load(shared, 0) < 1 && Date.now() < deadline) await turn();
+    assert.equal(spawned, 1); assert.equal(Atomics.load(shared, 0), 1);
+    Atomics.store(shared, 1, 1); Atomics.notify(shared, 1);
+    while (Atomics.load(shared, 3) !== 2 && Date.now() < deadline) await turn();
+    assert.equal(Atomics.load(shared, 3), 2); await turn(); await turn();
+    assert.equal(spawned, 1, "message/running state is not a settled worker");
+    assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  } finally { Atomics.store(shared, 1, 2); Atomics.notify(shared, 1); await operation; }
+  assert.equal(await operation, 3); assert.equal(spawned, groupNames.length);
+  assert.equal(maximumActive, 1); assert.equal(active, 0);
+  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === "pending"));
+});
+
+test("real collection worker event loops overlap synchronous blocking tasks and drain before unlocking", async (t) => {
   for (const cancel of [false, true]) {
     const flags = {}, p = fixture(t, flags);
-    await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+    await fleetMain(p.prepare(), p.deps); for (const group of groupNames) p.seed(group);
+    const approved = await p.approve("--collect");
     const controls = new SharedArrayBuffer((3 + groupNames.length) * 4), shared = new Int32Array(controls);
     let spawned = 0;
     class SyntheticWorker extends Worker {
@@ -198,7 +457,8 @@ test("real isolated worker event loops overlap synchronous blocking tasks and dr
         assert.ok(url.href.startsWith("data:text/javascript;base64,"));
         const slot = spawned++;
         super(new URL("./fleet-worker-fixture.mjs", import.meta.url), { ...options,
-          workerData: { ...options.workerData, controls, slot, uncertain: cancel && slot === 0, holdExit: !cancel } });
+          resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8 },
+          workerData: { ...options.workerData, controls, slot, fleet: p.manifest(), group: groupNames[slot], uncertain: cancel && slot === 0, holdExit: !cancel } });
       }
     }
     delete p.deps.main; p.deps.WorkerClass = SyntheticWorker;
@@ -377,7 +637,8 @@ test("worker protocol rejects malformed diagnostics, unexpected fields and unset
 });
 
 test("fleet receipts retain sanitized provider failure and uncertainty without replay", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
   const codes = ["create-request", ...["shape", "count", "id", "rel", "href"].map((predicate) => `create-link-${predicate}`)];
   flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
     controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
@@ -387,17 +648,19 @@ test("fleet receipts retain sanitized provider failure and uncertainty without r
   for (const row of result.groups) {
     assert.equal(row.outcome, "error"); assert.equal(row.error, "group-operation-failed");
     assert.equal(row.uncertain, true, "fleet receipt must retain uncertainty");
-    assert.equal(row.providerDiagnostic?.code, codes[groupNames.indexOf(row.group) % codes.length]); assert.equal(row.id, undefined);
+    assert.equal(row.providerDiagnostic?.code, codes[groupNames.indexOf(row.group) % codes.length]); assert.equal(row.id, String(groupNames.indexOf(row.group) + 1));
     const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
     assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row), "saved receipt must match public row");
   }
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN"));
   assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  await assert.rejects(fleetMain(approved, p.deps), /already-attempted|busy/);
+  await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
+  await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
 });
 
 test("fleet receipts retain all closed census predicates without replay", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
   const codes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-response-${predicate}`);
   flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
     controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
@@ -405,16 +668,18 @@ test("fleet receipts retain all closed census predicates without replay", async 
   const result = p.output.at(-1); assert.equal(result.fullGroupQualified, false); assert.equal(result.groups.length, groupNames.length);
   for (const row of result.groups) {
     assert.equal(row.error, "group-operation-failed"); assert.equal(row.outcome, "error"); assert.equal(row.uncertain, true);
-    assert.deepEqual(row.providerDiagnostic, { code: codes[groupNames.indexOf(row.group) % codes.length] }); assert.equal(row.id, undefined);
+    assert.deepEqual(row.providerDiagnostic, { code: codes[groupNames.indexOf(row.group) % codes.length] }); assert.equal(row.id, String(groupNames.indexOf(row.group) + 1));
     const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
     assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row));
   }
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN")); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  await assert.rejects(fleetMain(approved, p.deps), /already-attempted|busy/);
+  await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
+  await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
 });
 
 test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
+  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
   const diagnostics = [{ code: "account-http", httpStatus: 403 }, { code: "PRIVATE_CODE" },
     { code: "list-http", httpStatus: 418 }, { code: "list-request", raw: "PRIVATE_RAW" }, undefined];
   flags.child = ({ group }) => {
@@ -430,5 +695,5 @@ test("fleet receipt sanitizer rejects raw fields and accessors without changing 
   }
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
   assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
-  await assert.rejects(fleetMain(approved, p.deps), /already-attempted/);
+  await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
 });

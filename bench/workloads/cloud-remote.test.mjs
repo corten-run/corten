@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { remoteFiles as originalFiles, reservation } from "./cloud-contract.mjs";
-import { remoteFiles, sourceUrl } from "./cloud-remote.mjs";
+import { bootstrapMarker, bootstrapReadScript, remoteFiles, sourceUrl } from "./cloud-remote.mjs";
 import { commit } from "./cloud-fixtures.mjs";
 import { archiveLimit, archiveMembers, expandedLimit, fileHash } from "./cloud-local.mjs";
 
@@ -22,6 +22,17 @@ test("production files preserve fixed unit/packages/all-nine entry and require m
   for (const line of original["job.sh"].split("\n").filter((line) => /apt-get|playwright install|rustup|enable --now docker|finish\(\)|trap finish/.test(line))) assert.ok(job.includes(line));
   assert.ok(!/--apps|--adapter|--duration|systemctl (stop|restart|reboot)/.test(job));
   assert.match(files[state.unit], /Restart=no/); assert.match(files[state.unit], /RuntimeMaxSec=48h/);
+});
+
+test("common bootstrap marker is source-bound and produced only after tooling, before native entry", () => {
+  const state = reservation({ round: "r21", commit, token: "0123456789abcdef" }), job = remoteFiles(state)["job.sh"];
+  const marker = bootstrapMarker(state);
+  assert.deepEqual(marker, { schema: "benchmark-common-bootstrap/v1", round: "r21", commit, token: state.token, group: "all" });
+  const at = job.indexOf('writeFileSync("/bench/bootstrap-ready.json"');
+  assert.ok(at > job.indexOf("cargo --version"));
+  assert.ok(at < job.indexOf("node 'bench/workloads/isolated/campaign-entry.mjs'"));
+  assert.ok(job.includes('flag: "wx"')); assert.ok(job.includes('mode: 0o600'));
+  assert.ok(bootstrapReadScript.includes("test ! -L")); assert.ok(bootstrapReadScript.includes("-le 1024"));
 });
 
 test("terminal packer keeps existing archives and publishes new bytes without overwrite", () => {
@@ -65,6 +76,10 @@ test("native entry receives a fresh private physical campaign root, never a reus
   // Exclusive mkdir rejects any existing directory, file or symlink, including dangling links.
   assert.equal(job.split(create).length, 2, "one exclusive private root creation required");
   assert.ok(job.indexOf(create) < job.indexOf(entry));
-  assert.ok(job.includes(`${create}\ntest -z "$(git status --porcelain --untracked-files=all)"\n${entry}`));
+  const clean = 'test -z "$(git status --porcelain --untracked-files=all)"';
+  const cleanAt = job.indexOf(clean, job.indexOf(create));
+  assert.ok(job.indexOf(create) < cleanAt);
+  assert.ok(cleanAt < job.indexOf('writeFileSync("/bench/bootstrap-ready.json"'));
+  assert.ok(job.indexOf('writeFileSync("/bench/bootstrap-ready.json"') < job.indexOf(entry));
   assert.ok(!/mkdir[^\n]*-p[^\n]*campaign|chmod[^\n]*campaign|rm[^\n]*campaign/.test(job));
 });

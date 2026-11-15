@@ -86,7 +86,7 @@ function childArgs(options, hash) {
 }
 
 // WorkerClass is a synthetic test boundary, never an option or saved field.
-// Separate event loops are required: production SSH/SCP uses spawnSync.
+// Separate event loops keep collection independent while SSH/SCP uses spawnSync.
 export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources } = {}) {
   return new Promise((resolve, reject) => {
     let worker, message, messages = 0, failed = false;
@@ -168,6 +168,8 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   const subject = { schema: "benchmark-group-fleet-approval/v1", action: mode, controllerCommit: head,
     stateRoot: root, requestedRoot: resolve(options.root), round: options.round, manifestSha256: fleet.manifestSha256,
     fleet: fleet.manifest, records, jobs,
+    ...(mode === "detach" ? { admission: { mode: "serial", firstGroup: jobs[0].group, gate: "running-bound-host",
+      firstGroupGate: "common-bootstrap-marker", nativeReadiness: false } } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), fleet };
 }
@@ -231,13 +233,20 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     // delegated, and productionMain revalidates them under its own child lock.
     const cancellation = new SharedArrayBuffer(4), cancel = new Int32Array(cancellation);
     const poll = () => { try { if (interrupted()) Atomics.store(cancel, 0, 1); } catch { Atomics.store(cancel, 0, 1); } };
+    const cancelled = () => { poll(); return Atomics.load(cancel, 0) !== 0; };
     poll(); const cancellationPoll = setInterval(poll, 25);
-    let settled;
-    try { settled = await Promise.allSettled(preview.subject.jobs.map(async (job) => {
+    const persist = (job, row) => {
+      physical(root); physical(receipts);
+      durable(join(receipts, `${preview.subject.action}-${operation}-${job.group}.json`), json(row));
+      write(JSON.stringify(row)); return row;
+    };
+    const admittedIds = new Set(), admittedIps = new Set();
+    const operate = async (job, skipped) => {
+      if (skipped) return persist(job, { group: job.group, outcome: "not-admitted", reason: skipped });
       let code, failure;
       try {
         if (job.outcome === "planned") code = main
-          ? await main(childArgs(job.options, job.approvalSha256), { repo, spawn, providerFactory, inspect, sleep, interrupted, write: () => {} })
+          ? await main(childArgs(job.options, job.approvalSha256), { repo, spawn, providerFactory, inspect, sleep, interrupted: cancelled, write: () => {} })
           : await productionChild(childArgs(job.options, job.approvalSha256), { cancellation, WorkerClass });
       }
       catch (error) { failure = error; if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true; }
@@ -252,22 +261,56 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       // particular, never print completion/deletion from a worker receipt alone.
       if (!failure && job.outcome === "planned") {
         const state = saved?.state;
-        const consistent = saved?.outcome === "available" && (code === 3 ? state.status === "running"
-          : [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
+        const first = job.group === preview.fleet.manifest.jobs[0].group;
+        const bootstrapReady = state?.bootstrapReady;
+        const bootstrap = !first || bootstrapReady && /^[a-f0-9]{64}$/.test(bootstrapReady.sha256)
+          && typeof bootstrapReady.observedAt === "string" && Number.isFinite(Date.parse(bootstrapReady.observedAt));
+        const retired = code === 1 && state?.status === "retired" && state.destroyedAt && state.retirement?.kind === "unused"
+          && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
+        const consistent = saved?.outcome === "available" && (options.detach
+          ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
+            && bootstrap && !admittedIds.has(state.id) && !admittedIps.has(state.ip)
+          : code === 3 ? state.status === "running"
+          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
+        else if (options.detach) { admittedIds.add(state.id); admittedIps.add(state.ip); }
+        else if (retired) row.outcome = "unused-retired";
       }
-      physical(root); physical(receipts);
-      durable(join(receipts, `${preview.subject.action}-${operation}-${job.group}.json`), json(row));
-      write(JSON.stringify(row)); return row;
-    })); } finally { clearInterval(cancellationPoll); }
-    // productionMain settles its credential worker in finally. Promise.allSettled
-    // keeps this lock while every child (including failed siblings) finishes it.
+      return persist(job, row);
+    };
+    let settled;
+    try {
+      if (options.detach) {
+        settled = [];
+        let stopped;
+        // The first required group must have the controller's exact common-bootstrap
+        // marker observation as well as bound running state and worker settlement.
+        // That marker precedes native entry; it does not prove any group's parity.
+        // Admit the rest serially; already-running remote measurements are untouched.
+        for (const job of preview.subject.jobs) {
+          if (cancelled()) stopped = "cancelled";
+          if (!stopped) {
+            try { await controlCheckpoint(cancelled); }
+            catch { stopped = "cancelled"; }
+          }
+          try {
+            const value = await operate(job, stopped);
+            settled.push({ status: "fulfilled", value });
+            if (!stopped && value.outcome !== "pending") stopped = "prior-admission-failed";
+          } catch (reason) {
+            settled.push({ status: "rejected", reason }); stopped ??= "prior-admission-failed";
+          }
+        }
+      } else settled = await Promise.allSettled(preview.subject.jobs.map((job) => operate(job)));
+    } finally { clearInterval(cancellationPoll); }
+    // productionMain settles its credential worker in finally. Await every
+    // admitted child (or all collection siblings) before releasing this lock.
     const groups = settled.map((s, i) => s.status === "fulfilled" ? s.value : { group: preview.subject.jobs[i].group, outcome: "error", error: "group-receipt-failed" });
-    await controlCheckpoint(interrupted);
+    await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
-    if (groups.some((g) => ["error", "missing", "ambiguous", "busy"].includes(g.outcome))) return 2;
-    return groups.some((g) => g.outcome === "pending") ? 3 : groups.some((g) => g.outcome === "terminal-incomplete") ? 1 : 0;
+    if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
+    return groups.some((g) => g.outcome === "pending") ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     throw error;

@@ -3,21 +3,30 @@ import { isAbsolute } from "node:path";
 import { roundName, selection, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
-  "account-request", "account-http", "list-request", "list-http", "list-response",
+  "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
   "list-response-links", "list-response-pages", "list-response-next", "list-response-count", "list-response-bounds",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
   "create-action-response", "create-action-pending", "delete-request", "delete-http"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
+const providerDetails = {
+  "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
+    "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
+  "list-response-count": ["terminal-count-mismatch", "total-changed"],
+};
 // This is the entire public diagnostic vocabulary, not an acceptance/retry policy.
 // Reconstruct data properties only; never copy native exceptions or raw values.
 export function providerDiagnostic(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const fields = Object.getOwnPropertyDescriptors(value), names = Object.keys(fields).sort();
-  if (JSON.stringify(names) !== '["code"]' && JSON.stringify(names) !== '["code","httpStatus"]') return undefined;
+  if (![ '["code"]', '["code","httpStatus"]', '["code","detail"]' ].includes(JSON.stringify(names))) return undefined;
   const code = fields.code.value;
   if (!providerCodes.includes(code)) return undefined;
+  if (fields.detail) {
+    const detail = fields.detail.value;
+    return providerDetails[code]?.includes(detail) ? { code, detail } : undefined;
+  }
   if (!fields.httpStatus) return { code };
   const httpStatus = fields.httpStatus.value;
   if (!code.endsWith("-http") || !providerStatuses.includes(httpStatus)) return undefined;
@@ -89,7 +98,7 @@ export function controllerState(s, round) {
   validateState(s, round);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -98,6 +107,22 @@ export function controllerState(s, round) {
   if (s.status === "reserved") assert.ok(!s.createIntentAt && !s.id, "reserved host already has create intent");
   if (s.status === "creating") assert.ok(!s.id, "creating host unexpectedly bound");
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
+  if (s.bootstrapReady !== undefined) {
+    assert.ok(s.group !== undefined && s.group === s.fleet.jobs[0].group && ["running", "collected"].includes(s.status), "only the first started fleet group records bootstrap admission");
+    assert.deepEqual(Object.keys(s.bootstrapReady).sort(), ["observedAt", "sha256"]);
+    full(s.bootstrapReady.sha256, /[a-f0-9]{64}/, "bootstrap observation hash");
+    assert.equal(new Date(s.bootstrapReady.observedAt).toISOString(), s.bootstrapReady.observedAt, "bootstrap observation time required");
+  }
+  if (s.status === "retired" || s.retirement !== undefined) {
+    assert.equal(s.status, "retired");
+    assert.ok(s.retirement && typeof s.retirement === "object" && !Array.isArray(s.retirement), "retirement evidence required");
+    assert.deepEqual(Object.keys(s.retirement).sort(), ["evidenceSha256", "kind"]);
+    assert.equal(s.retirement.kind, "unused");
+    full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "unused host evidence hash");
+    assert.ok(s.deletionIntentAt, "retirement requires a durable deletion intent");
+    for (const key of ["archiveSha256", "evidenceSha256", "evidence", "validation", "exitCode", "collectedAt"])
+      assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
+  }
   if (s.evidence) assert.ok(s.archiveSha256 && s.evidenceSha256, "unhashed evidence");
   if (s.collectedAt || s.status === "collected") assert.ok(s.evidence && s.validation && ["validated", "failed", "blocked"].includes(s.evidenceOutcome), "incomplete collection state");
   if (s.destroyedAt) assert.ok(s.deletionIntentAt, "deletion confirmation without intent");
