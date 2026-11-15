@@ -21,6 +21,7 @@ else if (args[0] === "account" && args[1] === "get") {
 } else {
   assert.deepEqual(args.slice(0, 2), ["compute", "droplet"]);
   if (args[2] === "list") output = ledger.hosts[account];
+  else if (args[2] === "get") output = ledger.hosts[account].filter((host) => String(host.id) === args[3]);
   else if (args[2] === "create") {
     const state = JSON.parse(readFileSync(statePath));
     const host = { id: 123, name: state.name, tags: ["corten-bench", "corten-bench-groups", state.tag],
