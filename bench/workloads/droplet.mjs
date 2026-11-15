@@ -214,7 +214,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return retire("unused", evidence, finishedAtMs);
   };
   const retireFailedSetup = async () => {
-    assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock && !state.bootstrapReady, "uncertain or native-started work cannot use setup retirement");
+    assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
     const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
     const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
     const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs);

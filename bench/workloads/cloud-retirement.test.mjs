@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { reservation } from "./cloud-contract.mjs";
+import { fleetPlan, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
 import { setupEvidence, terminalSetupScript, unusedHostScript } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
-import { remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 
 const python = process.platform === "win32" ? "python" : "python3";
 const available = spawnSync(python, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true }).status === 0;
@@ -125,6 +125,10 @@ if mode == 'attempt': contents['/bench/campaign/attempt.json'] = b'native attemp
 if mode == 'archive': contents['/bench/results.tgz'] = b'preserved archive, not inspected as qualification'
 if mode == 'extra-data': contents['/bench/unknown'] = b'unknown'
 if mode == 'marker': contents['/bench/bootstrap-ready.json'] = b'marker'
+if config.get('marker') is not None: contents['/bench/bootstrap-ready.json'] = config['marker'].encode()
+if config.get('markerKind') == 'directory':
+    contents.pop('/bench/bootstrap-ready.json', None)
+    directories.add('/bench/bootstrap-ready.json')
 if mode in ['user-data', 'user-data-symlink']: contents['/var/lib/cloud/instance/user-data.txt'] = b'x' if mode == 'user-data' else b''
 if mode == 'empty-user-data': contents['/var/lib/cloud/instance/user-data.txt'] = b''
 for name in config['files']:
@@ -135,6 +139,7 @@ if mode in bad_codes: contents['/bench/exit-code'] = bad_codes[mode]
 links = {'/bench' if mode == 'bench-symlink' else '/absent-link'}
 if mode in ['repo-symlink', 'campaign-symlink']: links.add('/bench/' + mode.split('-')[0])
 if mode == 'marker-dangling': links.add('/bench/bootstrap-ready.json')
+if config.get('markerKind') == 'symlink': links.add('/bench/bootstrap-ready.json')
 if mode == 'unit-symlink': links.add('/etc/systemd/system/' + unit)
 if mode == 'control-symlink': links.add('/bench/job.sh')
 if mode == 'user-data-symlink': links.add('/var/lib/cloud/instance/user-data.txt')
@@ -274,4 +279,70 @@ test("setup evidence binds expected exit, fixed script, preserved hashes and bou
   assert.equal(setupEvidence(proof, state, script, 1, 1005000, 1005000).observation.observedAtMs, 1000000);
   assert.equal(setupEvidence(proof, state, script, 1, 995000, 995000).observation.observedAtMs, 1000000);
   assert.equal(setupEvidence(proof, state, script, 1, 985000, 1015000).exitCode, 1);
+});
+
+function firstGroupSetupState() {
+  const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42",
+    provider: { accountId: "user:synthetic", context: "synthetic-control" },
+    tokens: Object.fromEntries(selection().groups.map(({ group }, index) => [group, (index + 1).toString(16).padStart(16, "0")])) }, "2026-11-15T12:00:00.000Z");
+  const { group, token } = fleet.jobs[0];
+  return { ...reservation({ round: "r21", commit, token, group, fleet }), id: "123", ip: "192.0.2.10", status: "running",
+    archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) };
+}
+
+test("fixed failed-setup program accepts only exact common tooling markers without native work", { skip: !available }, () => {
+  const base = firstGroupSetupState(), canonical = `${JSON.stringify(bootstrapMarker(base))}\n`;
+  const cases = [
+    { label: "unobserved exact marker", marker: canonical, positive: true },
+    { label: "observed exact marker", marker: canonical, observed: true, positive: true },
+    { label: "unobserved marker and empty campaign", marker: canonical, mode: "empty-campaign", positive: true },
+    { label: "observed marker and empty campaign", marker: canonical, observed: true, mode: "empty-campaign", positive: true },
+    { label: "unobserved absent marker", positive: true },
+    { label: "observed missing marker", observed: true },
+    { label: "invalid marker", marker: "invalid" },
+    { label: "observed foreign marker", marker: canonical.replace("benchmark-common-bootstrap/v1", "foreign/v1"), observed: true },
+    ...["round", "commit", "token", "group"].map(key => ({ label: "foreign marker " + key,
+      marker: `${JSON.stringify({ ...bootstrapMarker(base), [key]: "foreign" })}\n` })),
+    { label: "marker without newline", marker: canonical.trimEnd() },
+    { label: "marker extra newline", marker: canonical + "\n" },
+    { label: "noncanonical marker", marker: `${JSON.stringify(bootstrapMarker(base), null, 1)}\n` },
+    { label: "oversized marker", marker: "x".repeat(1025) },
+    { label: "marker symlink", marker: canonical, markerKind: "symlink" },
+    { label: "observed marker symlink", marker: canonical, markerKind: "symlink", observed: true },
+    { label: "marker directory", markerKind: "directory" },
+    { label: "dangling marker", mode: "marker-dangling" },
+    { label: "marker with native files", marker: canonical, mode: "attempt" },
+    { label: "observed marker with native files", marker: canonical, mode: "attempt", observed: true },
+    ...["active", "pid", "jobs", "docker-running", "changed-job.sh", "process", "campaign-symlink"].map(mode => ({ label: "marker still refuses " + mode, marker: canonical, mode })),
+  ];
+  for (const item of cases) {
+    const state = item.observed ? { ...base, bootstrapReady: { sha256: digest(canonical), observedAt: "2026-11-15T12:00:01.000Z" } } : base;
+    const script = terminalSetupScript(state, 1), files = remoteFiles(state);
+    const manifest = JSON.stringify(Object.fromEntries(Object.entries(files).map(([name, content]) => [name, digest(content)])));
+    const program = script.split("<<'CORTEN_FAILED_SETUP_HOST'\n")[1].split("\nCORTEN_FAILED_SETUP_HOST")[0];
+    const r = spawnSync(python, ["-c", setupFixture], { input: JSON.stringify({ mode: item.mode ?? "failed", id: state.id, unit: state.unit,
+      files, manifest, code: 1, program, marker: item.marker, markerKind: item.markerKind }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+    assert.equal(r.error, undefined, item.label); assert.equal(r.status, item.positive ? 0 : 1, item.label); assert.equal(r.stderr, "", item.label);
+    const observation = JSON.parse(r.stdout);
+    if (item.positive) {
+      assert.deepEqual(observation, { schema: "benchmark-failed-setup-host/v1", hostId: state.id, unit: state.unit,
+        observedAtMs: 1000000, exitCode: 1, setupFailed: true }, item.label);
+      const evidence = setupEvidence(r.stdout, state, script, 1, 999999, 1000001);
+      assert.equal(evidence.scriptSha256, digest(script)); assert.equal(evidence.exitCode, 1);
+    } else assert.deepEqual(observation, { schema: "benchmark-failed-setup-host/v1", setupFailed: false }, item.label);
+  }
+});
+
+test("observed common-bootstrap hash and state remain bound to the exact setup script", () => {
+  const state = firstGroupSetupState(), canonical = `${JSON.stringify(bootstrapMarker(state))}\n`;
+  const observed = { ...state, bootstrapReady: { sha256: digest(canonical), observedAt: "2026-11-15T12:00:01.000Z" } };
+  for (const bootstrapReady of [null, false, {}, { sha256: "a".repeat(64) }, { ...observed.bootstrapReady, sha256: digest(canonical.trimEnd()) }])
+    assert.throws(() => terminalSetupScript({ ...state, bootstrapReady }, 1));
+  const script = terminalSetupScript(observed, 1), unobservedScript = terminalSetupScript(state, 1);
+  assert.notEqual(script, unobservedScript);
+  const proof = JSON.stringify({ schema: "benchmark-failed-setup-host/v1", hostId: state.id, unit: state.unit,
+    observedAtMs: 1000000, exitCode: 1, setupFailed: true });
+  assert.throws(() => setupEvidence(proof, observed, unobservedScript, 1, 999999, 1000001));
+  assert.throws(() => setupEvidence(proof, state, script, 1, 999999, 1000001));
+  assert.equal(setupEvidence(proof, observed, script, 1, 999999, 1000001).scriptSha256, digest(script));
 });

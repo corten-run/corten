@@ -92,6 +92,24 @@ test("pre-entry package checks need neither Node nor a cloned repository", (t) =
   assert.ok(!existsSync(join(root, "repo")), "early failure must not need a clone");
 });
 
+test("the exact common bootstrap marker does not make an empty campaign native evidence", (t) => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  if (spawnSync(python, ["--version"], { timeout: 3000, windowsHide: true }).status !== 0) { t.skip("Python unavailable"); return; }
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-marked-pack-")));
+  t.after(() => { assert.equal(dirname(root), realpathSync(tmpdir())); rmSync(root, { recursive: true }); });
+  const state = reservation({ round: "r21", commit, token: "0123456789abcdef" });
+  const program = remoteFiles(state)["pack.sh"].split("<<'CORTEN_SETUP_PACKAGE'\n")[1].split("\nCORTEN_SETUP_PACKAGE")[0]
+    .replace("pathlib.Path('/bench')", "pathlib.Path(__import__('sys').argv[1])");
+  for (const [name, body] of [["run.log", "entry import failed"], ["host.txt", "host"], ["exit-code", "1\n"]]) writeFileSync(join(root, name), body);
+  mkdirSync(join(root, "campaign"));
+  const marker = `${JSON.stringify(bootstrapMarker(state))}\n`;
+  const run = () => spawnSync(python, ["-c", program, root], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  writeFileSync(join(root, "bootstrap-ready.json"), marker); assert.equal(run().status, 0);
+  writeFileSync(join(root, "bootstrap-ready.json"), marker.replace(commit, "b".repeat(40))); assert.notEqual(run().status, 0);
+  writeFileSync(join(root, "bootstrap-ready.json"), marker);
+  writeFileSync(join(root, "campaign", ".host-attempt.json"), "{}"); assert.notEqual(run().status, 0);
+});
+
 test("early setup failure packs a validated archive with no usable Node or source clone", { skip: process.platform !== "linux" }, async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-early-pack-")));
   t.after(() => { assert.equal(dirname(root), realpathSync(tmpdir())); rmSync(root, { recursive: true }); });

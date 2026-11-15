@@ -48,12 +48,16 @@ if test -e 'results.tgz' || test -L 'results.tgz'; then
   test "$(stat -c '%s' -- 'results.tgz')" -le ${archiveLimit}
   exit 0
 fi
-if test ! -e 'bootstrap-ready.json' && test ! -L 'bootstrap-ready.json' && { test ! -e 'campaign' && test ! -L 'campaign' || test -d 'campaign' && test ! -L 'campaign' && test -z "$(ls -A -- 'campaign')"; }; then
+if { test ! -e 'campaign' && test ! -L 'campaign'; } || { test -d 'campaign' && test ! -L 'campaign' && test -z "$(ls -A -- 'campaign')"; }; then
   /usr/bin/timeout 25 /usr/bin/python3 - <<'CORTEN_SETUP_PACKAGE'
 import os, pathlib, re, stat
 root = pathlib.Path('/bench')
 assert root.is_dir() and not root.is_symlink() and root.resolve() == root
-assert not os.path.lexists(root / 'bootstrap-ready.json')
+marker = root / 'bootstrap-ready.json'
+if os.path.lexists(marker):
+    info = marker.lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 1024
+    assert marker.read_bytes() == ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}.encode('ascii')
 campaign = root / 'campaign'
 if os.path.lexists(campaign):
     assert campaign.is_dir() and not campaign.is_symlink() and next(campaign.iterdir(), None) is None

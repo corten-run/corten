@@ -108,7 +108,8 @@ export function controllerState(s, round) {
   if (s.status === "creating") assert.ok(!s.id, "creating host unexpectedly bound");
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
   if (s.bootstrapReady !== undefined) {
-    assert.ok(s.group !== undefined && s.group === s.fleet.jobs[0].group && ["running", "collected"].includes(s.status), "only the first started fleet group records bootstrap admission");
+    assert.ok(s.group !== undefined && s.group === s.fleet.jobs[0].group
+      && (["running", "collected"].includes(s.status) || s.status === "retired" && s.retirement?.kind === "setup-failed"), "only the first started fleet group records bootstrap admission");
     assert.deepEqual(Object.keys(s.bootstrapReady).sort(), ["observedAt", "sha256"]);
     full(s.bootstrapReady.sha256, /[a-f0-9]{64}/, "bootstrap observation hash");
     assert.equal(new Date(s.bootstrapReady.observedAt).toISOString(), s.bootstrapReady.observedAt, "bootstrap observation time required");
@@ -120,10 +121,10 @@ export function controllerState(s, round) {
     assert.ok(["unused", "setup-failed"].includes(s.retirement.kind));
     full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "retirement evidence hash");
     assert.ok(s.deletionIntentAt, "retirement requires a durable deletion intent");
-    for (const key of ["validation", "exitCode", "collectedAt", "evidenceOutcome", "bootstrapReady"])
+    for (const key of ["validation", "exitCode", "collectedAt", "evidenceOutcome"])
       assert.equal(s[key], undefined, "retirement cannot claim native campaign execution");
     if (s.retirement.kind === "unused") {
-      for (const key of ["archiveSha256", "evidenceSha256", "evidence"])
+      for (const key of ["archiveSha256", "evidenceSha256", "evidence", "bootstrapReady"])
         assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
     } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
   }

@@ -218,8 +218,8 @@ the Node installation or source clone that setup may have failed to create.
 It permits only bounded regular metadata and an absent or empty campaign root;
 native packaging keeps its existing full-tree validation. A separate
 `setup-failed` retirement requires both an absent or empty local campaign root and
-a fresh host proof: exact terminal started unit, no bootstrap marker or native
-campaign data, exact uploaded controls, matching exit, no running containers or
+a fresh host proof: exact terminal started unit, no native campaign data, only an
+absent or exact common-bootstrap marker, exact uploaded controls, matching exit, no running containers or
 benchmark processes and no pending jobs. The saved `failed-setup-host.json` binds
 the archive and extracted-tree hashes. No native validator result, timings or
 successful exit is invented. Unsettled validation, any entry evidence, failed
@@ -227,6 +227,12 @@ observations or a running unit preserves the host. Fleet output reports
 `setup-failed-retired`; repeat collection checks the same receipt and absence,
 without another DELETE. Native-started jobs retain the existing native collection
 and evidence gates. Neither retirement path can delete a running benchmark.
+
+The common-bootstrap marker precedes native entry. It is not native evidence or
+a reason to strand a terminal host whose entry failed before writing any data.
+Setup retirement permits only that exact source-bound marker, preserving an
+already-recorded bootstrap observation. A foreign, malformed, symlinked or
+missing previously observed marker refuses, as does any native campaign data.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;

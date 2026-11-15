@@ -1,7 +1,7 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
 import { digest } from "./cloud-local.mjs";
-import { remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
 
 export function unusedHostScript(state) {
@@ -82,16 +82,24 @@ export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs) {
     scriptSha256: digest(script), observation, startedAtMs, finishedAtMs };
 }
 
-// A terminal setup failure is not a native benchmark result. In particular,
-// neither a bootstrap marker nor any campaign contents may have existed here.
+// The common tooling marker does not prove native entry. Retirement still
+// requires an absent or empty campaign, not a native benchmark result.
 export function terminalSetupScript(state, exitCode) {
   assert.ok(Number.isInteger(exitCode) && exitCode >= 1 && exitCode <= 255, "nonzero setup exit code required");
   const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   assert.deepEqual(Object.keys(files).sort(), ["job.sh", "pack.sh", state.unit].sort());
+  const marker = `${JSON.stringify(bootstrapMarker(state))}\n`, observed = state.bootstrapReady !== undefined;
+  assert.ok(Buffer.byteLength(marker) <= 1024, "bounded common bootstrap marker required");
+  if (observed) {
+    assert.ok(state.bootstrapReady && typeof state.bootstrapReady === "object" && !Array.isArray(state.bootstrapReady), "saved bootstrap observation required");
+    assert.equal(state.bootstrapReady.sha256, digest(marker), "saved bootstrap marker differs");
+  }
   return `/usr/bin/timeout 25 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(files))} ${quote(String(exitCode))} <<'CORTEN_FAILED_SETUP_HOST'
 import hashlib, json, os, pathlib, stat, subprocess, sys, time, urllib.request
 host_id, unit, manifest, expected_code = sys.argv[1:]
 files = json.loads(manifest)
+expected_marker = ${JSON.stringify(marker)}.encode('ascii')
+require_marker = ${observed ? "True" : "False"}
 def failed(kind, value, traceback):
     print(json.dumps(dict(schema='benchmark-failed-setup-host/v1', setupFailed=False)))
 sys.excepthook = failed
@@ -115,14 +123,23 @@ def regular(path, limit=None):
 def control(path, name):
     regular(path, 1048576)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == files[name]
+def common_marker(path):
+    regular(path, 1024)
+    assert path.read_bytes() == expected_marker
 bench = pathlib.Path('/bench')
 assert stat.S_ISDIR(bench.lstat().st_mode)
-assert not os.path.lexists(bench / 'bootstrap-ready.json')
+marker_path = bench / 'bootstrap-ready.json'
+if os.path.lexists(marker_path):
+    common_marker(marker_path)
+else:
+    assert not require_marker
 for name in files:
     control(bench / name, name)
 for entry in bench.iterdir():
     if entry.name in files:
         control(entry, entry.name)
+    elif entry.name == 'bootstrap-ready.json':
+        common_marker(entry)
     elif entry.name in ['run.log', 'host.txt', 'exit-code', 'results.tgz']:
         regular(entry)
     else:

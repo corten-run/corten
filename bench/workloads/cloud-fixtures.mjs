@@ -100,7 +100,7 @@ export function harness(t, flags = {}) {
       if (script === bootstrapReadScript) {
         if (flags.bootstrapError) return { ...good(), status: 1 };
         if (flags.bootstrapPending) { flags.bootstrapPending--; return { ...good(), status: 3 }; }
-        return good(JSON.stringify(flags.bootstrapMarker ?? bootstrapMarker(JSON.parse(readFileSync(statePath)))));
+        return good(`${JSON.stringify(flags.bootstrapMarker ?? bootstrapMarker(JSON.parse(readFileSync(statePath))))}\n`);
       }
       if (script.includes("benchmark-unused-host/v1")) {
         const saved = JSON.parse(readFileSync(statePath));

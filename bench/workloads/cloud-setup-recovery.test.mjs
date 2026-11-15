@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { archive, harness, metadata } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata } from "./cloud-fixtures.mjs";
+import { fleetPlan } from "./cloud-contract.mjs";
+import { groupNames } from "./registry.mjs";
 import { digest } from "./cloud-local.mjs";
 import { setupEvidence, terminalSetupScript } from "./cloud-retirement.mjs";
 
@@ -10,6 +12,20 @@ const noNative = { inspect: async () => { throw new Error("no native campaign be
 function failedSetup(t, flags = {}, entries = metadata()) {
   const h = harness(t, flags); h.seed(); h.setArchive(archive(entries)); return h;
 }
+
+test("observed common bootstrap is retained provenance, not native entry or a cleanup dead end", async (t) => {
+  const h = harness(t, { active: true });
+  const tokens = Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")]));
+  const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
+  const path = join(h.temp, "fleet.json"); writeFileSync(path, JSON.stringify(fleet));
+  await h.task({}, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: groupNames[0], fleet: path }).launch();
+  const bootstrap = h.saved().bootstrapReady; assert.ok(bootstrap);
+  h.flags.active = false; h.setArchive(archive([...metadata(), { name: "campaign/" }]));
+  assert.equal(await h.task(noNative).collect(), 1);
+  const s = h.saved(); assert.equal(s.retirement.kind, "setup-failed"); assert.equal(s.status, "retired");
+  assert.deepEqual(s.bootstrapReady, bootstrap); assert.equal(s.validation, undefined); assert.equal(h.deletes, 1);
+  assert.equal(await h.task(noNative).collect(), 1); assert.equal(h.deletes, 1);
+});
 test("ordinary collect preserves failed-setup archive and retires only after separate terminal no-entry proof", async (t) => {
   const h = failedSetup(t);
   assert.equal(await h.task(noNative).collect(), 1);

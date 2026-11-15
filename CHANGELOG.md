@@ -13,6 +13,8 @@ Corten is pre-1.0, so any minor version may change the API.
   collection with separate immutable evidence, one deletion intent and exact-ID
   absence confirmation, never a successful baseline. Early failure packaging does
   not depend on the Node installation or source clone that setup may not have made.
+  A valid common-setup marker remains provenance, not native-entry evidence or a
+  reason to strand a terminal host with an empty campaign.
 
 - Distinguish benchmark provider census refusal predicates and finite href/count
   details without forwarding rejected values. Bound count-only census convergence
