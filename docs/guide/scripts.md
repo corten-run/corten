@@ -415,14 +415,14 @@ expression or a component writes into an element a browser reads as text (`<text
 `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`). An element written in one of those in the markup
 does not compile where the markup shows it is HTML, nor one in a `<script>` or a `<style>`, nor a
 `<plaintext>` (the browser would show its tags as text; [views](views.md),
-[design Choice 53](../design.md#choice-html-parse-refusals)). Inside an `<svg>` all
+[design Choice 54](../design.md#choice-html-parse-refusals)). Inside an `<svg>` all
 of them are elements like any other, and what they hold is found, except in its `<foreignObject>`,
 `<desc>` or `<title>`, which hold HTML. A component's markup does not see an `<svg>` its parent
 writes it into, and a component's children do not see where the component writes them, so the keys
 in a `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 `<noframes>` at the top of a component's markup (which its parent may write into an `<svg>`), or
 in one among a component's children (outside an `<svg>` the children write themselves), are not
-checked ([design Limit 29](../design.md#limit-markup-context)). Nor are those in one of them inside
+checked ([design Limit 30](../design.md#limit-markup-context)). Nor are those in one of them inside
 a `<math>` (outside its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>`, and an `<annotation-xml>`
 whose `encoding` is `text/html` or `application/xhtml+xml`, or in a `<mglyph>` or `<malignmark>` in
 one of them), where it is MathML's and the runtime

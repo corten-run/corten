@@ -48,8 +48,8 @@ of a component's markup (its parent may write it into an `<svg>`), among a compo
 children (they go where the component writes them) and in an `<annotation-xml>` whose `encoding`
 an expression writes, it does not show, and nothing here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
-`<svg>` compiles ([design Choice 53](../design.md#choice-html-parse-refusals),
-[Limit 29](../design.md#limit-markup-context)).
+`<svg>` compiles ([design Choice 54](../design.md#choice-html-parse-refusals),
+[Limit 30](../design.md#limit-markup-context)).
 
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns

@@ -5,6 +5,21 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
+  post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
+  its query set once instead of on a route per write to redirect back to the same view
+  ([#1403](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
+  method per name, `action={at.price()}` or a button's `formaction={at.photo()}`, whose address is
+  the page's own with `do=price`; the router chooses the handler from the address alone, so a
+  urlencoded form and a multipart upload are chosen alike and the handler's extractor still owns
+  the body. A post with no `do` goes to the plain `post`; an unknown name, `do` sent twice or no
+  `do` without a plain `post` is a 400; a `GET` of a post's address draws the page. A name with
+  no handler, two handlers for one name, a route with posts but no `get` or in an API's module, a
+  query parameter named `do`, and a redirect to a post's address do not compile. A debug build
+  answers a page of a route with named posts, drawn at a `do` address, with a post form that has no
+  `action` with a 500 (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and
+  the ui-gallery's draft use them.
+
 - Preserve closed production-controller failure stages through fleet workers and
   saved receipts, distinguishing pre-reservation source and Git failures from
   launch, collection and teardown without forwarding raw errors or changing gates.
@@ -653,7 +668,7 @@ Corten is pre-1.0, so any minor version may change the API.
   `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
   a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose `encoding` is
   `text/html` or `application/xhtml+xml`
-  ([design Choice 53](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
   inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
@@ -667,7 +682,7 @@ Corten is pre-1.0, so any minor version may change the API.
   or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
   drawing or the formula and holds elements. At the top of a component's markup, among a
   component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread
-  writes, where the markup does not show how they are parsed, none of this is refused ([design Limit 29](docs/design.md#limit-markup-context)).
+  writes, where the markup does not show how they are parsed, none of this is refused ([design Limit 30](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

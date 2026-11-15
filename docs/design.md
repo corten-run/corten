@@ -3217,7 +3217,7 @@ rules something out.
     component writes into an element whose content a browser reads as text (`<textarea>`, an HTML
     `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`); one written in those in the markup
     itself does not compile where `html!` can see it is parsed as HTML
-    ([Choice 53](#choice-html-parse-refusals)). In an `<svg>` they are elements like any other, and
+    ([Choice 54](#choice-html-parse-refusals)). In an `<svg>` they are elements like any other, and
     what they hold is counted, except in its `<foreignObject>`, `<desc>` and `<title>`, the HTML
     standard's integration points, whose children are HTML's. It counts an
     element against its component's render only when the element is written into the string that
@@ -3230,7 +3230,7 @@ rules something out.
     document's head tags: it renders each expression or component in its `<head>` into scratch
     storage and copies it into the page (`head_slot` in `crates/corten/src/view.rs`), so equal keys
     in two of them, or in one and the body, are not checked. Its limit is at a component's edge
-    ([Limit 29](#limit-markup-context)), where the markup on either side cannot know the other's
+    ([Limit 30](#limit-markup-context)), where the markup on either side cannot know the other's
     context: a component's markup does not see an `<svg>` its
     parent writes it into, so it takes a `<template>`, `<noscript>`, `<textarea>`, `<title>`,
     `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` at its top there for HTML's, and the keys in
@@ -3245,7 +3245,7 @@ rules something out.
     `application/xhtml+xml` (with another or none, an `<annotation-xml>`'s content is MathML's),
     is MathML's and the runtime finds what it holds, which the check does not
     count. An element a browser moves out of an `<svg>` (`<div>`, `<p>`) does not compile written
-    straight into one ([Choice 53](#choice-html-parse-refusals)), so the check
+    straight into one ([Choice 54](#choice-html-parse-refusals)), so the check
     follows the markup there as the browser does, except where `html!` cannot see it: a component
     that writes such an element at the top of its markup into a parent's `<svg>`, or an expression
     that writes one there, closes the drawing, and the parent's check still takes what follows for
@@ -3330,7 +3330,7 @@ rules something out.
     `<template>`'s content or, with scripting on, a `<noscript>`'s; the HTML standard's tree
     construction, which the key check follows for what that query finds: the elements whose content
     a browser reads as text and the integration points in SVG and MathML, as
-    [Choice 53](#choice-html-parse-refusals) records); reasoned (the runtime already finds a ref's
+    [Choice 54](#choice-html-parse-refusals) records); reasoned (the runtime already finds a ref's
     elements in the page's order for `*` and `#`, so a value is one attribute read per element
     when the handler runs and nothing on a load; the ref's third type parameter is one type wherever
     the component uses the ref, so a ref given text on one element and a number on another, or a
@@ -3358,7 +3358,7 @@ rules something out.
     has to read `data-ref-value`, which [Rule 10](#rule-standard-formats) keeps internal, or an app
     is found to give equal keys where the debug check cannot see them across a component's edge (in
     a `<template>` a component writes into a parent's `<svg>`, or among children it writes into an
-    `<svg>`'s `<desc>`, [Limit 29](#limit-markup-context)), when following the context across
+    `<svg>`'s `<desc>`, [Limit 30](#limit-markup-context)), when following the context across
     components would be weighed against its cost to every render, or a browser reads a key other
     than `getAttribute` gives it, when the check would compare what the runtime reads. The bet
     fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
@@ -4095,7 +4095,88 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
 
-53. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser would not keep as written, where the
+53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
+    in the address each form posts to, not by the pressed button's name in the body or a route per
+    write.** A path takes one `POST`, so a screen with several writes gave each a route of its
+    own, and each such route declared the page's query set again so its handler could redirect
+    back to the view it was sent from: 53 times in one port of a marketplace's seller screens
+    ([#1403](https://github.com/corten-run/corten/issues/1403)). A route now names its writes
+    beside its plain `post`, `post(price) = set_price`, and the routes module gives the route a
+    method per name, `at.price()`: an `Action` whose address is the page's own with `do=price`,
+    which renders as an attribute value (`action={at.price()}`, `formaction={at.price()}`) and is
+    not an `Href`, so nothing links or redirects to it. At a route with named posts, and only
+    there, the router's `POST` handler reads `do` from the request's query and calls the handler
+    it names, or the plain `post` when it names none, and answers 400 with the names the page has
+    otherwise; a `GET` or `HEAD` of the same address draws the page. Each handler takes the
+    page's `Params`, so the query set is said once and reaches every write and its redirect.
+
+    The address carries the name because a browser sends a form to the pressed button's
+    `formaction`, else the form's `action`, query kept, in both of a post's encodings, with or
+    without JavaScript, and the runtime's `data-patch` send reads the same two attributes, so the
+    runtime did not change. The query is read before the body, so a multipart upload is chosen as
+    a urlencoded form is, and the chosen handler's extractor keeps the body: its limit, its
+    streaming and its errors. Enter in a field presses the form's first submit button, so it
+    sends where that button does, and `requestSubmit()` with no submitter sends to the form's
+    `action`: each goes where the markup says, as a click does.
+
+    Not chosen: the pressed button's `name` and `value` in the body, HTML's own way to say which
+    control submitted a form (Rails' `commit`, Django's submit names). Routing on it reads the
+    body before routing: a urlencoded body is buffered, parsed and handed on, and a multipart one
+    is read until the submitter's part, which a browser writes in tree order among the others
+    (after a file input above it), so the router would hold the files ahead of it under a limit of
+    its own or take the body from the handler's `Upload`, and every post to such a route would pay
+    that read. A route per write with a shared query set, what apps wrote: correct, and still a
+    route and a `Params` per write that each say the page's query, the duplication the issue
+    counts. A `back` parameter or the `Referer` to redirect to: the handler would redirect wherever
+    a request says, an open redirect to guard, and still could not read the page's view as typed
+    `Params`. A path per write under the page (`/inventory/price`): a route of its own again.
+
+    `do` is a query parameter of Corten's own on an address users see
+    ([Rule 10](#rule-standard-formats)). The standard way to name the pressed control is its name
+    and value in the body, which does not fit for the reasons above; what carries Corten's
+    parameter, a `formaction` or an `action` with a query, is HTML's own, and Corten moves to the
+    submitter if a browser ever sends it where a server can read it before the body. A route with
+    a query parameter of its own named `do` does not compile, nor does a post named for one of a
+    route's own methods (`href`, `at`) or with a name that is not ASCII, which a browser would send
+    percent-encoded. What it leaves open is a form with no `action` on a page drawn at a post's
+    address, which posts there again ([Limit 29](#limit-page-action-address)).
+
+    What it costs, in instructions per request on the request path (the release test
+    `what_a_page_with_posts_costs`, callgrind, the difference between 1,200 and 200 requests):
+    a write that is a named post, `/desk?page=3&do=price`, is 22,928 where the same write at a
+    route of its own, `/desk/price?page=3`, was 21,882 before this change, 1,046 (4.8%) more: the
+    router finding and reading `do` (about 190 of it when the name was compared undecoded, 78 more
+    to decode it as `Params` does) and the rest the handler's `Params` decoding one more query
+    pair, which it reads and drops. The page's plain `post` beside named posts is 22,010 against
+    21,805 (205 more, the router reading the query), and drawing the page, whose forms now write
+    `/desk?page=3&amp;do=price` where they wrote `/desk/price?page=3`, 22,321 against 22,230 (91
+    more). A post to a route with no named post, mounted as before, is 21,893 against 21,882 (11
+    more, with none of this change's code on its path). The runtime is unchanged.
+
+    Stands on: measured (instructions per request under callgrind, three runs of each case alternating between the
+    two builds, every run within 2 of the others); platform (a form's submission goes to its submitter's
+    `formaction`, else its `action`, query kept, for `application/x-www-form-urlencoded` and
+    `multipart/form-data`, where only a `GET` replaces the query (HTML's form submission
+    algorithm); the smoke's urlencoded and multipart named posts with and without JavaScript, and
+    a `data-patch` one, in Chromium, Firefox and WebKit); reasoned (the router reads the request's
+    query, which it already holds, and no body, and a route with no named post is mounted as before;
+    the `do` key and its name are percent-decoded as `Params` reads the query's other keys, so an
+    address names one post however it is spelled, and only a pair with a `%` pays to decode); value (a
+    screen's view is said once and every write goes back to it, and a post a page does not have is
+    a compile error, README Value 4; it works without JavaScript and in both encodings, Value 3; a
+    page's writes are its route's, one concept rather than a route per write, Values 5 and 6).
+
+    Revisit when: a browser sends the submitter where a server can read it before the body (a
+    header), when routing on the standard submitter would cost no body read; an app needs one of a
+    page's named posts sent from another page's form, which a path of its own still serves; or an
+    app needs a query parameter named `do` on a page with posts.
+
+    Last checked: 2026-11-15, instructions per request on `e69833f2c` against `dea1788d2`, three
+    runs of each case alternating between the two; 2026-11-15, three runs of each case on
+    `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
+    others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
+    Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
+54. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser would not keep as written, where the
     markup shows how a browser parses it, and acts nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4136,7 +4217,7 @@ rules something out.
     still compiles, so a component that draws an SVG fragment without its `<svg>`
     (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
     the context it misses a mistake rather than refuse correct markup. Its limit is the
-    component's edge ([Limit 29](#limit-markup-context)). The accessible-name check and the named
+    component's edge ([Limit 30](#limit-markup-context)). The accessible-name check and the named
     link's `href` check keep their older rule, under which only an `<svg>`'s `<foreignObject>`
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
@@ -4169,7 +4250,7 @@ rules something out.
     app is found to write one of the refused shapes across a component's edge (a component whose
     top-level element lands in an `<svg>` and writes an element there a browser moves out, or
     children a component writes into a `<textarea>`), when following the context across
-    components ([Limit 29](#limit-markup-context)) would have to be weighed against its cost to
+    components ([Limit 30](#limit-markup-context)) would have to be weighed against its cost to
     every render.
 
     Last checked: 2026-11-15, the HTML standard's tree construction (its tokenization states for
@@ -4240,9 +4321,10 @@ rules something out.
 5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
    instant (filtering the rows on the page as you type) keeps the form that does it without. A
-   form that belongs to one page posts to that page's route, and a write with a path of its own
-   redirects once done and draws a page only to refuse, so the page a browser is left at answers
-   a `GET` ([Where a form posts](guide/requests-and-forms.md#where-a-form-posts)).
+   form that belongs to one page posts to that page's route, a page's several writes are named
+   posts of it ([Choice 53](#choice-page-actions)), and a write with a path of its own redirects
+   once done and draws a page only to refuse, so the page a browser is left at answers a `GET`
+   ([Where a form posts](guide/requests-and-forms.md#where-a-form-posts)).
 6. <a id="rule-page-view-model"></a>A page another surface reads derives `ToJson`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
 7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
@@ -4278,7 +4360,7 @@ rules something out.
     resolver's rule, the later wins, would drop one side's tokens without a word; the token goes
     in the group as its `$root`). Where Corten defines its own instead, a Choice above names the standard it considered, why it does not fit, and what
     would let Corten move to it ([Choice 11](#choice-corten-request-header), [Choice 12](#choice-own-prefetch),
-    [Choice 14](#choice-feed-patch-rows), [Choice 15](#choice-corten-answer-headers), [Choice 18](#choice-custom-media-breakpoints); [Choice 24](#choice-openapi)
+    [Choice 14](#choice-feed-patch-rows), [Choice 15](#choice-corten-answer-headers), [Choice 18](#choice-custom-media-breakpoints), [Choice 53](#choice-page-actions); [Choice 24](#choice-openapi)
     extends one where it cannot say something). A format only Corten's own
     server and runtime read (the `data-on` wire format) needs no standard, but stays internal:
     nothing outside the framework may depend on it.
@@ -4639,9 +4721,26 @@ by design; where it is known, a limit says what would lift it or why it is so.
     of the count.
     This limit is deliberate: inferring an identity from changing markup would
     still guess where the app's id can state it.
-29. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
+29. <a id="limit-page-action-address"></a>A page drawn at one of its posts' addresses
+    (`/inventory?page=3&do=price`: a write it refused, drawn without JavaScript, or the address
+    opened by hand) stays at that address, so a post form in it with no `action` sends to that
+    post again, whatever the form is for: a browser resolves a missing `action` to the document's
+    address, query included (HTML's form submission), and nothing Corten sends can change where a
+    browser without JavaScript posts. A page with named posts writes every post form's `action`,
+    `action={at}` for its plain `post` ([Choice 53](#choice-page-actions)). A debug build answers
+    a page of a route with named posts, drawn at an address whose query has a `do` key, whose
+    markup has a `<form method="post">` with no `action`, or an empty one, with a 500 that names
+    the form; the router marks such a route's requests, so a route without named posts may use a
+    `do` of its own unread, and it reads only those pages, after they are written. A release build
+    compiles none of it, so it costs nothing in production and never runs in a smoke test against a
+    production image. It reads
+    the form's own attributes: a form whose every button carries a `formaction` is flagged though
+    it posts nowhere wrong (give it an `action` too), and a `formmethod="post"` button in a `GET`
+    form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
+    address the browser was already at.
+30. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
     or where a component writes its children, so `html!`'s refusals of markup a browser does not
-    keep as written ([Choice 53](#choice-html-parse-refusals)) and the debug check of a keyed ref's
+    keep as written ([Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
     it, and where it does not they let a mistake pass rather than stop correct markup. At the top
     of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
