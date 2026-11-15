@@ -417,6 +417,11 @@ macro_rules! float {
                 };
                 let (mut lo, mut hi) = if last {
                     let nearest = Decimal::of(max)?.steps_below(from, by)?;
+                    if nearest < 0 {
+                        // Not even `min` is below `max`: a step under `min`, so the drawn range
+                        // is empty as the bounds are.
+                        return from.plus_steps(by, -1);
+                    }
                     ((nearest - span).max(0), nearest)
                 } else {
                     (1, span)
@@ -493,12 +498,12 @@ impl Decimal {
         Some(if left >= step - left { whole + 1 } else { whole })
     }
 
-    /// The most whole `step`s from `from` that stay below `self`: `None` when none do, or the
-    /// digits do not line up in an `i128`.
+    /// The most whole `step`s from `from` that stay below `self`, negative when not even `from`
+    /// does: `None` when the digits do not line up in an `i128`.
     fn steps_below(self, from: Decimal, step: Decimal) -> Option<i128> {
         let exponent = self.exponent.min(from.exponent).min(step.exponent);
         let (apart, step) = (self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?);
-        (apart > 0).then(|| (apart - 1).div_euclid(step))
+        Some((apart - 1).div_euclid(step))
     }
 
     /// `self` plus `k` times `step`, exactly: digits and an exponent, `None` past an `i128`.
@@ -731,6 +736,20 @@ mod tests {
         let none = Bounds::new(0.0, 0.25).step(0.25).exclusive_min().exclusive_max();
         assert_eq!(drawn(none).0, r#" min="0.25" max="0" step="0.25""#);
         assert!(!none.holds(0.0) && !none.holds(0.25));
+        // Equal ends: with either excluded nothing holds, and the drawn range is empty too (the
+        // drawn max a step under the min when only max is excluded).
+        let one = Bounds::new(1.0, 1.0).step(0.25);
+        assert_eq!(drawn(one), (r#" min="1" max="1" step="0.25""#.to_string(), (1.0, 1.0)));
+        assert!(one.holds(1.0));
+        for (ends, attrs) in [
+            (one.exclusive_min(), r#" min="1.25" max="1" step="0.25""#),
+            (one.exclusive_max(), r#" min="1" max="0.75" step="0.25""#),
+            (one.exclusive_min().exclusive_max(), r#" min="1.25" max="0.75" step="0.25""#),
+        ] {
+            let (out, (min, max)) = drawn(ends);
+            assert_eq!(out, attrs);
+            assert!(min > max && !ends.holds(1.0), "{attrs}");
+        }
         // Digits that do not line up in an i128: the end itself, which these bounds refuse even
         // when it is inclusive, as they do every value near it (the 38-digit limit above).
         let wide = Bounds::new(1e30, 2e30).step(1e-9);
