@@ -4022,10 +4022,10 @@ rules something out.
     kind check moves to the compiler and the runtime's goes; an app needs a control outside any
     form, which is a ref's; or a handler is measured spending time in the lookup.
 
-    Last checked: 2026-11-15, the runtime's size on COMMIT against `c9ed56785`, a field's bytes
-    against a ref's, and the item page's `render_cost` on both; 2026-11-15, the smoke's field
-    checks on COMMIT in Chromium ENGINES (Playwright PW), and `corten dev`'s reports on
-    COMMIT in Chromium.
+    Last checked: 2026-11-15, the runtime's size, a field's bytes against a ref's and the item
+    page's `render_cost` (native release builds) on `a69607283` against `c9ed56785`; 2026-11-15,
+    the smoke's field checks on `a69607283` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1), and `corten dev`'s reports of a mismatched field in Chromium 156.0.8078.4.
 
 ## Rules
 
