@@ -7,17 +7,17 @@ use std::{
 };
 
 /// A read started now, alongside the rest of the request, and awaited where its value is used,
-/// so a full load waits for the longer of it and the page's own reads, not their sum. A value only
-/// the layout shows (a cart's count) is a [`crate::LayoutRead`] instead, which Corten starts and
-/// draws with no extractor; `Ahead` is for a read the handler itself awaits.
+/// so a page waits for the longer of it and the handler's other reads, not their sum. It is for a
+/// read the page itself awaits. A value the layout shows (a cart's count) is a
+/// [`crate::LayoutRead`] instead, which Corten starts and draws with no extractor: for a full load,
+/// and for a write's own page once the handler has answered, not for a navigation's `<main>` nor a
+/// patch. Started with `Ahead` in an extractor, such a value would be read on every write the
+/// runtime sends, one that answers a patch too, and before the write, so it could miss what the
+/// write did.
 ///
-/// An extractor starts it as the request arrives, only when the request needs it (a full load:
-/// [`crate::Mode::of`]), and the handler passes it on as it does the viewer; the function that
-/// builds the layout's props awaits it. Each page that draws the layout takes the extractor, so
-/// one that does not cannot draw the count, and none joins the read with its own by hand.
-///
-/// It starts before the handler, so on a write it may not see what the write did: a value that
-/// depends on it (the count after an item is added) is read or given after the write, by the
+/// An extractor starts it as the request arrives, and the handler passes it on as it does the
+/// viewer. It starts before the handler, so on a write it may not see what the write did: a value
+/// that depends on it (the orders after one is placed) is read or given after the write, by the
 /// handler, or is a [`crate::LayoutRead`], which a write's own page starts once the handler has
 /// answered.
 ///
@@ -25,34 +25,34 @@ use std::{
 /// use corten::{extract::FromRequestParts, http::{request::Parts, Method}, prelude::*, Ahead};
 ///
 /// #[derive(Clone)]
-/// struct Carts;
-/// impl Carts {
-///     async fn count(&self) -> u32 { 3 }
+/// struct Shop;
+/// impl Shop {
+///     async fn orders(&self) -> Vec<String> { vec!["A-1".into()] }
 /// }
 ///
-/// /// What the layout shows beside the page: the cart's count, read once per full load.
-/// struct Chrome { cart: Ahead<Option<u32>> }
+/// /// The viewer's orders, which the orders page lists, read as the request arrives.
+/// struct Orders { list: Ahead<Option<Vec<String>>> }
 ///
-/// impl FromRequestParts<Carts> for Chrome {
+/// impl FromRequestParts<Shop> for Orders {
 ///     type Rejection = std::convert::Infallible;
 ///
-///     async fn from_request_parts(parts: &mut Parts, carts: &Carts) -> Result<Self, Self::Rejection> {
-///         // The runtime keeps the header for a swap, but a write's own page is whole.
-///         if Mode::of(&parts.headers).swaps() && parts.method == Method::GET {
-///             return Ok(Chrome { cart: Ahead::ready(None) });
+///     async fn from_request_parts(parts: &mut Parts, shop: &Shop) -> Result<Self, Self::Rejection> {
+///         // A write reads its page after it writes, so the list shows what it did.
+///         if parts.method != Method::GET {
+///             return Ok(Orders { list: Ahead::ready(None) });
 ///         }
-///         let carts = carts.clone();
-///         Ok(Chrome { cart: Ahead::start(async move { Some(carts.count().await) }) })
+///         let shop = shop.clone();
+///         Ok(Orders { list: Ahead::start(async move { Some(shop.orders().await) }) })
 ///     }
 /// }
 ///
-/// async fn account(req: Req, chrome: Chrome) -> HtmlResult {
-///     // The page's own reads run here while the cart is read.
-///     let cart = chrome.cart.await; // in the function that builds the layout's props
-///     # let _ = (req, cart);
+/// async fn orders(req: Req, orders: Orders) -> HtmlResult {
+///     // The page's other reads run here while the orders are read.
+///     let list = orders.list.await;
+///     # let _ = (req, list);
 ///     # todo!()
 /// }
-/// # let _ = account;
+/// # let _ = orders;
 /// ```
 ///
 /// It runs on a task of its own, so the read is `Send + 'static` and takes what it uses by value;

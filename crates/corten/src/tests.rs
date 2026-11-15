@@ -15363,8 +15363,10 @@ mod layout_reads {
 
     /// What a write the runtime sent (`corten: action`) costs, answered with its own page (a form drawn
     /// again) or, with `WRITE_ANSWER=patch`, a patch: `WRITE_REQUESTS` (200) requests in process, one
-    /// at a time, in an app with two layout reads or, with `WRITE_READS=0`, none. Counting it under
-    /// callgrind at two numbers of requests gives the instructions per request (#1370). Run in release:
+    /// at a time, in an app with two layout reads or, with `WRITE_READS=0`, none. With
+    /// `WRITE_MODE=page` the same write comes from a browser without JavaScript (no `corten` header),
+    /// whose page is the same whole document. Counting it under callgrind at two numbers of requests
+    /// gives the instructions per request (#1370). Run in release:
     /// `WRITE_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_write_answering_in_an_action_costs`
     #[test]
     #[ignore]
@@ -15372,6 +15374,7 @@ mod layout_reads {
         let requests: usize = std::env::var("WRITE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
         let patch = std::env::var("WRITE_ANSWER").is_ok_and(|v| v == "patch");
         let reads = !std::env::var("WRITE_READS").is_ok_and(|v| v == "0");
+        let mode = if std::env::var("WRITE_MODE").is_ok_and(|v| v == "page") { None } else { Some("action") };
         let routes = Table::new().route(
             "/form",
             crate::router::post(move |req: Req| async move {
@@ -15388,7 +15391,7 @@ mod layout_reads {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..requests {
-                let (status, _, body) = call_with(router.clone(), "POST", "/form", Some("action"), None).await;
+                let (status, _, body) = call_with(router.clone(), "POST", "/form", mode, None).await;
                 assert!(status == StatusCode::OK && body.contains("too short"), "{status} {body}");
             }
         });

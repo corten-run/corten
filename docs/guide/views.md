@@ -277,9 +277,12 @@ starts none, so it draws nothing there. On a `Public` or JSON route it changes n
 is started for one.
 
 A value both the page and the layout use (who is signed in, which the page greets by name) stays
-a prop the handler passes. A read the handler itself needs and wants started early is a
+a prop the handler passes. A read the page itself needs and wants started early is a
 `corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
-reads the request's mode before the handler has its `Req`. `Ahead` is `tokio::spawn` with the two
+reads the request's mode before the handler has its `Req`. A value the layout shows is a layout
+read, not an `Ahead`: Corten starts a layout read only for a page that draws the layout, and an
+extractor that started the count ahead for every request but a navigation would start it on every
+write the runtime sends, one that answers a patch too, before the write. `Ahead` is `tokio::spawn` with the two
 things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
 after the client left), and its panic fails the request. It starts before the handler, so on a
 write it may not see what the write did: a value that depends on the write (the count after an item
@@ -353,9 +356,13 @@ it as it draws that page, swapping in `<main>` and each element around it that c
 document and at the same address; until it is in, a navigation reads the whole page, so one that
 leaves it on its way still shows what the write changed. With two writes out at once, whichever
 page is drawn last may be older than the other write, so the next navigation reads the whole page
-again. So does one after a write the runtime cut off before its answer (by that navigation or a
-newer submit), which the server may have applied. A write that failed in view (the network failed,
-a 5xx) leaves the page as it is, with its failure shown, for the user to send again. A page the app's or an area's middleware makes with `Req` in the
+again. So does one after a write a navigation cut off before its answer, which the server may have
+applied, and the navigation after that one, since the server may still have been running the write
+when that page was read. A write that failed in view (the network failed, a 5xx) leaves the page as
+it is, with its failure shown, for the user to send again; the server may have applied it, so the
+next navigation reads the whole page, but the page reading itself again
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)) does not, as that would draw
+the failure away. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
 within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is
 `<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer

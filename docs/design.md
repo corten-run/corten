@@ -3879,15 +3879,18 @@ rules something out.
     page's layout stands for those answered before it was asked for and the write it answers, and
     drawing it makes every other write answered since it was asked for undrawn again: with two
     writes out, whichever page is drawn last, its layout may be older than the other write, so the
-    next navigation reads the whole page. A write the runtime cut off once it was sent (a navigation,
-    a newer submit), which the server may have applied, counts too, and a navigation that cuts off a
-    write still waiting for its answer reads the whole page. One that failed in view (the network
-    failed, a 5xx) does not: the page says so (a toast) and the user sends it again under the same
-    key, whose answer draws it, and reading the whole page would draw the failure away. The limit:
-    the server may have applied such a failed write, or may still be running a cut-off one when that
-    page is read, and the layout may not show it; nothing marks the layout stale after that page is
-    drawn, so the change shows at the next whole page read for another reason (another write, a
-    reload). A page the app's or an area's
+    next navigation reads the whole page. A navigation that cuts off a write still waiting for its
+    answer (only a navigation does: a newer submit of the form waits for it) reads the whole page,
+    and the write, which the server may have applied, counts too, numbered as the navigation starts
+    and after the writes that page draws: the server may still be running it as that page is read,
+    so the navigation after reads the whole page again. One that failed in view (the network failed,
+    a 5xx), which the server may have applied too, counts for the next navigation but not for the
+    page reading itself again (`ReadAgain`): the page says so (a toast in `<main>`) and the user
+    sends it again under the same key, and a read of the whole page would draw that failure away.
+    The limit: a page reading itself again after such a failure keeps the layout as it was until the
+    user leaves it or sends the write again, and a write the server applies after the navigation
+    after its cut-off (a slow write still running then) shows at the next whole page read for another
+    reason (another write, a reload). A page the app's or an area's
     middleware makes with `Req` in the route's place is filled as the middleware answers, under the
     request's deadline and before the error page, from the head that `Req` was taken with, as the
     route's own page is. A
@@ -3906,31 +3909,36 @@ rules something out.
     and a layout value a patch updates is a component with an id, passed its value as a prop.
 
     What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
-    reads, as the same write without JavaScript always did; in the test app (two reads, a small
-    layout) it takes 58,628 instructions where its `<main>` swap took 23,028, and 25,203 where it
-    took 22,780 in an app without layout reads (the document's head and layout). A write that
-    answers something else starts no read, since nothing runs beside its handler, but in an app with
-    layout reads only the request the server marks as such a write keeps a copy of the request's
-    head for a page it may answer with, since a handler's answer type (`HtmlResult`) does not say
-    whether it answers a page or a patch, and its answer is looked at for a page a middleware made.
-    So a patch there takes 27,977 instructions where it took 21,549, 6,428 more: callgrind puts
-    about 3,400 in allocating and freeing (most of it the head's copy and its drop) and 1,100 in
-    copying, the rest in the futures around the route. The watchlist's watch, a real write answered
-    with its patch, takes 80,331 in process, so that is 8.0% of a write without I/O. Other requests
-    pay a little too: in an app with layout reads each looks at one more atomic mark as its `Req` is
-    made, and every request runs through router futures that can carry the fill. A navigation takes
-    22,374 where it took 22,206 (168 more), a whole document 53,110 where it took 53,006, the watch
-    80,452 where it took 80,331, and a patch in an app without layout reads 21,518 where it took
-    21,370. The fill is boxed for the writes that carry it, a trade for the many requests that are
-    not such writes: without the box a navigation ran 197 more and a patch without layout reads 204
-    more, and a write in an action about 1,000 less (a patch with layout reads 26,971). The runtime
-    is 776 bytes larger raw and 270 with gzip (15,069 to 15,339), numbering the writes a layout
-    draws.
+    reads. In the test app (two reads, a small layout) it takes 58,677 instructions where its
+    `<main>` swap took 23,019; the same write from a browser without JavaScript, the same whole
+    document, takes 55,997 (it took 55,936 before), and a `GET` of the whole document 53,067. So
+    the runtime's write pays 2,680 more than the same write without JavaScript: profiled, about 1,300
+    in allocating and freeing and about 800 in reading headers, most of both because the request
+    carries one header more (`corten: action`), which the head's copy and each look at the mode and
+    credentials pay for, and about 600 in the boxed late path around the route; no one step to cut. In an app without layout reads it takes 25,205 where it took
+    22,771 (the document's head and layout). A write that answers something else starts no read,
+    since nothing runs beside its handler, but in an app with layout reads only the request the
+    server marks as such a write keeps a copy of the request's head for a page it may answer with,
+    since a handler's answer type (`HtmlResult`) does not say whether it answers a page or a patch,
+    and its answer is looked at for a page a middleware made. So a patch there takes 27,979
+    instructions where it took 21,543, 6,436 more: callgrind puts about 3,400 in allocating and
+    freeing (most of it the head's copy and its drop) and 1,100 in copying, the rest in the futures
+    around the route. The watchlist's watch, a real write answered with its patch, takes 80,359 in
+    process, so that is 8.0% of a write without I/O. Other requests pay a little too: in an app with
+    layout reads each looks at one more atomic mark as its `Req` is made, and every request runs
+    through router futures that can carry the fill. A navigation takes 22,363 where it took 22,200
+    (163 more), a whole document 53,067 where it took 52,783, the watch 80,453 where it took 80,359,
+    and a patch in an app without layout reads 21,516 where it took 21,369. The fill is boxed for the
+    writes that carry it, a trade for the many requests that are not such writes: without the box a
+    navigation ran 197 more and a patch without layout reads 204 more, and a write in an action about
+    1,000 less (round 4's counts). The runtime is 978 bytes larger raw and 373 with gzip (15,218 to
+    15,591 at zlib's default level), numbering the writes a layout draws and which of them failed in
+    view.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
     `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference
     of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
-    150 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
+    170 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
     patch carries elements by id, and a layout read's view at two places has none, so filling it
     needs a marker on every page; a write's own answer is not at an address a full load would
     draw); value (the page shows the same values with JavaScript as without, Values 3; one answer
@@ -3944,12 +3952,14 @@ rules something out.
     (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit
     before the change) pass 10% of what the watchlist's watch costs in process
     (`what_a_watch_costs`: a real write's handler answering with its patch, a lower bound since it
-    has no I/O). Last taken: 6,428 against 80,331, 8.0%.
+    has no I/O). Last taken: 6,436 against 80,359, 8.0%.
 
-    Last checked: 2026-11-14, callgrind (valgrind 3.19.0) on `04000147b` with the harness tests
-    added against `02ac51d9e`, three alternating rounds (earlier rounds: `e59c32c28` against
-    `934c94367`, `e760a5385` and `de46e974b` against the change as it was), and the runtime's size
-    with the change as it now is against `02ac51d9e`; 2026-11-14, the writes a layout draws in either order and a
+    Last checked: 2026-11-15, callgrind (valgrind 3.19.0) on the change as it now is, with the
+    harness tests added to `0d2d818cd`, three alternating rounds, and the own page in an action
+    profiled against the same write without JavaScript (earlier rounds: `04000147b` against
+    `02ac51d9e`, `e59c32c28` against `934c94367`, `e760a5385` and `de46e974b` against the change as
+    it was), and the runtime's size against `0d2d818cd`; 2026-11-15, a write that failed in view by
+    the watchlist smoke in Chromium and Firefox, failing on `fba53d131` in Chromium; 2026-11-14, 2026-11-14, the writes a layout draws in either order and a
     write cut off before its answer by the watchlist smoke in Chromium and Firefox (WebKit, without
     the Navigation API, skips them) on `04000147b`, each failing on `3eeba8d8d` in Chromium, and a middleware's page filled under the
     deadline and before the error page by the crate's tests on `04000147b`, failing without it.

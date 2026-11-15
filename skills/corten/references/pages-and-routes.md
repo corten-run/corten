@@ -91,7 +91,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    write sends it to whole and draws the layout again. One that answers with its own page (a form
    drawn again, a partial result) needs nothing more either: a write's `req.page(..)` is whole in
    every mode, `Mode::Action` included, its reads start once the handler has answered with it, and
-   the runtime draws the layout again (an `Ahead` started before the handler may not see the write);
+   the runtime draws the layout again (a layout value is a `LayoutRead`, never an `Ahead`, which starts before the handler, on every write, and may not see it);
    give the value it read after the write with `.give::<CartCount>(n)`. A patch is not a page and
    fills no layout read (a `later` in it is a debug error), so a write whose answer must change one
    answers its page, never a patch of the read's view. Write each nav link from

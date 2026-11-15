@@ -35,6 +35,11 @@ pub mod url {
     #[route("/smoke/written", get = unwritten, post = written)]
     pub struct Written;
 
+    /// The same form on a page that reads itself again each second (`ReadAgain`), so a write that
+    /// failed in view can be seen to stay shown while the page reads itself again (#1370).
+    #[route("/smoke/written/again", get = unwritten_again)]
+    pub struct WrittenAgain;
+
     /// A page with a dialog drawn empty and closed and a `data-patch` form outside it that asks
     /// for it (#1371).
     #[route("/smoke/sheet", get = sheet_page)]
@@ -168,20 +173,24 @@ fn LargeList() -> impl Render {
 }
 
 async fn unwritten(req: Req) -> HtmlResult {
-    written_page(&req, false)
+    written_page(&req, false, None)
+}
+
+async fn unwritten_again(req: Req) -> HtmlResult {
+    written_page(&req, false, Some(ReadAgain { after: std::time::Duration::from_secs(1) }))
 }
 
 async fn written(req: Req) -> HtmlResult {
-    written_page(&req, true)
+    written_page(&req, true, None)
 }
 
 /// The form, and once it is sent the write's own page, in the layout the smoke's other pages draw.
 /// The write's page draws a component with a script the form's page has not loaded, so the test
 /// can hold the page on its way in while the write is done, and leave it by a link to a page in
 /// the same area, which a navigation swaps into this document.
-fn written_page(req: &Req, written: bool) -> HtmlResult {
+fn written_page(req: &Req, written: bool, again: Option<ReadAgain>) -> HtmlResult {
     req.page(html! {
-        <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head="">
+        <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head={again}>
             <a href={url::Quoted}>"Quoted arguments"</a>
             <form method="post" action={url::Written} data-patch>
                 if written {

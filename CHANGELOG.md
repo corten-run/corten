@@ -528,21 +528,23 @@ Corten is pre-1.0, so any minor version may change the API.
   answer must change one answers its page
   ([design Choice 53](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
-  else starts none. Measured against `main` with callgrind: such a write takes 58,628 instructions
-  where its `<main>` swap took 23,028 (two layout reads), 25,203 where it took 22,780 without
-  reads; a patch in an app with layout reads takes 27,977 where it took 21,549 (its route keeps a
-  copy of the request's head for a page it may answer with), 8.0% of the watchlist's watch, a real
-  write; any other request in such an app runs about 100 to 170 more (a navigation 22,374 where it
-  took 22,206), and a patch in an app without layout reads 21,518 where it took 21,370. The
-  runtime is 270 bytes larger with gzip. A read an `Ahead` starts
+  else starts none. Measured against `main` with callgrind: such a write takes 58,677 instructions
+  where its `<main>` swap took 23,019 (two layout reads), and the same write without JavaScript
+  55,997; 25,205 where it took 22,771 without reads; a patch in an app with layout reads takes
+  27,979 where it took 21,543 (its route keeps a copy of the request's head for a page it may
+  answer with), 8.0% of the watchlist's watch, a real write; any other request in such an app runs
+  about 100 to 290 more (a navigation 22,363 where it took 22,200), and a patch in an app without
+  layout reads 21,516 where it took 21,369. The runtime is 373 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, so the next navigation reads the whole page; so does one
-  after a write the runtime cut off before its answer, which the server may have applied. A page the app's or an area's middleware makes with `Req` in the route's place is
+  after a write a navigation cut off before its answer, or one that failed in view (the network
+  failed, a 5xx), either of which the server may have applied; a page reading itself again
+  (`ReadAgain`) after such a failure reads only `<main>`, so the failure stays shown. A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
-  page, which the runtime then shows; skip it only for a `GET`
-  (`Mode::of(&parts.headers).swaps() && parts.method == Method::GET`), as the `Ahead` example does
-  ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+  page, which the runtime then shows; make such a value a `LayoutRead`, which Corten starts only
+  for a page that draws the layout, as the `Ahead` docs now say (an `Ahead` is for a read the page
+  itself awaits) ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

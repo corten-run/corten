@@ -3787,13 +3787,16 @@ async function run(browser) {
    * page from the write's answer on (`written`), `before` each one until then, each given the count
    * of writes sent by then (`writes`), its own included. Each request's mode for a path is recorded
    * in `asked`, and the writes answered are counted in `answers`; a write's answer waits for what
-   * `hold` gives for its number.
+   * `hold` gives for its number. While `fail` is set, a write is done but its answer is dropped, as a
+   * network that fails after the server applied it. The page opened is `path`.
    * @param {(body: string, writes: number) => string} edit @param {(body: string) => string} [before]
+   * @param {string} [path]
    */
-  const writtenPage = async (edit, before = (body) => body) => {
+  const writtenPage = async (edit, before = (body) => body, path = "/smoke/written") => {
     const own = await (await browser.newContext()).newPage();
     const seen = {
       written: false,
+      fail: false,
       writes: 0,
       answers: 0,
       /** @type {string[]} */ asked: [],
@@ -3822,12 +3825,13 @@ async function run(browser) {
         // A navigation's <main> is passed on as it is: it has no layout to change.
         const body = mode === "nav" ? text : write || seen.written ? edit(text, writes) : before(text);
         seen.written ||= write;
+        if (write && seen.fail) return route.abort("failed");
         if (write) await seen.hold(writes);
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
         if (write) seen.answers += 1;
       },
     );
-    await own.goto(`${base}/smoke/written`);
+    await own.goto(`${base}${path}`);
     await own.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
     return { own, seen };
   };
@@ -4053,6 +4057,49 @@ async function run(browser) {
       cutOffName,
       written && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ written, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write the server applied whose answer the network lost: the page shows the failure in its
+  // layout (as a toaster there does), for the user to send again. The page reading itself again
+  // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
+  // the write changed, would draw it away; the next navigation reads the whole page, which shows
+  // what the write changed.
+  const failedName = "a write that failed in view leaves its change to the layout for the next page, and the page reading itself again keeps the failure shown";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(failedName, "without the Navigation API a link is a full load");
+  else {
+    const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
+    seen.fail = true;
+    // The page says the write failed in its header, as a toaster in the layout shows it.
+    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+    await own.click("main form button");
+    const failed = await own
+      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const after = seen.asked.length;
+    // The page's next read of itself, and a moment for it to be drawn.
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
+    const again = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
+    await own.waitForTimeout(500);
+    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again");
+    await own.click('main a[href="/smoke/quoted"]');
+    const arrived = await own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    check(
+      failedName,
+      failed && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ failed, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
