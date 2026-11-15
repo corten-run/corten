@@ -2522,9 +2522,7 @@ impl Req {
 /// Whether `query` has the key that names one of a page's posts (`do=..`).
 #[cfg(debug_assertions)]
 fn at_action(query: Option<&str>) -> bool {
-    query.is_some_and(|query| {
-        query.split('&').any(|pair| pair.split_once('=').map_or(pair, |(key, _)| key) == crate::route::ACTION_KEY)
-    })
+    !matches!(crate::router::named(query), crate::router::Named::None)
 }
 
 /// The first `<form method="post">` in `html` with no `action` (or an empty one), as written: it

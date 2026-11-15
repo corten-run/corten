@@ -16,7 +16,7 @@ use corten::{
 
 use crate::{
     app,
-    layout::{Layout, ViewerBadge},
+    layout::{Layout, ViewerLink},
     recent::Recent,
     theme::*,
 };
@@ -258,6 +258,15 @@ struct AccountPictureId;
 #[derive(Id)]
 struct NameResultId;
 
+#[derive(Id)]
+struct SignedInAsId;
+
+/// Who the page says is signed in, which a new name replaces.
+#[component]
+fn SignedInAs<'a>(viewer: &'a Viewer) -> impl Patch {
+    html! { <p id={SignedInAsId}>"Signed in as "{&viewer.name}"."</p> }
+}
+
 #[derive(Fields)]
 pub(crate) struct NameForm {
     name: String,
@@ -363,9 +372,10 @@ pub(crate) async fn avatar(
     sessions.set_picture(&viewer.session, &id);
     let viewer = &sessions.now(&viewer, &pictures);
     let saved = &format!("Saved {name} as your picture.");
+    let r = &req;
     req.patch_or(
         html! {
-            <ViewerBadge viewer={viewer} />
+            <ViewerLink req={r} viewer={viewer} />
             <AccountPicture viewer={viewer} />
             <AvatarResult text={saved} />
         },
@@ -396,9 +406,11 @@ pub(crate) async fn rename(
     sessions.set_name(&viewer.session, name);
     let viewer = &sessions.now(&viewer, &pictures);
     let saved = &format!("Your pages now say {name}.");
+    let r = &req;
     req.patch_or(
         html! {
-            <ViewerBadge viewer={viewer} />
+            <ViewerLink req={r} viewer={viewer} />
+            <SignedInAs viewer={viewer} />
             <NameResult text={saved} />
         },
         || async { req.redirect(&url::Account) },
@@ -463,7 +475,7 @@ fn account_page(req: &Req, viewer: &Viewer, said: Said<'_>, status: StatusCode) 
                 <div class={(stack(Space::_4), max_w_prose())}>
                     <h1>"Account"</h1>
                     <section class={(card(), row(Space::_3), justify_between(), flex_wrap())}>
-                        <p>"Signed in as "{&viewer.name}"."</p>
+                        <SignedInAs viewer={viewer} />
                         <form method="post" action={app::url::SignOut} data-patch>
                             <button class={secondary()}>"Sign out"</button>
                         </form>
@@ -530,7 +542,7 @@ mod tests {
         let session = sign_in(&app).await;
         let ada = app.get(&Account).cookie("session", &session).await;
         let ada = ada.text();
-        assert!(ada.contains("<p>Signed in as Ada.</p>") && ada.contains("No picture yet."), "{ada}");
+        assert!(ada.contains(r#"<p id="signed-in-as">Signed in as Ada.</p>"#) && ada.contains("No picture yet."), "{ada}");
         assert!(ada.contains(r#"enctype="multipart/form-data""#) && ada.contains(r#"id="avatar-result""#), "{ada}");
         // Both forms post to the page's own address, each naming what it does.
         assert!(ada.contains(r#"action="/account?do=picture""#) && ada.contains(r#"action="/account?do=name""#), "{ada}");
@@ -657,15 +669,19 @@ mod tests {
             |name: &'static str| app.post(&Account.name()).field(NameForm::FIELDS.name, name).cookie("session", &session);
         let patch = rename(" Grace ").mode(Mode::Action).await;
         assert_eq!(patch.status(), StatusCode::OK);
+        // Every place the page names them: the header's link, its accessible name too, and the
+        // account's own line.
+        let patch = patch.text();
         assert!(
-            patch.text().contains("Your pages now say Grace.") && patch.text().contains(r#"id="viewer-badge""#),
-            "{}",
-            patch.text()
+            patch.contains("Your pages now say Grace.")
+                && patch.contains(r#"<a id="viewer-link" href="/account" data-nav aria-current="page" aria-label="Grace: account"><span id="viewer-badge""#)
+                && patch.contains(r#"<p id="signed-in-as">Signed in as Grace.</p>"#),
+            "{patch}"
         );
         let back = rename("Ada").await;
         assert_eq!(sent_to(&back), (StatusCode::SEE_OTHER, "/account"));
         let page = app.get(&Account).cookie("session", &session).await;
-        assert!(page.text().contains("<p>Signed in as Ada.</p>"), "{}", page.text());
+        assert!(page.text().contains(r#"<p id="signed-in-as">Signed in as Ada.</p>"#), "{}", page.text());
         let refused = rename(" ").await;
         assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text());
         assert!(refused.text().contains("<h1>Account</h1>") && refused.text().contains("Choose a name of 1 to 40 characters."));

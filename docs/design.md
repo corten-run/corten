@@ -4009,7 +4009,8 @@ rules something out.
     algorithm); the smoke's urlencoded and multipart named posts with and without JavaScript, and
     a `data-patch` one, in Chromium, Firefox and WebKit); reasoned (the router reads the request's
     query, which it already holds, and no body, and a route with no named post is mounted as before;
-    a name is compared as written, which is what a browser sends for an ASCII identifier); value (a
+    the `do` key and its name are percent-decoded as `Params` reads the query's other keys, so an
+    address names one post however it is spelled, and only a pair with a `%` pays to decode); value (a
     screen's view is said once and every write goes back to it, and a post a page does not have is
     a compile error, README Value 4; it works without JavaScript and in both encodings, Value 3; a
     page's writes are its route's, one concept rather than a route per write, Values 5 and 6).

@@ -116,7 +116,7 @@ impl Endpoint for Chooser {
     fn call(&self, req: Request) -> Answering {
         let chosen = match named(req.uri().query()) {
             Named::None => self.plain.as_ref(),
-            Named::One(name) => self.actions.iter().find(|(own, _)| *own == name).map(|(_, route)| route),
+            Named::One(name) => self.actions.iter().find(|(own, _)| *own == name.as_ref()).map(|(_, route)| route),
             Named::Twice => None,
         };
         match chosen {
@@ -162,29 +162,34 @@ impl Endpoint for Posts {
 }
 
 /// What a post's address names in its `do`.
-enum Named<'q> {
+pub(crate) enum Named<'q> {
     None,
-    One(&'q str),
+    One(std::borrow::Cow<'q, str>),
     Twice,
 }
 
-/// The `do` of `query`, as written: a page's post's name is a Rust identifier, which a browser
-/// sends as it is, so it is compared without decoding.
+/// The `do` of `query`, its key and value percent-decoded as `Params` reads the query's other
+/// keys, so an address names the same post however it is spelled (`%64o=price` is `do=price`). A
+/// browser sends a post's name, a Rust identifier, as it is written, so decoding is only for a
+/// pair with a `%` in it.
 #[inline]
-fn named(query: Option<&str>) -> Named<'_> {
+pub(crate) fn named(query: Option<&str>) -> Named<'_> {
+    use std::borrow::Cow;
+    let decode = |text| percent_encoding::percent_decode_str(text).decode_utf8_lossy();
     let mut found = Named::None;
     for pair in query.unwrap_or("").split('&') {
-        // The key is `do` when the pair starts with it and ends there or at its `=`.
-        let Some(rest) = pair.strip_prefix(crate::route::ACTION_KEY) else { continue };
-        let value = match rest.as_bytes().first() {
-            None => "",
-            Some(b'=') => &rest[1..],
-            Some(_) => continue,
-        };
+        // A key that decodes to `do` starts with its `d` or an escape.
+        if !matches!(pair.as_bytes().first(), Some(b'd' | b'%')) {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key != crate::route::ACTION_KEY && !(key.contains('%') && decode(key) == crate::route::ACTION_KEY) {
+            continue;
+        }
         if !matches!(found, Named::None) {
             return Named::Twice;
         }
-        found = Named::One(value);
+        found = Named::One(if value.contains('%') { decode(value) } else { Cow::Borrowed(value) });
     }
     found
 }

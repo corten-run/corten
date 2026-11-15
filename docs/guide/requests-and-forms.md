@@ -227,9 +227,10 @@ async fn set_price(req: Req, Params(p): Params<url::Inventory>, Form(f): Form<Pr
 }
 ```
 
-The router reads only the address's query for `do`, before anything reads the body, so a
-urlencoded form and a multipart upload (`Upload<T>`, [Files](#files)) are chosen the same way,
-and the chosen handler's extractor still owns the body and its limit. A post with no `do` goes to
+The router reads only the address's query for `do` (key and name percent-decoded, as `Params`
+reads the query), before anything reads the body, so a urlencoded form and a multipart upload
+(`Upload<T>`, [Files](#files)) are chosen the same way, and the chosen handler's extractor still
+owns the body and its limit. A post with no `do` goes to
 the plain `post`. A name the page has no post for, `do` sent twice, or no `do` where the page has
 no plain `post` answers 400 with the names it has. A `GET` or `HEAD` of a post's address draws
 the page and runs nothing.

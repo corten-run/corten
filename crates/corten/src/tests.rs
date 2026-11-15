@@ -15845,15 +15845,26 @@ async fn each_post_goes_to_the_handler_its_do_names_urlencoded_or_multipart() {
         app.post(&local("/desk?done=1&dot&page=2&do=price")).field(ActionPrice::FIELDS.price, 7).mode(crate::Mode::Action).await;
     assert_eq!(priced.text(), r#"<p id="msg">priced 7 on page Some(2)</p>"#);
     assert_eq!(app.post(&local("/desk?dot=1&page=2")).await.location().as_ref().map(crate::Local::as_str), Some("/desk?page=2"));
+    // The key and the name are read decoded, as `Params` reads the query: `%64o=pr%69ce` is `do=price`.
+    let priced =
+        app.post(&local("/desk?page=2&%64o=pr%69ce")).field(ActionPrice::FIELDS.price, 7).mode(crate::Mode::Action).await;
+    assert_eq!(priced.text(), r#"<p id="msg">priced 7 on page Some(2)</p>"#);
 }
 
 #[tokio::test]
 async fn a_post_no_handler_of_the_page_is_for_is_a_400_and_a_get_of_an_action_draws_the_page() {
     let app = App::new(url_actions::router()).test();
     let local = |path| crate::Local::parse(path).unwrap();
-    for path in
-        ["/desk?do=sell", "/desk?do=price&do=photo", "/desk?do=price&do", "/desk?do=", "/desk?do", "/bare", "/bare?do=price"]
-    {
+    for path in [
+        "/desk?do=sell",
+        "/desk?do=price&do=photo",
+        "/desk?do=price&%64o=photo",
+        "/desk?do=price&do",
+        "/desk?do=",
+        "/desk?do",
+        "/bare",
+        "/bare?do=price",
+    ] {
         let res = app.post(&local(path)).field(ActionPrice::FIELDS.price, 7).await;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{path}: {}", res.text());
     }

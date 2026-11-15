@@ -6646,6 +6646,16 @@ async function run(browser) {
       new URL(sent.url()).search === "?do=name" && type.startsWith("application/x-www-form-urlencoded") && badge.includes("Grace") && new URL(page.url()).search === "",
       `${sent.url()} ${type} ${badge} ${page.url()}`,
     );
+    const named = await page.evaluate(() => ({
+      label: document.querySelector("#viewer-link")?.getAttribute("aria-label"),
+      current: document.querySelector("#viewer-link")?.getAttribute("aria-current"),
+      line: document.querySelector("#signed-in-as")?.textContent,
+    }));
+    check(
+      "the new name replaces every place the page names them: the header link's accessible name, still current, and the account's line",
+      named.label === "Grace: account" && named.current === "page" && named.line === "Signed in as Grace.",
+      JSON.stringify(named),
+    );
     await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
     const [upload] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), page.click("main form[enctype] button")]);
     await page.waitForFunction(() => document.querySelector("#avatar-result")?.textContent === "Saved card.png as your picture.", null, { timeout: 8000 }).catch(() => {});
