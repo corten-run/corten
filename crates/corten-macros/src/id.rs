@@ -135,7 +135,7 @@ pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
     )
 }
 
-/// The architectures `global_asm!` is stable on (as of Rust 1.88, the workspace's minimum), as a
+/// The architectures `global_asm!` is stable on (as of Rust 1.89, the workspace's minimum), as a
 /// `cfg` predicate.
 const ASM: &str = "any(target_arch = \"x86\", target_arch = \"x86_64\", target_arch = \"arm\", target_arch = \"aarch64\", target_arch = \"arm64ec\", target_arch = \"riscv32\", target_arch = \"riscv64\", target_arch = \"loongarch64\", target_arch = \"s390x\")";
 

@@ -143,7 +143,7 @@ pub fn After() -> impl Render {
                 </div>
                 <div class={Words}>
                     <p>
-                        "You need Rust 1.88 or later, and Node.js for TypeScript. " <code>"corten new"</code>
+                        "You need Rust 1.89 or later, and Node.js for TypeScript. " <code>"corten new"</code>
                         " writes a working app: a page, a form that patches part of it, a component with a script, a test and a Dockerfile. Its package is "
                         <code>"corten-run"</code> " and its library " <code>"corten"</code> ", as the app's Cargo.toml says."
                     </p>

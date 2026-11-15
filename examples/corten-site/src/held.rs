@@ -72,8 +72,8 @@ const HELD: [(&str, &str, &str, &str); 20] = [
         README,
         "`corten::serve` speaks HTTP/1.1, so an app with live streams goes behind a proxy or CDN",
     ),
-    (AFTER, "You need Rust 1.88 or later", MANIFEST, "rust-version = \"1.88\""),
-    (AFTER, "Corten is 0.2: usable and tested", README, "Corten is 0.2: usable and tested, on Rust 1.88 or later"),
+    (AFTER, "You need Rust 1.89 or later", MANIFEST, "rust-version = \"1.89\""),
+    (AFTER, "Corten is 0.2: usable and tested", README, "Corten is 0.2: usable and tested, on Rust 1.89 or later"),
     (
         AFTER,
         "the deadline timer that cost 640 ns per request was reworked rather than kept for convenience, and a nicer API that slows every page loses",
