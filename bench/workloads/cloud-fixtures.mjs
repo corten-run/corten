@@ -62,6 +62,7 @@ export function harness(t, flags = {}) {
     if (flags.hook) flags.hook(binary, args);
     if (binary === "git") {
       if (flags.gitError) throw new Error("fake git failure");
+      if (args[0] === "ls-remote") return good(flags.remoteLine ?? `${flags.remoteHead ?? commit}\trefs/heads/main\n`);
       if (args[0] === "rev-parse") return good(args[1] === "HEAD" ? flags.wrongHead ? "b".repeat(40) : commit : repo);
       if (args[0] === "status") return good(flags.dirty ? " M README.md" : "");
       return good();

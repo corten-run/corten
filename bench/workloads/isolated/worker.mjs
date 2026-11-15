@@ -1,5 +1,6 @@
 // Local isolated-host API only: no provider, credentials, transport or CLI launcher.
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import os from "node:os";
@@ -114,8 +115,8 @@ export function createWorker({ authorize }) {
   function verifyCollection(attempt) {
     own(attempt.handle);
     assert.ok(attempt.receipt, "no completed collection");
-    assert.deepEqual(tree(join(attempt.directory, "native")), attempt.manifest, "collected evidence mutated");
-    if (attempt.sourcePresent) assert.deepEqual(tree(attempt.source), attempt.manifest, "original native evidence mutated");
+    assert.ok(isDeepStrictEqual(tree(join(attempt.directory, "native")), attempt.manifest), "collected evidence mutated");
+    if (attempt.sourcePresent) assert.ok(isDeepStrictEqual(tree(attempt.source), attempt.manifest), "original native evidence mutated");
     else assert.equal(lstatSync(attempt.source, { throwIfNoEntry: false }), undefined, "native evidence appeared after missing-output failure");
     for (const entry of attempt.logs) assert.equal(digest(readRegular(join(attempt.directory, entry.path))), entry.sha256, "command evidence mutated");
     return attempt.receipt;
@@ -142,8 +143,8 @@ export function createWorker({ authorize }) {
     catch (error) { validationError = error.message; attempt.failed = true; }
     // Failed process/cleanup cannot be promoted even if its saved summary looks successful.
     if (!attempt.failed) assert.ok(attempt.commands.every((c) => c.success));
-    assert.deepEqual(tree(destination), attempt.manifest, "evidence changed during native validation");
-    if (attempt.sourcePresent) assert.deepEqual(tree(source), attempt.manifest, "source changed during native validation");
+    assert.ok(isDeepStrictEqual(tree(destination), attempt.manifest), "evidence changed during native validation");
+    if (attempt.sourcePresent) assert.ok(isDeepStrictEqual(tree(source), attempt.manifest), "source changed during native validation");
     attempt.logs = attempt.commands.map((_, i) => ({ path: `command-${i}.log`, sha256: digest(readRegular(join(attempt.directory, `command-${i}.log`))) }));
     const receipt = { schema: "benchmark-isolated-collection/v1", attempt: handle.id, bindingSha256: attempt.binding.bindingSha256,
       outcome: attempt.failed ? "failed" : report?.qualification === "blocked" ? "blocked" : "native-validated", report, validationError,
