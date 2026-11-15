@@ -7,14 +7,16 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
-assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch"].includes(mode));
+assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
+let clock = 0;
 serveProviderWorker({
+  now: () => clock,
   spawn(binary, argv) {
     assert.equal(binary, "doctl"); assert.deepEqual(argv.slice(0, 2), ["auth", "token"]);
     record({ boundary: "synthetic-credential" });
@@ -45,6 +47,7 @@ serveProviderWorker({
       return { status: 200, value: { droplet: hosts().find((row) => row.id === Number(path.split("/").at(-1))) } };
     if (method === "GET" && /^\/v2\/actions\/\d+$/.test(path)) {
       const id = Number(path.split("/").at(-1));
+      if (mode === "late-create") clock = 24 * 60 * 60 * 1000;
       return { status: 200, value: { action: { id, type: "create", resource_id: id - 1000, resource_type: "droplet", status: "completed" } } };
     }
     assert.fail("unexpected synthetic REST operation");

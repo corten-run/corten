@@ -134,7 +134,9 @@ It also grants no authority. Requests use only the fixed HTTPS origin and a
 canonical action path constructed from the numeric ID. The authoritative action
 response must match that ID, type `create`, resource type `droplet`, and, when
 completed, the POST's exact droplet ID. Pending null/zero resource IDs never prove
-completion. Before any provisioning SSH, the controller explicitly joins this
+completion; even a matching completed response must be observed before the original
+absolute deadline, otherwise control uncertainty is retained. Before any provisioning
+SSH, the controller explicitly joins this
 completed-action/POST host ID to the freshly observed owned reservation host ID.
 Wrong IDs, account, ownership, action status, timeout and cancellation still fail
 closed without repeating POST. No optional hint can select another host or route.

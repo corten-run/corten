@@ -576,6 +576,25 @@ test("first action failures after accepted POST stop without retry or leaking pr
   }
 });
 
+test("completed create action must be observed before the original deadline", async () => {
+  for (const hints of [advisoryHints[0], advisoryHints[2]]) for (const completedAt of [999, 1000, 1001]) for (const allowFail of [false, true]) {
+    let clock = 0; const calls = [];
+    const run = providerTransport({ repo: resolve("."), spawn, now: () => clock,
+      request({ method, path, timeout }) {
+        calls.push({ method, path, timeout });
+        if (method === "POST") {
+          clock = 100; const response = publishedCreate(); response.value.links.actions = [{ id: 7515, ...hints }]; return response;
+        }
+        clock = completedAt; return createAction("completed", 3164444);
+      } });
+    if (completedAt < 1000) assert.deepEqual(await run(create, 1000, allowFail), { status: 0, stdout: '[{"id":3164444}]', stderr: "" });
+    else await assert.rejects(run(create, 1000, allowFail), (error) => {
+      assert.equal(error.controlUncertain, true); assert.equal(error.providerDiagnostic?.code, "create-action-response"); return true;
+    });
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 1000 }, { method: "GET", path: "/v2/actions/7515", timeout: 900 }]);
+  }
+});
+
 test("ignored metadata never extends the original deadline or bypasses cancellation", async () => {
   for (const hints of advisoryHints) for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
     let clock = 0, cancelled = false; const calls = [];

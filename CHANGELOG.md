@@ -10,6 +10,8 @@ Corten is pre-1.0, so any minor version may change the API.
   proves exact create completion; explicitly join its droplet ID to the freshly
   observed owned host before provisioning. Keep one POST, original deadlines,
   account/ownership, settlement and terminal-only cleanup gates unchanged.
+  Recheck the original absolute deadline before granting completed-action success;
+  late completion stays uncertain and cannot authorize provisioning.
 
 - A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
   post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares

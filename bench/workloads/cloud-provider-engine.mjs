@@ -243,7 +243,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           // The action model permits integer zero as well as null. Neither is
           // completion proof: only a completed action bound to this droplet is.
           if (!(action.resource_id === dropletId || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
-          if (action.status === "completed") { assert.equal(action.resource_id, dropletId); break; }
+          if (action.status === "completed") { assert.equal(action.resource_id, dropletId); readRemaining(); break; }
           if (action.status !== "in-progress") refuseCreate({ code });
           code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));

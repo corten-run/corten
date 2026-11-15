@@ -151,6 +151,24 @@ test("completed POST host A cannot provision otherwise owned host B or admit the
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
 });
 
+test("late completed create preserves uncertainty and locks without provisioning or later admission", { timeout: 30000 }, async (t) => {
+  const p = fixture(t, "late-create");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  assert.equal(p.workers.length, 1);
+  const events = p.events(), saved = p.saved();
+  assert.equal(saved.status, "creating"); assert.equal(saved.id, undefined);
+  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
+  assert.equal(events.filter((row) => row.path?.startsWith("/v2/actions/")).length, 1);
+  assert.ok(!events.some((row) => row.method === "DELETE"));
+  const first = p.output.at(-1).groups[0];
+  assert.equal(first.uncertain, true);
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+  assert.ok(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")));
+  assert.ok(fs.existsSync(path.join(p.h.base, groupNames[0], ".groups-launch.lock")));
+  assert.ok(fs.existsSync(path.join(p.h.base, groupNames[0], "groups-r21/operation.lock")));
+});
+
 test("captured production rejects Git advertisement before reservation or provider access", { timeout: 15000 }, async (t) => {
   const p = fixture(t, "advertisement");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
