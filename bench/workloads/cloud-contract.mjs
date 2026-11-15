@@ -105,8 +105,8 @@ export function validateState(s, round) {
     assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   date(s.createdAt);
-  assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected"].includes(s.status));
-  if (["preparing", "starting", "running", "collected"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
+  assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
+  if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
   if (s.id !== undefined) full(s.id, /[1-9]\d*/, "droplet ID");
   if (s.ip !== undefined) assert.equal(isIP(s.ip), 4, "public IPv4 required");
   for (const key of ["archiveSha256", "evidenceSha256"]) if (s[key] !== undefined) full(s[key], /[a-f0-9]{64}/, key);
@@ -117,10 +117,18 @@ export function validateState(s, round) {
     assert.equal(new Set(s.extractionAttempts).size, s.extractionAttempts.length);
   }
   if (s.evidence !== undefined) assert.ok(s.extractionAttempts?.includes(s.evidence), "unrecorded extraction");
-  if (s.deletionIntentAt || s.destroyedAt) {
-    assert.equal(s.status, "collected");
-    assert.ok(s.collectedAt && s.archiveSha256 && s.evidenceSha256 && s.evidence, "deletion requires preserved evidence");
-    assert.ok(["validated", "failed", "blocked"].includes(s.evidenceOutcome), "terminal evidence outcome required");
+  if (s.deletionIntentAt || s.destroyedAt || s.status === "retired" || s.retirement !== undefined) {
+    if (s.retirement !== undefined) assert.equal(s.status, "retired");
+    if (s.status === "retired") {
+      exact(s.retirement, ["kind", "evidenceSha256"]);
+      assert.ok(["unused", "setup-failed"].includes(s.retirement.kind));
+      full(s.retirement.evidenceSha256, /[a-f0-9]{64}/, "retirement evidence hash");
+      assert.ok(s.deletionIntentAt, "retirement requires deletion intent");
+    } else {
+      assert.equal(s.status, "collected");
+      assert.ok(s.collectedAt && s.archiveSha256 && s.evidenceSha256 && s.evidence, "deletion requires preserved evidence");
+      assert.ok(["validated", "failed", "blocked"].includes(s.evidenceOutcome), "terminal evidence outcome required");
+    }
   }
   return s;
 }

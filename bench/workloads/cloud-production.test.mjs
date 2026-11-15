@@ -124,8 +124,37 @@ test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch f
   }
 });
 
+test("pre-reservation failures retain their closed controller stage without cloud calls", async (t) => {
+  for (const [flags, stage] of [[{ fetchError: true }, "remote-main-fetch"], [{ unmerged: true }, "remote-main-ancestry"]]) {
+    const p = productionHarness(t, flags), approval = await p.approve("--detach");
+    await assert.rejects(productionMain(approval, p.deps), (error) => {
+      assert.equal(error.controllerStage, stage); return true;
+    });
+    assert.ok(p.calls.every(([binary]) => binary === "git"));
+    assert.ok(!existsSync(p.h.local)); assert.equal(p.h.creates, 0);
+  }
+});
+
+test("frozen settlement failures retain their stronger uncertainty and stage", async (t) => {
+  const p = productionHarness(t, { fetchError: true }), approval = await p.approve("--detach");
+  const factory = p.deps.providerFactory;
+  p.deps.providerFactory = (options) => {
+    const provider = factory(options);
+    provider.close = async () => { throw Object.freeze(Object.assign(new Error("PRIVATE_CLOSE"), {
+      controlTreeUncertain: true, controlUncertain: true, providerDiagnostic: { code: "get-http", httpStatus: 503 },
+    })); };
+    return provider;
+  };
+  await assert.rejects(productionMain(approval, p.deps), (error) => {
+    assert.equal(error.controllerStage, "provider-settlement");
+    assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
+    assert.deepEqual(error.providerDiagnostic, { code: "get-http", httpStatus: 503 }); return true;
+  });
+  assert.ok(p.calls.every(([binary]) => binary === "git")); assert.equal(p.h.creates, 0);
+});
+
 test("approved composed transport provisions fixed files and starts exactly once", async (t) => {
-  const p = productionHarness(t, { active: true, createRejected: true }), approval = await p.approve("--detach");
+  const p = productionHarness(t, { active: true }), approval = await p.approve("--detach");
   assert.equal(await productionMain(approval, p.deps), 3); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
   assert.equal(p.calls.filter(([b, , o]) => b === "ssh" && o.input.includes("systemctl start")).length, 1);
   assert.equal(p.calls.filter(([b, , o]) => b === "ssh" && o.input.includes("sha256sum --check")).length, 3);
@@ -200,7 +229,7 @@ test("account changes during the absence query also preserve deletion uncertaint
   const flags = { deleteUnconfirmed: true }, p = productionHarness(t, flags); p.h.seed();
   await assert.rejects(productionMain(await p.approve(), p.deps));
   flags.hook = (binary, args) => {
-    if (binary === "doctl" && args[2] === "list") { flags.accountId = "00000000-0000-4000-8000-000000000002"; p.h.hosts([]); }
+    if (binary === "doctl" && args[2] === "get") { flags.accountId = "00000000-0000-4000-8000-000000000002"; p.h.hosts([]); }
   };
   await assert.rejects(productionMain(await p.approve(), p.deps), /account identity/);
   assert.ok(!p.h.saved().destroyedAt); assert.equal(p.h.deletes, 1);
@@ -251,7 +280,8 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 17);
+  assert.equal(controllerPaths.length, 18);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));

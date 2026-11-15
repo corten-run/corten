@@ -87,7 +87,7 @@ test("fleet census permits only exact reserved siblings, not a tag-prefix exempt
 });
 
 function configured(t) {
-  const h = harness(t), values = input(); values.provider = { accountId, context };
+  const h = harness(t, { active: true }), values = input(); values.provider = { accountId, context };
   const fleet = contract.fleetPlan(values, at), path = join(h.temp, "fleet.json");
   writeFileSync(path, JSON.stringify(fleet));
   const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: groupNames[0], fleet: path };
@@ -106,6 +106,31 @@ test("group launch permits exact siblings but reserves only this group's complet
   assert.ok(job.includes(`--group '${groupNames[0]}'`));
   assert.equal(job, remoteFiles(saved)["job.sh"]);
   await assert.rejects(h.task({}, options).launch()); assert.equal(h.creates, 1);
+});
+
+test("a terminal later group cannot be saved as running admission and remains collectable", async (t) => {
+  const { h, options } = configured(t);
+  options.group = groupNames[1]; h.flags.active = false;
+  await assert.rejects(h.task({}, options).launch(), /group ended before running admission/);
+  assert.equal(h.saved().status, "starting"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+  const report = syntheticInspection("verified");
+  report.schema = "benchmark-isolated-group-campaign-inspection/v1";
+  report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
+  report.groups = report.groups.filter((row) => row.group === options.group);
+  h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "0\n" } : row),
+    { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
+  assert.equal(await h.task({ inspect: async () => report }).collect(), 0);
+  assert.equal(h.saved().status, "collected"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().fullGroupQualified, false);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
+});
+
+test("a nonterminal later group retains ordinary running admission", async (t) => {
+  const { h, options } = configured(t); options.group = groupNames[1];
+  await h.task({}, options).launch();
+  assert.equal(h.saved().status, "running"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.saved().bootstrapReady, undefined); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
 });
 
 test("foreign benchmark, own preexisting host, or fleet/account tampering cannot create", async (t) => {
@@ -129,6 +154,7 @@ test("first host requires account room for the whole reserved fleet, not just it
 
 test("group inspection is distinct from whole-campaign evidence and retains terminal deletion gates", async (t) => {
   const { h, options } = configured(t); await h.task({}, options).launch();
+  h.flags.active = false;
   const report = syntheticInspection("verified");
   report.schema = "benchmark-isolated-group-campaign-inspection/v1";
   report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
@@ -159,6 +185,7 @@ test("CLI group selection cannot omit the full fleet or change collection scope"
 test("failed and blocked collection preserves a host when evidence belongs to another selection", async (t) => {
   for (const status of ["failed", "blocked"]) for (const change of ["group", "apps", "contract"]) {
     const { h, options } = configured(t); await h.task({}, options).launch();
+    h.flags.active = false;
     const report = syntheticInspection(status);
     report.schema = "benchmark-isolated-group-campaign-inspection/v1";
     report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
@@ -170,5 +197,31 @@ test("failed and blocked collection preserves a host when evidence belongs to an
     await assert.rejects(h.task({ inspect: async () => report }).collect(), /native campaign validation unavailable or invalid/);
     assert.equal(h.deletes, 0); assert.equal(h.saved().destroyedAt, undefined);
     assert.equal(h.saved().deletionIntentAt, undefined);
+  }
+});
+
+test("first official group waits for the bound common bootstrap marker, not native qualification", async (t) => {
+  const { h, options } = configured(t); h.flags.bootstrapPending = 1;
+  const saved = await h.task({}, options).launch();
+  assert.equal(saved.status, "running"); assert.ok(saved.bootstrapReady.sha256); assert.ok(saved.bootstrapReady.observedAt);
+  assert.equal(saved.fullGroupQualified, false); assert.equal(h.creates, 1);
+  assert.equal(h.calls.filter((c) => c[0] === "ssh" && c.at(-1).startsWith("if test ! -e /bench/bootstrap-ready.json")).length, 2);
+});
+
+test("failed or wrong common bootstrap leaves the first host observable without another allocation", async (t) => {
+  for (const mode of ["read-failed", "wrong-identity", "ended", "expired", "reverse-time", "cancelled"]) {
+    const { h, options } = configured(t); let clock = 0;
+    if (mode === "read-failed") h.flags.bootstrapError = true;
+    if (mode === "wrong-identity") h.flags.bootstrapMarker = { schema: "benchmark-common-bootstrap/v1", commit: "foreign" };
+    if (mode === "ended") h.flags.active = false;
+    if (["expired", "reverse-time", "cancelled"].includes(mode)) h.flags.hook = (binary, args) => {
+      if (binary === "ssh" && args.at(-1).startsWith("if test ! -e /bench/bootstrap-ready.json")) {
+        clock = mode === "expired" ? 45 * 60000 : -1;
+        if (mode === "cancelled") h.flags.cancelled = true;
+      }
+    };
+    await assert.rejects(h.task({ now: () => clock }, options).launch());
+    assert.equal(h.saved().status, "running"); assert.equal(h.saved().bootstrapReady, undefined);
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });

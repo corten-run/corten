@@ -40,9 +40,11 @@ The per-host production launch adds `--group GROUP --fleet ABSOLUTE_PLAN_JSON`.
 Both fields are required together, only at detach, and the approval binds the exact
 plan file bytes. Collection and source-audit delivery use the saved host identity;
 they cannot change the group. An audit for another group's host is refused.
-The existing account, source, process-settlement, archive and deletion gates remain
-mandatory independently for every host. No host is retried or adopted after an
-ambiguous create/start.
+The existing account, source, process-settlement and ownership gates remain
+mandatory independently for every host. No create or start is replayed after an
+ambiguous result. A saved create intent can reconcile its one exact name/tag
+allocation for recovery, never as proof that create completed or permission to
+provision it.
 
 `fleet.mjs` is the complete-registry operator entry. Its root is a fresh physical
 directory outside the checkout, separate from legacy reservations. Preparation
@@ -63,15 +65,32 @@ The launch intent is durable before any child starts and prevents a second launc
 including after partial failure. Each child has an independent state directory,
 operation lock, private credential worker and remote systemd unit.
 
-Each production controller runs on a separate worker event loop, so synchronous
-SSH/SCP calls do not serialize group launches. Worker entry and dependency modules
-execute captured, hash-checked source bytes with a deny-unlisted loader. Batch
-approval binds that executable closure. The parent propagates cancellation to all
-children and keeps its lock until every worker exits; uncertainty retains the lock.
-It never terminates a possibly mutating child merely to make a timeout look clean.
+Admission is staged, not a simultaneous fleet allocation. The first required
+registry group must reach bound running state and emit the exact source-bound
+common-bootstrap marker after its tooling setup. Only then are the remaining
+required hosts admitted serially. Remote benchmark jobs overlap; their contenders,
+profiles and measurement parameters are unchanged. The marker precedes native
+entry and proves neither feature parity nor a group's performance evidence.
+Its observation is bounded to 45 minutes, checks cancellation and preserves the
+running host on timeout or an invalid observation. A failed admission or
+cancellation leaves every later group visibly `not-admitted`, not silently omitted
+or automatically retried. The complete reserved roster remains mandatory.
+Later groups must also be observed nonterminal before running admission is saved.
+A job already terminal at that observation remains in its saved `starting` state
+for ordinary collection, rather than admitting another host from a false running
+claim. This does not discard a fast completed job's evidence or permit a restart.
+
+Each production controller runs on a separate worker event loop. Worker entry and
+dependency modules execute captured, hash-checked source bytes with a deny-unlisted
+loader. Batch approval binds that executable closure and the admission policy.
+Collection remains independent and concurrent across saved hosts. The parent
+propagates cancellation to children and keeps its lock until every worker exits;
+uncertainty retains the lock. It never terminates a possibly mutating child merely
+to make a timeout look clean.
 
 Failed worker results and fleet receipts retain only the existing allowlisted
-`providerDiagnostic` code and optional HTTP status, plus an explicit `uncertain`
+`providerDiagnostic` code and optional HTTP status or code-specific finite detail,
+plus an explicit `uncertain`
 boolean for a reported operation failure. Raw errors, stacks, command arguments
 and credential material are never forwarded. Malformed worker messages still
 mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
@@ -87,6 +106,25 @@ their coarse phase codes, including `create-link`. No rejected provider values a
 retained or forwarded. These diagnostics do not identify the cause of historical
 failures whose rejected responses were not retained, or change any acceptance,
 completion, ownership, retry or cleanup gate.
+
+Failures inside the production composition also retain one closed `controllerStage`
+code: `source-plan`, `exact-approval`, `remote-main-advertisement`,
+`remote-main-fetch`, `remote-main-ancestry`, `source-recheck`,
+`controller-construction`, `controller-launch`, `controller-collect`,
+`controller-audit`, `controller-checkpoint` or `provider-settlement`.
+The stage identifies the failing operation, not its cause or whether a host exists.
+Only an own data property from that vocabulary crosses the worker boundary;
+unknown values and accessors are not forwarded. It adds no retry, cleanup or
+launch authority. Raw Git errors, URLs, arguments and stderr remain private.
+
+The href diagnostic can additionally classify a refused representation as
+`non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
+`semantically-same-canonical-uri`, `query-or-trailing-slash` or
+`wrong-action-or-resource`. These are a closed vocabulary, never the rejected URL,
+query, IDs or response. A classification does not make that representation valid.
+Count refusals similarly retain only `total-changed` or
+`terminal-count-mismatch`. Historical failures without these observations remain
+unexplained; a synthetic reproduction does not establish their cause.
 
 When present, a create action's `href` must exactly match one of the provider's
 two documented action routes: `https://api.digitalocean.com/v2/actions/<action-id>`
@@ -109,7 +147,7 @@ node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit 
 
 Missing, ambiguous or locked child state stays visible and never triggers another
 launch. Both successful and failed native inspections must match the host's exact
-reserved selection before cleanup. Batch receipts are diagnostics, not proof.
+reserved selection before campaign cleanup. Batch receipts are diagnostics, not proof.
 The read-only fleet verifier replays every saved native archive, rechecks its
 immutable hashes and confirmed cleanup, and requires unique host identities for
 the entire roster. Its intrinsic `verified` status is not publication approval:
@@ -124,25 +162,91 @@ account must have room for the entire remaining roster, not just the next host.
 Sibling membership is not permission to collect, stop or delete that sibling.
 
 An HTTP-successful census with a changed total between pages or a final count
-mismatch may be discarded once and read again from page 1. Only the new complete
-census can be returned: no rows, IDs or totals carry over. Both attempts share the
-original command deadline and cancellation checks, at most 100 GETs in total,
-200 rows per page and a total of at most 20,000. Malformed IDs, metadata or next
-links fail before this narrow count-change classification. A second mismatch,
-HTTP or request error, cancellation or exhausted budget refuses. This is not an
+mismatch may be discarded and read again from page 1 after a paced observation
+delay of up to one second. Only a new complete census can be returned: no rows,
+IDs or totals carry over. All observations share the original absolute command
+deadline and cancellation checks, at most 100 GETs in total, 200 rows per page and
+a total of at most 20,000. Malformed IDs, metadata or next links fail before this
+narrow count-change classification. An HTTP or request error, cancellation or
+exhausted deadline/request budget refuses. This is not an
 HTTP/network retry or permission to repeat POST/DELETE, replay an old operation,
 relax identity/absence checks or infer the cause of a historical failure.
 
 Census predicate refusals use the closed `list-response-` suffixes `shape`
 (droplet array), `total` (nonnegative safe-integer metadata), `id`, `duplicate`,
 `links`, `pages`, `next` (fixed-origin URL, path and exact next-page parameters),
-`count` (inconsistency on the second attempt), and `bounds` (row, total, page or
+`count` (count inconsistency after the bounded convergence window), and `bounds` (row, total, page or
 shared request ceiling). They expose no rejected values or counts. The code is
 attached only at the failed predicate; intervening deadline and cancellation
 faults retain their coarse phase code. These diagnostics neither identify the
 historical failed response nor make an incomplete census valid. Concurrent
 allocations between complete single-page responses do not alone cause a count
 refusal; disagreement within a response or between pages is a separate condition.
+
+After identity binding, host checks use fixed-origin `GET /v2/droplets/<saved-id>`
+instead of another account-wide census before every SSH/SCP call. Successful
+responses must bind that ID and still pass exact name, ownership tags, host size,
+region and public-IP checks. Only an explicit HTTP 404 establishes absence;
+authorization, rate-limit, network, timeout and malformed-response errors never do.
+Account/context checks still surround provider commands. Initial allocation and
+unbound recovery require a complete census.
+
+## Failed Allocation Retirement
+
+A known semantic create refusal is returned as failure without poisoning a settled
+credential worker. Recovery can then reconcile the unique allocation under its
+durable create intent. Even if identity is found, provisioning cannot begin without
+the exact completed create-action proof. A timed-out or unsettled mutation remains
+uncertain, retains locks and cannot take this recovery shortcut.
+
+Ordinary `--collect` supports a separate unused-host retirement path only from
+the pre-start `preparing` state. A bounded read-only host probe must confirm exact
+metadata ID, an inactive never-started unit without a restart policy or pending
+job, completed cloud-init without user data, no benchmark process or container
+runtime, and no benchmark data. `/bench` may be absent or contain only the exact
+hashed uploaded control files and an empty log. Ambiguous files, partial data,
+unreadable observations or any attempted start refuse this path.
+
+Both retirement probes recognize only their own exact fixed `timeout` parent,
+binding its PID, executable and full argv before and after scanning other
+processes. Other wrappers and processes receive no exception.
+
+The controller preserves `unused-host.json` with the exact probe hash, bound host,
+source and fresh observation window before recording a deletion intent. It issues
+at most one DELETE and requires exact-ID 404 confirmation. Later collection only
+rechecks the immutable receipt and absence; a lost acknowledgement never repeats
+DELETE. The saved status is `retired`, not `collected`, and carries no native archive,
+validation, timings or successful result. Fleet inspection reports `unused-retired`
+or `cleanup-pending`, never a verified baseline.
+
+An interrupted receipt write before deletion intent is not a permanent recovery
+dead end. Collection verifies and retains the exact previous receipt under its
+content hash, then requires a new fresh host probe before writing the current
+receipt and intent. It never overwrites unknown evidence, treats an old observation
+as current permission or repeats a saved deletion intent.
+
+If the common setup itself ran and failed before native entry, collection first
+preserves the immutable terminal archive and its raw nonzero exit. A separate
+pre-entry packaging check uses only the base image's Python and GNU tools, not
+the Node installation or source clone that setup may have failed to create.
+It permits only bounded regular metadata and an absent or empty campaign root;
+native packaging keeps its existing full-tree validation. A separate
+`setup-failed` retirement requires both an absent or empty local campaign root and
+a fresh host proof: exact terminal started unit, no native campaign data, only an
+absent or exact common-bootstrap marker, exact uploaded controls, matching exit, no running containers or
+benchmark processes and no pending jobs. The saved `failed-setup-host.json` binds
+the archive and extracted-tree hashes. No native validator result, timings or
+successful exit is invented. Unsettled validation, any entry evidence, failed
+observations or a running unit preserves the host. Fleet output reports
+`setup-failed-retired`; repeat collection checks the same receipt and absence,
+without another DELETE. Native-started jobs retain the existing native collection
+and evidence gates. Neither retirement path can delete a running benchmark.
+
+The common-bootstrap marker precedes native entry. It is not native evidence or
+a reason to strand a terminal host whose entry failed before writing any data.
+Setup retirement permits only that exact source-bound marker, preserving an
+already-recorded bootstrap observation. A foreign, malformed, symlinked or
+missing previously observed marker refuses, as does any native campaign data.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;

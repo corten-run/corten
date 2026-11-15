@@ -5,14 +5,14 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs } from "./cloud-options.mjs";
+import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
+export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
 const policyPaths = [...new Set([...controllerPaths, ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/json-api/contract.mjs", "bench/workloads/registry.mjs"])];
 const loadedSources = new Map(policyPaths.map((path) => [path, regular(join(checkout, path), 1024 * 1024).toString("utf8").replaceAll("\r\n", "\n")]));
@@ -71,6 +71,25 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn });
   const providerRun = providerFactory({ repo, interrupted });
+  let stage = "source-plan";
+  const mark = (error, value) => {
+    // Keep the original internal failure and uncertainty flags. Only this closed
+    // phase value may cross the worker boundary, never its message or arguments.
+    if (error && typeof error === "object") {
+      try { Object.defineProperty(error, "controllerStage", { value, configurable: true }); }
+      catch {
+        const message = Object.getOwnPropertyDescriptor(error, "message")?.value;
+        const wrapped = new Error(typeof message === "string" ? message : "controller operation failed", { cause: error });
+        wrapped.controllerStage = value;
+        for (const flag of ["controlTreeUncertain", "controlUncertain"])
+          if (Object.getOwnPropertyDescriptor(error, flag)?.value === true) wrapped[flag] = true;
+        const diagnostic = providerFailure(error);
+        if (diagnostic) wrapped.providerDiagnostic = diagnostic;
+        return wrapped;
+      }
+    }
+    return error;
+  };
   try {
   const run = async (...args) => {
     await controlCheckpoint(interrupted);
@@ -87,16 +106,21 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
       approvalSha256: plan.approvalSha256, missing: plan.missing, fullGroupQualified: false }));
     return plan.missing.length ? 2 : 3; // Preview is never qualified execution success.
   }
+  stage = "exact-approval";
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
   // Each parallel controller observes main independently, but must not race a
   // shared reference or FETCH_HEAD. Fetch only that exact advertised object.
+  stage = "remote-main-advertisement";
   const advertisement = (await run("git", ["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"], 120000)).stdout;
   full(advertisement, /[a-f0-9]{40}\trefs\/heads\/main\n/, "remote main advertisement unavailable or ambiguous");
   const remoteHead = advertisement.slice(0, 40);
+  stage = "remote-main-fetch";
   await run("git", ["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead], 120000);
+  stage = "remote-main-ancestry";
   await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
+  stage = "source-recheck";
   const repeated = await productionPlan(options, { repo, run });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
@@ -111,14 +135,21 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
     }
     return run(binary, argv, timeout, allowFail);
   };
+  stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close() });
   let result;
+  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : "controller-audit";
   if (options.detach) { await task.launch(); result = 3; }
   else result = options.collect ? await task.collect() : await task.deliverAudit();
+  stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;
-  } finally { await providerRun.close(); }
+  } catch (error) { throw mark(error, stage); }
+  finally {
+    try { await providerRun.close(); }
+    catch (error) { throw mark(error, "provider-settlement"); }
+  }
 }
 
 export function productionSignals() {
