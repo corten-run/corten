@@ -13,14 +13,16 @@ const runtime = fileURLToPath(new URL("../crates/corten/js/corten.js", import.me
 const config = fileURLToPath(new URL("../jsconfig.json", import.meta.url));
 const source = readFileSync(runtime, "utf8");
 
-for (const [where, before, after] of [
-  ["startedBy", "event.info?.[SOURCE] ??", "event.info?.[SOURCE]?.reviewTypo ??"],
-  ["navigate listener", "  const skip =", "  event.info?.[SOURCE]?.reviewTypo;\n  const skip ="],
+for (const [where, before, after, code, marker] of [
+  ["startedBy source shape", "event.info?.[SOURCE] ??", "event.info?.[SOURCE]?.reviewTypo ??", 2339, "reviewTypo"],
+  ["navigate listener source shape", "  const skip =", "  event.info?.[SOURCE]?.reviewTypo;\n  const skip =", 2339, "reviewTypo"],
+  ["optional Navigation API", "const navigation = /** @type {Navigation | undefined} */ (window.navigation);",
+    "const navigation = /** @type {Navigation | undefined} */ (window.navigation);\nnavigation.currentEntry;", 18048, "navigation.currentEntry"],
 ]) {
-  test(`${where} rejects an unknown property of the navigation source`, () => {
+  test(`${where} rejects an unsafe read`, () => {
     assert.equal(source.split(before).length, 2, "the probe must match exactly one runtime expression");
     const changed = source.replace(before, after);
-    const position = changed.indexOf("reviewTypo");
+    const position = changed.indexOf(marker, source.indexOf(before));
     const api = new API({ fs: { readFile: (file) => file.replaceAll("\\", "/") === runtime ? changed : undefined } });
     try {
       const snapshot = api.updateSnapshot({ openProjects: [config] });
@@ -28,8 +30,8 @@ for (const [where, before, after] of [
         const project = snapshot.getProject(config);
         assert.ok(project, "the runtime's check project must load");
         const errors = project.program.getSemanticDiagnostics(runtime);
-        assert.ok(errors.some((error) => error.code === 2339 && error.pos === position),
-          `expected TS2339 for reviewTypo in ${where}; an any-typed info would accept it`);
+        assert.ok(errors.some((error) => error.code === code && error.pos === position),
+          `expected TS${code} for ${marker} in ${where}`);
       } finally {
         snapshot.dispose();
       }

@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript7/unstable/ast";
-import { parse } from "./typescript.mjs";
+import { parse, parseFiles } from "./typescript.mjs";
 
 /** What `text`, the file `file`, has that this check forbids, by line. @param {string} file @param {string} text @returns {string[]} */
 export function problems(file, text) {
@@ -66,7 +66,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .split("\0")
     // The scripts the type check covers: not the minified builds, nor the smokes' Node scripts.
     .filter((file) => /\.(js|d\.ts)$/.test(file) && !file.includes("/dist/") && !file.includes("node_modules/"));
-  const found = files.filter((file) => existsSync(join(root, file))).flatMap((file) => problems(file, readFileSync(join(root, file), "utf8")));
+  const inputs = files.filter((file) => existsSync(join(root, file))).map((file) => ({ file, text: readFileSync(join(root, file), "utf8") }));
+  const found = parseFiles(inputs, problemsIn).flat();
   if (found.length) {
     console.error(found.join("\n"));
     process.exit(1);

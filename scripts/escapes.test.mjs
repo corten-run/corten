@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { problems } from "./escapes.mjs";
+import { parseFiles } from "./typescript.mjs";
+
+test("a batched parse isolates files with the same basename and preserves declaration/JSDoc types", () => {
+  const files = [
+    { file: "one/a.js", text: "/** @type {any} */ let bad;" },
+    { file: "two/a.js", text: "/** @type {number} */ let good;" },
+    { file: "types/a.d.ts", text: "export declare const bad: any;" },
+  ];
+  assert.deepEqual(parseFiles(files, (file, text, source) => [file, source.text === text]), files.map(({ file }) => [file, true]));
+});
 
 const js = (/** @type {string} */ text) => problems("a.js", text).length;
 

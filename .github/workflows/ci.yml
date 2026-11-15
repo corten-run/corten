@@ -52,6 +52,9 @@ jobs:
       - run: |
           npm install --global $(node -p "require('./package.json').devDependencies.typescript7.slice(4)")
           tsc --version
+      - run: npm ci
+      - name: Pinned compiler checks the template's scripts
+        run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli

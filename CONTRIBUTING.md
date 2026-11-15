@@ -47,6 +47,15 @@ the framework itself.
 
 ## Tooling
 
+Corten apps require TypeScript 6.0 or later. Framework CI pins TypeScript 7.0.2, npm's
+`latest` verified on 2026-11-14, as the exact `typescript7` npm alias. Root `typescript`
+5.9.3 remains only for benchmark harness consumers of the classic compiler API.
+`npm run check:types` invokes the alias directly, not npm's colliding `tsc` bin.
+`corten check` selects the alias only from the local Corten checkout supplying its runtime;
+standalone registry apps use their own local compiler or PATH, with the minimum checked.
+The parser checks use the alias's unstable native API
+([Choice 5](docs/design.md#choice-handlers-checked-where-called)).
+
 - Rust (stable). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
 - Node 22 or later, for the runtime's type check, its minified build and the browser smoke
   tests: `npm install`, then `npx playwright install chromium firefox webkit` (the core and

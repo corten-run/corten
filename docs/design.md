@@ -198,8 +198,9 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   platform (TypeScript 7.0.2, pinned for CI to match npm's newest stable release installed by the
-   getting-started guide, checks JSDoc types as it checks annotations, except where
+   platform (apps require TypeScript 6.0 or later for the runtime's Navigation API DOM types;
+   TypeScript 7.0.2 is pinned for framework CI to match npm's newest stable release installed by
+   the getting-started guide. It checks JSDoc types as it checks annotations, except where
    JavaScript infers a type, in the cases probed so far: a property first given after an empty
    object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
    untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
@@ -213,8 +214,8 @@ rules something out.
    constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
    TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
-   The repository's AST checks use `typescript/unstable/sync`, `typescript/unstable/fs` and
-   `typescript/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
+   The repository's AST checks import `typescript7/unstable/sync`, `typescript7/unstable/fs` and
+   `typescript7/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
    and the lockfile as the `typescript7` npm alias, not a compatible-version range. The root
    `typescript` 5.9.3 install remains only for `bench/**` consumers of the classic compiler API;
    Corten's checks explicitly select the 7.0.2 alias, not npm's colliding `tsc` bin);
@@ -253,7 +254,10 @@ rules something out.
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
    update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
-   off the classic compiler API, so the root 5.9.3 compatibility install can be removed.
+   off the classic compiler API, so the root 5.9.3 compatibility install can be removed; or the
+   benchmark harness isolates its classic API dependency in its own package, removing the need
+   for Corten's alias; or the `@typescript/typescript-<platform>-<arch>/lib/lib.dom.d.ts` package
+   layout that `scripts/events.mjs` resolves through the alias changes.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -301,7 +305,14 @@ rules something out.
    in `binding-effects.test.mjs`. Root `typescript` 5.9.3 restored solely for those benchmark
    consumers, with 7.0.2 under `typescript7` explicitly selected by Corten's CLI, root compiler
    and AST checks. This corrects the earlier assumption that app-local pins covered all bench
-   consumers: the evidence harness also imports the root compiler.
+   consumers: the evidence harness also imports the root compiler;
+   2026-11-14, reopened at `727130519` and the change: apps require TypeScript 6.0 or later
+   (5.9.3 lacks the Navigation API declarations), the CLI rejects older versions explicitly,
+   and its alias lookup is confined to the checkout supplying `crates/corten/js`, never a
+   registry dependency or arbitrary ancestor. The escape scan parses all files in one native
+   session rather than starting a process per file. Three sequential wall-time runs of
+   `node scripts/escapes.mjs` before batching: 9.392, 8.134, 8.427 s, after: 2.431, 2.337,
+   2.255 s (medians 8.427 and 2.337 s on the same workstation, not controlled for load).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2633,8 +2644,10 @@ rules something out.
     `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
     next one, code after a `return` and a side-effect import of a module that is not there are
     mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
-    are checked the same way: `corten check` writes the app's config with a copy of the
+    use the same checking options: `corten check` writes the app's config with a copy of the
     repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
+    This compares options, not compiler versions: apps support TypeScript 6.0 or later, while
+    repository checks and the README's explicit benchmark type-check command use 7.0.2.
     Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
     `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
     `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
@@ -2671,7 +2684,9 @@ rules something out.
 
     Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
     sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
-    (Playwright 1.64.1) on 2026-11-08.
+    (Playwright 1.64.1) on 2026-11-08; 2026-11-14, reopened at `727130519` with TypeScript
+    7.0.2: no additional checking flag beyond those considered under 5.9.3 changes the choice.
+    The equal-options test is not evidence of equal compiler selection.
 
 40. <a id="choice-script-boundaries"></a>**What a script reads from outside the checker is `unknown` and checked where it
     enters, as much as the reader needs; a feed's rows are trusted as the server's.** `tsc`
@@ -2757,8 +2772,11 @@ rules something out.
     one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
     parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
     returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
-    TypeScript 7.0.2's DOM library declares `window.navigation`, with `NavigateEvent.info` as
-    `any` and `NavigationResult`'s promises optional); reasoned (a value the checker
+    TypeScript 7.0.2's DOM library declares `window.navigation` always present, although not all
+    supported browsers have it, with `NavigateEvent.info` as `any` and `NavigationResult`'s promises
+    optional. The runtime widens navigation to `Navigation | undefined` at this boundary and
+    checks availability before use; `go` casts only after its caller's availability check);
+    reasoned (a value the checker
     did not see made is only as typed as its producer: the server's rows are, an older runtime's
     reading of a newer protocol and old storage are not); value (Correctness and reliability
     first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
@@ -2779,7 +2797,9 @@ rules something out.
     type-checked and its minified build checked unchanged, and the existing unsafe-escape
     fixtures run through TypeScript 7's native parser API; 2026-11-14, TypeScript 7.0.2 on
     `c34532753` and the change: the helper's unchecked `info` reproduced by the compiler probe,
-    then both helper and listener checked through the shared event typedef and the probes.
+    then both helper and listener checked through the shared event typedef and the probes;
+    2026-11-14, at `727130519` and the change: the optional Navigation API boundary restored,
+    with a compiler probe requiring TS18048 for an unguarded read.
 
 41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
     `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept

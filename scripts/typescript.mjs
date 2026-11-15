@@ -16,21 +16,35 @@ console.log(`TypeScript AST checks: ${version} (typescript7)`);
  * @returns {T}
  */
 export function parse(file, text, inspect) {
+  return parseFiles([{ file, text }], (_file, _text, source) => inspect(source))[0];
+}
+
+/**
+ * Parse a scan in one native process and snapshot, keeping files with the same basename distinct.
+ * @template T
+ * @param {{ file: string, text: string }[]} files
+ * @param {(file: string, text: string, source: import("typescript7/unstable/ast").SourceFile) => T} inspect
+ * @returns {T[]}
+ */
+export function parseFiles(files, inspect) {
   const root = resolve("work", "typescript-parser").replaceAll("\\", "/");
   const config = `${root}/tsconfig.json`;
-  const source = `${root}/${basename(file)}`;
+  const paths = files.map(({ file }, index) => `${index}/${basename(file)}`);
   const api = new API({
     fs: createVirtualFileSystem({
-      [config]: JSON.stringify({ compilerOptions: { allowJs: true, noLib: true, types: [] }, files: [basename(file)] }),
-      [source]: text,
+      [config]: JSON.stringify({ compilerOptions: { allowJs: true, noLib: true, types: [] }, files: paths }),
+      ...Object.fromEntries(files.map(({ text }, index) => [`${root}/${paths[index]}`, text])),
     }),
   });
   try {
     const snapshot = api.updateSnapshot({ openProjects: [config] });
     try {
-      const parsed = snapshot.getProject(config)?.program.getSourceFile(source);
-      if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
-      return inspect(parsed);
+      const project = snapshot.getProject(config);
+      return files.map(({ file, text }, index) => {
+        const parsed = project?.program.getSourceFile(`${root}/${paths[index]}`);
+        if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
+        return inspect(file, text, parsed);
+      });
     } finally {
       snapshot.dispose();
     }

@@ -2410,7 +2410,7 @@ function readLater(seconds, wanted, read) {
  * @typedef {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} RuntimeNavigateEvent
  */
 // The Navigation API, where the browser has it.
-const navigation = window.navigation;
+const navigation = /** @type {Navigation | undefined} */ (window.navigation);
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2569,7 +2569,7 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
 function go(url, options) {
   // Called only where the browser has the Navigation API.
   // navigate() returns both promises; lib.dom models the Web IDL dictionary's fields as optional.
-  const { committed, finished } = /** @type {Required<NavigationResult>} */ (navigation.navigate(url, options));
+  const { committed, finished } = /** @type {Required<NavigationResult>} */ (/** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options));
   committed.catch(() => {});
   return finished;
 }

@@ -4,7 +4,7 @@
 //! app's generated `types/app.d.ts` (feed rows, its `corten/events` and `corten/views` classes).
 //!
 //! A handler's call is checked when the crate compiles; this checks its body. TypeScript is not
-//! a dependency of an app: the check prefers the repository's `typescript7` alias when present,
+//! a dependency of an app: the check prefers the runtime checkout's `typescript7` alias when present,
 //! otherwise uses `tsc` from the app's `node_modules` or the `PATH`,
 //! and fails when there is none and the app has scripts, so a machine or a CI job without
 //! TypeScript cannot pass with the scripts unchecked. `corten check --no-script-types` skips them
@@ -39,7 +39,12 @@ struct App {
 /// `tsc` fails here, before format, lint and tests have taken their time.
 pub fn plan(dir: &Path, skip: bool) -> Result<Option<Plan>, String> {
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
-    plan_with(&metadata, dir, skip, find_tsc)
+    let runtime = corten_js_dir(&metadata);
+    let plan = plan_with(&metadata, dir, skip, |homes| find_tsc(homes, runtime.as_deref()))?;
+    if let Some(Plan { run: Some((tsc, _, _)), .. }) = &plan {
+        compiler_version(tsc)?;
+    }
+    Ok(plan)
 }
 
 /// The scripts `corten check` type-checks and how ([`plan`]).
@@ -101,11 +106,8 @@ pub fn run(plan: Option<Plan>) -> Result<(), String> {
         return Ok(());
     };
     let mut failed = Vec::new();
-    let version = tsc_command(&tsc).arg("--version").output().map_err(|e| format!("could not run {}: {e}", tsc.display()))?;
-    if !version.status.success() {
-        return Err(format!("{} --version failed", tsc.display()));
-    }
-    eprintln!("corten: script types: {} ({})", String::from_utf8_lossy(&version.stdout).trim(), tsc.display());
+    let version = compiler_version(&tsc)?;
+    eprintln!("corten: script types: {version} ({})", tsc.display());
     for app in &apps {
         let dir = target.join("corten").join(&app.name);
         std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -237,11 +239,11 @@ fn checker(skip: bool, find: impl FnOnce() -> Option<PathBuf>, whose: &str) -> R
     })
 }
 
-/// The explicit TypeScript 7 alias first, without relying on npm's colliding `tsc` bin.
+/// Only the runtime's local checkout may supply a TypeScript 7 alias, avoiding npm's colliding bin.
 /// A present but broken alias must fail the check, not silently fall back to an older compiler.
 /// Otherwise use the first local `tsc`, then the PATH (`tsc.cmd` on Windows).
-fn find_tsc(homes: &[&Path]) -> Option<PathBuf> {
-    if let Some(alias) = alias_tsc(homes) {
+fn find_tsc(homes: &[&Path], runtime: Option<&Path>) -> Option<PathBuf> {
+    if let Some(alias) = runtime.and_then(alias_tsc) {
         return Some(alias);
     }
     let names: &[&str] = if cfg!(windows) { &["tsc.cmd", "tsc.exe", "tsc"] } else { &["tsc"] };
@@ -250,12 +252,33 @@ fn find_tsc(homes: &[&Path]) -> Option<PathBuf> {
     candidates.into_iter().find(|tsc| Command::new(tsc).arg("--version").output().is_ok_and(|o| o.status.success()))
 }
 
-fn alias_tsc(homes: &[&Path]) -> Option<PathBuf> {
-    homes
-        .iter()
-        .flat_map(|home| home.ancestors())
-        .map(|home| home.join("node_modules/typescript7/lib/tsc.js"))
-        .find(|tsc| tsc.is_file())
+fn alias_tsc(runtime: &Path) -> Option<PathBuf> {
+    let checkout = runtime.parent()?.parent()?.parent()?;
+    if runtime != checkout.join("crates/corten/js") {
+        return None;
+    }
+    let alias = checkout.join("node_modules/typescript7/lib/tsc.js");
+    alias.is_file().then_some(alias)
+}
+
+fn compiler_version(tsc: &Path) -> Result<String, String> {
+    let output = tsc_command(tsc).arg("--version").output().map_err(|e| format!("could not run {}: {e}", tsc.display()))?;
+    if !output.status.success() {
+        return Err(format!("{} --version failed", tsc.display()));
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    supported_version(&version)?;
+    Ok(version)
+}
+
+fn supported_version(version: &str) -> Result<(), String> {
+    let major = version.strip_prefix("Version ").and_then(|v| v.split('.').next()).and_then(|v| v.parse::<u32>().ok());
+    match major {
+        Some(6..) => Ok(()),
+        _ => Err(format!(
+            "found TypeScript {version}; corten check requires TypeScript 6.0 or later. Run npm install --global typescript, or update the app's package.json"
+        )),
+    }
 }
 
 fn tsc_command(tsc: &Path) -> Command {
@@ -357,9 +380,24 @@ mod tests {
         let cli = Path::new(env!("CARGO_MANIFEST_DIR"));
         let repo = cli.parent().unwrap().parent().unwrap();
         let root = cli.join("template");
-        let tsc = find_tsc(&[&root]).expect("npm ci installs the repository compiler alias");
+        let tsc =
+            find_tsc(&[&root], Some(&repo.join("crates/corten/js"))).expect("npm ci installs the repository compiler alias");
         assert_eq!(tsc, repo.join("node_modules/typescript7/lib/tsc.js"));
+        // A registry runtime never inherits this checkout's alias. The older root compiler
+        // belongs to the benchmark harness and must fail with the app-facing minimum error.
+        let classic = repo.join("node_modules/typescript/lib/tsc.js");
+        let error = compiler_version(&classic).unwrap_err();
+        assert!(error.contains("5.9.3") && error.contains("TypeScript 6.0 or later"), "{error}");
+        assert_ne!(find_tsc(&[repo], Some(&repo.join("registry/corten-run-0.2.0/js"))), Some(tsc.clone()));
         let target = std::env::temp_dir().join(format!("corten-template-types-{}", std::process::id()));
+        let error = run(Some(Plan {
+            apps: vec![App { id: "template".into(), name: "template".into(), root: root.clone() }],
+            whose: "the template's scripts".into(),
+            run: Some((classic, repo.join("crates/corten/js"), target.clone())),
+        }))
+        .unwrap_err();
+        assert!(error.contains("5.9.3") && error.contains("TypeScript 6.0 or later"), "{error}");
+        assert!(!target.exists(), "an old compiler must fail before writing or checking scripts");
         let result = run(Some(Plan {
             apps: vec![App { id: "template".into(), name: "template".into(), root }],
             whose: "the template's scripts".into(),
@@ -378,12 +416,26 @@ mod tests {
         std::fs::create_dir_all(app.join("node_modules/.bin")).unwrap();
         std::fs::write(app.join("node_modules/.bin/tsc"), "").unwrap();
         std::fs::write(&alias, "").unwrap();
-        assert_eq!(find_tsc(&[&app]), Some(alias.clone()));
+        let runtime = base.join("crates/corten/js");
+        assert_eq!(find_tsc(&[&app], Some(&runtime)), Some(alias.clone()));
+        assert_eq!(alias_tsc(&base.join("registry/corten-run-0.2.0/js")), None);
+        assert_eq!(alias_tsc(&app.join("crates/corten/js")), None);
+        assert_eq!(alias_tsc(&base.join("other/corten/js")), None);
         let command = tsc_command(&alias);
         assert_eq!(command.get_program(), "node");
         assert_eq!(command.get_args().collect::<Vec<_>>(), [alias.as_os_str()]);
         assert_eq!(tsc_command(Path::new("tsc")).get_program(), "tsc");
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn app_compilers_require_typescript_six_or_later() {
+        for version in ["Version 6.0.3", "Version 7.0.2", "Version 10.0.0-dev.1"] {
+            assert_eq!(supported_version(version), Ok(()));
+        }
+        let error = supported_version("Version 5.9.3").unwrap_err();
+        assert!(error.contains("5.9.3") && error.contains("TypeScript 6.0 or later"), "{error}");
+        assert!(supported_version("not a compiler version").is_err());
     }
 
     #[test]

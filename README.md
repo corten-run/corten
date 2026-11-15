@@ -418,6 +418,11 @@ these values, in this order, before it merges ([CONTRIBUTING.md](CONTRIBUTING.md
 
 ## Contributing
 
+After `npm ci` and the benchmark's normal build has generated `out/_gen/view/views.d.ts`,
+type-check the browser benchmark's view apps with the repository's pinned
+compiler: `node node_modules/typescript7/bin/tsc -p bench/browser/jsconfig.json`.
+The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 compiler instead.
+
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout, the
 checks and how a change is reviewed; report security issues as [SECURITY.md](SECURITY.md)
 describes.
