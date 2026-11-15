@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
-import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
+import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
 import { nativeBuildContext } from "./build-context.mjs";
 import { createExecutionEvidence, executionContext } from "./execution-evidence.mjs";
@@ -85,7 +85,7 @@ export async function run(args) {
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const execution = createExecutionEvidence({ folder, summary, docker });
   writeFileSync(join(folder, "plan.json"), JSON.stringify(plan, null, 2));
-  writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
+  writeFixture(join(folder, "marketplace.json"), JSON.stringify(records));
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
   summary.provenance.harnessFiles = Object.fromEntries(["build-context.mjs", "capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
