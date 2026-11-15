@@ -71,14 +71,14 @@ test("supported lifecycle exact-ID GET refuses malformed commands and mismatched
 test("supported lifecycle known create refusal permits same-credential recovery without success or another POST", async () => {
   const { run, state } = fixture(({ method, path }) => {
     if (method === "POST") return { status: 202, value: { droplet: { id: 123 },
-      links: { actions: [{ id: 456, rel: "create", href: `https://foreign.invalid/${credential}` }] } } };
+      links: { actions: [{ id: credential, rel: "create", href: `https://foreign.invalid/${credential}` }] } } };
     if (path === "/v2/account") return { status: 200, value: { account: { uuid: "synthetic-account" } } };
     if (path === "/v2/droplets/123") return { status: 200, value: { droplet: { id: 123 } } };
     return page([{ id: 123 }], 1);
   });
   const failed = await run(create, 1000, true);
   assert.equal(failed.status, 1); assert.equal(failed.stdout, ""); assert.equal(failed.stderr, "");
-  assert.deepEqual(failed.providerDiagnostic, { code: "create-link-href", detail: "foreign-origin" });
+  assert.deepEqual(failed.providerDiagnostic, { code: "create-link-id" });
   assert.ok(!JSON.stringify(failed).includes(credential));
   for (const command of [account, list, get()]) assert.equal((await run(command)).status, 0);
   assert.equal(state.consumes, 1); assert.equal(state.calls.filter(({ method }) => method === "POST").length, 1);
@@ -131,30 +131,22 @@ test("supported lifecycle expired or cancelled create refusal is uncertainty, ne
   }
 });
 
-test("supported lifecycle href detail classifies only refused hints without accepting URI variants or forwarding values", async () => {
-  const cases = [
-    [null, "non-string"], [{ private: credential }, "non-string"], ["not a URI", "malformed-uri"],
-    [`https://foreign.invalid/${credential}`, "foreign-origin"], ["http://api.digitalocean.com/v2/actions/456", "foreign-origin"],
-    [`https://${credential}@api.digitalocean.com/v2/actions/456`, "credentials-or-fragment"],
-    [`https://api.digitalocean.com/v2/actions/456#${credential}`, "credentials-or-fragment"],
-    ["https://api.digitalocean.com/v2/actions/456#", "credentials-or-fragment"],
-    ["https://API.DIGITALOCEAN.COM/v2/actions/456", "semantically-same-canonical-uri"],
-    ["https://api.digitalocean.com:443/v2/droplets/123/actions/456", "semantically-same-canonical-uri"],
-    [`https://api.digitalocean.com/v2/actions/456?private=${credential}`, "query-or-trailing-slash"],
-    ["https://api.digitalocean.com/v2/droplets/123/actions/456/", "query-or-trailing-slash"],
-    ["https://api.digitalocean.com/v2/actions/457", "wrong-action-or-resource"],
-    ["https://api.digitalocean.com/v2/droplets/124/actions/456", "wrong-action-or-resource"],
-  ];
-  for (const [href, detail] of cases) {
-    const { run, state } = fixture(() => ({ status: 202, value: { droplet: { id: 123 }, links: { actions: [{ id: 456, href }] } } }));
+test("supported lifecycle arbitrary hints cannot affect the ID-only projection or canonical proof", async () => {
+  // Deliberate projection boundary cases, not claims that malformed hints are URIs.
+  for (const hints of [{}, { href: null, rel: false }, { href: { private: credential }, rel: [credential] },
+    { href: `https://${credential}@foreign.invalid/private#fragment`, rel: "delete" }, { href: "not a URI", rel: 1 }]) {
+    const { run, state } = fixture(({ method }) => method === "POST"
+      ? { status: 202, value: { droplet: { id: 123, unused: credential }, links: { actions: [{ id: 456, ...hints }] } } }
+      : { status: 200, value: { action: { id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: "completed" } } });
     const result = await run(create, 1000, true);
-    assert.equal(result.status, 1); assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
-    assert.deepEqual(result.providerDiagnostic, { code: "create-link-href", detail });
-    assert.ok(!JSON.stringify(result).includes(credential)); assert.equal(state.calls.length, 1);
+    assert.deepEqual(result, { status: 0, stdout: '[{"id":123}]', stderr: "" });
+    assert.ok(!JSON.stringify(result).includes(credential));
+    assert.deepEqual(state.calls, [{ method: "POST", path: "/v2/droplets", timeout: 1000 },
+      { method: "GET", path: "/v2/actions/456", timeout: 1000 }]);
   }
 });
 
-test("supported lifecycle diagnostic detail is code-specific finite data, never an arbitrary value or getter", () => {
+test("historical diagnostic parser remains code-specific finite data, not current hint emission", () => {
   assert.deepEqual(providerDiagnostic({ code: "create-link-href" }), { code: "create-link-href" });
   assert.deepEqual(providerDiagnostic({ code: "list-response-count", detail: "total-changed" }), { code: "list-response-count", detail: "total-changed" });
   for (const value of [{ code: "create-link-href", detail: credential }, { code: "get-http", httpStatus: 404, detail: "foreign-origin" },

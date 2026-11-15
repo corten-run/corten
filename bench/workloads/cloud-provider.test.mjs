@@ -35,8 +35,6 @@ test("create-link diagnostics isolate each refused predicate without reflecting 
     ["shape", (response) => { response.value.links.actions = { raw: credential }; }],
     ["count", (response) => { response.value.links.actions = []; }],
     ["id", (response) => { response.value.links.actions[0].id = credential; }],
-    ["rel", (response) => { response.value.links.actions[0].rel = credential; }],
-    ["href", (response) => { response.value.links.actions[0].href = `https://synthetic.invalid/${credential}`; }],
   ];
   for (const [predicate, mutate] of cases) await t.test(predicate, async () => {
     const response = publishedCreate(), calls = []; mutate(response);
@@ -49,6 +47,88 @@ test("create-link diagnostics isolate each refused predicate without reflecting 
     assert.ok(!JSON.stringify(result).includes(credential));
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
   });
+});
+
+const advisoryHints = [
+  { rel: "delete", href: `https://${credential}@foreign.invalid/private#${credential}` },
+  {}, { rel: "create", href: "https://api.digitalocean.com/v2/actions/7515" },
+  { rel: "delete", href: "https://api.digitalocean.com/v2/droplets/3164445/actions/7516" },
+  { rel: null, href: null }, { rel: 17, href: 42 }, { rel: false, href: true },
+  { rel: { raw: credential }, href: [null, { raw: credential }] },
+  { rel: credential, href: `https://${credential}@foreign.invalid/private#${credential}` },
+  { rel: [], href: "not a URL" }, { href: "/v2/actions/7515" },
+  { href: "https://api.digitalocean.com:443/v2/actions/7515?next=1" },
+];
+
+test("create metadata noninterference projects only IDs and makes identical canonical requests", async () => {
+  for (const hints of advisoryHints) {
+    const response = publishedCreate(), calls = []; let clock = 0;
+    response.value.links.actions[0] = { id: 7515, ...hints };
+    response.value.droplet.unused = { raw: credential };
+    const run = providerTransport({ repo: resolve("."), spawn, now: () => clock,
+      sleep: async (ms) => { clock += ms; }, request(options) {
+        assert.ok(!JSON.stringify({ ...options, credential: undefined }).includes(credential));
+        const { method, path, timeout } = options; calls.push({ method, path, timeout });
+        return method === "POST" ? response : createAction(clock ? "completed" : "in-progress", clock ? 3164444 : null);
+      } });
+    const result = await run(create, 5000);
+    assert.deepEqual(result, { status: 0, stdout: '[{"id":3164444}]', stderr: "" });
+    assert.ok(!JSON.stringify(result).includes(credential));
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
+      { method: "GET", path: "/v2/actions/7515", timeout: 5000 }, { method: "GET", path: "/v2/actions/7515", timeout: 4000 }]);
+  }
+});
+
+test("create projection does not even read advisory rel or href properties", async () => {
+  const response = publishedCreate(), calls = [];
+  for (const key of ["rel", "href"]) Object.defineProperty(response.value.links.actions[0], key, {
+    get() { assert.fail(`unused ${key} must not be read`); }, enumerable: true,
+  });
+  const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+    calls.push({ method, path }); return method === "POST" ? response : createAction();
+  } });
+  assert.deepEqual(await run(create, 1000), { status: 0, stdout: '[{"id":3164444}]', stderr: "" });
+  assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
+});
+
+test("positive safe-integer droplet and action IDs keep their exact canonical identity", async () => {
+  for (const id of [1, 3_000_000_001, Number.MAX_SAFE_INTEGER]) {
+    const response = publishedCreate(), action = createAction(), calls = [];
+    response.value.droplet.id = id; response.value.links.actions[0] = { id };
+    action.value.action.id = id; action.value.action.resource_id = id;
+    const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+      calls.push({ method, path }); return method === "POST" ? response : action;
+    } });
+    assert.deepEqual(await run(create, 1000), { status: 0, stdout: JSON.stringify([{ id }]), stderr: "" });
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: `/v2/actions/${id}` }]);
+  }
+});
+
+test("controller joins successful create ID to fresh ownership before provisioning", async (t) => {
+  const cases = [
+    { createReturnedId: 124 },
+    ...["", "not JSON", "null", "{}", "[]", '[{"id":123},{"id":123}]', '[{"id":"123"}]',
+      '[{}]', '[{"id":null}]', '[{"id":0}]', '[{"id":-1}]', '[{"id":1.5}]', '[{"id":9007199254740992}]']
+      .map((createStdout) => ({ createStdout })),
+  ];
+  for (const flags of cases) await t.test(JSON.stringify(flags), async (t) => {
+    const h = harness(t, flags);
+    await assert.rejects(h.launch().launch());
+    assert.equal(h.saved().id, "123"); assert.equal(h.saved().status, "preparing");
+    assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+    assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+    await assert.rejects(h.launch().launch()); assert.equal(h.creates, 1);
+  });
+});
+
+test("mismatched create identity retains owned host for unused cleanup without create replay", async (t) => {
+  const h = harness(t, { createReturnedId: 124, missingUnit: true });
+  await assert.rejects(h.launch().launch());
+  assert.equal(h.saved().id, "123"); assert.equal(h.saved().status, "preparing");
+  assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.saved().status, "retired"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
 });
 
 const censusPage = (droplets, total, page) => ({ status: 200, value: { droplets, meta: { total }, links: page === undefined ? {}
@@ -291,7 +371,7 @@ test("create failures retain only bounded phase codes and HTTP status, never raw
         posts++;
         const response = publishedCreate();
         if (mode === "response") response.value.droplet.id = credential;
-        if (mode === "link") response.value.links.actions[0].href = `https://synthetic.invalid/${credential}`;
+        if (mode === "link") response.value.links.actions[0].id = credential;
         return response;
       }
       reads++;
@@ -299,10 +379,10 @@ test("create failures retain only bounded phase codes and HTTP status, never raw
       if (mode === "transport") throw new Error(`raw-native-${credential}`);
       return createAction(mode === "pending" ? "in-progress" : credential, mode === "pending" ? 0 : 3164444);
     } });
-    const code = { response: "create-response", link: "create-link-href", action: "create-action-response", pending: "create-action-pending",
+    const code = { response: "create-response", link: "create-link-id", action: "create-action-response", pending: "create-action-pending",
       http: "create-action-http", transport: "create-action-request" }[mode];
     await assert.rejects(run(create, 2500), (error) => {
-      assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}), ...(mode === "link" ? { detail: "foreign-origin" } : {}) });
+      assert.deepEqual(error.providerDiagnostic, { code, ...(mode === "http" ? { httpStatus: 403 } : {}) });
       assert.equal(error.controlUncertain === true, ["pending", "transport"].includes(mode));
       assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential));
       return true;
@@ -331,7 +411,7 @@ test("published create example and nullable in-progress action already satisfy t
       const action = createAction(clock ? "completed" : "in-progress", clock ? 3164444 : null);
       action.value.action.id = actionId; return action;
     } });
-    assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [response.value.droplet]);
+    assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [{ id: response.value.droplet.id }]);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
       { method: "GET", path: `/v2/actions/${actionId}`, timeout: 5000 },
       { method: "GET", path: `/v2/actions/${actionId}`, timeout: 4000 }]);
@@ -354,7 +434,7 @@ test("documented droplet-scoped create href still polls only the canonical exact
           const action = createAction(clock ? "completed" : "in-progress", clock ? response.value.droplet.id : pendingResource);
           action.value.action.id = actionId; return action;
         } });
-      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [response.value.droplet]);
+      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [{ id: response.value.droplet.id }]);
       assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
         { method: "GET", path: `/v2/actions/${actionId}`, timeout: 5000 },
         { method: "GET", path: `/v2/actions/${actionId}`, timeout: 4000 }]);
@@ -377,7 +457,7 @@ for (const omitted of [["rel"], ["href"], ["rel", "href"]]) {
         const action = createAction(clock < 1000 ? "in-progress" : "completed", clock < 1000 ? null : response.value.droplet.id);
         action.value.action.id = actionId; return action;
       } });
-      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [response.value.droplet]);
+      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [{ id: response.value.droplet.id }]);
       assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
         { method: "GET", path: `/v2/actions/${actionId}`, timeout: 4750 },
         { method: "GET", path: `/v2/actions/${actionId}`, timeout: 3750 }]);
@@ -395,7 +475,7 @@ test("schema-conformant zero resource ID remains pending until the create action
     if (method === "POST") return publishedCreate();
     return createAction(clock ? "completed" : "in-progress", clock ? 3164444 : 0);
   } });
-  assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [publishedCreate().value.droplet]);
+  assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [{ id: publishedCreate().value.droplet.id }]);
   assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" },
     { method: "GET", path: "/v2/actions/7515" }, { method: "GET", path: "/v2/actions/7515" }]);
 });
@@ -419,48 +499,37 @@ test("unbound zero action cannot complete, poll past the deadline, or repeat POS
   }
 });
 
-test("accepted create rejects ambiguous links before any action read and never repeats POST", async () => {
-  const link = publishedCreate().value.links.actions[0];
-  for (const [predicate, actions] of [
-    ...[undefined, null, {}].map((actions) => ["shape", actions]),
-    ...[[], [link, link]].map((actions) => ["count", actions]),
-    ...[null, {}].map((entry) => ["id", [entry]]),
-    ...["delete", "", null, 1].map((rel) => ["rel", [{ id: link.id, rel }]]),
-    ...[undefined, "7515", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["id", [{ id }]]),
-    ...[null, "", 1, {}, "/v2/actions/7515", "not a URL"].map((href) => ["href", [{ id: link.id, href }]]),
-    ...["http://api.digitalocean.com/v2/actions/7515", "https://synthetic.invalid/v2/actions/7515",
-      "https://api.digitalocean.com/v2/actions/7516", "https://api.digitalocean.com/v2/actions/7515?next=1",
-      "https://api.digitalocean.com/v2/actions/7515#fragment",
-      "https://synthetic@api.digitalocean.com/v2/actions/7515",
-      "https://api.digitalocean.com/v2/droplets/3164445/actions/7515",
-      "https://api.digitalocean.com/v2/droplets/3164444/actions/7516",
-      "https://api.digitalocean.com/v2/images/3164444/actions/7515",
-      "https://api.digitalocean.com/v2/droplets/03164444/actions/7515",
-      "https://api.digitalocean.com/v2/droplets/3164444/actions/07515",
-      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515/",
-      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515?next=1",
-      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515#fragment",
-      "https://synthetic@api.digitalocean.com/v2/droplets/3164444/actions/7515",
-      "https://api.digitalocean.com:443/v2/droplets/3164444/actions/7515",
-      "http://api.digitalocean.com/v2/droplets/3164444/actions/7515",
-      "https://synthetic.invalid/v2/droplets/3164444/actions/7515",
-      "/v2/droplets/3164444/actions/7515"].map((href) => ["href", [{ id: link.id, href }]])]) {
-    const calls = [], response = publishedCreate(); response.value.links.actions = actions;
-    const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
-    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === `create-link-${predicate}`);
-    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
+test("create projection rejects invalid droplet IDs and ambiguous action IDs across advisory metadata", async () => {
+  for (const hints of advisoryHints) {
+    const link = { id: 7515, ...hints };
+    const cases = [
+      ...[undefined, null, "3164444", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["create-response", (r) => { r.value.droplet.id = id; }]),
+      ...[undefined, null, {}].map((actions) => ["create-link-shape", (r) => { r.value.links.actions = actions; }]),
+      ...[[], [link, link]].map((actions) => ["create-link-count", (r) => { r.value.links.actions = actions; }]),
+      ...[null, {}].map((entry) => ["create-link-id", (r) => { r.value.links.actions = [entry]; }]),
+      ...[undefined, null, "7515", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ["create-link-id", (r) => { r.value.links.actions[0].id = id; }]),
+    ];
+    for (const [code, mutate] of cases) {
+      const response = publishedCreate(), calls = []; response.value.links.actions = [link]; mutate(response);
+      const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
+      await assert.rejects(run(create, 1000), (error) => {
+        assert.equal(error.providerDiagnostic?.code, code);
+        assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+      });
+      assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
+    }
   }
 });
 
-test("droplet-scoped create href cannot qualify a wrong, failed or unbound action", async () => {
-  for (const mutate of [
+test("ignored metadata cannot qualify a wrong, failed or unbound action", async () => {
+  for (const hints of advisoryHints) for (const mutate of [
     (a) => { a.id = 7516; }, (a) => { a.id = "7515"; }, (a) => { delete a.id; },
     (a) => { a.type = "snapshot"; }, (a) => { a.resource_type = "image"; },
     ...[null, 0, 3164445, "3164444", undefined].map((id) => (a) => { a.resource_id = id; }),
     ...["errored", "unknown", undefined].map((status) => (a) => { a.status = status; }),
   ]) {
     const response = publishedCreate(), action = createAction(), calls = [];
-    response.value.links.actions[0].href = "https://api.digitalocean.com/v2/droplets/3164444/actions/7515";
+    response.value.links.actions[0] = { id: 7515, ...hints };
     mutate(action.value.action);
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
       calls.push({ method, path }); return method === "POST" ? response : action;
@@ -507,15 +576,15 @@ test("first action failures after accepted POST stop without retry or leaking pr
   }
 });
 
-test("ID-only and droplet-scoped create links never extend the original deadline or bypass cancellation", async () => {
-  for (const scoped of [false, true]) for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
+test("ignored metadata never extends the original deadline or bypasses cancellation", async () => {
+  for (const hints of advisoryHints) for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
     let clock = 0, cancelled = false; const calls = [];
     const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, interrupted: () => cancelled,
       sleep: async (ms) => { clock += ms; if (mode === "cancelled") cancelled = true; }, request({ method, path, timeout }) {
         calls.push({ method, path, timeout });
         if (method === "POST") {
           const response = publishedCreate(); response.value.links.actions = [{ id: 7515,
-            ...(scoped ? { href: "https://api.digitalocean.com/v2/droplets/3164444/actions/7515" } : {}) }];
+            ...hints }];
           clock = mode === "post-deadline" ? 2500 : 500; return response;
         }
         if (mode === "transport") throw new Error(credential);
