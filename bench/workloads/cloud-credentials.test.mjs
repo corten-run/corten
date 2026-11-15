@@ -31,7 +31,9 @@ function nativeHarness(t, attack = null) {
   const providerRequest = async ({ method, path, body, credential, timeout }) => {
     if (path === "/v2/actions/456") return { status: 200, value: { action: { id: 456, resource_id: 123, resource_type: "droplet", type: "create", status: "completed" } } };
     const argv = path === "/v2/account" ? ["account", "get", "--output", "json"]
-      : method === "GET" ? ["compute", "droplet", "list", "--output", "json"]
+      : method === "GET" ? path.startsWith("/v2/droplets/")
+        ? ["compute", "droplet", "get", path.split("/").at(-1), "--output", "json"]
+        : ["compute", "droplet", "list", "--output", "json"]
         : ["compute", "droplet", "create", body.name, "--size", body.size, "--region", body.region, "--image", body.image,
           "--ssh-keys", String(body.ssh_keys[0]), "--tag-names", body.tags.join(","), "--wait", "--output", "json"];
     assert.ok(method !== "DELETE", "regressions must not delete a synthetic host");
@@ -40,7 +42,7 @@ function nativeHarness(t, attack = null) {
       ...argv, "--context", context, "--synthetic-rest-stdin"], { env: {}, input: JSON.stringify({ credential }), encoding: "utf8", timeout: 5000 });
     assert.equal(result.status, 0); const value = JSON.parse(result.stdout);
     if (path === "/v2/account") return { status: 200, value: { account: value } };
-    if (method === "GET") return { status: 200, value: { droplets: value, meta: { total: value.length }, links: {} } };
+    if (method === "GET") return { status: 200, value: argv[2] === "get" ? { droplet: value[0] } : { droplets: value, meta: { total: value.length }, links: {} } };
     // Keep fake SSH/systemd state in sync. Only the native ledger determines
     // which account actually mutated; no credential is in the child's argv/env.
     h.run("doctl", [...argv, "--context", context], timeout);
@@ -87,8 +89,8 @@ test("native rebind-restore cannot mutate a foreign account between matching acc
   assert.equal(p.ledger().hosts.B.length, 0, "P1: native CLI used rebound credentials to create a foreign host");
 });
 
-test("native rebind-restore empty foreign list cannot confirm the original host destroyed", { timeout: 15000 }, async (t) => {
-  const p = nativeHarness(t, "list"); p.h.seed(); p.h.flags.active = false; p.h.flags.deleteUnconfirmed = true;
+test("native rebind-restore empty foreign host lookup cannot confirm the original host destroyed", { timeout: 15000 }, async (t) => {
+  const p = nativeHarness(t, "get"); p.h.seed(); p.h.flags.active = false; p.h.flags.deleteUnconfirmed = true;
   await assert.rejects(p.h.task().collect(), /deletion not confirmed/);
   const state = p.h.saved(), ledger = p.ledger();
   ledger.hosts.A = [{ id: 123, name: state.name, tags: ["corten-bench", "corten-bench-groups", state.tag], size_slug: state.host.size,
@@ -97,7 +99,7 @@ test("native rebind-restore empty foreign list cannot confirm the original host 
   await p.action().catch(() => {});
   assert.equal(p.rebound, true); assert.equal(p.ledger().hosts.A.length, 1);
   assert.equal(p.ledger().calls.filter(({ command }) => command === "consume").length, 1);
-  assertMatchingProbes(p, "list");
+  assertMatchingProbes(p, "get");
   assert.deepEqual(JSON.parse(readFileSync(p.configPath)), p.config("A"));
   assert.ok(!p.h.saved().destroyedAt, "P1: absence in rebound account falsely confirmed destruction of an existing original host");
 });

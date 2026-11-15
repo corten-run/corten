@@ -9,6 +9,7 @@ import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
 import { verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 function fixture(t) {
   const h = harness(t), at = "2026-11-14T00:00:00.000Z";
@@ -69,7 +70,7 @@ test("all current groups replay individually; hardware/hash references and faile
   assert.equal(treeHash(p.h.base), before, "inspection must be read-only");
 });
 
-test("missing, live, busy, ambiguous and cleanup-pending groups keep a partial fleet incomplete", async (t) => {
+test("missing, live, busy, recoverable and cleanup-pending groups keep a partial fleet incomplete", async (t) => {
   const p = fixture(t);
   const pending = p.seed(groupNames[0]); delete pending.state.destroyedAt; pending.save();
   const live = p.seed(groupNames[1]); Object.assign(live.state, { status: "running" });
@@ -78,8 +79,38 @@ test("missing, live, busy, ambiguous and cleanup-pending groups keep a partial f
   const ambiguous = p.seed(groupNames[3]); Object.assign(ambiguous.state, { status: "creating" });
   for (const key of ["id", "ip", "collectedAt", "destroyedAt", "deletionIntentAt"]) delete ambiguous.state[key]; ambiguous.save();
   const result = await p.verify(); assert.equal(result.status, "incomplete"); assert.equal(result.publishableBaseline, false);
-  assert.deepEqual(result.groups.slice(0, 4).map((r) => r.outcome), ["cleanup-pending", "uncollected", "busy", "ambiguous"]);
+  assert.deepEqual(result.groups.slice(0, 4).map((r) => r.outcome), ["cleanup-pending", "uncollected", "busy", "uncollected"]);
   assert.ok(result.groups.slice(4).every((r) => r.outcome === "missing")); assert.equal(p.calls.length, 1);
+});
+
+test("retirement evidence is independently rebound and never qualifies a partial fleet", async (t) => {
+  for (const kind of ["unused", "setup-failed"]) {
+    const p = fixture(t), group = groupNames[0], local = join(p.h.base, group, "groups-r21"), at = new Date().toISOString();
+    mkdirSync(local, { recursive: true });
+    const state = { ...reservation({ round: "r21", commit, token: p.fleet.jobs[0].token, group, fleet: p.fleet }), provider: p.fleet.provider,
+      status: "retired", createIntentAt: at, deletionIntentAt: at, destroyedAt: at, fullGroupQualified: false, id: "123", ip: "192.0.2.10",
+      retirement: { kind, evidenceSha256: "a".repeat(64) } };
+    if (kind === "setup-failed") {
+      const extracted = join(local, "evidence-Setup"); mkdirSync(extracted);
+      const entries = [{ name: "run.log", body: "failed setup" }, { name: "host.txt", body: "synthetic" }, { name: "exit-code", body: "1\n" }];
+      for (const entry of entries) writeFileSync(join(extracted, entry.name), entry.body);
+      writeFileSync(join(local, "results.tgz"), archive(entries));
+      Object.assign(state, { archiveSha256: fileHash(join(local, "results.tgz")), evidenceSha256: treeHash(extracted),
+        evidence: "evidence-Setup", extractionAttempts: ["evidence-Setup"] });
+    }
+    const ms = Date.now(), raw = JSON.stringify({ schema: kind === "unused" ? "benchmark-unused-host/v1" : "benchmark-failed-setup-host/v1",
+      hostId: state.id, unit: state.unit, observedAtMs: ms, ...(kind === "unused" ? { unused: true } : { setupFailed: true, exitCode: 1 }) });
+    const record = kind === "unused" ? unusedEvidence(raw, state, unusedHostScript(state), ms, ms)
+      : setupEvidence(raw, state, terminalSetupScript(state, 1), 1, ms, ms);
+    const proof = join(local, kind === "unused" ? "unused-host.json" : "failed-setup-host.json"), statePath = join(local, "state.json");
+    const save = () => { const bytes = JSON.stringify(record); writeFileSync(proof, bytes);
+      state.retirement = { kind, evidenceSha256: digest(bytes) }; writeFileSync(statePath, JSON.stringify(state)); };
+    save(); const report = await p.verify();
+    assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false); assert.equal(p.calls.length, 0);
+    assert.equal(report.groups[0].outcome, kind === "unused" ? "unused-retired" : "setup-failed-retired");
+    record.id = "124"; save();
+    assert.equal((await p.verify()).groups[0].outcome, "error", "a self-consistent hash cannot authorize foreign retirement evidence");
+  }
 });
 
 test("strict roster, source and all original replay/lifecycle gates cannot be supplied by receipts", async (t) => {
