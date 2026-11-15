@@ -595,6 +595,19 @@ async function run(browser) {
         said.join(" | "),
       );
     }
+    // The control is found each time the handler runs: one a patch replaced is the new one, and
+    // the old one, gone from the page, is not touched.
+    const replaced = await shipped.evaluate(async () => {
+      const old = /** @type {HTMLInputElement} */ (document.querySelector('#ship-form [name="weight"]'));
+      const fresh = Object.assign(document.createElement("input"), { name: "weight", value: "1" });
+      old.replaceWith(fresh);
+      const select = /** @type {HTMLSelectElement} */ (document.querySelector('#ship-form [name="service"]'));
+      select.value = "ground";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 100));
+      return `${fresh.value},${old.value}`;
+    });
+    check("a handler given a field gets the control its form has when it runs, not one a patch replaced", replaced === "9,2", replaced);
     await shipped.close();
   }
   // A data-patch form on a page outside an area whose handler is in it (Area::components): the

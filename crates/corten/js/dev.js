@@ -2,11 +2,13 @@
 // Loaded by the runtime under `corten dev` only, from /corten/dev.js, which only a dev server
 // serves, as written: what it reports costs a production page nothing.
 import { ready } from "corten";
-import { TAGS, controls, field } from "./field.js";
+import { TAGS, controls, field, formOf } from "./field.js";
 import { parseOn } from "./on.js";
 /** @import { Arg } from "./on.js" */
 
 const CONTROLS = "input,select,textarea";
+// The elements with a form owner, which `form=` can join to a form outside them.
+const LISTED = "button,fieldset,input,object,output,select,textarea";
 // A region a screen reader announces as it changes: the live roles and aria-live, unless
 // aria-live="off" silences it (as it does a role's own politeness).
 const LIVE_ROLES = ["alert", "status", "log"];
@@ -199,9 +201,20 @@ const flat = (args) => args.flatMap((arg) => (arg.kind === "{" ? flat(arg.fields
  * @param {Element} root
  */
 function fields(root) {
-  // The whole form: a control drawn into it can be the one a call there is given, or another of
-  // its name. `closest` and `getAttribute` are read through the prototypes, as `within` reads its.
-  for (const el of within(Element.prototype.closest.call(root, "form") ?? root, "[data-on]")) {
+  // The calls drawn, and every call of each form a control drawn belongs to (the one around it, or
+  // another it joins with `form=`, and the calls joined to that form from outside it): the control
+  // can be the one such a call is given, or another of its name. Read through the prototypes, so a
+  // form's control named `closest` or `getAttribute` stands in for neither.
+  const calls = new Set(within(root, "[data-on]"));
+  const forms = new Set([Element.prototype.closest.call(root, "form"), ...within(root, LISTED).map(formOf)]);
+  for (const form of forms) {
+    if (!form) continue;
+    for (const el of within(form, "[data-on]")) calls.add(el);
+    for (const el of /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))) {
+      if (Element.prototype.hasAttribute.call(el, "data-on")) calls.add(el);
+    }
+  }
+  for (const el of calls) {
     if (fieldsReported.has(el)) continue;
     /** @type {string[]} */
     const wrong = [];

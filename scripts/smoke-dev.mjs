@@ -212,6 +212,19 @@ try {
     !!fieldErrors[4]?.startsWith("corten: ship_form.weigh takes field closest as one <textarea>, and its form has input"),
     fieldErrors.join(" | "),
   );
+  // A control drawn outside a form and joined to it with `form=` rechecks that form's calls: a
+  // second weight makes the one `fill` takes ambiguous.
+  await shipped.evaluate(() => {
+    const extra = Object.assign(document.createElement("input"), { name: "weight" });
+    extra.setAttribute("form", "ship");
+    document.body.append(extra);
+  });
+  for (let waited = 0; fieldErrors.length < 6 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  check(
+    "dev mode rechecks a form's calls when a control joins it from outside with form=",
+    !!fieldErrors[5]?.startsWith("corten: ship_form.fill takes field weight as one <input>, and its form has input, input"),
+    fieldErrors.join(" | "),
+  );
   await shipped.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });
