@@ -2382,7 +2382,30 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 
 #[cfg(test)]
 mod tests {
-    use super::{local_path, refused_path};
+    use super::{address_unsent, local_path, refused_path, Attr};
+
+    #[test]
+    fn data_address_is_refused_where_the_runtime_would_never_change_the_address() {
+        let bare = |n: &str| Attr::Bare(n.into());
+        let method = |m: &str| Attr::Static("method".into(), m.into());
+        let why = |is_form, attrs: Vec<Attr>| address_unsent(is_form, &attrs).map(|w| w.split(':').nth(1).unwrap_or_default().trim().to_owned());
+        assert_eq!(why(true, vec![bare("data-patch"), bare("data-address")]), None);
+        assert_eq!(why(true, vec![method("GET"), bare("data-patch"), bare("data-address")]), None);
+        assert_eq!(why(true, vec![method("get")]), None, "no mark, nothing to say");
+        assert!(why(false, vec![bare("data-patch"), bare("data-address")]).is_some_and(|w| w.starts_with("only a <form")));
+        assert!(why(true, vec![method("get"), bare("data-address")]).is_some_and(|w| w.starts_with("a form without data-patch")));
+        for posting in ["post", "POST", "dialog"] {
+            let refused = why(true, vec![method(posting), bare("data-patch"), bare("data-address")]);
+            assert!(refused.is_some_and(|w| w.starts_with("only a GET form")), "{posting}");
+        }
+        // A spread may write data-patch, and a method after it may not be the one the browser
+        // keeps (the first); one before it is.
+        let spread = || Attr::Spread(proc_macro::TokenStream::new());
+        assert_eq!(why(true, vec![bare("data-address"), spread()]), None);
+        assert_eq!(why(true, vec![bare("data-patch"), bare("data-address"), spread(), method("post")]), None);
+        let first = why(true, vec![method("post"), bare("data-patch"), bare("data-address"), spread()]);
+        assert!(first.is_some_and(|w| w.starts_with("only a GET form")));
+    }
 
     #[test]
     fn a_path_in_the_app_is_found_in_each_url_attribute() {

@@ -4631,6 +4631,16 @@ async function run(browser) {
       const at = () => scope.evaluate(() => location.pathname + location.search);
       const shown = () => scope.evaluate(() => document.querySelector("#smoke-scope output")?.textContent);
       const entries = () => scope.evaluate(() => /** @type {any} */ (window).navigation.entries().length);
+      /** The focused element: a button by its text, a link by its address, else its name. */
+      const focused = () =>
+        scope.evaluate(() => {
+          const el = document.activeElement;
+          return el?.localName === "button" ? el.textContent?.trim() : el?.localName === "a" ? `a ${el.getAttribute("href")}` : el?.localName;
+        });
+      // Where Tab goes first on the page as loaded: where it goes after focus is reset to the start.
+      await scope.keyboard.press("Tab");
+      const firstTab = await focused();
+      await scope.evaluate(() => /** @type {HTMLElement | null} */ (document.activeElement)?.blur());
       /**
        * Does `act`, then waits until its submit's answer is drawn (the panel a new element) and the
        * submit has ended, and says whether it was.
@@ -4690,16 +4700,18 @@ async function run(browser) {
           pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
         JSON.stringify(pushed),
       );
-      // Back and Forward: the patch again, the rest of the screen kept.
+      // Back and Forward: the patch again, the rest of the screen kept, and focus on a control in
+      // it too.
       await scope.evaluate(() => Object.assign(window, { __rest: document.querySelector("main ol") }));
+      await scope.getByRole("button", { name: "Year, in place", exact: true }).focus();
       asked.length = 0;
-      const back = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-      const forward = { at: await traverse("forward"), shown: await shown(), asked: asked.splice(0) };
+      const back = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), focus: await focused() };
+      const forward = { at: await traverse("forward"), shown: await shown(), asked: asked.splice(0), focus: await focused() };
       const kept = await scope.evaluate(() => document.querySelector("main ol") === /** @type {any} */ (window).__rest);
       check(
         "Back and Forward between a data-address form's entries read its patch again (corten: action), not the page",
-        back.at === "/smoke/scope" && back.shown === "all" && back.asked.join() === "action " &&
-          forward.at === "/smoke/scope?scope=week" && forward.shown === "week" && forward.asked.join() === "action ?scope=week" && kept,
+        back.at === "/smoke/scope" && back.shown === "all" && back.asked.join() === "action " && back.focus === "Year, in place" &&
+          forward.at === "/smoke/scope?scope=week" && forward.shown === "week" && forward.asked.join() === "action ?scope=week" && forward.focus === "Year, in place" && kept,
         JSON.stringify({ back, forward, kept }),
       );
       // A traversal superseded while its patch read is on its way (before its headers, then while
@@ -4810,25 +4822,24 @@ async function run(browser) {
           });
         const went = await traverse("back");
         await scope.unroute(from);
-        const focus = await scope.evaluate(() => {
-          const el = document.activeElement;
-          return el?.localName === "button" ? el.textContent?.trim() : el?.localName;
-        });
-        return { at: went, shown: await shown(), asked: asked.splice(0), focus };
+        const focus = await focused();
+        // The next Tab: from the document's start, as on the page loaded.
+        await scope.keyboard.press("Tab");
+        return { at: went, shown: await shown(), asked: asked.splice(0), focus, tab: await focused() };
       };
       const failed = await backFrom("Day", "?scope=week", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" });
       check(
         "Back to a data-address form's entry whose patch read fails reads the page instead",
-        failed.at === "/smoke/scope?scope=week" && failed.shown === "week" && failed.asked.join() === "action ?scope=week,nav ?scope=week" && failed.focus === "body",
-        JSON.stringify(failed),
+        failed.at === "/smoke/scope?scope=week" && failed.shown === "week" && failed.asked.join() === "action ?scope=week,nav ?scope=week" && failed.focus === "body" && failed.tab === firstTab,
+        JSON.stringify({ failed, firstTab }),
       );
       // The page read above began the screen again: the form's next entry is the first of it.
       await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
       const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } });
       check(
         "Back to a data-address form's entry whose patch read redirects reads the page instead",
-        moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body",
-        JSON.stringify(moved),
+        moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body" && moved.tab === firstTab,
+        JSON.stringify({ moved, firstTab }),
       );
       // A handler that answers the form with its page, not a patch: the page is drawn and the
       // address follows too, and Back from it reads a page, the screen being another one now.
@@ -4858,8 +4869,8 @@ async function run(browser) {
       });
       check(
         "Back to a data-address form's entry whose patch read is a 500 with a patch reads the page instead",
-        refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day" && refused.focus === "body",
-        JSON.stringify(refused),
+        refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day" && refused.focus === "body" && refused.tab === firstTab,
+        JSON.stringify({ refused, firstTab }),
       );
       // A page that gives a control focus as it is drawn keeps it: only focus the read left where it
       // was goes to the document's start.

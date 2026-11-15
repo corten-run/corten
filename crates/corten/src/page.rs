@@ -2187,6 +2187,17 @@ impl Req {
     /// # fn main() {}
     /// ```
     ///
+    /// A dialog's form closes its dialog and sends nothing, so it is refused too:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="dialog" data-patch data-address><button>"Close"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
     /// A `method` before every spread is the one the browser keeps:
     ///
     /// ```compile_fail
