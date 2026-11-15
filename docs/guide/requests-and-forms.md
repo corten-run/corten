@@ -592,8 +592,9 @@ with `#[fields(group)]`. Its fields post under the field's name, `ship_to.street
 hold two of one type (where it ships from and to), each read into its own value as its own type (a
 number stays a number). A component draws the group once for every form that has one, given its
 names: `<AddressInputs f={f.ship_to} />`, where `f: AddressGroupFields` (the
-names of an `Address` put in a form as a group; in a row it is `AddressRowGroupFields<'k>`, so a
-group drawn both at a form's top and in its rows takes a component for each). A group whose
+names of an `Address` put in a form as a group; in a row it is `AddressRowGroupFields<'k>`, and in
+a row of a row `AddressRowGroupFields<'k, Row<'k>>`, so a group drawn both at a form's top and in
+its rows takes a component for each). A group whose
 fields a form can all leave out (checkboxes, `Option`s, file inputs) needs `#[serde(default)]` on the group's
 field as well, or it does not compile: a form that sends none of them would otherwise be refused.
 A group is never an `Option` (that does not compile either): a form sends a group's fields one by
@@ -651,12 +652,14 @@ named through every row it is in, `f.rules.at(&1).conditions.at(&0).kind`, poste
 `rules[1].conditions[0].kind`, read into rule 1's conditions, and an error on it marks that one
 input. Each key is written in its own brackets by the rules above, so no app builds or splits a
 key that joins two. A component that draws one inner row takes its names as
-`ConditionRowFields<'_, Row<'_>>` (`corten::form::Row`: the rule's row it is in), and one that
-draws a row of the form's own rows `RuleRowFields<'_>`.
+`ConditionRowFields<'a, Row<'a>>` (`corten::form::Row`: the rule's row it is in), and one that
+draws a row of the form's own rows `RuleRowFields<'a>`:
 
 ```rust
 # use std::collections::BTreeMap;
 # use corten::prelude::*;
+use corten::form::Row;
+
 #[derive(Fields)]
 struct Condition { kind: Option<String>, value: Option<String> }
 
@@ -666,6 +669,24 @@ struct Rule { offset: Option<String>, #[fields(rows)] #[serde(default)] conditio
 #[derive(Fields)]
 struct Policy { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule> }
 
+#[derive(Id)]
+struct PolicyFormId;
+
+#[component]
+fn ConditionInputs<'a>(f: ConditionRowFields<'a, Row<'a>>, e: &'a Within<'a, PolicyFormId>) -> impl Render {
+    html! { <input {..e.control(f.kind)}> {e.message(f.kind)} }
+}
+
+#[component]
+fn RuleInputs<'a>(f: RuleRowFields<'a>, rule: &'a Rule, e: &'a Within<'a, PolicyFormId>) -> impl Render {
+    html! {
+        <input {..e.control(f.offset)}>
+        for key in rule.conditions.keys() {
+            <ConditionInputs f={f.conditions.at(key)} e={e} />
+        }
+    }
+}
+
 let kind = Policy::FIELDS.rules.at(&1).conditions.at(&0).kind;
 assert_eq!(kind.to_string(), "rules[1].conditions[0].kind");
 let read: Policy = corten::form::from_bytes(b"rules%5B1%5D.offset=5&rules%5B1%5D.conditions%5B0%5D.kind=grade").unwrap();
@@ -673,6 +694,10 @@ assert_eq!(read.rules[&1].conditions[&0].kind.as_deref(), Some("grade"));
 let mut errors = Errors::new();
 errors.add(kind, "Choose what the condition tests.");
 assert!(errors.has(kind) && !errors.has(Policy::FIELDS.rules.at(&2).conditions.at(&0).kind));
+
+let e = errors.within(PolicyFormId);
+let drawn = html! { <RuleInputs f={Policy::FIELDS.rules.at(&1)} rule={&read.rules[&1]} e={&e} /> }.to_html();
+assert!(drawn.contains(r#"name="rules[1].conditions[0].kind" aria-invalid="true""#));
 ```
 
 Rows go as deep as the types do, and the reader follows a key only as deep as the type it reads

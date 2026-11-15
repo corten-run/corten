@@ -289,6 +289,13 @@
 //! let _: Result<Step, _> = corten::form::from_bytes(b"name=a");
 //! ```
 //!
+//! ```compile_fail
+//! # use std::collections::BTreeMap;
+//! # use corten::prelude::*;
+//! #[derive(Fields)]
+//! struct Step { name: String, #[fields(rows)] #[serde(default)] then: BTreeMap<u32, Self> }
+//! ```
+//!
 //! Rows that reach it through another type are a cycle in reading the types' `SHAPE`, which
 //! rustc reports as one (E0391, "cycle detected when elaborating drops for `...::SHAPE`"):
 //!
@@ -299,6 +306,17 @@
 //! struct Rule { #[fields(rows)] #[serde(default)] groups: BTreeMap<u32, Group> }
 //! #[derive(Fields)]
 //! struct Group { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule> }
+//! ```
+//!
+//! So are rows that reach it through a generic type, whichever type the generic is given:
+//!
+//! ```compile_fail,E0391
+//! # use std::collections::BTreeMap;
+//! # use corten::prelude::*;
+//! #[derive(Fields)]
+//! struct Rule<T> { #[serde(default)] tag: Option<T>, #[fields(rows)] #[serde(default)] groups: BTreeMap<u32, Group> }
+//! #[derive(Fields)]
+//! struct Group { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule<u8>> }
 //! ```
 //!
 //! A group whose fields a form can all leave out (checkboxes, `Option`s, file inputs, which are
@@ -1431,9 +1449,13 @@ pub struct Errors {
 /// is in the list. Two chains with one hash share a list, and [`Kept::is`] tells them apart.
 type RowIndex = std::collections::HashMap<u64, Vec<u32>>;
 
+/// The key of [`row_hash`], random for each process: a row's key is the client's choice, so with a
+/// key it knows a client could send chains that share one list and are read through on each look.
+static ROW_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
+
 /// The hash [`RowIndex`] keeps a place's messages by, or none for a place in no row.
 fn row_hash<P: Place>(at: &P) -> Option<u64> {
-    let mut state = std::hash::DefaultHasher::new();
+    let mut state = std::hash::BuildHasher::build_hasher(&*ROW_KEY);
     at.hash_rows(&mut state).then(|| std::hash::Hasher::finish(&state))
 }
 

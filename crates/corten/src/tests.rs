@@ -3921,6 +3921,36 @@ fn what_row_errors_cost() {
     assert_eq!(std::hint::black_box(errors).len(), count as usize);
 }
 
+/// What redrawing a refused form with `ROW_DRAWS` of its own rows costs (2,000 if unset), each
+/// row's field with a message: the lookups that find it (`has`, `get`, the control's ARIA) and
+/// its name drawn through its row (`Row::render`). Measured with callgrind on the release build,
+/// collecting in `draw_rows` alone (`--toggle-collect='*draw_rows*'`), against main.
+#[test]
+fn what_redrawing_rows_costs() {
+    #[inline(never)]
+    fn draw_rows(errors: &Errors, count: u32) -> (usize, String) {
+        let f = Numbered::FIELDS;
+        let e = errors.within(LimitsFormId);
+        let found = (0..count).filter(|row| errors.has(f.lines.at(row).qty) && errors.get(f.lines.at(row).qty).is_some()).count();
+        let drawn = html! {
+            for row in 0..count {
+                let qty = f.lines.at(&row).qty;
+                <input {..e.control(qty)}>
+                {e.message(qty)}
+            }
+        };
+        (found, drawn.to_html())
+    }
+    let count: u32 = std::env::var("ROW_DRAWS").ok().and_then(|n| n.parse().ok()).unwrap_or(2_000);
+    let mut errors = Errors::new();
+    for row in 0..count {
+        errors.add(Numbered::FIELDS.lines.at(&row).qty, "Too many.");
+    }
+    let (found, drawn) = draw_rows(std::hint::black_box(&errors), std::hint::black_box(count));
+    assert_eq!(found, count as usize);
+    assert_eq!(drawn.matches(r#"aria-invalid="true""#).count(), count as usize);
+}
+
 /// A form's input is a `FromJson` and an agent tool's input too: rows in a row are read from JSON
 /// objects in objects, and the schema describes each level.
 #[cfg(feature = "json")]
