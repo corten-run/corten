@@ -26,6 +26,13 @@ Corten is pre-1.0, so any minor version may change the API.
   stylesheets do not reach it
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
+  BTreeMap<u32, Condition>` in the type of a form's rows names
+  `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
+  the maps inside the map and gives it its own error, so a list whose items own a list needs no
+  key the app joins and splits by hand. Rows go as deep as the types do; a type whose rows reach
+  its own type does not compile
+  ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
 
 - Stage grouped benchmark host admission behind the first required group's
   source-bound common bootstrap, then admit remaining hosts serially while their
