@@ -88,6 +88,17 @@ retained or forwarded. These diagnostics do not identify the cause of historical
 failures whose rejected responses were not retained, or change any acceptance,
 completion, ownership, retry or cleanup gate.
 
+When present, a create action's `href` must exactly match one of the provider's
+two documented action routes: `https://api.digitalocean.com/v2/actions/<action-id>`
+or `https://api.digitalocean.com/v2/droplets/<created-droplet-id>/actions/<action-id>`.
+The latter must bind both IDs; foreign origins, credentials, other resources,
+queries, fragments and noncanonical spellings remain refused. These are advisory
+identity checks, not URLs to fetch: completion still uses only the fixed global
+action GET and verifies its exact ID, type, resource and completed status.
+The [published action endpoint contract](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/dropletActions_get.yml)
+supports this second route; it does not establish what any unretained failed
+response contained or prove a historical failure's cause.
+
 Collection reuses only saved identities and independently collects terminal hosts:
 
 ```sh
@@ -121,6 +132,17 @@ links fail before this narrow count-change classification. A second mismatch,
 HTTP or request error, cancellation or exhausted budget refuses. This is not an
 HTTP/network retry or permission to repeat POST/DELETE, replay an old operation,
 relax identity/absence checks or infer the cause of a historical failure.
+
+Census predicate refusals use the closed `list-response-` suffixes `shape`
+(droplet array), `total` (nonnegative safe-integer metadata), `id`, `duplicate`,
+`links`, `pages`, `next` (fixed-origin URL, path and exact next-page parameters),
+`count` (inconsistency on the second attempt), and `bounds` (row, total, page or
+shared request ceiling). They expose no rejected values or counts. The code is
+attached only at the failed predicate; intervening deadline and cancellation
+faults retain their coarse phase code. These diagnostics neither identify the
+historical failed response nor make an incomplete census valid. Concurrent
+allocations between complete single-page responses do not alone cause a count
+refusal; disagreement within a response or between pages is a separate condition.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;
