@@ -4891,7 +4891,8 @@ async function run(browser) {
             : turning
               ? `<input name="q" value="abcdef" ${applied ? 'type="hidden"' : ""}>`
               : "";
-          // After the filter, so its index in <main> is the focused control's once the copy turns.
+          // After the filter form, so its index in <main> is the focused control's once the copy
+          // turns. (A swap's answer is <main>'s part, without its closing tag.)
           const later = turning ? '<form><input name="q" value="abcdef"></form>' : "";
           const other =
             kind === "lose ancestor beside an unchanged duplicate"
@@ -4903,7 +4904,7 @@ async function run(browser) {
                   : "";
           const body = (await res.text())
             .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${other}${losing && applied ? form : form.replace("<form", '<form id="smoke-filter"')}${preceding}${moved ? "" : target}`)
-            .replace("</main>", `${later}</main>`);
+            .replace(/(<form id="smoke-filter"[\s\S]*?<\/form>)/, (_, form) => `${form}${later}`);
           await route.fulfill({ status: res.status(), headers, body });
         },
       );
