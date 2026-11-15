@@ -191,7 +191,10 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 `RequiredWhen`, `SubmitKey::field`) the field it is for, and a widget its id as an `Id`
 (`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
 `qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
-message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
+message) and drawn again with `value={&input.qty}`; a decimal with no step or an end it stays
+off is `Bounds::new(0.0, 1.0).exclusive_min().any_step()` (a float's alone; with a step the input
+says the step inside the end, with none the end itself, which the handler refuses; the message
+says "above"), never a rule beside the `Entry`; a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names

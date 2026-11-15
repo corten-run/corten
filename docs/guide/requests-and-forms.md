@@ -380,6 +380,32 @@ let Some(copies) = COPIES.read(&input.copies) else {
 };
 ```
 
+A decimal that takes whatever precision is typed (a ratio, a percentile) has no step:
+`.any_step()` writes HTML's `step="any"` and holds every finite number in range. An end the
+value must stay off ("above 0", "below 100") is `.exclusive_min()` or `.exclusive_max()`. HTML
+has no exclusive `min` or `max`. With a step, the input says the first and last steps inside the
+ends (`Bounds::new(0.0, 100.0).step(0.01).exclusive_min()` writes `min="0.01"`), so the browser
+checks them as well. With no step there is no next number to say, so the input says the end
+itself, the browser sends it, and the handler refuses it, and a number that reads as the end in
+the field's type (`1e-50` is `0` in an `f32`). The message is the app's, as every rule's is,
+and says "above" where the bound does:
+
+```rust,ignore
+const DISCOUNT: Bounds<f64> = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
+
+// <input type="number" name={f.discount} value={&input.discount} {..DISCOUNT}> writes min="0"
+// max="100" step="any"; DISCOUNT.read is None for 0, 100 and 100.5, Some for 37.5
+let Some(discount) = DISCOUNT.read(&input.discount) else {
+    let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
+    errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
+    return req.invalid(&errors, ..).await;
+};
+```
+
+Both are a float's alone: a count stays off an end with its next whole number
+(`Bounds::new(1, 9)` is above 0), and `step="any"` would let the browser send `2.5`, which no
+integer reads, so `Bounds::new(0u32, 3).any_step()` does not compile.
+
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
 anything from a browser that does not check (`inputmode="numeric"` on a text input, `novalidate`,

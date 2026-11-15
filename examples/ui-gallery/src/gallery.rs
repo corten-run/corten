@@ -9,7 +9,7 @@ use corten_ui::{
 };
 use std::time::SystemTime;
 
-use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
+use crate::app::{CREATED, DISCOUNT, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
 use crate::glyphs;
 use crate::ui::{
     alert::{AlertEmphasis, FailedAlert, FormAlert},
@@ -272,6 +272,8 @@ struct PriceId;
 #[derive(Id)]
 struct WeightId;
 #[derive(Id)]
+struct DiscountId;
+#[derive(Id)]
 struct ConditionId;
 #[derive(Id)]
 struct BookId;
@@ -299,12 +301,15 @@ pub fn Gallery<'a>(
     rename: RenameDialog<'a>,
     qty: Entry<u32>,
     weight: Entry<f64>,
+    discount: Entry<f64>,
 ) -> impl Render {
     let Times { t, now } = times;
     let f = SellForm::FIELDS;
     let qty = Number { value: qty.clone(), required: true, ..Number::new(QtyId, f.qty, QTY, "Fewer", "More") };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
     let weight = Number { value: weight.clone(), ..Number::new(WeightId, f.weight, WEIGHT, "Lighter", "Heavier") };
+    // Any decimals and two ends it stays off: no step, so its buttons are drawn disabled.
+    let discount = Number { value: discount.clone(), ..Number::new(DiscountId, f.discount, DISCOUNT, "Less", "More") };
     let condition = Picker {
         required: true,
         ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
@@ -377,6 +382,9 @@ pub fn Gallery<'a>(
                                 </Stepper>
                             </Field>
                         </div>
+                        <Field id={DiscountId} label="Discount on two or more (%)" hint="" error="">
+                            <Stepper><NumberField field={&discount} /></Stepper>
+                        </Field>
                         <Field id={ConditionId} label="Condition" hint="" error="">
                             <Combobox><ComboBox field={&condition} /></Combobox>
                         </Field>

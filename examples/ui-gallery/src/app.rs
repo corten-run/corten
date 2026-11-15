@@ -202,6 +202,7 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
         rename: RenameDialog { here: DRAFT, name: "", errors: none },
         qty: 1.into(),
         weight: 0.5.into(),
+        discount: Entry::default(),
     }
 }
 
@@ -230,6 +231,8 @@ pub struct SellForm {
     /// Money as the reader typed it, read by `t.parse_money`: a refused entry is shown back as is.
     pub price: String,
     pub weight: Entry<f64>,
+    /// A percentage off two or more copies, as precise as typed; blank for none.
+    pub discount: Entry<f64>,
     /// One of the combo box's options: a word outside them is refused, as a malformed number is.
     pub condition: Condition,
     /// The regions the seller ships to: at least one (`CheckboxGroup`).
@@ -245,10 +248,13 @@ pub struct SellForm {
 /// The listing's currency.
 pub const USD: Currency = Currency::new("USD");
 
-/// How many copies a listing may offer, and its shipping weight in ounces: the inputs' `min`, `max`
-/// and `step`, and the handler's check.
+/// How many copies a listing may offer, and its shipping weight in ounces, above 0 in tenths (the
+/// input says the first tenth): the inputs' `min`, `max` and `step`, and the handler's check.
 pub const QTY: Bounds<u32> = Bounds::new(1, 10);
-pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
+pub const WEIGHT: Bounds<f64> = Bounds::new(0.0, 16.0).step(0.1).exclusive_min();
+/// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. The
+/// input says 0 and 100, which the browser lets through; the handler refuses them.
+pub const DISCOUNT: Bounds<f64> = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
 
 /// What a listing that ships nowhere is told, by the browser and by the handler.
 pub const NO_REGION: &str = "Choose where you ship.";
@@ -264,7 +270,12 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
         errors.add(f.qty, format!("List from {} to {} copies.", QTY.min(), QTY.max()));
     }
     if weight.is_none() {
-        errors.add(f.weight, format!("Enter a weight from {} to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
+        errors.add(f.weight, format!("Enter a weight above {} and up to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
+    }
+    let discount = DISCOUNT.read(&form.discount);
+    if discount.is_none() && !form.discount.is_blank() {
+        let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
+        errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent, or none."));
     }
     let price = t.parse_money(&form.price, USD);
     if price.is_none() {
@@ -279,7 +290,13 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     if let Some((_, message)) = errors.iter().next() {
         let none = Errors::new();
         // Without the script the form is drawn again, its numbers as they were typed.
-        let sent = || Gallery { result: message, qty: form.qty.clone(), weight: form.weight.clone(), ..listings(&req, &none) };
+        let sent = || Gallery {
+            result: message,
+            qty: form.qty.clone(),
+            weight: form.weight.clone(),
+            discount: form.discount.clone(),
+            ..listings(&req, &none)
+        };
         let page = || async { gallery(&req, sent()) };
         return req.invalid(&errors, OrderResult { text: message }, page).await;
     }
@@ -288,7 +305,8 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     let condition = form.condition.label();
     // Some here: a price that does not read is refused above.
     let price = price.map(|cents| t.money(cents, USD).to_string()).unwrap_or_default();
-    let text = format!("Listed {qty} {condition} {CARD} at {price} each, {weight:.1} oz to ship.");
+    let off = discount.map(|d| format!(", {d}% off two or more")).unwrap_or_default();
+    let text = format!("Listed {qty} {condition} {CARD} at {price} each, {weight:.1} oz to ship{off}.");
     let none = Errors::new();
     let page = || async { gallery(&req, Gallery { result: &text, ..listings(&req, &none) }) };
     req.patch_or(OrderResult { text: &text }, page).await
@@ -540,6 +558,34 @@ mod tests {
         let page = listed().await;
         assert_eq!(page.status(), StatusCode::OK);
         assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
+    }
+
+    /// A discount takes any decimals and stays off both its ends: the input says 0 and 100, which
+    /// the browser sends, and the handler refuses them with the message that says "above".
+    #[tokio::test]
+    async fn a_discount_is_above_0_and_below_100_with_any_decimals() {
+        let app = client();
+        let f = SellForm::FIELDS;
+        let sent = |discount: &str| listing(&app, "1", &[Region::Us], Pricing::Fixed, "").field(f.discount, discount);
+        let listed = sent("37.5").mode(Mode::Action).await;
+        assert_eq!(
+            read(&listed),
+            (
+                StatusCode::OK,
+                r#"<p id="result" role="status">Listed 1 Lightly Played Ashen Drake at $1.00 each, 1.0 oz to ship, 37.5% off two or more.</p>"#
+            )
+        );
+        for (discount, status) in [("0.001", StatusCode::OK), ("99.999", StatusCode::OK), ("", StatusCode::OK)] {
+            assert_eq!(sent(discount).mode(Mode::Action).await.status(), status, "{discount}");
+        }
+        let refused = r#"<p id="result" role="status">Enter a discount above 0 and below 100 percent, or none.</p>"#;
+        for discount in ["0", "100", "-1", "1e3", "half"] {
+            let res = sent(discount).mode(Mode::Action).await;
+            assert_eq!(read(&res), (StatusCode::UNPROCESSABLE_ENTITY, refused), "{discount}");
+        }
+        // Without JavaScript the form comes back with the discount as sent.
+        let page = sent("100").await;
+        assert!(page.text().contains(r#"name="discount" value="100" min="0" max="100" step="any""#), "{}", page.text());
     }
 
     /// What the browser stops when its script runs (no region, offers with no lowest one), the

@@ -24,7 +24,8 @@ pub struct Number<'a, I, T> {
     pub value: Entry<T>,
     /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
     /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
-    /// Down add ten steps.
+    /// Down add ten steps. With [`any_step`](Bounds::any_step) there is no step to add: a number
+    /// is shown as it is, and both buttons are drawn disabled, so the field keeps its layout.
     pub bounds: Bounds<T>,
     pub required: bool,
     pub disabled: bool,
@@ -161,12 +162,19 @@ pub fn NumberField<'a, I: Id, T: Numeric>(field: &'a Number<'a, I, T>) -> impl R
     let f = field;
     let (input, decrease, increase) = refs();
     let number = f.value.value();
-    let at_min = number.is_some_and(|v| v <= f.bounds.min());
-    let at_max = number.is_some_and(|v| v >= f.bounds.max());
-    // What was sent, as typed; a number made in code with its step's decimals.
-    let shown = match f.value.text() {
-        Some(text) => Some(std::borrow::Cow::Borrowed(text)),
-        None => number.map(|v| std::borrow::Cow::Owned(v.shown(f.bounds.step_size()))),
+    let step = f.bounds.step_size();
+    // `step="any"` has no step for a button to add (`stepUp` throws).
+    let stepless = step.is_none();
+    // The ends the input says: the steps inside an exclusive end.
+    let (min, max) = f.bounds.drawn();
+    let at_min = stepless || number.is_some_and(|v| v <= min);
+    let at_max = stepless || number.is_some_and(|v| v >= max);
+    // What was sent, as typed; a number made in code with its step's decimals, or as it is.
+    let shown = match (f.value.text(), number, step) {
+        (Some(text), _, _) => Some(std::borrow::Cow::Borrowed(text)),
+        (None, Some(v), Some(step)) => Some(std::borrow::Cow::Owned(v.shown(step))),
+        (None, Some(v), None) => Some(std::borrow::Cow::Owned(v.to_html())),
+        (None, None, _) => None,
     };
     html! {
         <div on:connect={js::connect(decrease, input, increase, signal)}>
@@ -233,5 +241,39 @@ mod tests {
         let sent = Number { value: Entry::typed("12.5x"), ..Number::new(PriceId, Form::FIELDS.p, cents, "Less", "More") };
         let html = NumberField { field: &sent }.to_html();
         assert!(html.contains(r#"value="12.5x""#) && !html.contains(" disabled"), "{html}");
+    }
+
+    #[test]
+    fn a_field_with_any_step_shows_its_number_as_it_is_with_both_buttons_disabled() {
+        #[derive(Fields)]
+        #[allow(dead_code)]
+        struct Form {
+            p: Entry<f64>,
+        }
+        #[derive(Id)]
+        struct ShareId;
+        let share = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
+        let field = Number { value: 37.5.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
+        let html = NumberField { field: &field }.to_html();
+        assert!(html.contains(r#"value="37.5" min="0" max="100" step="any""#), "{html}");
+        assert_eq!(html.matches(r#"tabindex="-1" disabled"#).count(), 2, "{html}");
+    }
+
+    #[test]
+    fn a_stepped_exclusive_end_disables_its_button_at_the_step_inside_it() {
+        #[derive(Fields)]
+        #[allow(dead_code)]
+        struct Form {
+            p: Entry<f64>,
+        }
+        #[derive(Id)]
+        struct ShareId;
+        let quarters = Bounds::new(0.0, 1.0).step(0.25).exclusive_min().exclusive_max();
+        let field = |value: f64| Number { value: value.into(), ..Number::new(ShareId, Form::FIELDS.p, quarters, "Less", "More") };
+        let at_first = NumberField { field: &field(0.25) }.to_html();
+        assert!(at_first.contains(r#"value="0.25" min="0.25" max="0.75" step="0.25""#), "{at_first}");
+        assert!(at_first.contains(r#"aria-label="Less" tabindex="-1" disabled"#) && !at_first.contains(r#""More" tabindex="-1" disabled"#));
+        let between = NumberField { field: &field(0.5) }.to_html();
+        assert!(!between.contains(" disabled"), "{between}");
     }
 }

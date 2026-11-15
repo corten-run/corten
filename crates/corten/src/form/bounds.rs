@@ -39,6 +39,55 @@ use crate::view::{quoted, Attrs, Render};
 /// A field has both ends: the server checks a value it was sent against both, so the input says
 /// them too.
 ///
+/// A decimal with no step, a ratio or a percentile that takes whatever precision is typed, is
+/// [`any_step`](Bounds::any_step), which writes HTML's `step="any"` and holds every finite number
+/// from `min` to `max`. An end the value must stay off ("above 0", "below 1") is
+/// [`exclusive_min`](Bounds::exclusive_min) or [`exclusive_max`](Bounds::exclusive_max). HTML
+/// has no exclusive `min` or `max`. With a step the input says the first and last steps inside
+/// the ends (`min="0.1"` above 0 in tenths), so the browser checks them too; with any step there is
+/// no next number, so the input says the end itself, the browser lets it through, and the handler
+/// refuses it, with the field's message, which says "above":
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// struct Listing { discount: Entry<f64> }
+///
+/// /// A percentage off, as precise as the seller likes: above 0 and below 100.
+/// const DISCOUNT: Bounds<f64> = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
+///
+/// let f = Listing::FIELDS;
+/// let view = html! { <input type="number" name={f.discount} {..DISCOUNT}> };
+/// assert_eq!(view.to_html(), r#"<input type="number" name="discount" min="0" max="100" step="any">"#);
+///
+/// assert!(DISCOUNT.holds(37.5) && DISCOUNT.holds(0.001));
+/// assert!(!DISCOUNT.holds(0.0) && !DISCOUNT.holds(100.0));
+/// assert_eq!(DISCOUNT.step_size(), None);
+/// ```
+///
+/// A count has neither: its next whole number is the end it stays off (`Bounds::new(1, 9)` is
+/// above 0), and a number input with `step="any"` would send `2.5`, which no integer reads. So
+/// they are a float's alone, and an integer's bounds with either do not compile:
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+///
+/// const COPIES: Bounds<u32> = Bounds::new(0, 3).any_step();
+/// ```
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+///
+/// const COPIES: Bounds<u32> = Bounds::new(0, 3).exclusive_min();
+/// ```
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+///
+/// const COPIES: Bounds<i64> = Bounds::new(-3, 3).exclusive_max();
+/// ```
+///
 /// A step not above zero holds nothing, so every value is refused: a browser ignores such a step
 /// and steps by 1, and the handler must not agree to values the input never offered.
 ///
@@ -56,18 +105,22 @@ use crate::view::{quoted, Attrs, Render};
 pub struct Bounds<T> {
     min: T,
     max: T,
-    step: T,
+    /// `None` for `step="any"`.
+    step: Option<T>,
+    /// Whether `min` and `max` themselves are refused.
+    above: bool,
+    below: bool,
 }
 
 impl<T: Numeric> Bounds<T> {
-    /// Whole steps of 1 from `min` to `max`. A `min` above `max` holds nothing.
+    /// Whole steps of 1 from `min` to `max`, both included. A `min` above `max` holds nothing.
     pub const fn new(min: T, max: T) -> Self {
-        Bounds { min, max, step: T::ONE }
+        Bounds { min, max, step: Some(T::ONE), above: false, below: false }
     }
 
     /// Steps of `step` from `min`: `0.01` for cents, `5` for a count in fives.
     pub const fn step(self, step: T) -> Self {
-        Bounds { min: self.min, max: self.max, step }
+        Bounds { min: self.min, max: self.max, step: Some(step), above: self.above, below: self.below }
     }
 
     pub const fn min(&self) -> T {
@@ -78,7 +131,8 @@ impl<T: Numeric> Bounds<T> {
         self.max
     }
 
-    pub const fn step_size(&self) -> T {
+    /// The step, or `None` for [`any_step`](Bounds::any_step).
+    pub const fn step_size(&self) -> Option<T> {
         self.step
     }
 
@@ -89,18 +143,109 @@ impl<T: Numeric> Bounds<T> {
         entry.value().filter(|&v| self.holds(v))
     }
 
-    /// Whether `value` is from `min` to `max` and a whole number of steps from `min`: what a
-    /// browser checks before it sends the form, checked again by the handler.
+    /// Whether `value` is from `min` to `max` (off an exclusive end) and a whole number of steps
+    /// from `min`: what a browser checks before it sends the form, checked again by the handler,
+    /// which also refuses an exclusive end the browser lets through.
     pub fn holds(&self, value: T) -> bool {
-        self.min <= value && value <= self.max && T::ZERO < self.step && value.on_step(self.min, self.step)
+        let above = if self.above { self.min < value } else { self.min <= value };
+        let below = if self.below { value < self.max } else { value <= self.max };
+        above
+            && below
+            && match self.step {
+                // A finite number in range: an infinite `max` does not hold infinity.
+                None => value.is_finite(),
+                Some(step) => T::ZERO < step && value.on_step(self.min, step),
+            }
+    }
+}
+
+impl<T: Float> Bounds<T> {
+    /// Every number from `min` to `max`, with as many decimals as are typed: the input's
+    /// `step="any"`. Set after [`step`](Bounds::step), it replaces it, and `step` after it
+    /// replaces it in turn.
+    pub const fn any_step(self) -> Self {
+        Bounds { min: self.min, max: self.max, step: None, above: self.above, below: self.below }
+    }
+
+    /// Refuses `min` itself: "above 0". HTML has no exclusive end: with a step the input says the
+    /// first step above `min`; with [`any_step`](Bounds::any_step) it says `min`, which the
+    /// browser sends and the handler refuses.
+    pub const fn exclusive_min(self) -> Self {
+        Bounds { min: self.min, max: self.max, step: self.step, above: true, below: self.below }
+    }
+
+    /// Refuses `max` itself: "below 1": with a step the input says the last step below `max`,
+    /// and with [`any_step`](Bounds::any_step) `max`, as for [`exclusive_min`](Bounds::exclusive_min).
+    pub const fn exclusive_max(self) -> Self {
+        Bounds { min: self.min, max: self.max, step: self.step, above: self.above, below: true }
+    }
+}
+
+impl<T: Numeric> Bounds<T> {
+    /// The step inside an exclusive end that the input says in its place, `None` for an end the
+    /// input says as it is (inclusive, with no step, or with no exact step inside it).
+    fn inside(&self, last: bool) -> Option<(i128, i32)> {
+        let step = self.step?;
+        if (last && !self.below) || (!last && !self.above) {
+            return None;
+        }
+        T::step_inside(self.min, self.max, step, last)
+    }
+
+    /// The `min` and `max` the input says, as numbers: what corten-ui's `NumberField` disables
+    /// its buttons at.
+    #[doc(hidden)]
+    pub fn drawn(&self) -> (T, T) {
+        let at = |last: bool| {
+            self.inside(last).and_then(|decimal| {
+                let mut text = String::new();
+                write_decimal(decimal, &mut text);
+                T::read(&text)
+            })
+        };
+        (at(false).unwrap_or(self.min), at(true).unwrap_or(self.max))
     }
 }
 
 impl<T: Numeric> Attrs for Bounds<T> {
     fn render_attrs(&self, out: &mut String) {
-        quoted(" min", &self.min, out);
-        quoted(" max", &self.max, out);
-        quoted(" step", &self.step, out);
+        for (name, end, last) in [(" min", &self.min, false), (" max", &self.max, true)] {
+            match self.inside(last) {
+                Some(decimal) => {
+                    out.push_str(name);
+                    out.push_str("=\"");
+                    write_decimal(decimal, out);
+                    out.push('"');
+                }
+                None => quoted(name, end, out),
+            }
+        }
+        match &self.step {
+            Some(step) => quoted(" step", step, out),
+            None => out.push_str(" step=\"any\""),
+        }
+    }
+}
+
+/// `digits` times ten to `exponent` in HTML's syntax for a number, with no exponent and no
+/// trailing zeros: `(25, -2)` is `0.25`.
+fn write_decimal((digits, exponent): (i128, i32), out: &mut String) {
+    if digits < 0 {
+        out.push('-');
+    }
+    let text = digits.unsigned_abs().to_string();
+    let Ok(point) = usize::try_from(-i64::from(exponent)) else {
+        out.push_str(&text);
+        out.extend(std::iter::repeat_n('0', exponent.unsigned_abs() as usize));
+        return;
+    };
+    let padded = format!("{text:0>width$}", width = point + 1);
+    let (whole, fraction) = padded.split_at(padded.len() - point);
+    let fraction = fraction.trim_end_matches('0');
+    out.push_str(whole);
+    if !fraction.is_empty() {
+        out.push('.');
+        out.push_str(fraction);
     }
 }
 
@@ -108,6 +253,14 @@ impl<T: Numeric> crate::view::__private::Writes for Bounds<T> {
     type Static = Self;
     const WRITES: &'static [&'static str] = &["min", "max", "step"];
 }
+
+/// A float, whose [`Bounds`] can have [`any_step`](Bounds::any_step) and an exclusive end. Sealed.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is a whole number: its bounds have a step and include both ends",
+    label = "a float's bounds alone take this",
+    note = "a count stays off an end with its next whole number: `Bounds::new(1, 9)` is above 0"
+)]
+pub trait Float: Numeric {}
 
 /// A number a [`Bounds`] holds: an integer or a float. Sealed.
 #[diagnostic::on_unimplemented(message = "a number field reads an integer or a float, not `{Self}`")]
@@ -123,6 +276,14 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     /// Whether `self`, at least `from`, is a whole number of `step`s (above zero) from it.
     #[doc(hidden)]
     fn on_step(self, from: Self, step: Self) -> bool;
+    /// Not an infinity or NaN; every integer.
+    #[doc(hidden)]
+    fn is_finite(self) -> bool;
+    /// The first step above `min`, or (`last`) the last one below `max`, exactly, as digits and
+    /// an exponent: `None` where the digits do not line up, and for an integer, which has no
+    /// exclusive end.
+    #[doc(hidden)]
+    fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)>;
     /// `self` as an input's value, with the decimals of `step`: `12.5` in steps of `0.01` is
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
@@ -165,6 +326,12 @@ macro_rules! whole {
                 // one would overflow.
                 (self as $u).wrapping_sub(from as $u) % (step as $u) == 0
             }
+            fn is_finite(self) -> bool {
+                true
+            }
+            fn step_inside(_: Self, _: Self, _: Self, _: bool) -> Option<(i128, i32)> {
+                None
+            }
             fn shown(self, _: Self) -> String {
                 self.to_string()
             }
@@ -177,6 +344,7 @@ whole!(u8 => u8, u16 => u16, u32 => u32, u64 => u64, u128 => u128, usize => usiz
 macro_rules! float {
     ($($t:ty),*) => {$(
         impl sealed::Sealed for $t {}
+        impl Float for $t {}
         impl Numeric for $t {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
@@ -218,6 +386,17 @@ macro_rules! float {
                                 && std::str::from_utf8(&text.bytes[..text.len]).ok().and_then(|t| t.parse::<$t>().ok()) == Some(self)
                         })
                 })
+            }
+            fn is_finite(self) -> bool {
+                <$t>::is_finite(self)
+            }
+            fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)> {
+                if !step.is_finite() || step <= 0.0 {
+                    return None;
+                }
+                let (min, max, step) = (Decimal::of(min)?, Decimal::of(max)?, Decimal::of(step)?);
+                let steps = if last { max.steps_below(min, step)? } else { 1 };
+                min.plus_steps(step, steps)
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -266,6 +445,14 @@ impl Decimal {
         let (apart, step) = (self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?);
         let (whole, left) = (apart.div_euclid(step), apart.rem_euclid(step));
         Some(if left >= step - left { whole + 1 } else { whole })
+    }
+
+    /// The most whole `step`s from `from` that stay below `self`: `None` when none do, or the
+    /// digits do not line up in an `i128`.
+    fn steps_below(self, from: Decimal, step: Decimal) -> Option<i128> {
+        let exponent = self.exponent.min(from.exponent).min(step.exponent);
+        let (apart, step) = (self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?);
+        (apart > 0).then(|| (apart - 1).div_euclid(step))
     }
 
     /// `self` plus `k` times `step`, exactly: digits and an exponent, `None` past an `i128`.
@@ -402,6 +589,58 @@ mod tests {
     }
 
     #[test]
+    fn any_step_holds_every_finite_number_in_range() {
+        let ratio = Bounds::new(0.0, 1.0).any_step();
+        assert!(ratio.holds(0.0) && ratio.holds(0.375) && ratio.holds(1.0 / 3.0) && ratio.holds(1.0));
+        assert!(!ratio.holds(-0.000_001) && !ratio.holds(1.000_000_1));
+        assert!(!ratio.holds(f64::NAN) && !ratio.holds(f64::INFINITY) && !ratio.holds(f64::NEG_INFINITY));
+        // An infinite end does not let infinity through.
+        let open = Bounds::new(f64::NEG_INFINITY, f64::INFINITY).any_step();
+        assert!(open.holds(f64::MAX) && open.holds(f64::MIN) && !open.holds(f64::INFINITY) && !open.holds(f64::NEG_INFINITY));
+        assert!(!Bounds::new(1.0f32, 0.0).any_step().holds(0.5));
+        assert_eq!(ratio.step_size(), None);
+        // The last of `step` and `any_step` holds.
+        assert_eq!(ratio.step(0.25).step_size(), Some(0.25));
+        assert!(!ratio.step(0.25).holds(0.3));
+        assert_eq!(Bounds::new(0.0, 1.0).step(0.25).any_step().step_size(), None);
+    }
+
+    #[test]
+    fn an_exclusive_end_refuses_the_end_and_holds_the_next_number() {
+        let above = Bounds::new(0.0, 10.0).exclusive_min().any_step();
+        assert!(!above.holds(0.0) && !above.holds(-0.0));
+        // The smallest f64 above zero reads from a form and holds.
+        let least = super::super::Entry::<f64>::typed("5e-324");
+        assert_eq!(least.value(), Some(5e-324));
+        assert_eq!(above.read(&least), Some(5e-324));
+        assert!(above.holds(10.0));
+        let one = Bounds::new(1.0, 2.0).exclusive_min().exclusive_max().any_step();
+        assert!(!one.holds(1.0) && one.holds(1.0f64.next_up()) && one.holds(2.0f64.next_down()) && !one.holds(2.0));
+        assert!(!one.holds(f64::NAN) && !one.holds(f64::INFINITY));
+        let below = Bounds::new(0.0f32, 1.0).exclusive_max().any_step();
+        assert!(below.holds(0.0) && below.holds(1.0f32.next_down()) && !below.holds(1.0));
+        // An end with a step: the end itself is refused, the steps past it hold.
+        let cents = Bounds::new(0.0, 100.0).step(0.01).exclusive_min();
+        assert!(!cents.holds(0.0) && cents.holds(0.01) && !cents.holds(0.005) && cents.holds(100.0));
+        // Both ends excluded with min at max: nothing.
+        assert!(!Bounds::new(1.0, 1.0).exclusive_min().any_step().holds(1.0));
+    }
+
+    #[test]
+    fn a_number_that_reads_as_the_excluded_end_is_refused() {
+        // 1e-50 is above 0, and the browser's double says so, but it reads as 0 in an f32.
+        let above = Bounds::new(0.0f32, 1.0).exclusive_min().any_step();
+        let tiny = super::super::Entry::<f32>::typed("1e-50");
+        assert_eq!(tiny.value(), Some(0.0));
+        assert_eq!(above.read(&tiny), None);
+        assert_eq!(above.read(&super::super::Entry::typed("1e-45")), Some(1e-45));
+        // A value that is no number, or not finite, does not read.
+        assert_eq!(above.read(&super::super::Entry::typed("NaN")), None);
+        assert_eq!(above.read(&super::super::Entry::typed("inf")), None);
+        assert_eq!(above.read(&super::super::Entry::typed("1e39")), None);
+    }
+
+    #[test]
     fn the_spread_writes_min_max_and_step() {
         let mut out = String::new();
         Bounds::new(0.0, 10_000.0).step(0.01).render_attrs(&mut out);
@@ -409,6 +648,45 @@ mod tests {
         out.clear();
         Bounds::new(-5i32, 5).render_attrs(&mut out);
         assert_eq!(out, r#" min="-5" max="5" step="1""#);
+        out.clear();
+        // With no step an exclusive end is drawn as the end itself: HTML has no exclusive min or max.
+        Bounds::new(0.0, 1.0).exclusive_min().exclusive_max().any_step().render_attrs(&mut out);
+        assert_eq!(out, r#" min="0" max="1" step="any""#);
+    }
+
+    #[test]
+    fn a_stepped_exclusive_end_is_drawn_as_the_step_inside_it() {
+        let drawn = |bounds: Bounds<f64>| {
+            let mut out = String::new();
+            bounds.render_attrs(&mut out);
+            (out, bounds.drawn())
+        };
+        let quarters = Bounds::new(0.0, 1.0).step(0.25).exclusive_min().exclusive_max();
+        assert_eq!(drawn(quarters), (r#" min="0.25" max="0.75" step="0.25""#.to_string(), (0.25, 0.75)));
+        // Each drawn end is one the bounds hold, and the ends themselves are not.
+        assert!(quarters.holds(0.25) && quarters.holds(0.75) && !quarters.holds(0.0) && !quarters.holds(1.0));
+        let cents = Bounds::new(0.0, 100.0).step(0.01).exclusive_min();
+        assert_eq!(drawn(cents), (r#" min="0.01" max="100" step="0.01""#.to_string(), (0.01, 100.0)));
+        // A max off the steps: the last step below it, as for an inclusive one.
+        let off = Bounds::new(-1.5, 0.9).step(0.5).exclusive_min().exclusive_max();
+        assert_eq!(drawn(off), (r#" min="-1" max="0.5" step="0.5""#.to_string(), (-1.0, 0.5)));
+        assert_eq!(drawn(Bounds::new(-1.0, 0.0).step(0.5).exclusive_max()).0, r#" min="-1" max="-0.5" step="0.5""#);
+        let tens = Bounds::new(0.0, 1e3).step(10.0).exclusive_min().exclusive_max();
+        assert_eq!(drawn(tens), (r#" min="10" max="990" step="10""#.to_string(), (10.0, 990.0)));
+        let tenths = Bounds::new(0.0f32, 16.0).step(0.1).exclusive_min();
+        let mut out = String::new();
+        tenths.render_attrs(&mut out);
+        assert_eq!((out.as_str(), tenths.drawn()), (r#" min="0.1" max="16" step="0.1""#, (0.1, 16.0)));
+        // Inclusive ends and no step are drawn as they are.
+        assert_eq!(drawn(Bounds::new(0.0, 1.0).step(0.25)).1, (0.0, 1.0));
+        assert_eq!(drawn(Bounds::new(0.0, 1.0).exclusive_min().any_step()).1, (0.0, 1.0));
+        // No step fits inside: the drawn min is above the drawn max, so the browser sends nothing,
+        // as the bounds hold nothing.
+        let none = Bounds::new(0.0, 0.25).step(0.25).exclusive_min().exclusive_max();
+        assert_eq!(drawn(none).0, r#" min="0.25" max="0" step="0.25""#);
+        assert!(!none.holds(0.0) && !none.holds(0.25));
+        // Digits that do not line up in an i128: the end itself.
+        assert_eq!(drawn(Bounds::new(1e30, 2e30).step(1e-9).exclusive_min()).1, (1e30, 2e30));
     }
 
     #[test]

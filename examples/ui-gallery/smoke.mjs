@@ -426,6 +426,13 @@ async function run(browser) {
   const fewer = page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(0);
   for (const key of ["Enter", "Space", "Enter", "Space"]) await fewer.press(key);
   check("Enter and Space on decrease step down", (await page.locator("#weight").inputValue()) === "0.7", await page.locator("#weight").inputValue());
+  // The weight is above 0 in tenths (Bounds::exclusive_min with a step): the input says the first
+  // step inside, so Home goes there and decrease is disabled at it, never at the refused 0.
+  await page.locator("#weight").focus();
+  await page.keyboard.press("Home");
+  const firstStep = [await page.locator("#weight").inputValue(), await page.locator("#weight").getAttribute("min"), await fewer.isDisabled()].join(" ");
+  check("a stepped exclusive end: Home goes to the first step inside it, where decrease is disabled", firstStep === "0.1 0.1 true", firstStep);
+  await page.locator("#weight").fill("0.7");
   const layout = await page.evaluate(() => {
     // The number field's root is a div; the wrapper that lays out its parts and the adornment holds it.
     const field = /** @type {Element} */ (document.querySelector("#weight")?.closest("[data-scope=ui-number-field]")?.parentElement);
@@ -435,6 +442,16 @@ async function run(browser) {
       .join(" ");
   });
   check("the design system orders an adornment between the parts", layout === "button span input button", layout);
+  // A field with step="any" (Bounds::any_step) has no step for a button to add: both stay disabled
+  // as the value changes, and Home leaves the value as typed rather than going to an end the field
+  // may have to stay off (exclusive_min).
+  const discount = page.locator("#discount");
+  const discountButtons = page.locator("[data-scope=ui-number-field]").nth(2).locator("button");
+  await discount.fill("37.5");
+  await discount.press("Home");
+  const stepless = [await discount.inputValue(), await discount.getAttribute("step"), await discountButtons.nth(0).isDisabled(), await discountButtons.nth(1).isDisabled()].join(" ");
+  check("a number field with step any keeps both buttons disabled and Home leaves its value", stepless === "37.5 any true true", stepless);
+  await discount.fill("");
 
   // ComboBox
   const color = page.getByLabel("Condition");
@@ -4991,7 +5008,22 @@ async function run(browser) {
   });
   await listForSale();
   const offStep = (await plain.textContent("#result")) ?? "";
-  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
+  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight above 0 and up to 16 oz, in tenths.", offStep);
+  // An exclusive end (Bounds::exclusive_max): HTML has none, so the input says max="100", the
+  // browser sends 100, and the handler refuses it. Any decimals inside it are listed.
+  /** @param {string} discount */
+  const postDiscount = async (discount) => {
+    await plain.goto(`${base}/`);
+    await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
+    await plain.fill("#discount", discount);
+    const valid = await plain.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).checkValidity());
+    const answer = await listForSale();
+    return `${valid} ${answer.status()} ${(await plain.textContent("#result")) ?? ""}`;
+  };
+  const atEnd = await postDiscount("100");
+  check("no script: a discount at its exclusive end passes the browser and is refused by the handler", atEnd === "true 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
+  const precise = await postDiscount("12.345");
+  check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));
