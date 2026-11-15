@@ -1210,7 +1210,9 @@ impl Req {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let (mode, fetched) = Mode::asked(headers);
-        let own_whole = write && own_page_whole(mode, method, headers);
+        // In an app with layout reads such a write is marked already (`render_errors`), so its
+        // header is looked up once.
+        let own_whole = write && (signal.late_write().is_some() || own_page_whole(mode, method, headers));
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -2737,8 +2739,8 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
     // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
-    // (#1370).
-    let action_write = own_page_whole(mode, req.method(), req.headers());
+    // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
+    let action_write = !shared.layout_reads.is_empty() && own_page_whole(mode, req.method(), req.headers());
     if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }

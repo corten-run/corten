@@ -4011,60 +4011,82 @@ rules something out.
     and a layout value a patch updates is a component with an id, passed its value as a prop.
 
     What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
-    reads. In the test app (two reads, a small layout) it takes 58,677 instructions where its
-    `<main>` swap took 23,019; the same write from a browser without JavaScript, the same whole
-    document, takes 55,997 (it took 55,936 before), and a `GET` of the whole document 53,067. So
-    the runtime's write pays 2,680 more than the same write without JavaScript: profiled, about 1,300
-    in allocating and freeing and about 800 in reading headers, most of both because the request
-    carries one header more (`corten: action`), which the head's copy and each look at the mode and
-    credentials pay for, and about 600 in the boxed late path around the route; no one step to cut. In an app without layout reads it takes 25,205 where it took
-    22,771 (the document's head and layout). A write that answers something else starts no read,
-    since nothing runs beside its handler, but in an app with layout reads only the request the
-    server marks as such a write keeps a copy of the request's head for a page it may answer with,
-    since a handler's answer type (`HtmlResult`) does not say whether it answers a page or a patch,
-    and its answer is looked at for a page a middleware made. So a patch there takes 27,979
-    instructions where it took 21,543, 6,436 more: callgrind puts about 3,400 in allocating and
-    freeing (most of it the head's copy and its drop) and 1,100 in copying, the rest in the futures
-    around the route. The watchlist's watch, a real write answered with its patch, takes 80,359 in
-    process, so that is 8.0% of a write without I/O. Other requests pay a little too: in an app with
-    layout reads each looks at one more atomic mark as its `Req` is made, and every request runs
-    through router futures that can carry the fill. A navigation takes 22,363 where it took 22,200
-    (163 more), a whole document 53,067 where it took 52,783, the watch 80,453 where it took 80,359,
-    and a patch in an app without layout reads 21,516 where it took 21,369. The fill is boxed for the
-    writes that carry it, a trade for the many requests that are not such writes: without the box a
-    navigation ran 197 more and a patch without layout reads 204 more, and a write in an action about
-    1,000 less (round 4's counts). The runtime is 978 bytes larger raw and 375 with gzip (15,341 to
-    15,716 at zlib's default level), numbering the writes a layout draws and which of them failed in
-    view.
+    reads, which start only once the handler has answered. In the crate's test app (two layout
+    reads, a small layout, a route of a routes module), with a read that takes 20 ms, the whole page
+    is 506 bytes and answers in 21.3 ms (median of 25, three runs, 20.3 to 21.6), where `<main>` was
+    37 bytes in 0.04 ms: the user waits for the layout's reads after the write, as a browser
+    without JavaScript does. In the watchlist (its real layout, no layout reads) the write's own page
+    is 2,632 bytes, 1,125 with gzip, where `<main>` is 911 and 471. In instructions it takes 62,214 where its `<main>` swap took 24,902;
+    the same write from a browser without JavaScript, the same whole document, takes 57,365 (57,186
+    before), and a `GET` of the whole document 53,075, so the runtime's write pays 4,849 more than
+    the same write without JavaScript: the copy of the request's head that its reads start from
+    (made before the handler, since the handler takes the request), the fill's two boxes and the
+    one header more. In an app without layout reads it takes 28,168 where it took 24,813 (the
+    document's head and layout). A runtime that does not send `corten-draws` gets `<main>` in
+    23,742 (23,247 before: the header's look-up and the route's look at the request's mark).
+    A write that answers something else starts no read, since nothing runs beside its handler. In an
+    app with layout reads only a route whose answer type can be a page keeps a copy of the
+    request's head, known where the route is called: one that answers patches alone
+    (`HtmlResult<Patches>`), JSON or text keeps none, and its patch takes 25,606 where it took 23,674
+    (it took 31,590 at the round before this one, when every write copied the head). An
+    `HtmlResult` route keeps it, since its handler may answer either: a `data-patch` form whose
+    handler is `req.patch_or(view, page)` answers a patch with JavaScript and its page without, so it
+    is `HtmlResult` and pays the copy on each patch: 31,137 where it took 23,040, 8,097 more (30,803
+    at the round before; this one's header check adds 334). A route given by hand (`Table`) copies
+    the head as its `Req` is taken, whatever it answers, and so does a `Req` the app's or an area's
+    middleware takes before a write's route, a second copy beside the route's: the own page takes
+    67,116 and an `HtmlResult` patch 35,650 with a middleware that takes `Req` and passes the
+    request on, about 3,000 and 2,600 more than without it once the `Req` itself (1,870 before) is
+    counted. Other requests pay a little: in an app without layout reads a patch takes 23,376
+    where it took 22,964 (the header's look-up as its `Req` is made and the route's look at the
+    request), a navigation in an app with them 22,297 where it took 22,206, a whole document 53,075
+    where it took 52,820, and the watchlist's watch (an app without layout reads) 81,148 where it
+    took 80,386. The route's fill is boxed: with the box only around the reads, past the handler, an
+    `HtmlResult` patch took 262 less but every other write about 480 to 590 more, as each route's
+    future grew. The runtime is 1,054 bytes larger raw and 395 with gzip (15,341 to 15,736 at
+    zlib's default level), numbering the writes a layout draws and which of them failed in view.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
     `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference
     of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
-    170 instructions; the runtime's size by Node's `zlib`, once each build); reasoned (a
-    patch carries elements by id, and a layout read's view at two places has none, so filling it
-    needs a marker on every page; a write's own answer is not at an address a full load would
-    draw); value (the page shows the same values with JavaScript as without, Values 3; one answer
-    brings a layout read up to date after a write, a page, Values 5; correctness before the few
-    microseconds a write in an app with layout reads now pays, the order of the values).
+    210 instructions; `what_a_writes_own_page_costs_in_time_and_bytes` for the time and bytes; the
+    runtime's size by Node's `zlib`, once each build); reasoned (a patch carries elements by id, and
+    a layout read's view at two places has none, so filling it needs a marker on every page; a
+    write's own answer is not at an address a full load would draw; a handler takes the request, so
+    the head its page's reads start from is copied before it runs, and only the answer type says
+    beforehand that no page will come); value (the page shows the same values with JavaScript as
+    without, Values 3; one answer brings a layout read up to date after a write, a page, Values 5;
+    correctness before the few microseconds a write in an app with layout reads now pays, the order
+    of the values).
 
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
-    whose page is too costly to draw again), which would reopen markers on the places; or a route's
-    answer type says it answers patches alone, when its route need not keep the head; or the
-    instructions a patch pays over the base in an app with layout reads
-    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit
-    before the change) pass 10% of what the watchlist's watch costs in process
-    (`what_a_watch_costs`: a real write's handler answering with its patch, a lower bound since it
-    has no I/O). Last taken: 6,436 against 80,359, 8.0%.
+    whose page is too costly to draw again), which would reopen markers on the places; or a route
+    can have the request's head back from its handler once it has answered (an extractor that hands
+    it on), which would take the copy off an `HtmlResult` route's patch; or the instructions such a
+    patch pays over the base in an app with layout reads
+    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit before
+    the change) pass 12% of what the watchlist's watch costs in process (`what_a_watch_costs`: a real
+    write's handler answering with its patch, a lower bound since it has no I/O). Last taken:
+    8,097 against 80,386, 10.1%. The line was 10% on a route given by hand (6,436, 8.0%); on a route
+    of a routes module, which this round's harness uses, the round before already paid 9.7%, and
+    this round moved the copy where the answer type is known, so a route that answers patches alone
+    pays 2.4%, and raised the `HtmlResult` patch by 334 (0.4%) for the header that keeps an older
+    runtime working. It stays, as the copy is what lets the reads see the write.
 
-    Last checked: 2026-11-15, callgrind (valgrind 3.19.0) on the change as it now is, with the
-    harness tests added to `0d2d818cd`, three alternating rounds, and the own page in an action
-    profiled against the same write without JavaScript (earlier rounds: `04000147b` against
-    `02ac51d9e`, `e59c32c28` against `934c94367`, `e760a5385` and `de46e974b` against the change as
-    it was), and the runtime's size against `4dad0f513`; 2026-11-15, a write that failed in view by
-    the watchlist smoke in Chromium and Firefox, failing on `fba53d131` in Chromium; 2026-11-14, the writes a layout draws in either order and a
-    write cut off before its answer by the watchlist smoke in Chromium and Firefox (WebKit, without
-    the Navigation API, skips them) on `04000147b`, each failing on `3eeba8d8d` in Chromium, and a middleware's page filled under the
-    deadline and before the error page by the crate's tests on `04000147b`, failing without it.
+    Last checked: 2026-11-15, callgrind (valgrind 3.19.0) on the change as it now is against
+    `ef7570f63` with the harness tests added, and against `e2c5cec0c` (the round before) with them,
+    three alternating rounds each, and the fill's box past the handler measured as a third build,
+    the time and bytes in release (three runs of 25), and the runtime's size against `4dad0f513`
+    (earlier rounds: `04000147b` against `02ac51d9e`, `e59c32c28` against `934c94367`,
+    `e760a5385` and `de46e974b` against the change as it was, `0d2d818cd` with the harness);
+    2026-11-15, a write without `corten-draws` answered `<main>` and drawn with no failure, and a
+    navigation that leaves a patch before it is drawn, by the watchlist smoke, each failing with the
+    runtime of `e2c5cec0c` in Chromium; 2026-11-15, a write that failed in view by the watchlist smoke
+    in Chromium and Firefox, failing on `fba53d131` in Chromium; 2026-11-14, the writes a layout draws
+    in either order and a write cut off before its answer by the watchlist smoke in Chromium and
+    Firefox (WebKit, without the Navigation API, skips them) on `04000147b`, each failing on
+    `3eeba8d8d` in Chromium, and a middleware's page filled under the deadline and before the error
+    page by the crate's tests on `04000147b`, failing without it.
 
 ## Rules
 

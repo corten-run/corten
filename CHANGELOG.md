@@ -585,13 +585,15 @@ Corten is pre-1.0, so any minor version may change the API.
   answer must change one answers its page
   ([design Choice 53](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
-  else starts none. Measured against `main` with callgrind: such a write takes 58,677 instructions
-  where its `<main>` swap took 23,019 (two layout reads), and the same write without JavaScript
-  55,997; 25,205 where it took 22,771 without reads; a patch in an app with layout reads takes
-  27,979 where it took 21,543 (its route keeps a copy of the request's head for a page it may
-  answer with), 8.0% of the watchlist's watch, a real write; any other request in such an app runs
-  about 100 to 290 more (a navigation 22,363 where it took 22,200), and a patch in an app without
-  layout reads 21,516 where it took 21,369. The runtime is 375 bytes larger with gzip. A read an `Ahead` starts
+  else starts none. The runtime says it draws the page whole with a `corten-draws: whole` request
+  header; a runtime without it (a tab open across the deploy) gets `<main>` alone, as before.
+  Measured against `main` with callgrind: such a write takes 62,214 instructions where its
+  `<main>` swap took 24,902 (two layout reads), and the same write without JavaScript 57,365; with
+  a 20 ms read it answers in 21.3 ms where `<main>` took 0.04 ms. In an app with layout reads a
+  route whose answer can be a page (`HtmlResult`) keeps a copy of the request's head, so its patch
+  takes 31,137 where it took 23,040; one that answers patches alone (`HtmlResult<Patches>`) keeps
+  none, 25,606 where it took 23,674. A navigation takes 22,297 where it took 22,206, a patch in an
+  app without layout reads 23,376 where it took 22,964. The runtime is 395 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, so the next navigation reads the whole page; so does one
   after a write a navigation cut off before its answer, or one that failed in view (the network
