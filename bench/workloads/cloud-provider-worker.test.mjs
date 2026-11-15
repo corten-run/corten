@@ -37,7 +37,8 @@ function harness(t, mode = "success", transform = (value) => value, interrupted 
 }
 
 test("clean worker uses one immutable private credential across account/create/action/list/delete", async (t) => {
-  const h = harness(t);
+  for (const mode of ["success", "scoped-create-link"]) await t.test(mode, async (t) => {
+  const h = harness(t, mode);
   assert.equal(JSON.parse((await h.run(account)).stdout).uuid, "synthetic-user-0001");
   const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
@@ -45,9 +46,11 @@ test("clean worker uses one immutable private credential across account/create/a
   await h.run(["compute", "droplet", "delete", "123", "--force", ...account.slice(-2)]);
   const state = h.state(); assert.equal(state.consumes, 1); assert.equal(state.requests, 5); assert.equal(h.launches, 1);
   assert.deepEqual(state.calls.map((value) => value.method), ["GET", "POST", "GET", "GET", "DELETE"]);
+  assert.equal(state.calls[2].path, "/v2/actions/456", "href hints must never select the action GET path");
   assert.ok(state.calls.every((value) => value.originalCredential));
   await h.run.close(); assert.notEqual(h.child.exitCode, null);
   await assert.rejects(h.run(account));
+  });
 });
 
 test("strict worker grammar/source handshake refuses URL/sequence/context changes without fallback", async (t) => {
@@ -103,11 +106,31 @@ test("bounded create classifications survive real worker IPC and cached teardown
   });
 });
 
+test("closed census predicate diagnostics survive real worker IPC and cached teardown", async (t) => {
+  for (const predicate of ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"]) await t.test(predicate, async (t) => {
+    const h = harness(t, `list-${predicate}`), diagnostic = { code: `list-response-${predicate}` };
+    const check = (error) => {
+      assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
+      assert.deepEqual(error.providerDiagnostic, diagnostic);
+      assert.ok(publicError(error).includes(`Provider failure: ${diagnostic.code}.`));
+      assert.ok(!`${publicError(error)}${error.stack}${JSON.stringify(error)}`.includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"));
+      return true;
+    };
+    await assert.rejects(h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)], 1000), check);
+    await assert.rejects(h.run.close(), check); await assert.rejects(h.run.close(), check);
+    const state = h.state(); assert.equal(state.requests, predicate === "count" ? 2 : 1);
+    assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
+    assert.ok(state.calls.every((call) => call.method === "GET" && call.path === "/v2/droplets?page=1&per_page=200"));
+    assert.ok(h.child.exitCode !== null || h.child.signalCode !== null);
+  });
+});
+
 test("unknown, extra or non-table IPC diagnostic values fail closed without public reflection", async (t) => {
   const raw = "SYNTHETIC_RAW_BODY";
   for (const result of [{ code: raw }, { code: "create-link", raw }, { code: "create-action-http", httpStatus: raw },
     { code: "create-action-http", httpStatus: 499 }, { code: "create-link", httpStatus: 403 }, ["create-link"],
-    { code: "create-link-href", raw }, { code: "create-link-id", httpStatus: 403 }, { code: "create-link-private" }]) {
+    { code: "create-link-href", raw }, { code: "create-link-id", httpStatus: 403 }, { code: "create-link-private" },
+    { code: "list-response-next", raw }, { code: "list-response-count", httpStatus: 403 }, { code: "list-response-private" }]) {
     const h = harness(t, "reflect", undefined, undefined, (message) => message.ok === false ? { ...message, result } : message);
     await assert.rejects(h.run(account), (error) => {
       assert.equal(error.controlUncertain, true); assert.equal(error.providerDiagnostic, undefined);

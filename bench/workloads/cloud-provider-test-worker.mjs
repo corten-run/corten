@@ -21,19 +21,33 @@ if (mode === "worker-new-report") process.report.reportOnSignal = true;
 const server = createServer((socket) => socket.destroy());
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
-const syntheticRequest = ["success", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure",
+const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);
+const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure",
   "post-link-shape", "post-link-count", "post-link-id", "post-link-rel",
-  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure"].includes(mode) ? async ({ method, path, body, credential }) => {
+  "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
   state.requests++; state.calls.push({ method, path, originalCredential: credential === "SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL" }); save();
   if (mode === "hang" || mode === "hang-create" && method === "POST") return new Promise(() => {});
   if (mode === "reflect") return { status: 200, value: { account: { uuid: credential } } };
   if (path === "/v2/account") return { status: 200, value: { account: { uuid: "synthetic-user-0001", droplet_limit: 20 } } };
-  if (path.startsWith("/v2/droplets?")) return { status: 200, value: { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} } };
+  if (path.startsWith("/v2/droplets?")) {
+    const value = { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} };
+    if (mode === "list-shape") value.droplets = { raw: credential };
+    if (mode === "list-total") value.meta.total = credential;
+    if (mode === "list-id") value.droplets = [{ id: credential }];
+    if (mode === "list-duplicate") { value.droplets = [{ id: 1 }, { id: 1 }]; value.meta.total = 2; }
+    if (mode === "list-links") value.links = credential;
+    if (mode === "list-pages") value.links.pages = credential;
+    if (mode === "list-next") value.links.pages = { next: `https://foreign.invalid/${credential}` };
+    if (mode === "list-count") value.meta.total = 1;
+    if (mode === "list-bounds") value.meta.total = 20001;
+    return { status: 200, value };
+  }
   if (method === "DELETE") { created = undefined; return { status: 204, value: null }; }
   if (method === "POST") {
     if (mode === "create-http-failure") return { status: 422, value: { raw: credential } };
     created = { id: 123, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
     const response = { status: 202, value: { droplet: created, links: { actions: [{ id: 456, rel: "create", href: mode === "post-link-failure" ? "https://synthetic.invalid/v2/actions/456" : "https://api.digitalocean.com/v2/actions/456" }] } } };
+    if (mode === "scoped-create-link") response.value.links.actions[0].href = "https://api.digitalocean.com/v2/droplets/123/actions/456";
     if (mode === "post-link-shape") response.value.links.actions = { raw: credential };
     if (mode === "post-link-count") response.value.links.actions = [];
     if (mode === "post-link-id") response.value.links.actions[0].id = credential;

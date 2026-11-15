@@ -13,6 +13,14 @@ Corten is pre-1.0, so any minor version may change the API.
   its own type does not compile
   ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
 
+- Distinguish benchmark provider census refusal predicates with closed diagnostic
+  codes, without forwarding rejected values or changing census acceptance, the
+  one-retake limit, deadlines, cancellation, ownership or cleanup gates.
+
+- Accept the documented droplet-scoped create action link only when both resource
+  and action IDs match. Completion still uses the fixed global action endpoint;
+  foreign or malformed hints and incomplete/misbound actions remain refused.
+
 - Distinguish five benchmark provider create-link refusal predicates with closed
   diagnostic codes, without forwarding rejected values or changing completion,
   ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
