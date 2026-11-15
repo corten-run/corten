@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve sanitized provider diagnostics and control uncertainty from grouped
+  benchmark workers in fleet failure receipts, without exposing raw errors or
+  changing launch, settlement, lock or cleanup gates.
+
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
