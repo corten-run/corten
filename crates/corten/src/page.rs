@@ -148,6 +148,11 @@ pub(crate) fn own_page_whole(mode: Mode, method: &http::Method, headers: &Header
 /// which every runtime draws.
 fn prefers_whole(headers: &HeaderMap) -> bool {
     for line in headers.get_all(PREFER) {
+        // The line the runtime sends, read without taking it apart: nothing before it in the
+        // request named `corten-draws`, and it names nothing else.
+        if line.as_bytes() == DRAWS_WHOLE.as_bytes() {
+            return true;
+        }
         for preference in crate::cache::split_unquoted(line.as_bytes(), b',') {
             let named = crate::cache::split_unquoted(preference, b';').next().unwrap_or_default();
             let (name, value) = match named.iter().position(|&b| b == b'=') {
