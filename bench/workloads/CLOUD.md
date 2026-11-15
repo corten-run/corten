@@ -70,6 +70,14 @@ approval binds that executable closure. The parent propagates cancellation to al
 children and keeps its lock until every worker exits; uncertainty retains the lock.
 It never terminates a possibly mutating child merely to make a timeout look clean.
 
+Failed worker results and fleet receipts retain only the existing allowlisted
+`providerDiagnostic` code and optional HTTP status, plus an explicit `uncertain`
+boolean for a reported operation failure. Raw errors, stacks, command arguments
+and credential material are never forwarded. Malformed worker messages still
+mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
+mutation, permit a retry or authorize cleanup; saved reservations, launch intents
+and the existing settlement/lock rules remain authoritative.
+
 Collection reuses only saved identities and independently collects terminal hosts:
 
 ```sh
@@ -93,6 +101,16 @@ A launch census permits only the exact names, ownership tags, sizes and regions
 of reserved siblings. An unrelated benchmark host still blocks allocation. The
 account must have room for the entire remaining roster, not just the next host.
 Sibling membership is not permission to collect, stop or delete that sibling.
+
+An HTTP-successful census with a changed total between pages or a final count
+mismatch may be discarded once and read again from page 1. Only the new complete
+census can be returned: no rows, IDs or totals carry over. Both attempts share the
+original command deadline and cancellation checks, at most 100 GETs in total,
+200 rows per page and a total of at most 20,000. Malformed IDs, metadata or next
+links fail before this narrow count-change classification. A second mismatch,
+HTTP or request error, cancellation or exhausted budget refuses. This is not an
+HTTP/network retry or permission to repeat POST/DELETE, replay an old operation,
+relax identity/absence checks or infer the cause of a historical failure.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;

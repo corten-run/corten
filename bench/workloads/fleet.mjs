@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { fleetPlan, roundName, selection } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
-import { full, providerIdentity } from "./cloud-options.mjs";
+import { full, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
@@ -113,8 +113,12 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
       if (failed || code !== 0 || messages !== 1 || message?.schema !== "benchmark-group-fleet-worker-result/v1") { reject(uncertain()); return; }
       const fields = Object.keys(message).sort();
       if (JSON.stringify(fields) === '["code","schema"]' && [0, 1, 3].includes(message.code)) resolve(message.code);
-      else if (JSON.stringify(fields) === '["error","schema","uncertain"]' && ["group-operation-failed", "group-bootstrap-invalid"].includes(message.error) && typeof message.uncertain === "boolean")
-        reject(message.uncertain ? uncertain() : new Error(message.error));
+      else if (['["error","schema","uncertain"]', '["error","providerDiagnostic","schema","uncertain"]'].includes(JSON.stringify(fields))
+        && ["group-operation-failed", "group-bootstrap-invalid"].includes(message.error) && typeof message.uncertain === "boolean") {
+        const diagnostic = providerFailure(message);
+        if (fields.includes("providerDiagnostic") && !diagnostic) { reject(uncertain()); return; }
+        reject(Object.assign(message.uncertain ? uncertain() : new Error(message.error), diagnostic ? { providerDiagnostic: diagnostic } : {}));
+      }
       else reject(uncertain());
     });
   });
@@ -239,8 +243,11 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       catch (error) { failure = error; if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true; }
       let saved;
       try { saved = readGroup(preview.fleet, job.group); } catch { /* Only validated saved identity is public. */ }
+      const diagnostic = providerFailure(failure);
       const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
-        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(failure || job.outcome === "planned" && ![0, 1, 3].includes(code) ? { error: "group-operation-failed" } : {}) };
+        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(failure || job.outcome === "planned" && ![0, 1, 3].includes(code) ? { error: "group-operation-failed" } : {}),
+        ...(failure ? { uncertain: !!(failure.controlTreeUncertain || failure.controlUncertain) } : {}),
+        ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) };
       // Return codes cannot substitute for validated saved host state. In
       // particular, never print completion/deletion from a worker receipt alone.
       if (!failure && job.outcome === "planned") {

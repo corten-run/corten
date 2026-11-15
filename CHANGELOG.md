@@ -10,7 +10,32 @@ Corten is pre-1.0, so any minor version may change the API.
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
   the maps inside the map and gives it its own error, so a list whose items own a list needs no
   key the app joins and splits by hand. Rows go as deep as the types do; naming the fields of a
-  type whose rows are of its own type does not compile.
+  type whose rows are of its own type does not compile
+  ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
+
+- Permit one fresh complete benchmark provider census after a transient count or
+  total mismatch, within the original deadline and global request limit. Partial
+  results remain rejected; HTTP errors and mutations are never retried.
+
+- The kit's `Checkbox`, `Radio` and `Switch` draw their label, the whole click and tap target,
+  at least `--control-height` tall wherever they are used (in a list, a table cell or a toolbar),
+  as a button or field beside them is, so a theme that sets it to 2.75rem gives them a 44 px touch
+  target too; before, the label stayed 20 px whatever the theme said. A dense row sets a lower
+  `--control-height` on its container. A label that wraps grows, its box on the first line's
+  middle. The label is border-box, so a `min-height: var(--control-height)` an app gave it as a
+  workaround adds nothing and can go. The kit theme's `--choice-list-gap` drops from .75rem to
+  .25rem, so with the kit's theme a `Checkboxes` or `RadioGroup` row is 2.25rem tall and its
+  choices are 2.5rem apart (2rem before), the first choice's text .5rem further under the legend.
+  An app with a copied `checkbox.css`, `radio_group.css` or `switch.css` takes the change with
+  `corten ui add --force`, or `--merge` for an edited copy (`corten ui diff` shows which). A theme
+  that declares `choice-list-gap` at the kit's old .75rem (one `corten ui init` wrote, or one that
+  took `corten ui add`'s suggested line) keeps it, so once its copies are updated its rows are 3rem
+  apart unless it sets .25rem in `tokens/ui.tokens.json`
+  ([#1388 Kit Checkbox, Radio and Switch ignore --control-height: their label, the whole target, stays 20 px when a theme makes every other control 44 px](https://github.com/corten-run/corten/issues/1388)).
+
+- Preserve sanitized provider diagnostics and control uncertainty from grouped
+  benchmark workers in fleet failure receipts, without exposing raw errors or
+  changing launch, settlement, lock or cleanup gates.
 
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
@@ -734,6 +759,18 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
+  the button that asked for it (or, with none, the focused control of the form, else the form) is
+  outside the dialog: the element a submit's answer replaces opens then, as drawn, as the press is
+  newer than the user's close, so a
+  Preview button beside a server-drawn sheet works on every press, not only the first, and a
+  `<details>` asked for unfolded unfolds. Where the button was is read when it is pressed, so
+  one removed, or a dialog redrawn, while the answer is on its way still counts as inside. A
+  submit from inside the element, the elements inside the one replaced, a live fragment, a
+  `ReadAgain` read and a script's `patch()` still keep what the user opened or closed, and a
+  popover stays as the user left it (design Choice 52). It only opens: a dialog the user opened
+  stays open when such an answer draws it closed. The runtime is 149 bytes larger with gzip.
 
 - A patch answered by a handler in an area (`Area::components`) brings the area's stylesheet:
   the answer links its handler's section stylesheets after its elements, as a navigation's
