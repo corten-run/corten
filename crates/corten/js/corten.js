@@ -1099,11 +1099,12 @@ function partTagBeside(put) {
  */
 function readPatchAgain(tag, put, asked) {
   const page = swapped;
-  // An answer that is only its tag (a part with nothing new) reads for the same part as the tag it
-  // answered (that tag's own part, for a slow part's), and lasts while both are there.
-  const parts = (put.length ? put : (asked && (readFor.get(asked) ?? (hasAttr(asked, "data-part") ? partOf(asked) : null))) || []).filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
+  // An answer that is only its tag (a part with nothing new) reads for the same parts as the tag
+  // it answered (every part of a slow part's shared read), and lasts while they and it are there.
+  // One no read asked for (a form's or a script's answer) lasts while the page does, as before.
+  const parts = (put.length ? put : (asked && readFor.get(asked)) || []).filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
   readFor.set(tag, parts);
-  const held = put.length ? put : [tag, ...parts];
+  const held = put.length ? put : asked ? [tag, ...parts] : [];
   const here = () => page === swapped && held.every(inPage);
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.
@@ -1397,7 +1398,10 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
   // changes anything: the check is made then, and says whether it drew.
   const ask = { get aborted() { return !(drew = here()); } };
-  if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0], undefined, visited).catch(reportError);
+  const asked = /** @type {Element} */ (tags.find(inPage) ?? tags[0]);
+  // An answer that is only its tag to read it again reads for all of this read's parts.
+  readFor.set(asked, waiting);
+  if (html !== undefined && here()) await apply(html, ask, null, undefined, true, asked, undefined, visited).catch(reportError);
   for (const el of waiting) unmarkBusy(el, mine);
   if (drew || ended || page !== swapped) return;
   ended = true;

@@ -1647,6 +1647,43 @@ async function run(browser) {
       tagOnlyAsked && tagOnlyListening === 1 && tagOnlyLeft === 0 && tagOnlyStopped,
       `asked ${tagOnlyAsked}, ${tagOnlyListening} listening while it waited, ${tagOnlyLeft} after, fetch stopped ${tagOnlyStopped}`,
     );
+    // So does one two parts' shared read answered with only its tag, when the second part alone is
+    // replaced.
+    let pairStopped = false;
+    shared.on("requestfailed", (r) => r.url().endsWith("/smoke/tag-pair-stalled") && (pairStopped = true));
+    let pairAsked = false;
+    await shared.route("**/smoke/tag-pair-first", (route) => route.fulfill(patchOf('<template data-corten-read-again="1" data-from="/smoke/tag-pair-stalled"></template>')));
+    await shared.route("**/smoke/tag-pair-stalled", () => void (pairAsked = true));
+    await shared.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="tag-pair-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="tag-pair-0"><p id="tag-pair-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/tag-pair-first" data-part="tag-pair-a"></template><p id="tag-pair-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/tag-pair-first" data-part="tag-pair-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; !pairAsked && waited < 6000; waited += 50) await shared.waitForTimeout(50);
+    await shared.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="tag-pair-b">Drawn by a form</p>'));
+    });
+    for (let waited = 0; !pairStopped && waited < 2000; waited += 50) await shared.waitForTimeout(50);
+    check("and so does a shared read's, answered with only its tag, when its second part alone is replaced", pairAsked && pairStopped, `asked ${pairAsked}, fetch stopped ${pairStopped}`);
+    // A form's or a script's answer that is only a tag to read a part again, which no read asked
+    // for, still reads it (while the page lasts, as before #1400).
+    let soloAsked = 0;
+    await shared.route("**/smoke/tag-solo", (route) => {
+      soloAsked += 1;
+      return route.fulfill(patchOf('<p id="tag-solo-a">Read</p>'));
+    });
+    await shared.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p id="tag-solo-a">Waiting</p>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<template data-corten-read-again="1" data-from="/smoke/tag-solo"></template>'));
+    });
+    await shared.waitForFunction(() => document.getElementById("tag-solo-a")?.textContent === "Read", null, { timeout: 5000 }).catch(() => {});
+    check("a script's answer that is only a tag to read a part again reads it", soloAsked === 1 && (await shared.textContent("#tag-solo-a")) === "Read", `${soloAsked} reads`);
     await shared.unrouteAll({ behavior: "ignoreErrors" });
     await shared.context().close();
   }
