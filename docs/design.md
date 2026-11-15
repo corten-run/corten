@@ -1655,9 +1655,15 @@ rules something out.
     `allow_transparent` (a path type whose last segment is `PhantomData`), with the twins `Count`
     (a tuple), `Scored` (a `default = "path"` field), `Wrapped<T>` and `Qualified`
     (`<u8 as Marked>::PhantomData`), on the branch merged with `b7916d9e`; 2026-11-14, the form read
-    again at `4674d1d3` and with rows in rows on the branch from it: 9,222 instructions a read in
-    both (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within
-    174 instructions of each other over the 1,000 reads).
+    again at `4674d1d3` and with rows in rows at `16525bc5`: 9,222 instructions a read in both
+    (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within 174
+    instructions of each other over the 1,000 reads); 2026-11-15, a refused form's redraw with its
+    own rows (for each row's field, which has a message: `has`, `get`, the control's ARIA and
+    message, and its name drawn through its row), at `ef7570f6` and with rows in rows at `d62cff76`:
+    for 20,000 rows 163,534,872 instructions before and 155,100,625 after, for 2,000 rows 15,884,732
+    and 15,002,445 (callgrind, release build, `tests::what_redrawing_rows_costs` collecting in its
+    `draw_rows`, three runs each alternating before and after, medians, each run within 4,000 of
+    its median).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
