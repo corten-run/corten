@@ -14,6 +14,16 @@ const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
   uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
+function refusedHrefDetail(href, dropletId, actionId) {
+  if (typeof href !== "string") return "non-string";
+  let url; try { url = new URL(href); } catch { return "malformed-uri"; }
+  if (url.username || url.password || url.href.includes("#")) return "credentials-or-fragment";
+  if (url.origin !== origin) return "foreign-origin";
+  const paths = [`/v2/actions/${actionId}`, `/v2/droplets/${dropletId}/actions/${actionId}`];
+  if (paths.some((path) => url.href === `${origin}${path}`)) return "semantically-same-canonical-uri";
+  if (paths.some((path) => url.pathname === path || url.pathname === `${path}/`)) return "query-or-trailing-slash";
+  return "wrong-action-or-resource";
+}
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
 function nodeOptionArgs(text) {
@@ -122,26 +132,33 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     const command = args.slice(0, -2), deadline = now() + timeout;
     let code = "provider-command";
     let listTime = deadline - timeout;
-    const listRemaining = () => {
+    const readRemaining = () => {
       const current = now();
       if (!Number.isFinite(current) || !Number.isFinite(deadline) || current < listTime || current >= deadline || interrupted()) throw stopped(true);
       listTime = current; return Math.ceil(deadline - current);
     };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const remaining = phase === "list" ? listRemaining() : Math.ceil(deadline - now());
+      const remaining = phase === "list" || phase === "get" ? readRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
       let response;
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted }); }
       catch { throw stopped(true); }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
-      if (phase === "list") listRemaining();
+      if (phase === "list" || phase === "get") readRemaining();
       if (response?.status !== expected) {
         const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
         throw Object.assign(stopped(false, diagnostic), { httpFailure: true });
       }
       return response.value;
+    };
+    const refuseCreate = (diagnostic) => {
+      // A known semantic refusal is recoverable on this worker, not success.
+      // Deadline/cancellation must never be converted into that narrow result.
+      const current = now();
+      if (!Number.isFinite(current) || !Number.isFinite(deadline) || current < listTime || current >= deadline || interrupted()) throw stopped(true);
+      throw Object.assign(stopped(false, diagnostic), { createSemanticFailure: true });
     };
     try {
       let value;
@@ -151,40 +168,61 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (;;) {
           const rows = [], seen = new Set(); let total;
           for (let page = 1; page <= 100; page++) {
-            assert.ok(requests < 100, "unbounded provider census"); requests++;
+            if (!(requests < 100)) throw stopped(false, { code: "list-response-bounds" }); requests++;
             const result = await call("list", "GET", `/v2/droplets?page=${page}&per_page=200`);
             code = "list-response";
-            assert.ok(Array.isArray(result?.droplets) && result.droplets.length <= 200);
-            assert.ok(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0 && result.meta.total <= 20000);
-            for (const droplet of result.droplets) { assert.ok(positive(droplet?.id) && !seen.has(droplet.id)); seen.add(droplet.id); rows.push(droplet); }
-            if (result.links !== undefined) assert.ok(result.links && typeof result.links === "object" && !Array.isArray(result.links));
-            if (result.links?.pages !== undefined) assert.ok(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages));
+            // Attach subcodes only at refused predicates, never to checkpoints.
+            if (!Array.isArray(result?.droplets)) throw stopped(false, { code: "list-response-shape" });
+            if (!(result.droplets.length <= 200)) throw stopped(false, { code: "list-response-bounds" });
+            if (!(Number.isSafeInteger(result.meta?.total) && result.meta.total >= 0)) throw stopped(false, { code: "list-response-total" });
+            if (!(result.meta.total <= 20000)) throw stopped(false, { code: "list-response-bounds" });
+            for (const droplet of result.droplets) {
+              if (!positive(droplet?.id)) throw stopped(false, { code: "list-response-id" });
+              if (seen.has(droplet.id)) throw stopped(false, { code: "list-response-duplicate" });
+              seen.add(droplet.id); rows.push(droplet);
+            }
+            if (result.links !== undefined && !(result.links && typeof result.links === "object" && !Array.isArray(result.links))) throw stopped(false, { code: "list-response-links" });
+            if (result.links?.pages !== undefined && !(result.links.pages && typeof result.links.pages === "object" && !Array.isArray(result.links.pages))) throw stopped(false, { code: "list-response-pages" });
             const next = result.links?.pages?.next;
             if (next !== undefined) {
-              assert.equal(typeof next, "string"); const url = new URL(next);
-              assert.ok(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash);
+              if (typeof next !== "string") throw stopped(false, { code: "list-response-next" });
+              let url; try { url = new URL(next); } catch { throw stopped(false, { code: "list-response-next" }); }
+              if (!(url.origin === origin && url.pathname === "/v2/droplets" && !url.username && !url.password && !url.hash)) throw stopped(false, { code: "list-response-next" });
               const fields = [...url.searchParams.keys()].sort();
-              assert.ok(fields.length === 2 && fields[0] === "page" && fields[1] === "per_page", "invalid provider census page parameters");
-              assert.ok(url.searchParams.get("page") === String(page + 1) && url.searchParams.get("per_page") === "200", "invalid provider census page sequence");
+              if (!(fields.length === 2 && fields[0] === "page" && fields[1] === "per_page")) throw stopped(false, { code: "list-response-next" });
+              if (!(url.searchParams.get("page") === String(page + 1) && url.searchParams.get("per_page") === "200")) throw stopped(false, { code: "list-response-next" });
             }
-            listRemaining();
+            readRemaining();
             // Only these two internal count conditions permit a fresh page1.
             // All page/ID/link validation above must succeed first. No catch on
             // the public list-response code, and no rows survive the retake.
             const changed = total !== undefined && result.meta.total !== total;
             total ??= result.meta.total;
             if (changed || next === undefined && rows.length !== total) {
-              assert.equal(attempt, 0, "provider census remained inconsistent"); break;
+              if (requests === 100) throw stopped(false, { code: "list-response-count", detail: changed ? "total-changed" : "terminal-count-mismatch" });
+              // Only count inconsistency permits a paced page1 retake. Waiting
+              // spends the original deadline, never a fresh request budget.
+              await sleep(Math.min(1000, readRemaining()));
+              readRemaining(); break;
             }
             if (next === undefined) { value = rows; break; }
-            assert.ok(rows.length < total && page < 100, "unbounded provider census");
+            if (!(rows.length < total && page < 100)) throw stopped(false, { code: "list-response-bounds" });
           }
           if (value !== undefined) break;
         }
         assert.ok(value !== undefined, "incomplete provider census");
+      } else if (command[2] === "get") {
+        assert.equal(command.length, 6);
+        assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "get"]);
+        assert.deepEqual(command.slice(4), ["--output", "json"]);
+        assert.ok(/^[1-9]\d*$/.test(command[3]) && positive(Number(command[3])), "positive exact droplet ID required");
+        const result = await call("get", "GET", `/v2/droplets/${command[3]}`);
+        code = "get-response";
+        assert.ok(result?.droplet && !Array.isArray(result.droplet) && result.droplet.id === Number(command[3]));
+        value = [result.droplet];
       } else if (command[2] === "create") {
         assert.equal(command.length, 17);
         assert.deepEqual(command.filter((_, i) => ![3, 5, 7, 9, 11, 13].includes(i)), ["compute", "droplet", "create", "--size", "--region", "--image", "--ssh-keys", "--tag-names", "--wait", "--output", "json"]);
@@ -196,28 +234,31 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         const result = await call("create", "POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
           ssh_keys: [sshKey], tags: command[13].split(",") }, 202);
         code = "create-response";
-        assert.ok(positive(result.droplet?.id));
+        if (!positive(result?.droplet?.id)) refuseCreate({ code });
         code = "create-link";
         const actions = result.links?.actions;
         // Subcodes describe only a refused predicate, never a later checkpoint.
-        if (!Array.isArray(actions)) throw stopped(false, { code: "create-link-shape" });
-        if (actions.length !== 1) throw stopped(false, { code: "create-link-count" });
-        if (!positive(actions[0]?.id)) throw stopped(false, { code: "create-link-id" });
+        if (!Array.isArray(actions)) refuseCreate({ code: "create-link-shape" });
+        if (actions.length !== 1) refuseCreate({ code: "create-link-count" });
+        if (!positive(actions[0]?.id)) refuseCreate({ code: "create-link-id" });
         // rel/href are optional in the published action-link model. The exact
         // action GET below proves type/resource/completion; supplied hints must
         // still agree, and no provider-supplied href is ever fetched.
-        if (!(actions[0].rel === undefined || actions[0].rel === "create")) throw stopped(false, { code: "create-link-rel" });
-        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`)) throw stopped(false, { code: "create-link-href" });
+        if (!(actions[0].rel === undefined || actions[0].rel === "create")) refuseCreate({ code: "create-link-rel" });
+        // Both documented action endpoints identify this same action/resource.
+        if (!(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`
+          || actions[0].href === `${origin}/v2/droplets/${result.droplet.id}/actions/${actions[0].id}`))
+          refuseCreate({ code: "create-link-href", detail: refusedHrefDetail(actions[0].href, result.droplet.id, actions[0].id) });
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
           code = "create-action-response";
-          const { action } = response;
-          assert.ok(action?.id === actions[0].id && action.resource_type === "droplet" && action.type === "create");
+          const action = response?.action;
+          if (!(action?.id === actions[0].id && action.resource_type === "droplet" && action.type === "create")) refuseCreate({ code });
           // The action model permits integer zero as well as null. Neither is
           // completion proof: only a completed action bound to this droplet is.
-          assert.ok(action.resource_id === result.droplet.id || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0));
+          if (!(action.resource_id === result.droplet.id || action.status === "in-progress" && (action.resource_id === null || action.resource_id === 0))) refuseCreate({ code });
           if (action.status === "completed") { assert.equal(action.resource_id, result.droplet.id); break; }
-          assert.equal(action.status, "in-progress", "provider create action failed");
+          if (action.status !== "in-progress") refuseCreate({ code });
           code = "create-action-pending";
           await sleep(Math.min(1000, Math.max(0, deadline - now())));
         }
@@ -230,12 +271,14 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
-      if (command[2] === "list") listRemaining();
+      if (command[2] === "list" || command[2] === "get") readRemaining();
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
       const diagnostic = providerFailure(error) ?? { code };
       if (error?.controlUncertain) throw stopped(true, diagnostic);
-      if (allowFail && error?.httpFailure) return { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) };
+      if (allowFail && (error?.createSemanticFailure === true || error?.httpFailure
+        && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
+        return { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) };
       throw stopped(false, diagnostic);
     }
   };

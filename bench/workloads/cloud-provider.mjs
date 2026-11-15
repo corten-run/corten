@@ -66,6 +66,7 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
         if (value !== "ready") { fail(); slot.reject(uncertain()); } else slot.resolve();
       } else if (!(keys(value, ["status", "stdout", "stderr"])
         || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"]) && value.stdout === "") || ![0, 1].includes(value.status)
+        || value.status === 1 && (!slot.allowFail || slot.get && !(permittedDiagnostic?.code === "get-http" && permittedDiagnostic.httpStatus === 404))
         || typeof value.stdout !== "string" || Buffer.byteLength(value.stdout) > 16 * 1024 ** 2 || value.stderr !== "") {
         fail(); slot.reject(uncertain());
       } else slot.resolve(value);
@@ -109,7 +110,7 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       if (!child) await start();
       if (failed || closed || interrupted()) throw uncertain();
       const id = ++sequence;
-      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject }; });
+      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get" }; });
       child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);
     } catch { await close(); throw uncertain(); }
