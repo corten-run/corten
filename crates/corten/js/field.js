@@ -8,14 +8,27 @@
 export const TAGS = { i: "input", s: "select", t: "textarea", "*": "input" };
 
 /**
- * The controls named `name` in the form of `el` (the form itself, the one `el` belongs to,
- * `form=` included, or the one around it), in the form's order, or null when it is in no form.
+ * The form of `el`: the form itself; the one the browser says it belongs to (a control's,
+ * `form=` included); none when its `form=` names no form, as a submit has it; else the one around
+ * it. Only a form's own members can be shadowed by a control's name (`form`, `closest`), and a
+ * form is taken first.
+ * @param {Element} el @returns {HTMLFormElement | null}
+ */
+export function formOf(el) {
+  if (el instanceof HTMLFormElement) return el;
+  const owner = "form" in el ? /** @type {HTMLFormElement | null} */ (el.form) : null;
+  return owner ?? (el.hasAttribute("form") ? null : el.closest("form"));
+}
+
+/**
+ * The controls named `name` in the form of `el` (`formOf`), in the form's order, or null when it
+ * is in no form.
  * @param {Element} el @param {string} name @returns {Element[] | null}
  */
 export function controls(el, name) {
-  const form = (el instanceof HTMLFormElement ? el : /** @type {{ form?: HTMLFormElement | null }} */ (el).form) ?? el.closest("form");
+  const form = formOf(el);
   // The form's own `elements`: a control named "elements" would be found in its place.
-  return form && [.../** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))].filter((c) => c.getAttribute("name") === name);
+  return form && [.../** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))].filter((c) => Element.prototype.getAttribute.call(c, "name") === name);
 }
 
 /**

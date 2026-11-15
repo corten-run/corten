@@ -28,7 +28,7 @@ const liveName = (el) => {
  * @param {Element} root
  */
 function nested(root) {
-  for (const el of [...(root.matches(LIVE) ? [root] : []), ...root.querySelectorAll(LIVE)]) {
+  for (const el of within(root, LIVE)) {
     const outer = el.parentElement?.closest(LIVE);
     if (!outer || reported.has(el)) continue;
     reported.add(el);
@@ -57,7 +57,7 @@ function asDrawn(el) {
  * @param {Element} root
  */
 function check(root) {
-  const found = /** @type {HTMLInputElement[]} */ ([...(root.matches(CONTROLS) ? [root] : []), ...root.querySelectorAll(CONTROLS)]);
+  const found = /** @type {HTMLInputElement[]} */ (within(root, CONTROLS));
   for (const el of found) {
     if (reported.has(el) || !el.willValidate || !el.form || el.form.noValidate || el.getAttribute("aria-invalid") === "true" || !asDrawn(el)) continue;
     const { valid, valueMissing, customError } = el.validity;
@@ -81,7 +81,8 @@ const CLOSED_DIALOG = "dialog:not([open],[popover])";
  */
 function within(root, selector) {
   try {
-    return [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+    // Through the prototypes: a form whose control is named `matches` is still a form.
+    return [...(Element.prototype.matches.call(root, selector) ? [root] : []), ...Element.prototype.querySelectorAll.call(root, selector)];
   } catch {
     return selector === CLOSED ? within(root, CLOSED_DIALOG) : [];
   }
@@ -198,14 +199,16 @@ const flat = (args) => args.flatMap((arg) => (arg.kind === "{" ? flat(arg.fields
  * @param {Element} root
  */
 function fields(root) {
-  for (const el of within(root.closest("form") ?? root, "[data-on]")) {
+  // The whole form: a control drawn into it can be the one a call there is given, or another of
+  // its name. `closest` and `getAttribute` are read through the prototypes, as `within` reads its.
+  for (const el of within(Element.prototype.closest.call(root, "form") ?? root, "[data-on]")) {
     if (fieldsReported.has(el)) continue;
     /** @type {string[]} */
     const wrong = [];
     /** @type {ReturnType<typeof parseOn>} */
     let calls;
     try {
-      calls = parseOn(el.getAttribute("data-on") ?? "");
+      calls = parseOn(Element.prototype.getAttribute.call(el, "data-on") ?? "");
     } catch {
       continue; // The runtime reports an attribute it cannot read.
     }

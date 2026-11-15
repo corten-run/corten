@@ -13,7 +13,7 @@ Corten is pre-1.0, so any minor version may change the API.
   script needs no ref, and the script looks nothing up by a name as text. Text where a field
   belongs, and a field where the handler takes text or another element, do not compile; a call
   whose form lacks the control, or has one of another kind, throws, and `corten dev` reports it
-  when the page draws it. The runtime is 178 bytes larger with gzip
+  when the page draws it. The runtime is 204 bytes larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
 
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:

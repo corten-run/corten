@@ -573,6 +573,28 @@ async function run(browser) {
         said.join(" | "),
       );
     }
+    // A button whose `form=` names no form belongs to none, as a submit has it, though a form is
+    // around it: its field is not that form's, whose gift box would otherwise be given. (Its own
+    // field, so its message differs from the last: WebKit folds a repeated one.)
+    {
+      const before = shipErrors.length;
+      await shipped.evaluate(() => {
+        // Built from elements, not markup: the page requires Trusted Types.
+        const orphan = Object.assign(document.createElement("button"), { type: "button", id: "orphan", textContent: "Orphan" });
+        orphan.setAttribute("form", "missing");
+        orphan.setAttribute("data-on", 'click:ship_form.weigh(~i"gift")');
+        document.getElementById("ship-form")?.append(orphan);
+      });
+      await shipped.click("#orphan");
+      for (let waited = 0; shipErrors.length === before && waited < 5000; waited += 50) await shipped.waitForTimeout(50);
+      await shipped.waitForTimeout(100);
+      const said = shipErrors.slice(before);
+      check(
+        "a call from a control whose form= names no form is given none of the form around it",
+        said.length === 1 && said[0].includes("corten: ship_form.weigh takes field gift, and its form has no such control") && (await shipped.inputValue('#ship-form [name="gift"]')) === "on",
+        said.join(" | "),
+      );
+    }
     await shipped.close();
   }
   // A data-patch form on a page outside an area whose handler is in it (Area::components): the

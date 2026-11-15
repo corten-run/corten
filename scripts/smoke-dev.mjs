@@ -196,6 +196,22 @@ try {
       !fieldErrors.some((e) => e.includes("ship_form.fill")),
     fieldErrors.join(" | "),
   );
+  // A form whose controls are named as the element methods the check calls is still checked.
+  await shipped.evaluate(() => {
+    const form = document.createElement("form");
+    for (const name of ["closest", "matches", "getAttribute", "querySelectorAll"]) form.append(Object.assign(document.createElement("input"), { name }));
+    const later = document.createElement("button");
+    later.type = "button";
+    later.setAttribute("data-on", 'click:ship_form.weigh(~t"closest")');
+    form.append(later);
+    document.body.append(form);
+  });
+  for (let waited = 0; fieldErrors.length < 5 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  check(
+    "dev mode checks a later form whose controls are named closest, matches and the like",
+    !!fieldErrors[4]?.startsWith("corten: ship_form.weigh takes field closest as one <textarea>, and its form has input"),
+    fieldErrors.join(" | "),
+  );
   await shipped.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });

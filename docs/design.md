@@ -3995,9 +3995,10 @@ rules something out.
     handler with the old one. `RequiredWhen` keeps its name as text: its control may be a select,
     radios or a checkbox, and it reads only the value, which no one element type covers.
 
-    What it costs: the runtime is 575 bytes larger raw, 178 with gzip (15,341 to 15,519) and 178
-    with brotli (13,846 to 14,024), paid once a release by every user; the lookup and its message
-    are most of it, the parser about 20 with gzip. A field argument writes its posted name where a
+    What it costs: the runtime is 667 bytes larger raw, 204 with gzip (15,341 to 15,545) and 198
+    with brotli (13,846 to 14,044), paid once a release by every user; the lookup and its message
+    are most of it, the parser about 20 with gzip, and taking the browser's form owner, so that a
+    button whose `form=` names no form is in none, 26 of the 204. A field argument writes its posted name where a
     ref writes its own: a handler given four controls (an input, a select, a textarea and two
     radios) writes `data-on` of 58 bytes with fields against 30 with refs, but the form with refs
     also writes a `data-ref` on each control and a `data-scope` on its component, so the whole

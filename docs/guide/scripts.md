@@ -500,8 +500,9 @@ export function fill(service, weight, sizes) {
 
 The page gets `data-on='change:shipping.fill(~s"service",~i"weight",~*"size")'`. When the handler
 runs, the runtime finds the controls of that name in the form of the element with the `on:` (the
-form itself, the one the element belongs to, `form=` included, or the one around it), so a control a
-patch replaced is the new one. A field of a group or a row is passed the same way
+form itself, the one the element belongs to, `form=` included, or the one around it; a button
+whose `form=` names no form is in none, as its submit is), so a control a patch replaced is the
+new one. A field of a group or a row is passed the same way
 (`f.parcels.at(&1).weight`, `parcels[1].weight`), and so is one in a `@typedef` group. The name is
 the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,
 and a field where the handler takes text or another element, do not compile.
