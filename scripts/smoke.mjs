@@ -1306,6 +1306,9 @@ async function run(browser) {
   // in its back-forward cache) has the part read when it is back, never marked failed (#1400).
   {
     const away = await (await browser.newContext()).newPage();
+    // Whether the way back restored the page (the back-forward cache) or loaded it again, for the
+    // check's detail: either way the part must come.
+    await away.addInitScript(() => addEventListener("pageshow", (e) => (/** @type {any} */ (window).__restored = e.persisted)));
     let hold = true;
     let reads = 0;
     let releaseAway = () => {};
@@ -1339,10 +1342,41 @@ async function run(browser) {
     check(
       "a page left whole while its part was read has the part when it is back, not marked failed",
       (await away.$$("ul#picks li")).length === 2 && (await away.$("[data-corten-read-failed]")) === null,
-      `${await away.evaluate(() => document.getElementById("picks")?.outerHTML)}`,
+      `restored ${await away.evaluate(() => /** @type {any} */ (window).__restored)}, ${await away.evaluate(() => document.getElementById("picks")?.outerHTML)}`,
     );
     await away.unrouteAll({ behavior: "ignoreErrors" });
     await away.context().close();
+  }
+  // A page the browser prerenders reads its parts once it is shown, not before: the server's slow
+  // read is for a page someone sees (#1400). Playwright's headless Chromium did not prerender a
+  // Speculation Rules page when this was written, so the browser's state is stood in for:
+  // `document.prerendering` true until the test fires `prerenderingchange`.
+  {
+    const ahead = await (await browser.newContext()).newPage();
+    await ahead.addInitScript(() => {
+      let prerendering = true;
+      Object.defineProperty(Document.prototype, "prerendering", { configurable: true, get: () => prerendering });
+      Object.defineProperty(window, "__activate", {
+        value: () => {
+          prerendering = false;
+          document.dispatchEvent(new Event("prerenderingchange"));
+        },
+      });
+    });
+    let aheadReads = 0;
+    ahead.on("request", (r) => new URL(r.url()).pathname === "/" && r.headers().corten === "action" && aheadReads++);
+    await ahead.goto(`${base}/`);
+    await ahead.waitForTimeout(1500);
+    const beforeShown = { reads: aheadReads, busy: await ahead.getAttribute("#picks", "aria-busy"), drawn: (await ahead.$$("ul#picks li")).length };
+    await ahead.evaluate(() => /** @type {any} */ (window).__activate());
+    await ahead.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    const afterShown = { reads: aheadReads, drawn: (await ahead.$$("ul#picks li")).length };
+    check(
+      "a prerendered page reads its slow part once it is shown, not before",
+      beforeShown.reads === 0 && beforeShown.drawn === 0 && afterShown.reads === 1 && afterShown.drawn === 2,
+      JSON.stringify({ beforeShown, afterShown }),
+    );
+    await ahead.context().close();
   }
   // A part in one of the layout's elements that are the page's (`page` in html!, outside
   // <main>) is read as one in <main> is (#1400).
@@ -4366,9 +4400,37 @@ async function run(browser) {
     /** @type {string[]} */
     const said = [];
     redirected.on("console", (m) => m.type() === "error" && said.push(m.text()));
-    await redirected.route("**/smoke/signed-out-part", (route) => route.fulfill({ status: 204, headers: { "corten-location": "/news", vary: "corten" } }));
+    let releaseRedirect = () => {};
+    let redirectAsked = () => {};
+    const redirectSent = new Promise((resolve) => (redirectAsked = () => resolve(undefined)));
+    await redirected.route("**/smoke/signed-out-*", async (route) => {
+      if (new URL(route.request().url()).pathname === "/smoke/signed-out-held") {
+        redirectAsked();
+        await new Promise((resolve) => (releaseRedirect = () => resolve(undefined)));
+      }
+      await route.fulfill({ status: 204, headers: { "corten-location": "/news", vary: "corten" } }).catch(() => {});
+    });
     await redirected.goto(`${base}/`);
     await redirected.waitForSelector("ul#picks", { state: "attached", timeout: 5000 }).catch(() => {});
+    // Its part replaced while the redirect was on its way: the read is no longer the page's, and
+    // the page stays.
+    await redirected.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="signed-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="signed-0"><p id="signed-z">Waiting</p><template data-corten-read-again="0" data-from="/smoke/signed-out-held" data-part="signed-z"></template></div>'));
+    });
+    await Promise.race([redirectSent, redirected.waitForTimeout(5000)]);
+    await redirected.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="signed-z">Drawn by a form</p>'));
+    });
+    releaseRedirect();
+    await redirected.waitForTimeout(800);
+    check(
+      "a redirect answered to a read whose part was replaced meanwhile is not followed",
+      new URL(redirected.url()).pathname === "/" && (await redirected.textContent("#signed-z")) === "Drawn by a form",
+      redirected.url(),
+    );
     await redirected.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="signed-1"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));

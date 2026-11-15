@@ -283,8 +283,10 @@ read again later carries `ReadAgain::from` in its answer ([read again](requests-
 part a form's patch or another part's answer draws waiting is read the same way, unless its tag
 names the address that answer came from, which would ask for itself again: that part is marked
 failed. Tags are read in `<main>` and in the layout's elements that are the page's (`page` in
-`html!`). A read the server redirects (a sign-in) takes the page there, as a form's does; a page
-the browser prerenders reads its parts once it is shown.
+`html!`). A read the server redirects (a sign-in) takes the page there, as a form's does, unless
+its part was replaced meanwhile; a read the browser cut short by keeping the page in its
+back-forward cache is made again when the page is shown; a page the browser prerenders reads its
+parts once it is shown.
 
 Two parts one read draws (four panels from one report) each take a tag naming its own element and
 the same address: the runtime reads it once, and the part side draws both in one patch. No

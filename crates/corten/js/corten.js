@@ -1224,29 +1224,31 @@ async function readPart(from, tags, waiting) {
   for (const el of waiting) markBusy(el, mine);
   const leftAt = left;
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
-  // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, from
-  // the page that asked.
   const to = res && fromHere(res.url) ? res.headers.get("corten-location") : null;
-  if (res && to) {
-    for (const el of waiting) unmarkBusy(el, mine);
-    if (page !== swapped) return;
-    const url = new URL(to, res.url).href;
-    if (navigation) go(url, { info: { [LOAD]: true } });
-    else location.assign(url);
-    return;
-  }
+  // Whether the body failed on its way, as the fetch itself can.
+  let cut = !res;
+  const html = !to && res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => void (cut = true)) : undefined;
   // The page was hidden while the read was on its way (the back-forward cache), which may end the
-  // fetch: read again once the page is shown, rather than mark a part no read failed to bring.
-  if (!res && left !== leftAt && !stop.signal.aborted) {
+  // fetch or its body: read again once the page is shown, rather than mark a part no read failed
+  // to bring.
+  if (cut && left !== leftAt && !stop.signal.aborted) {
     for (const el of waiting) unmarkBusy(el, mine);
     const again = () => page === swapped && readNow(tags.filter(inPage));
     if (away) addEventListener("pageshow", again, { once: true });
     else again();
     return;
   }
-  const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
+  // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the
+  // read the page still waits for: not one whose part was replaced or whose address moved.
+  if (res && to && here()) {
+    for (const el of waiting) unmarkBusy(el, mine);
+    const url = new URL(to, res.url).href;
+    if (navigation) go(url, { info: { [LOAD]: true } });
+    else location.assign(url);
+    return;
+  }
   // A success that is not a patch is the app's mistake (the route answered its page).
-  if (html === undefined && res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+  if (html === undefined && res?.ok && !to) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
   let drew = false;
   // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
   // changes anything: the check is made then, and says whether it drew.
