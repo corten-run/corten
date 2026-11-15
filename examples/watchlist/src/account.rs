@@ -25,9 +25,10 @@ use crate::{
 /// reaches one (they are sent to the watchlist, where the sign-in button is).
 #[corten::routes(area = Account, caller = Viewer, state = app::Shared)]
 pub mod url {
-    /// The account page and its picture's form, which posts back to it, so the page an upload
-    /// draws without JavaScript is at the page's own address.
-    #[route("/account", get = page, post = avatar)]
+    /// The account page and its two forms, each a post of the page's own, sent to its address with
+    /// what it does (`do=picture`, `do=name`): the picture's a multipart upload, the name's a
+    /// urlencoded form. So the page either draws without JavaScript is at the page's own address.
+    #[route("/account", get = page, post(picture) = avatar, post(name) = rename)]
     pub struct Account;
 }
 
@@ -121,6 +122,13 @@ impl Sessions {
     fn set_picture(&self, token: &str, id: &str) {
         if let Some(session) = self.0.lock().expect("sessions").get_mut(token) {
             session.picture = Some(id.to_string());
+        }
+    }
+
+    /// The name the session's pages show, as `set_picture` keeps a picture.
+    fn set_name(&self, token: &str, name: &str) {
+        if let Some(session) = self.0.lock().expect("sessions").get_mut(token) {
+            session.name = name.to_string();
         }
     }
 }
@@ -235,6 +243,23 @@ struct AvatarResultId;
 #[derive(Id)]
 struct AccountPictureId;
 
+#[derive(Id)]
+struct NameResultId;
+
+#[derive(Fields)]
+pub(crate) struct NameForm {
+    name: String,
+}
+
+/// The longest name, in characters.
+const NAME_MAX: usize = 40;
+
+/// What the last change of name did: empty on the page, then each answer's text, announced.
+#[component]
+fn NameResult(text: &str) -> impl Patch {
+    html! { <p id={NameResultId} class={muted()} aria-live="polite">{text}</p> }
+}
+
 /// What the last upload did: empty on the page, then each answer's text, announced.
 #[component]
 fn AvatarResult(text: &str) -> impl Patch {
@@ -314,7 +339,7 @@ pub(crate) async fn avatar(
     // A refusal is the status line with JavaScript, the account page with it without.
     let refuse = |status, text| match req.mode {
         Mode::Action => req.patch_with_status(status, AvatarResult { text }),
-        _ => account_page(&req, &viewer, text, status),
+        _ => account_page(&req, &viewer, Said::Picture(text), status),
     };
     let (name, kind, bytes) = match read.await {
         Ok(Ok(picture)) => picture,
@@ -332,14 +357,53 @@ pub(crate) async fn avatar(
             <AccountPicture viewer={viewer} />
             <AvatarResult text={saved} />
         },
-        || async { account_page(&req, viewer, saved, StatusCode::OK) },
+        || async { account_page(&req, viewer, Said::Picture(saved), StatusCode::OK) },
+    )
+    .await
+}
+
+/// A new name for the pages to show, from a urlencoded form posted to the same page as the
+/// picture's upload: one to 40 characters, trimmed. Kept, it replaces the header's badge and the
+/// status line with JavaScript, or sends the browser back to the account page without; refused,
+/// it is the status line, or the account page drawn with it.
+pub(crate) async fn rename(
+    req: Req,
+    Caller(viewer): Caller<Viewer>,
+    State(sessions): State<Sessions>,
+    Form(form): Form<NameForm>,
+) -> HtmlResult {
+    let name = form.name.trim();
+    if name.is_empty() || name.chars().count() > NAME_MAX {
+        let text = "Choose a name of 1 to 40 characters.";
+        return match req.mode {
+            Mode::Action => req.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, NameResult { text }),
+            _ => account_page(&req, &viewer, Said::Name(text), StatusCode::UNPROCESSABLE_ENTITY),
+        };
+    }
+    sessions.set_name(&viewer.session, name);
+    let viewer = &Viewer { name: name.to_string(), ..viewer.clone() };
+    let saved = &format!("Your pages now say {name}.");
+    req.patch_or(
+        html! {
+            <ViewerBadge viewer={viewer} />
+            <NameResult text={saved} />
+        },
+        || async { req.redirect(&url::Account) },
     )
     .await
 }
 
 /// Only someone signed in gets here: the handler takes the viewer.
 async fn page(req: Req, Caller(viewer): Caller<Viewer>) -> HtmlResult {
-    account_page(&req, &viewer, "", StatusCode::OK)
+    account_page(&req, &viewer, Said::Nothing, StatusCode::OK)
+}
+
+/// What the account page says of the last post, under the form that sent it.
+#[derive(Clone, Copy)]
+enum Said<'a> {
+    Nothing,
+    Picture(&'a str),
+    Name(&'a str),
 }
 
 /// The picture's form. With JavaScript it is sent as a patch, and a bar shows how much of it is
@@ -353,7 +417,7 @@ pub(crate) fn PictureUpload<'a>(viewer: &'a Viewer, result: &'a str) -> impl Ren
         <form
             id={AvatarFormId}
             method="post"
-            action={url::Account}
+            action={url::Account.picture()}
             enctype="multipart/form-data"
             data-patch
             on:corten:progress={js::sending(event, bar)}
@@ -372,7 +436,13 @@ pub(crate) fn PictureUpload<'a>(viewer: &'a Viewer, result: &'a str) -> impl Ren
     }
 }
 
-fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) -> HtmlResult {
+fn account_page(req: &Req, viewer: &Viewer, said: Said<'_>, status: StatusCode) -> HtmlResult {
+    let f = NameForm::FIELDS;
+    let (picture, name) = match said {
+        Said::Nothing => ("", ""),
+        Said::Picture(text) => (text, ""),
+        Said::Name(text) => ("", text),
+    };
     req.page_with_status(
         status,
         html! {
@@ -385,7 +455,16 @@ fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) ->
                             <button class={secondary()}>"Sign out"</button>
                         </form>
                     </section>
-                    <PictureUpload viewer={viewer} result={result} />
+                    <form method="post" action={url::Account.name()} data-patch class={(card(), stack(Space::_3))}>
+                        <h2>"Your name"</h2>
+                        <label class={stack(Space::_1)}>
+                            <span class={muted()}>"What your pages call you, up to 40 characters"</span>
+                            <input name={f.name} value={&viewer.name} required maxlength="40">
+                        </label>
+                        <div><button>"Save name"</button></div>
+                        <NameResult text={name} />
+                    </form>
+                    <PictureUpload viewer={viewer} result={picture} />
                 </div>
             </Layout>
         },
@@ -401,7 +480,7 @@ mod tests {
         testing::{Answer, Client},
     };
 
-    use super::{Pictures, Sessions, Viewer, picture_type, url::Account};
+    use super::{NameForm, Pictures, Sessions, Viewer, picture_type, url::Account};
     use crate::{
         app::url::{Home, Picture, SignIn, SignOut},
         testing::{client, sign_in},
@@ -409,8 +488,8 @@ mod tests {
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 
-    /// `POST /account` from `session` with one file, as the runtime sends it (`Mode::Action`) or a
-    /// browser without JavaScript (`Mode::Document`).
+    /// `POST /account?do=picture` from `session` with one file, as the runtime sends it
+    /// (`Mode::Action`) or a browser without JavaScript (`Mode::Document`).
     async fn upload(app: &Client, mode: Mode, session: &str, name: &str, bytes: &[u8]) -> Answer {
         let mut body = format!(
             "--b\r\ncontent-disposition: form-data; name=\"picture\"; filename=\"{name}\"\r\ncontent-type: image/png\r\n\r\n"
@@ -418,7 +497,11 @@ mod tests {
         .into_bytes();
         body.extend_from_slice(bytes);
         body.extend_from_slice(b"\r\n--b--\r\n");
-        app.call(Method::POST, &Account).mode(mode).cookie("session", session).body("multipart/form-data; boundary=b", body).await
+        app.call(Method::POST, &Account.picture())
+            .mode(mode)
+            .cookie("session", session)
+            .body("multipart/form-data; boundary=b", body)
+            .await
     }
 
     /// Where an answer that is not the page sends the browser.
@@ -436,6 +519,8 @@ mod tests {
         let ada = ada.text();
         assert!(ada.contains("<p>Signed in as Ada.</p>") && ada.contains("No picture yet."), "{ada}");
         assert!(ada.contains(r#"enctype="multipart/form-data""#) && ada.contains(r#"id="avatar-result""#), "{ada}");
+        // Both forms post to the page's own address, each naming what it does.
+        assert!(ada.contains(r#"action="/account?do=picture""#) && ada.contains(r#"action="/account?do=name""#), "{ada}");
         // Its form hears its upload's progress, so the page loads the module that sends it.
         assert!(ada.contains("corten:progress:picture_upload.sending($e,") && ada.contains("scripts/corten-upload.js"), "{ada}");
         let res = app.post(&SignOut).cookie("session", &session).await;
@@ -540,8 +625,40 @@ mod tests {
             assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.headers().get("set-cookie").is_none());
             assert!(res.text().contains(message), "{message}");
         }
-        let signed_out = app.call(Method::POST, &Account).body("multipart/form-data; boundary=b", "").await;
+        let signed_out = app.call(Method::POST, &Account.picture()).body("multipart/form-data; boundary=b", "").await;
         assert_eq!(signed_out.status(), StatusCode::SEE_OTHER, "only someone signed in uploads");
+        // A post that names none of the page's posts has no handler here.
+        let unnamed =
+            app.call(Method::POST, &Account).cookie("session", &session).body("multipart/form-data; boundary=b", "").await;
+        assert_eq!(unnamed.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The name's urlencoded form posts to the same page as the picture's upload, and is told
+    /// apart by its address alone: kept, the header says the new name; refused, the page is drawn
+    /// at the post's address with the reason, and every form in it names where it posts.
+    #[tokio::test]
+    async fn a_new_name_is_a_post_of_the_same_page_beside_the_upload() {
+        let app = client();
+        let session = sign_in(&app).await;
+        let rename =
+            |name: &'static str| app.post(&Account.name()).field(NameForm::FIELDS.name, name).cookie("session", &session);
+        let patch = rename(" Grace ").mode(Mode::Action).await;
+        assert_eq!(patch.status(), StatusCode::OK);
+        assert!(
+            patch.text().contains("Your pages now say Grace.") && patch.text().contains(r#"id="viewer-badge""#),
+            "{}",
+            patch.text()
+        );
+        let back = rename("Ada").await;
+        assert_eq!(sent_to(&back), (StatusCode::SEE_OTHER, "/account"));
+        let page = app.get(&Account).cookie("session", &session).await;
+        assert!(page.text().contains("<p>Signed in as Ada.</p>"), "{}", page.text());
+        let refused = rename(" ").await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text());
+        assert!(refused.text().contains("<h1>Account</h1>") && refused.text().contains("Choose a name of 1 to 40 characters."));
+        let refused = rename(" ").mode(Mode::Action).await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(refused.text().contains(r#"id="name-result""#), "{}", refused.text());
     }
 
     /// A picture the server no longer has (forgotten past its limit) is not shown.

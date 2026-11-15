@@ -521,6 +521,11 @@ pub use corten_macros::UrlValue;
 /// }
 /// ```
 ///
+/// A page with several writes names each one, `post(hold) = hold`, beside its `get`: each is sent
+/// to the page's own address with `do=hold` (`page.hold()`, a form's `action` or a button's
+/// `formaction`), so its handler reads the page's query and redirects back to the same view. See
+/// [`Action`]. A route keeps one `post = ..` too, for a post that names none.
+///
 /// A route whose answers nothing may keep (a statement, a one-time code) says `no_store` after its
 /// handlers: each handler answers as [`crate::NoStore`] would make it, keeps its own result and
 /// its `?`, and a request its extractors refuse is `no-store` too. Use it in a routes module, and
@@ -1827,6 +1832,296 @@ impl<R: Route + ?Sized, I: crate::view::Id> crate::view::AttrValue for At<'_, R,
 impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.href())
+    }
+}
+
+/// Where one of a page's posts goes: the page's own address with `do=` and the post's name, made
+/// by the method `#[corten::routes]` gives a page route for each `post(name) = handler` it names.
+/// A screen with several writes posts each to its own page, where the page's query (a filter, a
+/// view, a page number) is already in the address, so each handler reads it with the page's
+/// [`Params`] and redirects back to the same view, and no write has a route of its own to declare
+/// the query again (docs/design.md#choice-page-actions).
+///
+/// The name is in the address, not the body, so the router picks the handler before anything
+/// reads the body: a urlencoded form and a multipart upload go the same way, and the handler's
+/// extractor still owns the body and its limit. A browser without JavaScript sends it as the
+/// form's `action` or the pressed button's `formaction` says, and the runtime does the same for a
+/// `data-patch` form. The page's other posts are untouched: `post = ..` still answers a post with
+/// no `do`.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// #[derive(Route, Clone, Copy, Default)]
+/// #[route(query)]
+/// pub struct View {
+///     pub page: Option<u32>,
+/// }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(reprice) = reprice, post(hold) = hold)]
+///     pub struct Pricing {
+///         #[route(query)]
+///         pub view: super::View,
+///     }
+/// }
+///
+/// #[derive(Fields)]
+/// struct Sku {
+///     sku: String,
+/// }
+///
+/// async fn pricing(req: Req, Params(p): Params<url::Pricing>) -> HtmlResult {
+///     let (at, f) = (url::Pricing { view: p.view }, Sku::FIELDS);
+///     req.page(html! {
+///         <html><head><title>"Pricing"</title><Corten /></head><body><main>
+///             <form method="post" action={at.reprice()}>
+///                 <input name={f.sku}>
+///                 <button>"Reprice"</button>
+///                 <button formaction={at.hold()}>"Hold"</button>
+///             </form>
+///         </main></body></html>
+///     })
+/// }
+///
+/// async fn reprice(req: Req, Params(p): Params<url::Pricing>, Form(_): Form<Sku>) -> HtmlResult {
+///     req.redirect(&url::Pricing { view: p.view })
+/// }
+///
+/// async fn hold(req: Req, Params(p): Params<url::Pricing>, Form(_): Form<Sku>) -> HtmlResult {
+///     req.redirect(&url::Pricing { view: p.view })
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let at = url::Pricing { view: View { page: Some(3) } };
+/// assert_eq!(at.reprice().to_string(), "/pricing?page=3&do=reprice");
+/// assert_eq!(url::Pricing { view: View::default() }.hold().to_string(), "/pricing?do=hold");
+///
+/// let app = App::new(url::router()).test();
+/// let page = app.get(&at).await;
+/// assert!(page.text().contains(r#"action="/pricing?page=3&amp;do=reprice""#));
+/// assert!(page.text().contains(r#"formaction="/pricing?page=3&amp;do=hold""#));
+/// // Each post goes to its handler, which redirects back to the view it was sent from.
+/// let held = app.post(&at.hold()).field(Sku::FIELDS.sku, "A-1").await;
+/// assert_eq!((held.status(), held.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/pricing?page=3"));
+/// // A name the page has no post for is refused; a GET of the address draws the page.
+/// let unknown = app.post(&corten::Local::parse("/pricing?do=sell").unwrap()).field(Sku::FIELDS.sku, "A-1").await;
+/// assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+/// assert_eq!(app.get(&at.hold()).await.status(), StatusCode::OK);
+/// # }
+/// ```
+///
+/// An action's address is not a link to a page, so nothing redirects to it:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(hold) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main></main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing.hold())
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// A page names only the actions it has a handler for:
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(hold) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main>
+///         <form method="post" action={url::Pricing.reprice()}><button>"Reprice"</button></form>
+///     </main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// and has one handler for each:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(hold) = hold, post(hold) = release)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main></main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+///
+/// async fn release(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// A name is ASCII, since the address carries it as written:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(réserver) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main></main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// An action posts to a page, so its route draws one (`get`), and is in no API's module:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", post(hold) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes(api = ApiRoot)]
+/// mod api {
+///     #[route("/api")]
+///     pub struct ApiRoot;
+///
+///     #[route("/api/pricing", get = price, post(hold) = hold)]
+///     pub struct Pricing;
+/// }
+///
+/// async fn price() -> &'static str {
+///     "{}"
+/// }
+///
+/// async fn hold() -> &'static str {
+///     "{}"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// None of the route's own query parameters is `do`, which its actions' addresses write:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/pricing", get = pricing, post(hold) = hold)]
+///     pub struct Pricing {
+///         #[serde(rename = "do")]
+///         pub task: Option<u32>,
+///     }
+/// }
+///
+/// async fn pricing(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Pricing"</title><Corten /></head><body><main></main></body></html> })
+/// }
+///
+/// async fn hold(req: Req) -> HtmlResult {
+///     req.redirect(&url::Pricing { task: None })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// A page drawn at an action's address (a write it refused, `req.invalid`, without JavaScript)
+/// stays there, so a post form in it with no `action` would send its post to that action again: a
+/// page with actions writes each form's `action`. A debug build answers such a page with an error
+/// that says so (docs/design.md#limit-page-action-address).
+pub struct Action<'a, R: ?Sized> {
+    route: &'a R,
+    name: &'static str,
+}
+
+impl<'a, R: Route + ?Sized> Action<'a, R> {
+    /// Used by `#[corten::routes]`: the page's post `name`. Not a public API.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __new(route: &'a R, name: &'static str) -> Self {
+        Action { route, name }
+    }
+
+    fn write(&self, out: &mut String, html: bool) {
+        let start = out.len();
+        self.route.write_href(out, html);
+        // A route's address has no `#`, and its query (if any) is its own parameters.
+        out.push_str(match (out[start..].contains('?'), html) {
+            (false, _) => "?",
+            (true, true) => "&amp;",
+            (true, false) => "&",
+        });
+        out.push_str(ACTION_KEY);
+        out.push('=');
+        out.push_str(self.name);
+    }
+}
+
+/// The query parameter that names one of a page's posts: `?do=hold`.
+pub(crate) const ACTION_KEY: &str = "do";
+
+impl<R: Route + ?Sized> crate::view::Render for Action<'_, R> {
+    fn render(&self, out: &mut String) {
+        self.write(out, true)
+    }
+}
+
+/// A form's `action` and a button's `formaction`: never prefetched, so it says nothing about it.
+impl<R: Route + ?Sized> crate::view::AttrValue for Action<'_, R> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        self.write(out, true);
+        out.push('"');
+    }
+}
+
+impl<R: Route + ?Sized> fmt::Display for Action<'_, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut out = String::with_capacity(R::PATH.len() + 16);
+        self.write(&mut out, false);
+        f.write_str(&out)
     }
 }
 
@@ -3737,6 +4032,14 @@ impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
     pub fn __patches(self) -> Methods<S, crate::Patches> {
         Methods(self.0, self.1, self.2, std::marker::PhantomData)
     }
+
+    /// Used by `#[corten::routes]`: the `post` handler of these methods as the page's post
+    /// `name` (`post(name) = ..`), which a post whose `do` names it reaches ([`Action`]). Not a
+    /// public API.
+    #[doc(hidden)]
+    pub fn __named(self, name: &'static str) -> Self {
+        Methods(self.0.named(name), self.1, self.2, std::marker::PhantomData)
+    }
 }
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
@@ -4796,6 +5099,19 @@ pub mod __private {
             panic!(
                 "a FromQuery set's Link and Read write different names: give the two sets the same fields' names and prefixes, and mark a name the Read set only reads #[route(read_only)]"
             );
+        }
+    }
+
+    /// Fails to compile a route with actions (`post(name) = ..`) one of whose parameters, its own
+    /// or its sets', is `do`, which its actions' addresses write, or a prefix `do` starts with.
+    pub const fn check_action_key(keys: &[Key]) {
+        let key = super::ACTION_KEY;
+        let mut i = 0;
+        while let Some((prefix, text)) = nth(keys, i, false) {
+            if (prefix && starts_with(key, text)) || (!prefix && text.len() == key.len() && starts_with(text, key)) {
+                panic!("this route has actions (post(name) = ..), whose addresses name them with the query parameter do, and one of its own query parameters, or its #[route(query)] sets', is do or a #[route(prefix)] that do starts with: rename that parameter");
+            }
+            i += 1;
         }
     }
 

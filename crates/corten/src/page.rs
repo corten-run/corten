@@ -1651,8 +1651,28 @@ impl Req {
         #[cfg(debug_assertions)]
         if page {
             self.check_submit_keys(&out[start..])?;
+            if at_action(self.uri.query()) {
+                self.check_action_forms(&out[start..])?;
+            }
         }
         Ok(modules)
+    }
+
+    /// In a debug build: an error when a page drawn at one of a page's posts' addresses (`?do=..`:
+    /// a write it refused, without JavaScript, or the address opened) has a post form with no
+    /// `action`. The browser stays at that address, so the form would send its post to that action
+    /// again, whatever it is for. Only a page at such an address is read.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_action_forms(&self, html: &str) -> Result<()> {
+        match post_form_without_action(html) {
+            Some(form) => Err(self.unserved(format!(
+                "{path} is drawn at one of its posts' addresses (do=..), where the browser stays, and it draws the post form {form} with no action, which would send its post to that address again: write each post form's action, action={{page}} for its post = .. or action={{page.save()}} for a post(save) = ..",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// In a debug build: an error when the page draws a hint with text (`id={HintId(&id)}`) that
@@ -2491,6 +2511,27 @@ impl Req {
         ];
         Ok(HtmlResponse::new((StatusCode::MOVED_PERMANENTLY, headers).into_response()))
     }
+}
+
+/// Whether `query` names one of a page's posts (`do=..`), where a page drawn stays.
+#[cfg(debug_assertions)]
+fn at_action(query: Option<&str>) -> bool {
+    query.is_some_and(|query| {
+        query.split('&').any(|pair| pair.split_once('=').map_or(pair, |(key, _)| key) == crate::route::ACTION_KEY)
+    })
+}
+
+/// The first `<form method="post">` in `html` with no `action` (or an empty one), as written: it
+/// posts to the address the page is at.
+#[cfg(debug_assertions)]
+fn post_form_without_action(html: &str) -> Option<&str> {
+    crate::html::start_tags(html)
+        .find(|tag| {
+            tag.name == "form"
+                && tag.attr("method").is_some_and(|method| method.eq_ignore_ascii_case("post"))
+                && tag.attr("action").is_none_or(|action| action.trim().is_empty())
+        })
+        .map(|tag| &html[tag.start..tag.end])
 }
 
 /// A page with a `Refresh` header: browsers keep a full load's after the runtime navigates
