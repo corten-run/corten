@@ -1122,8 +1122,14 @@ const partOf = (tag) => Array.from(childrenOf(/** @type {Element} */ (tag.parent
  * @param {Element} main
  */
 function readPartsAgain(main) {
-  for (const tag of Array.from(main.querySelectorAll(PART_LATER))) readPatchAgain(tag, [tag, ...partOf(tag)]);
-  readNow([main]);
+  // One query, as for the parts read again alone: a page with neither costs no more.
+  /** @type {Element[]} */
+  const now = [];
+  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
+    if (attrOf(tag, "data-corten-read-again") === "0") now.push(tag);
+    else readPatchAgain(tag, [tag, ...partOf(tag)]);
+  }
+  if (now.length) readTags(now);
 }
 
 /**
@@ -1133,16 +1139,24 @@ function readPartsAgain(main) {
  * @param {Element[]} roots
  */
 function readNow(roots) {
+  readTags(roots.flatMap((root) => [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))]));
+}
+
+/**
+ * Reads the parts `tags` (`ReadAgain::now`) wait for, each address once ({@link readNow}).
+ * @param {Element[]} tags
+ */
+function readTags(tags) {
   /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
-  for (const root of roots) for (const tag of [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))]) {
+  for (const tag of tags) {
     const from = /** @type {string} */ (attrOf(tag, "data-from"));
     let read = reads.get(from);
     if (!read) reads.set(from, (read = [[], []]));
     read[0].push(tag);
     read[1].push(...partOf(tag));
   }
-  for (const [from, [tags, waiting]] of reads) readPart(from, tags, waiting);
+  for (const [from, [own, waiting]] of reads) readPart(from, own, waiting);
 }
 
 /**
