@@ -83,7 +83,8 @@ export function harness(t, flags = {}) {
         creates++; s = JSON.parse(readFileSync(statePath)); assert.equal(s.status, "creating"); assert.ok(s.createIntentAt);
         droplets = flags.createMissing ? [] : flags.createAmbiguous ? [d(), { ...d(), id: 124 }] : [d()];
         if (flags.createCrash) throw new Error("simulated crash after create");
-        return flags.createLost ? { status: null, error: new Error("fake timeout"), stdout: "", stderr: "" } : flags.createRejected ? { ...good(), status: 1 } : good();
+        return flags.createLost ? { status: null, error: new Error("fake timeout"), stdout: "", stderr: "" } : flags.createRejected ? { ...good(), status: 1 }
+          : good(flags.createStdout ?? JSON.stringify([{ id: flags.createReturnedId ?? 123 }]));
       }
       if (args[2] === "delete") {
         deletes++; assert.equal(args[3], "123"); const saved = JSON.parse(readFileSync(statePath));

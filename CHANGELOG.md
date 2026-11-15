@@ -32,6 +32,30 @@ Corten is pre-1.0, so any minor version may change the API.
   checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+
+- Project benchmark create responses onto the positive droplet/action IDs rather
+  than gating on unused advisory link text. Fixed-origin action polling still
+  proves exact create completion; explicitly join its droplet ID to the freshly
+  observed owned host before provisioning. Keep one POST, original deadlines,
+  account/ownership, settlement and terminal-only cleanup gates unchanged.
+  Recheck the original absolute deadline before granting completed-action success;
+  late completion stays uncertain and cannot authorize provisioning.
+
+- A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
+  post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
+  its query set once instead of on a route per write to redirect back to the same view
+  ([#1403](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
+  method per name, `action={at.price()}` or a button's `formaction={at.photo()}`, whose address is
+  the page's own with `do=price`; the router chooses the handler from the address alone, so a
+  urlencoded form and a multipart upload are chosen alike and the handler's extractor still owns
+  the body. A post with no `do` goes to the plain `post`; an unknown name, `do` sent twice or no
+  `do` without a plain `post` is a 400; a `GET` of a post's address draws the page. A name with
+  no handler, two handlers for one name, a route with posts but no `get` or in an API's module, a
+  query parameter named `do`, and a redirect to a post's address do not compile. A debug build
+  answers a page of a route with named posts, drawn at a `do` address, with a post form that has no
+  `action` with a 500 (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and
+  the ui-gallery's draft use them.
+
 - Preserve closed production-controller failure stages through fleet workers and
   saved receipts, distinguishing pre-reservation source and Git failures from
   launch, collection and teardown without forwarding raw errors or changing gates.
@@ -62,13 +86,13 @@ Corten is pre-1.0, so any minor version may change the API.
   by the original deadline and shared request limit; use exact-ID host observations
   after binding rather than repeated whole-account censuses.
 
-- Accept the documented droplet-scoped create action link only when both resource
-  and action IDs match. Completion still uses the fixed global action endpoint;
-  foreign or malformed hints and incomplete/misbound actions remain refused.
+- Earlier droplet-scoped create-link compatibility and href diagnostics are
+  retained as historical evidence. The current ID projection above replaces hint
+  spelling checks; incomplete or misbound authoritative actions remain refused.
 
-- Distinguish five benchmark provider create-link refusal predicates with closed
-  diagnostic codes, without forwarding rejected values or changing completion,
-  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+- Earlier create-link refusal diagnostics remain readable as historical evidence;
+  current refusals cover consumed IDs and authoritative action proofs rather than
+  unused link text. Checkpoint failures retain coarse phase codes.
 
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.

@@ -1722,6 +1722,48 @@ pub mod __private {
         fn __named_href(&self) {}
     }
 
+    /// The value of a URL attribute that is not a form's address (`href`, `src`, `ping`): a page's
+    /// post's address (`route::Action`), which only a form sends to, does not compile there
+    /// (`IsPost` picks it before `NotPostAny`).
+    pub struct NotPost<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NotPostOwn {
+        fn __not_post(&self)
+        where
+            Self: PostNotLink;
+    }
+
+    impl<T: IsPost + ?Sized> NotPostOwn for NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self)
+        where
+            Self: PostNotLink,
+        {
+        }
+    }
+
+    pub trait NotPostAny {
+        fn __not_post(&self);
+    }
+
+    impl<T: ?Sized> NotPostAny for &NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self) {}
+    }
+
+    /// A page's post's address, or a value that may hold one.
+    pub trait IsPost {}
+    impl<R: ?Sized> IsPost for crate::route::Action<'_, R> {}
+    impl<T: IsPost> IsPost for Option<T> {}
+    impl<T: IsPost + ?Sized> IsPost for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "a page's post's address is where a form sends, not a link or a file to load",
+        label = "a post's address (page.save()) here",
+        note = "write it as a form's action or a button's formaction, <form method=\"post\" action={{page.save()}}>, and link to the page itself, href={{page}}"
+    )]
+    pub trait PostNotLink {}
+
     /// An attribute value that may write nothing.
     pub trait MayWriteNone {}
     impl<T> MayWriteNone for Option<T> {}
