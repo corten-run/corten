@@ -2648,7 +2648,7 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        breaks_out, local_path, parsing_within, reads_as_text, refused_path, foreign_breakout, text_only_element, Attr, Parsing,
+        breaks_out, foreign_breakout, local_path, parsing_within, reads_as_text, refused_path, text_only_element, Attr, Parsing,
         BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TEXT_ONLY,
     };
 
