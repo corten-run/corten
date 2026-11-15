@@ -5,25 +5,31 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` beside the part
-  drawn waiting has the runtime read it once the page is on the screen (a GET with
+- A slow part is answered by the page's own handler: `{ReadAgain::now(route, PicksId)}` names the
+  part drawn waiting and has the runtime read it once the page is on the screen (a GET with
   `corten: action` to the page's own route, which says `patches`), and
   `req.patch_or_with(part, page)` answers both, its two sides closures so the part's read runs
   only for the part and the page's only for the page. Before, the part was a `<corten-live>`
   stream of one item on a route of its own whose handler repeated the page's reads, with a second
   waiting state; and a `patches` route whose part needed a read of its own could not answer its
   page without building a patch it would not send. Tags that name one address are read once, so
-  two parts one read draws share it. The waiting elements are `aria-busy="true"` while the read
-  is on its way; a read that ends without a patch, or whose parts were not all still there to
-  draw over, marks those waiting `data-corten-read-failed`, where the app's CSS shows its link to
-  the page with the part read in (a browser without JavaScript shows it already). An element two
-  of a navigation, a submit and a part's read mark busy stays busy until the last has ended. An app with such a stream moves to this shape: drop the stream's route and
-  handler, put `ReadAgain::now` where the `<corten-live>` was, and key the link's CSS on
-  `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The runtime grows by
-  430 bytes gzipped (15,341 at `4dad0f513` to 15,771 at `987ad6f59`). Choices 7 and 44 are
-  rewritten: declarative shadow DOM places a part streamed later without a script, but only with
-  the page around it in a shadow root, where the document's id lookups, fragment links and
-  stylesheets do not reach it
+  two parts one read draws share it (each waits for the slowest; independent parts take a query
+  field each). The named element, and only it, is `aria-busy="true"` while the read is on its way,
+  so a patch of a cell or row beside it changes nothing; a read that ends without a patch, or
+  whose parts were not all still there to draw over, marks them `data-corten-read-failed`, where
+  the app's CSS shows its link to the page with the part read in (a browser without JavaScript
+  shows it already). A read the server redirects takes the page there, one the back-forward cache
+  ended is made again when the page is shown, a prerendered page reads once it is shown, and tags
+  are read in `<main>` and the layout's `page` elements. A part's answer may draw another part
+  waiting, except one for its own address, which is marked failed. A read again's own tag waits a
+  second at least. An element two of a navigation, a submit and a part's read mark busy stays busy
+  until the last has ended. An app with such a stream moves to this shape: drop the stream's route
+  and handler, put `ReadAgain::now` naming the part where the `<corten-live>` was, and key the
+  link's CSS on `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The
+  runtime grows by 691 bytes gzipped (15,341 on main, 16,032 with this). Choices 7 and 44 are
+  rewritten: declarative shadow DOM places a part streamed later without a script only at a slot
+  of a shadow tree around the page, as a child of a host still open, and `scripts/dsd-probe.mjs`
+  checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:

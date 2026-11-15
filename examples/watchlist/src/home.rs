@@ -253,9 +253,9 @@ fn LastTrade(text: &str) -> impl Render {
 #[derive(Id)]
 struct PicksId;
 
-/// The picks waiting, with the runtime's read of them beside them (`ReadAgain::now`), which the
-/// page's own handler answers (`page`). Its link goes to the same page with the picks read in,
-/// and shows where no read will bring them (`picks_loading.css`): without JavaScript, which reads
+/// The picks waiting, with the runtime's read of them beside them (`ReadAgain::now`, naming
+/// `PicksId`), which the page's own handler answers (`page`). Its link goes to the same page
+/// with the picks read in, and shows where no read will bring them (`picks_loading.css`): without JavaScript, which reads
 /// nothing, and once the read has failed (`data-corten-read-failed`), when the line saying they
 /// are on their way is hidden instead. A browser without the `scripting` media feature shows
 /// both. `nofollow`, as the page it opens waits for the slow read.
@@ -266,7 +266,7 @@ pub(crate) fn PicksLoading() -> impl Render {
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
         </p>
-        {ReadAgain::now(url::Home::default())}
+        {ReadAgain::now(url::Home::default(), PicksId)}
     }
 }
 
@@ -576,7 +576,7 @@ mod tests {
             page.contains(concat!(
                 r#"<p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
                 r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a></p>"#,
-                r#"<template data-corten-read-again="0" data-from="/"></template>"#
+                r#"<template data-corten-read-again="0" data-from="/" data-part="picks"></template>"#
             )),
             "{page}"
         );

@@ -214,7 +214,7 @@ can go without at first is drawn waiting, and read once the page is on the scree
 own route. One handler answers both: the route says `patches`, and its handler answers with
 `req.patch_or_with(part, page)`. The part side runs only for the runtime's read of the part
 (`Mode::Action`) and reads only the part; the page side runs for every other request and draws
-the part waiting, with `ReadAgain::now(route)` beside it.
+the part waiting, with `ReadAgain::now(route, PartId)` beside it, naming the waiting element.
 
 ```rust,ignore
 // in the routes module: `picks` has the page read them in (the link a browser without
@@ -255,8 +255,8 @@ fn PicksLoading() -> impl Render {
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
         </p>
-        // read at once from the page's own route, as a patch
-        {ReadAgain::now(url::Home::default())}
+        // read at once from the page's own route, as a patch that replaces #picks
+        {ReadAgain::now(url::Home::default(), PicksId)}
     }
 }
 
@@ -275,14 +275,25 @@ App::new(url::router()).components(&[.., PicksLoading])
 The runtime fetches the route with `corten: action` as soon as the page is on the screen (a full
 load or a navigation), whether the tab is shown or not, and applies the patch it answers by id.
 The handler runs once for the page and once for the part, and each run reads only what it draws.
-The elements with an id beside the tag are `aria-busy="true"` while the read is on its way, and a
-navigation away stops the fetch, so the server stops reading. A part is read once; one that should
-be read again later carries `ReadAgain::from` in its answer
-([read again](requests-and-forms.md)). A part a form's patch draws waiting is read the same way.
+The element the tag names, and only it, is `aria-busy="true"` while the read is on its way, and a
+navigation away stops the fetch, so the server stops reading. The read depends on that element
+alone: a patch of anything else meanwhile (the next cell of a grid, a live row of the same list,
+another part read first) neither stops it nor marks it. A part is read once; one that should be
+read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
+part a form's patch or another part's answer draws waiting is read the same way, unless its tag
+names the address that answer came from, which would ask for itself again: that part is marked
+failed. Tags are read in `<main>` and in the layout's elements that are the page's (`page` in
+`html!`). A read the server redirects (a sign-in) takes the page there, as a form's does; a page
+the browser prerenders reads its parts once it is shown.
 
-Two parts one read draws (four panels from one report) each take a tag beside them naming the same
-address: the runtime reads it once, and the part side draws both in one patch. No element wraps a
-part, so each can be a cell of a grid.
+Two parts one read draws (four panels from one report) each take a tag naming its own element and
+the same address: the runtime reads it once, and the part side draws both in one patch. No
+element wraps a part, so each can be a cell of a grid. A shared read is as slow as all it reads,
+so each part waits for the slowest: parts that do not need one read take a query field each
+(`url::Home { part: Some(Part::Picks) }`), so each has an address and a read of its own. A page
+in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part read for
+one visitor there (picks for the visitor on a cached home page) is read from a route of its own
+that says `patches`, named in its `ReadAgain::now`.
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own
 route with a query field its page side reads the part in for: no second route, and nothing of

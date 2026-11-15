@@ -63,7 +63,7 @@ These are what the framework is built around. Code that breaks them fights the f
 | a write that updates part of the page | `data-patch` plus `req.patch_or(view, page)`, `req.invalid` for errors | [forms.md](references/forms.md) |
 | behavior in the browser | `#[component(js)]`, exported functions in a script next to it | [scripts.md](references/scripts.md) |
 | a child that reports to its parent | a `Handler` prop, or an `#[event]` | [scripts.md](references/scripts.md) |
-| a slow part the page should not wait for | `{ReadAgain::now(route)}` beside it drawn waiting, and `req.patch_or_with(part, page)` in the page's own handler | [pages-and-routes.md](references/pages-and-routes.md) |
+| a slow part the page should not wait for | `{ReadAgain::now(route, PartId)}` beside it drawn waiting, and `req.patch_or_with(part, page)` in the page's own handler | [pages-and-routes.md](references/pages-and-routes.md) |
 | a fragment the server keeps current | `<corten-live src={Route}>` plus `corten::live` | [scripts.md](references/scripts.md) |
 | live rows a script updates | a `Feed` plus `subscribe` in an `on:connect` handler (feature `feed`) | [scripts.md](references/scripts.md) |
 | many rows a script reads or changes (a grid) | `#[component(view)]` rows, `rows(body, Row)` in the handler | [scripts.md](references/scripts.md) |

@@ -1048,10 +1048,10 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
     readPatchAgain(again, put);
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
-  // except in the answer to a part's read, which would ask for itself again. Looked for in the
-  // text first, so a patch without one (a ticker's) queries nothing; a script's is `TrustedHTML`,
-  // whose text is its markup.
-  if (!asked && String(html).includes('read-again="0"')) readNow(put);
+  // except one for the address this patch answers, which would ask for itself again. Looked for in
+  // the text first, so a patch without one (a ticker's) queries nothing; a script's is
+  // `TrustedHTML`, whose text is its markup.
+  if (String(html).includes('read-again="0"')) readNow(put, asked && attrOf(asked, "data-from"));
 }
 
 /**
@@ -1081,7 +1081,9 @@ function partTagBeside(put) {
 function readPatchAgain(tag, put) {
   const page = swapped;
   const here = () => page === swapped && put.every(inPage);
-  readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
+  // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
+  // would otherwise ask again at once, for as long as its answer does.
+  readLater(Math.max(1, Number(tag.getAttribute("data-corten-read-again")) || 0), here, async () => {
     for (;;) {
       // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
       // part's order in it).
@@ -1110,43 +1112,74 @@ const PART_NOW = 'template[data-corten-read-again="0"][data-from]';
 /** A part read again after a while (`ReadAgain::from`), which a page's whole reads give way to. */
 const PART_LATER = `${PART_AGAIN}:not([data-corten-read-again="0"])`;
 
-/** The elements with an id beside `tag`: the part it reads. @param {Element} tag */
-const partOf = (tag) => Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el));
+/**
+ * The part a `ReadAgain::now` tag waits for: the element its `data-part` names, and nothing else,
+ * so a patch of an element beside it (a cell of the same grid, a live row) is no concern of its read.
+ * @param {Element} tag
+ */
+const partOf = (tag) => {
+  const id = attrOf(tag, "data-part");
+  const el = id ? document.getElementById(id) : null;
+  return el ? [el] : [];
+};
+
+/** Where a page's tags are read: `<main>`, and the layout's elements that are the page's. */
+const PAGE_PARTS = "[data-corten-page]";
 
 /**
  * The parts a page asks to have read again (`ReadAgain::from` in the page, as in a patch): each
- * such tag in `<main>` starts the same read a patch's does once the page is on the screen, and the
- * patch it answers may ask again. It lasts while the page, the tag and the elements with an id
- * beside it are there: a patch of one of them (a form's answer, which brings its own read) stops it.
- * The parts it waits for are read at once ({@link readNow}).
- * @param {Element} main
+ * such tag in `roots` (`<main>` and the layout's elements that are the page's, `page` in
+ * `html!`) starts the same read a patch's does once the page is on the screen, and the patch it
+ * answers may ask again. It lasts while the page, the tag and the elements with an id beside it are
+ * there: a patch of one of them (a form's answer, which brings its own read) stops it. The parts
+ * it waits for are read at once ({@link readNow}).
+ * @param {Element[]} roots
  */
-function readPartsAgain(main) {
-  // One query, as for the parts read again alone: a page with neither costs no more.
+function readPartsAgain(roots) {
+  // One query a root, as for the parts read again alone: a page with neither costs no more.
   /** @type {Element[]} */
   const now = [];
-  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    if (attrOf(tag, "data-corten-read-again") === "0") now.push(tag);
-    else readPatchAgain(tag, [tag, ...partOf(tag)]);
+  for (const root of roots) {
+    for (const tag of Array.from(queryAll(root, PART_AGAIN))) {
+      if (attrOf(tag, "data-corten-read-again") === "0") now.push(tag);
+      else readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el))]);
+    }
   }
   if (now.length) readTags(now);
 }
 
 /**
- * Reads the parts `roots` wait for (`<template data-corten-read-again="0" data-from>`,
- * `ReadAgain::now`): each address once, so tags beside two parts that one read draws share it,
- * at once, whether the tab is shown or not. A root may be such a tag itself (one a patch appends).
- * @param {Element[]} roots
+ * Reads the parts `roots` wait for (`<template data-corten-read-again="0" data-from data-part>`,
+ * `ReadAgain::now`): each address once, so tags for two parts that one read draws share it, at
+ * once, whether the tab is shown or not. A root may be such a tag itself (one a patch appends). A
+ * tag for `answered`, the address of the patch that put it there, would ask for itself again: its
+ * part is marked failed instead, so its link shows.
+ * @param {Element[]} roots @param {string | null} [answered]
  */
-function readNow(roots) {
-  readTags(roots.flatMap((root) => [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))]));
+function readNow(roots, answered) {
+  /** @type {Element[]} */
+  const tags = [];
+  for (const tag of roots.flatMap((root) => [...(matchesOf(root, PART_NOW) ? [root] : []), ...Array.from(queryAll(root, PART_NOW))])) {
+    if (answered && attrOf(tag, "data-from") === answered) for (const el of partOf(tag)) markFailed(el);
+    else tags.push(tag);
+  }
+  if (tags.length) readTags(tags);
 }
 
+/** Marks `el`, a part no read will bring, `data-corten-read-failed`. @param {Element} el */
+const markFailed = (el) => elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
+
 /**
- * Reads the parts `tags` (`ReadAgain::now`) wait for, each address once ({@link readNow}).
+ * Reads the parts `tags` (`ReadAgain::now`) wait for, each address once ({@link readNow}). A page
+ * the browser renders before it is shown (Speculation Rules' prerender) reads them once it is.
  * @param {Element[]} tags
  */
 function readTags(tags) {
+  // Not in lib.dom yet; a browser without it never prerenders.
+  if (Reflect.get(document, "prerendering") === true) {
+    document.addEventListener("prerenderingchange", () => readTags(tags.filter(inPage)), { once: true });
+    return;
+  }
   /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
   for (const tag of tags) {
@@ -1161,15 +1194,18 @@ function readTags(tags) {
 
 /**
  * One read of {@link readNow}: fetches `from` as a part read again is ({@link readPatchAgain}) and
- * applies the patch it answers. The parts it waits for are `aria-busy` until the read ends. The
- * patch is drawn only if, once its modules and stylesheets have loaded, the page is the one that
- * asked, every part it waits for is still there and every tag still names `from`: a page left, or
- * a part replaced (a form's answer) or removed while it was on its way, is not drawn over, and a
- * tag whose address changed (a sort) is read again at the new one. On the page that asked, every
- * waiting part still there when the read ends without drawing (offline, the server unreachable, an
- * error page, a page, or one of the parts gone) is marked `data-corten-read-failed`, where the
- * app's CSS shows the link a browser without JavaScript gets, so none is left waiting for nothing.
- * The fetch stops once every tag and part has left the page, so the server stops reading.
+ * applies the patch it answers. The parts it waits for (the elements its tags name, and only
+ * those) are `aria-busy` until the read ends. The patch is drawn only if, once its modules and
+ * stylesheets have loaded, the page is the one that asked, every part it waits for is still there
+ * and every tag still names `from`: a page left, or a part replaced (a form's answer) or removed
+ * while it was on its way, is not drawn over, and a tag whose address changed (a sort) is read
+ * again at the new one. A patch of any other element meanwhile changes nothing. On the page that
+ * asked, every waiting part still there when the read ends without drawing (offline, the server
+ * unreachable, an error page, a page, or one of the parts gone) is marked
+ * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript gets,
+ * so none is left waiting for nothing. A redirect (`corten-location`) is followed, and a read
+ * that ended while the browser hid the page is made again once it is shown. The fetch stops once
+ * every tag and part has left the page, so the server stops reading.
  * @param {string} from @param {Element[]} tags @param {Element[]} waiting
  */
 async function readPart(from, tags, waiting) {
@@ -1183,10 +1219,31 @@ async function readPart(from, tags, waiting) {
   // The fetch stops when the last of the tags and parts leaves (after it ends, that does nothing).
   const stop = new AbortController();
   const held = [...tags, ...waiting];
-  let left = held.length;
-  for (const el of held) signalOf(el).addEventListener("abort", () => --left || stop.abort());
+  let holding = held.length;
+  for (const el of held) signalOf(el).addEventListener("abort", () => --holding || stop.abort());
   for (const el of waiting) markBusy(el, mine);
+  const leftAt = left;
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
+  // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, from
+  // the page that asked.
+  const to = res && fromHere(res.url) ? res.headers.get("corten-location") : null;
+  if (res && to) {
+    for (const el of waiting) unmarkBusy(el, mine);
+    if (page !== swapped) return;
+    const url = new URL(to, res.url).href;
+    if (navigation) go(url, { info: { [LOAD]: true } });
+    else location.assign(url);
+    return;
+  }
+  // The page was hidden while the read was on its way (the back-forward cache), which may end the
+  // fetch: read again once the page is shown, rather than mark a part no read failed to bring.
+  if (!res && left !== leftAt && !stop.signal.aborted) {
+    for (const el of waiting) unmarkBusy(el, mine);
+    const again = () => page === swapped && readNow(tags.filter(inPage));
+    if (away) addEventListener("pageshow", again, { once: true });
+    else again();
+    return;
+  }
   const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
   // A success that is not a patch is the app's mistake (the route answered its page).
   if (html === undefined && res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
@@ -1198,7 +1255,7 @@ async function readPart(from, tags, waiting) {
   for (const el of waiting) unmarkBusy(el, mine);
   if (drew || page !== swapped) return;
   if (moved()) return readNow(tags.filter(inPage));
-  for (const el of waiting) if (inPage(el)) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
+  for (const el of waiting) if (inPage(el)) markFailed(el);
 }
 
 /**
@@ -1628,7 +1685,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
   markCurrent(kept);
   readAgainLater();
-  readPartsAgain(main);
+  readPartsAgain([main, ...parts.map(([, part]) => part)]);
   return true;
 }
 
@@ -2491,7 +2548,7 @@ function readAgainLater() {
   const page = ++readAgainPage;
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
-  if (!(seconds > 0) || document.querySelector(`main ${PART_LATER}`)) return;
+  if (!(seconds > 0) || document.querySelector(`main ${PART_LATER}, ${PAGE_PARTS} ${PART_LATER}`)) return;
   // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
   const entry = navigation?.currentEntry?.key;
   const path = location.pathname;
@@ -2997,7 +3054,10 @@ function reload(notice = null) {
   }
   location.reload();
 }
-addEventListener("pagehide", () => (left += 1));
+/** Whether the browser has hidden the page (the back-forward cache) and not shown it again. */
+let away = false;
+addEventListener("pagehide", () => ((left += 1), (away = true)));
+addEventListener("pageshow", () => (away = false));
 
 /**
  * The pending submit of each `data-patch` form. The same submit again while it is pending (a
@@ -3319,7 +3379,7 @@ serve(document);
 readAgainLater();
 {
   const main = document.querySelector("main");
-  if (main) readPartsAgain(main);
+  if (main) readPartsAgain([main, ...Array.from(document.querySelectorAll(PAGE_PARTS)).filter((el) => !main.contains(el))]);
 }
 
 /** Resolves once the script modules the first page's handlers use are imported. */
