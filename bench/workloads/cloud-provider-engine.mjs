@@ -199,8 +199,12 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(positive(result.droplet?.id));
         code = "create-link";
         const actions = result.links?.actions;
-        assert.ok(Array.isArray(actions) && actions.length === 1 && actions[0].rel === "create" && positive(actions[0].id));
-        assert.equal(actions[0].href, `${origin}/v2/actions/${actions[0].id}`);
+        assert.ok(Array.isArray(actions) && actions.length === 1 && positive(actions[0]?.id));
+        // rel/href are optional in the published action-link model. The exact
+        // action GET below proves type/resource/completion; supplied hints must
+        // still agree, and no provider-supplied href is ever fetched.
+        assert.ok(actions[0].rel === undefined || actions[0].rel === "create");
+        assert.ok(actions[0].href === undefined || actions[0].href === `${origin}/v2/actions/${actions[0].id}`);
         for (;;) {
           const response = await call("create-action", "GET", `/v2/actions/${actions[0].id}`);
           code = "create-action-response";

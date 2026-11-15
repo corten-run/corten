@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Accept omitted optional `rel`/`href` fields on benchmark provider create links,
+  while still requiring one positive action ID and exact droplet-bound completed
+  action proof. Conflicting supplied fields remain rejected; no mutation is retried.
+
 - Permit one fresh complete benchmark provider census after a transient count or
   total mismatch, within the original deadline and global request limit. Partial
   results remain rejected; HTTP errors and mutations are never retried.

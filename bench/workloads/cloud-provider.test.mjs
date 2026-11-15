@@ -261,6 +261,29 @@ test("published create example and nullable in-progress action already satisfy t
   }
 });
 
+// These omissions are permitted by shared/models/action_link.yml, not observed
+// r21 responses. The example's rel/href values are not required schema fields:
+// https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml
+for (const omitted of [["rel"], ["href"], ["rel", "href"]]) {
+  test(`schema-optional create-link ${omitted.join("+")} omissions still require exact completed action`, async () => {
+    for (const actionId of [7515, 3_000_000_001]) {
+      const response = publishedCreate(), calls = []; let clock = 0;
+      response.value.links.actions[0] = { id: actionId, rel: "create", href: `https://api.digitalocean.com/v2/actions/${actionId}` };
+      for (const key of omitted) delete response.value.links.actions[0][key];
+      const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, sleep: async (ms) => { clock += ms; }, request({ method, path, timeout }) {
+        calls.push({ method, path, timeout });
+        if (method === "POST") { clock += 250; return response; }
+        const action = createAction(clock < 1000 ? "in-progress" : "completed", clock < 1000 ? null : response.value.droplet.id);
+        action.value.action.id = actionId; return action;
+      } });
+      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [response.value.droplet]);
+      assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
+        { method: "GET", path: `/v2/actions/${actionId}`, timeout: 4750 },
+        { method: "GET", path: `/v2/actions/${actionId}`, timeout: 3750 }]);
+    }
+  });
+}
+
 test("schema-conformant zero resource ID remains pending until the create action binds the exact droplet", async () => {
   // resource_id is integer + nullable, with no minimum in the published action
   // model. Zero is a synthetic schema instance, not a retained r21 response.
@@ -297,20 +320,24 @@ test("unbound zero action cannot complete, poll past the deadline, or repeat POS
 
 test("accepted create rejects ambiguous links before any action read and never repeats POST", async () => {
   const link = publishedCreate().value.links.actions[0];
-  for (const actions of [undefined, [], [link, link], [{ ...link, rel: "delete" }], [{ ...link, id: "7515" }],
+  for (const actions of [undefined, null, {}, [], [null], [{}], [link, link],
+    ...["delete", "", null, 1].map((rel) => [{ id: link.id, rel }]),
+    ...[undefined, "7515", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => [{ id }]),
+    ...[null, "", 1, {}, "/v2/actions/7515", "not a URL"].map((href) => [{ id: link.id, href }]),
     ...["http://api.digitalocean.com/v2/actions/7515", "https://synthetic.invalid/v2/actions/7515",
       "https://api.digitalocean.com/v2/actions/7516", "https://api.digitalocean.com/v2/actions/7515?next=1",
-      "https://api.digitalocean.com/v2/actions/7515#fragment"].map((href) => [{ ...link, href }])]) {
+      "https://api.digitalocean.com/v2/actions/7515#fragment",
+      "https://synthetic@api.digitalocean.com/v2/actions/7515"].map((href) => [{ id: link.id, href }])]) {
     const calls = [], response = publishedCreate(); response.value.links.actions = actions;
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
-    await assert.rejects(run(create, 1000, true));
+    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === "create-link");
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
   }
 });
 
 test("first action failures after accepted POST stop without retry or leaking provider data", async () => {
   const action = createAction().value.action;
-  for (const response of [
+  const responses = [
     ...[301, 401, 403, 404, 429, 500].map((status) => ({ status, value: { raw: credential } })),
     ...[{ ...action, id: 7516 }, { ...action, type: "delete" }, { ...action, resource_type: "image" }, { ...action, resource_type: null },
       { ...action, resource_id: 3164445 }, { ...action, resource_id: null }, { ...action, resource_id: 0 },
@@ -318,17 +345,55 @@ test("first action failures after accepted POST stop without retry or leaking pr
       { ...action, status: "in-progress", resource_id: "0" }, { ...action, status: "in-progress", resource_type: null, resource_id: 0 }, { ...action, status: "errored" },
       { ...action, status: "unknown" }].map((action) => ({ status: 200, value: { action } })),
     null,
-  ]) {
-    const calls = [];
-    const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
-      calls.push({ method, path }); if (method === "POST") return publishedCreate();
-      if (response === null) throw new Error(credential); return response;
-    } });
-    try {
-      const result = await run(create, 1000, true);
-      assert.equal(result.status, 1); assert.ok(!JSON.stringify(result).includes(credential));
-    } catch (error) { assert.equal(error.message, "provider control failed; preserve state/evidence/host"); }
-    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
+  ];
+  for (const link of [publishedCreate().value.links.actions[0], { id: action.id }]) {
+    for (const response of responses) {
+      const calls = [];
+      const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+        calls.push({ method, path });
+        if (method === "POST") { const created = publishedCreate(); created.value.links.actions = [link]; return created; }
+        if (response === null) throw new Error(credential); return response;
+      } });
+      if (response !== null && response.status !== 200) {
+        const result = await run(create, 1000, true);
+        assert.equal(result.status, 1);
+        assert.deepEqual(result.providerDiagnostic, { code: "create-action-http", httpStatus: response.status });
+        assert.ok(!JSON.stringify(result).includes(credential));
+      } else {
+        await assert.rejects(run(create, 1000, true), (error) => {
+          assert.equal(error.message, "provider control failed; preserve state/evidence/host");
+          assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request" : "create-action-response");
+          assert.equal(error.controlUncertain === true, response === null);
+          assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+        });
+      }
+      assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
+    }
+  }
+});
+
+test("ID-only create link never extends the original deadline or bypasses cancellation", async () => {
+  for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
+    let clock = 0, cancelled = false; const calls = [];
+    const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, interrupted: () => cancelled,
+      sleep: async (ms) => { clock += ms; if (mode === "cancelled") cancelled = true; }, request({ method, path, timeout }) {
+        calls.push({ method, path, timeout });
+        if (method === "POST") {
+          const response = publishedCreate(); response.value.links.actions = [{ id: 7515 }];
+          clock = mode === "post-deadline" ? 2500 : 500; return response;
+        }
+        if (mode === "transport") throw new Error(credential);
+        return createAction("in-progress", 0);
+      } });
+    await assert.rejects(run(create, 2500, true), (error) => {
+      assert.equal(error.providerDiagnostic?.code, { pending: "create-action-pending", "post-deadline": "create-link",
+        cancelled: "create-action-pending", transport: "create-action-request" }[mode]);
+      if (mode !== "cancelled") assert.equal(error.controlUncertain, true);
+      assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
+    });
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 2500 },
+      ...(mode === "post-deadline" ? [] : [{ method: "GET", path: "/v2/actions/7515", timeout: 2000 }]),
+      ...(mode === "pending" ? [{ method: "GET", path: "/v2/actions/7515", timeout: 1000 }] : [])]);
   }
 });
 
