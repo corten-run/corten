@@ -1004,7 +1004,7 @@ const BREAKOUT: &[&str] = &[
 /// The MathML elements whose children are HTML's: the HTML standard's MathML text integration
 /// points, where every start tag is HTML's but `<mglyph>` and `<malignmark>`, which stay
 /// MathML's (`Parsing::MathText`). An `<annotation-xml>` is an HTML integration point only with
-/// an `encoding` of `text/html` or `application/xhtml+xml` (`annotation_holds_html`); with another
+/// an `encoding` of `text/html` or `application/xhtml+xml` (`annotation_parsing`, by its first); with another
 /// or none it holds MathML, and an `<svg>` in it is SVG's (`Parsing::AnnotationXml`).
 const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 
@@ -1036,23 +1036,24 @@ enum Parsing {
     Unknown,
 }
 
-/// Whether an `<annotation-xml>` with `attrs` is an HTML integration point for certain: its
-/// `encoding` written as `text/html` or `application/xhtml+xml` (ASCII case-insensitive).
-fn annotation_holds_html(attrs: &[Attr]) -> bool {
-    attrs.iter().any(|a| {
-        matches!(a, Attr::Static(n, v) if n.eq_ignore_ascii_case("encoding")
-            && (v.eq_ignore_ascii_case("text/html") || v.eq_ignore_ascii_case("application/xhtml+xml")))
-    })
-}
-
-/// Whether an expression or a spread may write an `<annotation-xml>`'s `encoding`, so the markup
-/// does not show what it holds.
-fn encoding_unknown(attrs: &[Attr]) -> bool {
-    attrs.iter().any(|a| match a {
-        Attr::Expr(n, _) => n.eq_ignore_ascii_case("encoding"),
-        Attr::Spread(_) => true,
-        _ => false,
-    })
+/// How the children of an `<annotation-xml>` with `attrs` are parsed, by its first `encoding`, the
+/// one a browser keeps (`html!` writes attributes in the order they are written): HTML when it is
+/// `text/html` or `application/xhtml+xml` (ASCII case-insensitive), MathML when it is another or
+/// none is written, and not known when an expression or a spread comes first, which may write it.
+fn annotation_parsing(attrs: &[Attr]) -> Parsing {
+    for a in attrs {
+        match a {
+            Attr::Spread(_) => return Parsing::Unknown,
+            Attr::Expr(n, _) if n.eq_ignore_ascii_case("encoding") => return Parsing::Unknown,
+            Attr::Static(n, v) if n.eq_ignore_ascii_case("encoding") => {
+                let html = v.eq_ignore_ascii_case("text/html") || v.eq_ignore_ascii_case("application/xhtml+xml");
+                return if html { Parsing::Html } else { Parsing::AnnotationXml };
+            }
+            Attr::Bare(n) if n.eq_ignore_ascii_case("encoding") => return Parsing::AnnotationXml,
+            _ => {}
+        }
+    }
+    Parsing::AnnotationXml
 }
 
 /// Whether the element `name` with `attrs` is HTML's wherever it is written: one a browser
@@ -1077,9 +1078,7 @@ fn parsing_within(outer: Parsing, name: &str, attrs: &[Attr]) -> Parsing {
         // text integration point, where it is SVG's). A breakout element here does not compile
         // (`foreign_breakout` refuses it before its children are read), so it needs no arm.
         Parsing::Math if MATH_HTML_POINTS.iter().any(|point| is(point)) => Parsing::MathText,
-        Parsing::Math if is("annotation-xml") && annotation_holds_html(attrs) => Parsing::Html,
-        Parsing::Math if is("annotation-xml") && encoding_unknown(attrs) => Parsing::Unknown,
-        Parsing::Math if is("annotation-xml") => Parsing::AnnotationXml,
+        Parsing::Math if is("annotation-xml") => annotation_parsing(attrs),
         Parsing::Math => Parsing::Math,
         // The HTML standard's tree construction dispatcher reads an `<svg>` in a MathML
         // `<annotation-xml>` as HTML's rules do (an SVG `<svg>`); every other tag as in a `<math>`.
@@ -1140,8 +1139,11 @@ fn foreign_breakout(parsing: Parsing, name: &str, attrs: &[Attr]) -> Option<Stri
         Parsing::Svg => Some(format!(
             "<{name}> is HTML's, and a browser that meets it in an <svg> closes the <svg> before it, so it and what follows land outside the drawing: put HTML in an <svg> inside a <foreignObject>"
         )),
-        Parsing::Math | Parsing::AnnotationXml => Some(format!(
+        Parsing::Math => Some(format!(
             "<{name}> is HTML's, and a browser that meets it in a <math> closes the MathML elements around it, the <math> too unless one of them is an <mi>, <mo>, <mn>, <ms> or <mtext>, so it and what follows land outside them: put HTML in a <math> inside an <mtext>"
+        )),
+        Parsing::AnnotationXml => Some(format!(
+            "<{name}> is HTML's, and an <annotation-xml> whose first encoding is not an HTML one (or that has none) holds MathML, so a browser that meets it there closes the MathML elements around it, the <math> too unless one of them is an <mi>, <mo>, <mn>, <ms> or <mtext>: give the <annotation-xml> encoding=\"text/html\" as its first encoding, or put the HTML in an <mtext>"
         )),
         _ => None,
     }
@@ -2819,14 +2821,24 @@ mod tests {
             assert!(!reads_as_text(annotation, "title") && !reads_as_text(annotation, "textarea"));
             assert!(text_only_element(None, annotation, "plaintext").is_none());
             for name in BREAKOUT {
-                assert!(foreign_breakout(annotation, name, &[]).expect("refused").contains("<mtext>"), "{name}");
+                let why = foreign_breakout(annotation, name, &[]).expect("refused");
+                assert!(why.contains("encoding=\"text/html\"") && why.contains("<mtext>"), "{why}");
             }
             assert_eq!(foreign_breakout(annotation, "mrow", &[]), None);
         }
         let written = [Attr::Expr("encoding".into(), TokenStream::new())];
         assert_eq!(parsing_within(math, "annotation-xml", &written), Parsing::Unknown);
-        let spread = [Attr::Static("encoding".into(), "image/svg+xml".into()), Attr::Spread(TokenStream::new())];
-        assert_eq!(parsing_within(math, "annotation-xml", &spread), Parsing::Unknown);
+        let spread_first = [Attr::Spread(TokenStream::new()), Attr::Static("encoding".into(), "text/html".into())];
+        assert_eq!(parsing_within(math, "annotation-xml", &spread_first), Parsing::Unknown);
+        // The first encoding is the one a browser keeps, so a spread or a second one after it
+        // changes nothing.
+        let spread_after = [Attr::Static("encoding".into(), "image/svg+xml".into()), Attr::Spread(TokenStream::new())];
+        assert_eq!(parsing_within(math, "annotation-xml", &spread_after), Parsing::AnnotationXml);
+        let html_second = [Attr::Static("encoding".into(), "x".into()), Attr::Static("encoding".into(), "text/html".into())];
+        assert_eq!(parsing_within(math, "annotation-xml", &html_second), Parsing::AnnotationXml);
+        let html_first = [Attr::Static("ENCODING".into(), "TEXT/HTML".into()), Attr::Static("encoding".into(), "x".into())];
+        assert_eq!(parsing_within(math, "annotation-xml", &html_first), Parsing::Html);
+        assert_eq!(parsing_within(math, "annotation-xml", &[Attr::Bare("encoding".into())]), Parsing::AnnotationXml);
         // An element a browser takes out of foreign content is refused there, as in an <svg>.
         for name in BREAKOUT {
             let why = foreign_breakout(math, name, &[]).expect("refused");

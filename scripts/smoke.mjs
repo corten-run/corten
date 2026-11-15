@@ -318,9 +318,16 @@ async function parsesAsHtmlMeans(browser) {
       ({ XHTML }) => document.querySelector("annotation-xml > b")?.namespaceURI === XHTML,
     ],
     [
-      "an <annotation-xml> with a MathML encoding holds a MathML <title> with elements",
-      `<p><math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math></p>`,
-      ({ MATHML }) => document.querySelector("annotation-xml > title > mrow")?.namespaceURI === MATHML,
+      "an <annotation-xml> whose first encoding is TEXT/HTML (any case) holds HTML",
+      `<p><math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>x</b></annotation-xml></math></p>`,
+      ({ XHTML }) => document.querySelector("annotation-xml > b")?.namespaceURI === XHTML,
+    ],
+    [
+      "an <annotation-xml> with a MathML encoding holds a MathML <title> with elements, and an <svg> with HTML in its <foreignObject>",
+      `<p><math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math></p>`,
+      ({ MATHML, XHTML }) =>
+        document.querySelector("annotation-xml > title > mrow")?.namespaceURI === MATHML &&
+        document.querySelector("annotation-xml > svg > foreignObject > b")?.namespaceURI === XHTML,
     ],
     [
       "a <title> in a <malignmark> in an <mi> is MathML's and holds elements",
@@ -372,6 +379,16 @@ async function parsesAsHtmlMeans(browser) {
     [
       "a <div> in an <annotation-xml> without an encoding lands outside the <math> (refused by html!)",
       `<p><math><annotation-xml><div>x</div></annotation-xml></math></p>`,
+      () => !!document.querySelector("div") && !document.querySelector("math div"),
+    ],
+    [
+      "a <div> in an <annotation-xml> with a MathML encoding lands outside the <math> (refused by html!)",
+      `<p><math><annotation-xml encoding="application/mathml+xml"><div>x</div></annotation-xml></math></p>`,
+      () => !!document.querySelector("div") && !document.querySelector("math div"),
+    ],
+    [
+      "a <div> in an <annotation-xml> whose first encoding is not HTML's lands outside the <math> (refused by html!)",
+      `<p><math><annotation-xml encoding="x" encoding="text/html"><div>x</div></annotation-xml></math></p>`,
       () => !!document.querySelector("div") && !document.querySelector("math div"),
     ],
     [

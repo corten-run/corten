@@ -726,10 +726,11 @@ mod tests {
 
     /// A document around `KeyedMarkup`: its head's `<title>` is the page's, in a document's head,
     /// and a navigation asks for its parts (`Part::Swap`, `Part::Title`). It is written without
-    /// the doctype, which a document may leave out: `html!` counts a `<!DOCTYPE html>` as a root
-    /// beside the `<html>`, and a component with refs renders one root element, so a document
-    /// with refs cannot write one. Without it the `<html>` holds the refs and the document renders
-    /// scoped, whole and in its parts; its `<main>` holds a keyed ref's element and a `<template>`
+    /// the doctype because it cannot have one: `html!` counts a `<!DOCTYPE html>` as a root beside
+    /// the `<html>`, and a component with refs renders one root element. That is a known limit (a
+    /// page without the doctype the standard requires renders in quirks mode), tracked in
+    /// https://github.com/corten-run/corten/issues/1489. Here it only renders the markup, whose
+    /// `<html>` holds the refs, so the document renders scoped, whole and in its parts; its `<main>` holds a keyed ref's element and a `<template>`
     /// of its own, beside `KeyedMarkup`'s.
     #[component]
     fn KeyedDocument<'a>(title: &'a str, ids: &'a [String]) -> impl Document {

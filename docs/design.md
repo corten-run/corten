@@ -3241,7 +3241,7 @@ rules something out.
     components would have every element's markup report it to the check, for a duplicate few apps
     can write. Nor does it follow MathML: one of those in a `<math>`, outside its text integration
     points (`<mi>`, `<mo>`, `<mn>`, `<ms>`, `<mtext>`, where a `<mglyph>` or a `<malignmark>`
-    stays MathML's) and an `<annotation-xml>` whose `encoding` is `text/html` or
+    stays MathML's) and an `<annotation-xml>` whose first `encoding` is `text/html` or
     `application/xhtml+xml` (with another or none, an `<annotation-xml>`'s content is MathML's),
     is MathML's and the runtime finds what it holds, which the check does not
     count. An element a browser moves out of an `<svg>` (`<div>`, `<p>`) does not compile written
@@ -3389,7 +3389,9 @@ rules something out.
     instructions to the line (2,416 lines each, addresses aside). A document with refs cannot
     write its doctype: `html!` takes a `<!DOCTYPE html>` for a second root beside the `<html>`,
     and a component with refs renders one root element, so the harness writes the document
-    without its optional doctype. Card-market's `render_cost`,
+    without one. That is a known limit, not a choice: the HTML standard requires the doctype, and a
+    page without it renders in quirks mode
+    ([#1489](https://github.com/corten-run/corten/issues/1489)). Card-market's `render_cost`,
     on `6575d4d8c` against `72a37a87e` (no generated code has changed since), counted
     `ItemDetail`'s render at 2,372,754,748 instructions (median; 2,372,507,167 to 2,372,779,152)
     on the base and 2,372,745,747 (2,369,854,428 to 2,372,790,283) on the branch, each difference
@@ -4176,8 +4178,10 @@ rules something out.
     `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
     others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
-54. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser would not keep as written, where the
-    markup shows how a browser parses it, and acts nowhere else.** An element written in a
+54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
+    is written (an element in an element whose content is text, a `<plaintext>`, and an element
+    taken out of foreign content), where the markup shows how a browser parses it, and acts
+    nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
     text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
@@ -4199,20 +4203,18 @@ rules something out.
     document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>` (its HTML
     integration points), and in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (its
     text integration points, where a `<mglyph>` or a `<malignmark>` stays MathML's) and an
-    `<annotation-xml>` whose `encoding` is `text/html` or `application/xhtml+xml`; SVG in a
+    `<annotation-xml>` whose first `encoding` (the one a browser keeps of an attribute written
+    twice) is `text/html` or `application/xhtml+xml`, in any case; SVG in a
     literal `<svg>`, where a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements;
-    MathML in a literal `<math>`, outside those points, and in an `<annotation-xml>` whose
-    `encoding` is another or is not written (where an `<svg>` is SVG's, as the standard's tree
+    MathML in a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
+    `encoding` is another or that has none (where an `<svg>` is SVG's, as the standard's tree
     construction dispatcher has it), where they are MathML's and hold elements, and only an
     element taken out of foreign content is refused. At the top of a component's markup, which its
     parent may write into an `<svg>`, among a component's children, which go where the component
-    writes them, and in an `<annotation-xml>` whose `encoding` an expression or a spread may write,
-    it does not know, and refuses nothing. `html!` does not refuse an attribute written twice, and it takes an
-    `<annotation-xml>` for HTML when any of its `encoding`s is `text/html` or
-    `application/xhtml+xml`, while a browser keeps the first: `encoding="x" encoding="text/html"`
-    holds MathML in a browser, and an element in a `<title>` there is refused though the browser
-    would keep it. An attribute written twice is invalid markup, so the refusal stands on markup
-    that is not correct. That is
+    writes them, and in an `<annotation-xml>` where an expression or a spread comes before any
+    written `encoding` (either may write the first one), it does not know, and refuses nothing.
+    `html!` writes attributes in the order they are written, so the first `encoding` in the markup
+    is the one a browser keeps. That is
     the rule the refusals keep: markup that compiled before and that a browser keeps as written
     still compiles, so a component that draws an SVG fragment without its `<svg>`
     (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
@@ -4222,7 +4224,14 @@ rules something out.
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
 
-    Not chosen: refusing where the markup does not show the context, which would refuse a
+    Not chosen: refusing HTML a browser rearranges inside HTML: a `<div>` in a `<p>` (the
+    `<p>` closes before it), an `<a>` in an `<a>` or a `<form>` in a `<form>`, an `<li>` in an
+    `<li>`, a `<div>` written straight into a `<table>` (moved before the table). Those follow the
+    standard's insertion modes for HTML content, whose outcome depends on which elements are open
+    and in which mode (implied end tags, the adoption agency, foster parenting), not on the one
+    holder or namespace the three refused kinds read, so refusing them would need a model of those
+    modes in the macro; they compile as before, and the key check's limit for a table is in
+    [Choice 46](#choice-ref-values). Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
     report its namespace to the next, at a cost to every render for markup few apps write. A
@@ -4265,12 +4274,13 @@ rules something out.
     loads, written by hand as `html!` writes them (it is not rendered by `html!`), the shapes
     `html!`'s examples hold: a `<title>` in an `<mi>`'s `<mglyph>` and `<malignmark>`, a `<div>`
     in an `<mtext>`, an `<svg>` straight in a `<math>` (MathML's), an `<annotation-xml>` with an
-    HTML, a MathML and no `encoding` (an `<svg>` in the last SVG's), and an `<svg>`'s `<title>`,
-    `<style>` and `<textarea>`, and the refused shapes beside them (an element in a `<title>` in
-    an `<mi>` and in an HTML `<annotation-xml>`, a `<div>` in an `<mrow>` and in an
-    `<annotation-xml>` without an `encoding`, a `<p>` in an `<svg>`), and checks the parsed
-    elements, and passed in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright
-    1.64.1); 2026-11-14, a one-off probe, not a repository check: a
+    HTML `encoding`, with `TEXT/HTML` first and another after it, with a MathML one (a MathML
+    `<title>` and an `<svg>` whose `<foreignObject>` holds HTML) and with none (an `<svg>` in it
+    SVG's), and an `<svg>`'s `<title>`, `<style>` and `<textarea>`, and the refused shapes beside
+    them (an element in a `<title>` in an `<mi>` and in an HTML `<annotation-xml>`, a `<div>` in
+    an `<mrow>` and in an `<annotation-xml>` with no `encoding`, with a MathML one and with a
+    non-HTML one before `text/html`, a `<p>` in an `<svg>`), and checks the parsed elements, and
+    passed in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-14, a one-off probe, not a repository check: a
     page written by hand (not by `html!`, which refuses most of it) loaded in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), reading
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
@@ -4748,8 +4758,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or
     `size`), an element in a `<title>`, `<textarea>`, `<script>`, `<style>`, `<iframe>`,
     `<xmp>`, `<noembed>` or `<noframes>`, and a `<plaintext>` are not refused there, nor among a
-    component's children, nor in an `<annotation-xml>` whose `encoding` an expression or a spread
-    may write, until an element of the markup shows the context. Keys in a
+    component's children, nor in an `<annotation-xml>` where an expression or a spread comes
+    before any written `encoding`, until an element of the markup shows the context. Keys in a
     `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
     `<noframes>` there are not checked, though in an `<svg>` the runtime finds them. Among a
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless

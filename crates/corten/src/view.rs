@@ -265,8 +265,12 @@ use std::{
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 ///
-/// Markup a browser would not keep as written does not compile, where the markup shows how the
-/// browser parses it. An element written inside one whose content a browser parsing HTML reads as
+/// Three kinds of markup a browser parses differently from how it is written do not compile, where
+/// the markup shows how the browser parses it: an element inside one whose content a browser reads
+/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`.
+/// HTML a browser rearranges inside HTML (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a
+/// `<form>` in a `<form>`, an `<li>` in an `<li>`, a `<div>` straight in a `<table>`)
+/// still compiles. An element written inside one whose content a browser parsing HTML reads as
 /// text would show its tags as text, or put them in a field's value, rather than make an element.
 /// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
 /// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
@@ -379,16 +383,31 @@ use std::{
 /// let _ = html! { <p><math><annotation-xml><div>"x"</div></annotation-xml></math></p> };
 /// ```
 ///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="application/mathml+xml"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// A browser keeps the first of an attribute written twice, so an `<annotation-xml>` whose first
+/// `encoding` is not an HTML one holds MathML, whatever follows:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="x" encoding="text/html"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
 /// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 /// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
 /// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
 /// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
 /// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
 /// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
-/// integration points, and a `<title>` in a `<mglyph>` there. Where the markup does not show how
-/// it is parsed, at the top of a
-/// component's markup (whose parent may write it into an `<svg>`) and among a component's
-/// children (which go where it writes them), none of this is refused, so a component that draws
+/// integration points, a `<title>` in a `<mglyph>` or `<malignmark>` there, and an
+/// `<annotation-xml>`'s whose first `encoding` is not an HTML one (or that has none), which holds
+/// MathML and where an `<svg>` is SVG's. Where the markup does not show how it is parsed, at the
+/// top of a component's markup (whose parent may write it into an `<svg>`), among a component's
+/// children (which go where it writes them) and in an `<annotation-xml>` whose `encoding` an
+/// expression or a spread may write first, none of this is refused, so a component that draws
 /// an SVG fragment without its `<svg>` compiles:
 ///
 /// ```
@@ -419,9 +438,12 @@ use std::{
 /// ```
 ///
 /// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
-/// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` in a `<mglyph>`
-/// there, an `<annotation-xml>` holding HTML, one whose `encoding` an expression writes (which the markup does not show, so
-/// nothing in it is refused), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` holding
+/// elements in a `<mglyph>` and a `<malignmark>` there, an `<svg>` straight in a `<math>`
+/// (MathML's, as a browser reads it), an `<annotation-xml>` holding HTML (its first `encoding`
+/// `text/html`, in any case), ones with a MathML `encoding` and with none holding a MathML
+/// `<title>` and an `<svg>` with HTML in its `<foreignObject>`, one whose `encoding` an
+/// expression writes (which the markup does not show, so nothing in it is refused), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
 /// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
 /// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
 ///
@@ -443,7 +465,12 @@ use std::{
 ///             <math><mrow><mi>"x"</mi></mrow></math>
 ///             <math><mtext><div>"x"</div></mtext></math>
 ///             <math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>
+///             <math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>
+///             <math><svg><g></g></svg></math>
 ///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
+///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
 ///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
 ///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
 ///         </div>
@@ -455,7 +482,12 @@ use std::{
 ///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
 ///             r#"<math><mtext><div>x</div></mtext></math>"#,
 ///             r#"<math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>"#,
+///             r#"<math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>"#,
+///             r#"<math><svg><g></g></svg></math>"#,
 ///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
+///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
 ///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
 ///         )

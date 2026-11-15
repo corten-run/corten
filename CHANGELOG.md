@@ -662,12 +662,14 @@ Corten is pre-1.0, so any minor version may change the API.
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
   `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
   gets `key={..}` on each of its elements.
-- **Breaking:** markup a browser would not keep as written no longer compiles where the markup
-  shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+- **Breaking:** three kinds of markup a browser parses differently from how it is written no
+  longer compile (an element in an element whose content is text, a `<plaintext>`, and an element
+  taken out of foreign content; HTML a browser rearranges inside HTML, such as a `<div>` in a
+  `<p>`, still compiles) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
   a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
   `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
-  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose `encoding` is
-  `text/html` or `application/xhtml+xml`
+  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
+  `encoding` is `text/html` or `application/xhtml+xml`
   ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
   SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
   put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
@@ -676,13 +678,15 @@ Corten is pre-1.0, so any minor version may change the API.
   a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
   the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
   `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
-  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose `encoding` is
-  not an HTML one (or is not written), closed the `<svg>` or the MathML around it: put it in a
-  `<foreignObject>`, or in a formula in an `<mtext>`. Inside an `<svg>`,
+  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose first
+  `encoding` is not an HTML one (or that has none), closed the `<svg>` or the MathML around it: put
+  it in a `<foreignObject>`, in a formula in an `<mtext>`, or give the `<annotation-xml>`
+  `encoding="text/html"` first. Inside an `<svg>`,
   or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
   drawing or the formula and holds elements. At the top of a component's markup, among a
-  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread
-  writes, where the markup does not show how they are parsed, none of this is refused ([design Limit 30](docs/design.md#limit-markup-context)).
+  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread may
+  write first, where the markup does not show how they are parsed, none of this is refused until
+  an element of the markup shows the context ([design Limit 30](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
