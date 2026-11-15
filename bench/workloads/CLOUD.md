@@ -78,6 +78,16 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+Create-link refusals distinguish five closed predicate codes: `create-link-shape`
+(actions is not an array), `create-link-count` (not exactly one entry),
+`create-link-id` (missing or invalid positive safe-integer ID), `create-link-rel`
+(supplied relation differs) and `create-link-href` (supplied URL differs).
+Only a failing predicate emits its subcode; deadline/cancellation checkpoints keep
+their coarse phase codes, including `create-link`. No rejected provider values are
+retained or forwarded. These diagnostics do not identify the cause of historical
+failures whose rejected responses were not retained, or change any acceptance,
+completion, ownership, retry or cleanup gate.
+
 Collection reuses only saved identities and independently collects terminal hosts:
 
 ```sh
