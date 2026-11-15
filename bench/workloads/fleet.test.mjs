@@ -326,6 +326,7 @@ function capturedFailure(t, body, WorkerClass = Worker) {
 
 test("captured worker preserves only sanitized provider diagnostics and explicit uncertainty", async (t) => {
   for (const diagnostic of [{ code: "list-http", httpStatus: 429 },
+    ...["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => ({ code: `list-response-${predicate}` })),
     ...["shape", "count", "id", "rel", "href"].map((predicate) => ({ code: `create-link-${predicate}` }))]) {
     for (const uncertain of [false, true]) {
       await assert.rejects(capturedFailure(t, `throw Object.assign(new Error('PRIVATE_MESSAGE_TOKEN'), {
@@ -392,6 +393,23 @@ test("fleet receipts retain sanitized provider failure and uncertainty without r
   }
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN"));
   assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  await assert.rejects(fleetMain(approved, p.deps), /already-attempted|busy/);
+});
+
+test("fleet receipts retain all closed census predicates without replay", async (t) => {
+  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const codes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-response-${predicate}`);
+  flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
+    controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  const result = p.output.at(-1); assert.equal(result.fullGroupQualified, false); assert.equal(result.groups.length, groupNames.length);
+  for (const row of result.groups) {
+    assert.equal(row.error, "group-operation-failed"); assert.equal(row.outcome, "error"); assert.equal(row.uncertain, true);
+    assert.deepEqual(row.providerDiagnostic, { code: codes[groupNames.indexOf(row.group) % codes.length] }); assert.equal(row.id, undefined);
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row));
+  }
+  assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN")); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
   await assert.rejects(fleetMain(approved, p.deps), /already-attempted|busy/);
 });
 
