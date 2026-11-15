@@ -291,7 +291,9 @@ cut short by keeping the page in its back-forward cache is made again when the p
 its part is still the one it waited for; a page the browser prerenders reads its parts once it is
 shown. A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's
 read is on its way, since its answer would replace the part and the read with it: a part slower
-than the page's interval still comes, and the page is read once it has.
+than the page's interval still comes, and the page is read once it has (unless the part's answer
+asked to be read again itself, which then reads in the page's place). A read whose part a form's
+answer replaces is over: its other parts show their link at once.
 
 Two parts one read draws (four panels from one report) each take a tag naming its own element and
 the same address: the runtime reads it once, and the part side draws both in one patch. No

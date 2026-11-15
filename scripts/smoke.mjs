@@ -1337,8 +1337,8 @@ async function run(browser) {
   // the Navigation API or a full load without it; and so for a read made again at the address a
   // script moved its tag to after the link was followed (#1400).
   const crossBase = new URL(base).hostname === "localhost" ? base.replace("localhost", "127.0.0.1") : null;
-  for (const { moved = false, native = false, nested = false, cross = false } of [
-    ...(swaps ? [{}, { moved: true }, { nested: true }, ...(crossBase ? [{ cross: true }] : [])] : []),
+  for (const { moved = false, native = false, nested = false, cross = false, polled = false } of [
+    ...(swaps ? [{}, { moved: true }, { nested: true }, { polled: true }, ...(crossBase ? [{ cross: true }] : [])] : []),
     { native: true },
   ]) {
     const overtaken = await (await browser.newContext()).newPage();
@@ -1362,7 +1362,7 @@ async function run(browser) {
       if (url.search || url.pathname.endsWith("-inner")) return route.fulfill(signIn).catch(() => {});
       partAsked();
       await new Promise((resolve) => (releasePart = () => resolve(undefined)));
-      if (!nested) return route.fulfill(signIn).catch(() => {});
+      if (!nested && !polled) return route.fulfill(signIn).catch(() => {});
       await route
         .fulfill({
           status: 200,
@@ -1384,11 +1384,19 @@ async function run(browser) {
       for (const release of newsHeld) release();
     };
     await overtaken.goto(`${base}/`);
-    await overtaken.evaluate(async () => {
+    // The first read: a part waiting (`ReadAgain::now`), or a part read again a second after it
+    // is drawn (`ReadAgain::from`), whose answer then draws a part waiting.
+    await overtaken.evaluate(async (polled) => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="overtaken-0"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>'));
-    });
+      await corten.patch(
+        __html(
+          polled
+            ? '<div id="overtaken-0"><p id="overtaken-a">Drawn</p></div><template data-corten-read-again="1" data-from="/smoke/overtaken"></template>'
+            : '<div id="overtaken-0"><p id="overtaken-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/overtaken" data-part="overtaken-a"></template></div>',
+        ),
+      );
+    }, polled);
     await Promise.race([partSent, overtaken.waitForTimeout(5000)]);
     if (cross) {
       await overtaken.evaluate((href) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<a id="overtaken-away" href="${href}">Away</a>`)), `${crossBase}/news`);
@@ -1409,6 +1417,8 @@ async function run(browser) {
         ? "and nor does one read again at the address a script moved its tag to after the link was followed"
         : nested
           ? "nor one of a part the first part's answer drew waiting"
+          : polled
+            ? "nor one of a part a part read again drew waiting"
           : cross
             ? "nor where the link is to another site, which the browser loads itself"
             : native
@@ -1425,6 +1435,7 @@ async function run(browser) {
       "a part's redirect that comes after the user followed a link does not take the page from it",
       "and nor does one read again at the address a script moved its tag to after the link was followed",
       "nor one of a part the first part's answer drew waiting",
+      "nor one of a part a part read again drew waiting",
       "nor where the link is to another site, which the browser loads itself",
     ])
       skip(name, noSwaps);
@@ -1483,6 +1494,84 @@ async function run(browser) {
     );
     await orphan.unrouteAll({ behavior: "ignoreErrors" });
     await orphan.context().close();
+  }
+  // Two parts one read draws, whose answer waits for a stylesheet that never loads, and a form's
+  // answer replaces one of them: the read is over, so the other is no longer busy and shows its
+  // link, rather than wait as long as the stylesheet does (#1400).
+  {
+    const shared = await (await browser.newContext()).newPage();
+    let sharedStyleAsked = false;
+    await shared.route("**/smoke/never-shared.css", () => void (sharedStyleAsked = true));
+    await shared.route("**/smoke/shared-stalled", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+        body: '<link rel="stylesheet" href="/smoke/never-shared.css" data-corten-style><p id="shared-a">Read</p><p id="shared-b">Read</p>',
+      }),
+    );
+    await shared.goto(`${base}/`);
+    await shared.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="shared-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="shared-0"><p id="shared-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/shared-stalled" data-part="shared-a"></template><p id="shared-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/shared-stalled" data-part="shared-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; !sharedStyleAsked && waited < 5000; waited += 50) await shared.waitForTimeout(50);
+    await shared.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="shared-a">Drawn by a form</p>'));
+    });
+    await shared.waitForSelector("#shared-b[data-corten-read-failed]", { state: "attached", timeout: 3000 }).catch(() => {});
+    const settled = await shared.evaluate(() => ["shared-a", "shared-b"].map((id) => [document.getElementById(id)?.textContent, document.getElementById(id)?.getAttribute("aria-busy") ?? null, document.getElementById(id)?.hasAttribute("data-corten-read-failed")]));
+    check(
+      "a read whose answer waits for a stylesheet ends when one of its parts is replaced: the other shows its link",
+      sharedStyleAsked && settled[0][0] === "Drawn by a form" && settled[1][0] === "Waiting" && settled[1][1] === null && settled[1][2] === true,
+      JSON.stringify({ sharedStyleAsked, settled }),
+    );
+    await shared.unrouteAll({ behavior: "ignoreErrors" });
+    await shared.context().close();
+  }
+  // A slow part whose answer asks to be read again later (`ReadAgain::from`): from then on the part
+  // is read again in place of the page, which its head asks to be read whole, as for a page that
+  // draws such a part at once (#1400).
+  {
+    const polls = await (await browser.newContext()).newPage();
+    let first = true;
+    await polls.route(`${base}/`, async (route) => {
+      const action = route.request().headers().corten === "action";
+      if (!action && (route.request().headers().corten || !first)) return route.continue();
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      let body = await res.text();
+      if (action) {
+        // Slower than the page's read again, and asking to be read again in 30 s.
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        body += '<template data-corten-read-again="30" data-from="/"></template>';
+      } else {
+        first = false;
+        body = body.replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+      }
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    let [drawn, wholeAfter] = [false, 0];
+    polls.on("request", (r) => drawn && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeAfter++);
+    await polls.goto(`${base}/`);
+    await polls.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    drawn = (await polls.$$("ul#picks li")).length > 0;
+    await polls.waitForTimeout(2500);
+    const polling = await polls.$('main template[data-corten-read-again="30"]');
+    check(
+      "a page whose slow part's answer asks to be read again is not read whole after it",
+      drawn && polling !== null && wholeAfter === 0,
+      `drawn ${drawn}, polling ${polling !== null}, page read whole ${wholeAfter} times after`,
+    );
+    await polls.unrouteAll({ behavior: "ignoreErrors" });
+    await polls.context().close();
   }
   // A navigation away while the part's read is on its way: a client navigation stops the read and
   // leaves nothing marked failed on the page it draws; a page the browser left whole (and may keep

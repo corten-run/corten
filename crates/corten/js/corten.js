@@ -1090,6 +1090,9 @@ function readPatchAgain(tag, put) {
       // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
       // part's order in it).
       const from = /** @type {string} */ (tag.getAttribute("data-from"));
+      // Counted before the read: a part its answer draws waiting follows no redirect past a
+      // navigation started since.
+      const visited = visits;
       // Offline or unreachable: the part stays as it is.
       const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
       if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
@@ -1101,7 +1104,7 @@ function readPatchAgain(tag, put) {
       if (!here()) return;
       // Changed while the read was on its way: its answer is drawn for what was, so read again.
       if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
-      await apply(html, undefined, null, undefined, true, tag);
+      await apply(html, undefined, null, undefined, true, tag, undefined, visited);
       return;
     }
   });
@@ -1127,6 +1130,8 @@ const partOf = (tag) => {
 
 /** Where a page's tags are read: `<main>`, and the layout's elements that are the page's. */
 const PAGE_PARTS = "[data-corten-page]";
+/** A part read again after a while, in the page: the page is not read whole while there is one. */
+const PARTS_LATER = `main ${PART_LATER}, ${PAGE_PARTS} ${PART_LATER}`;
 
 /**
  * The parts a page asks to have read again (`ReadAgain::from` in the page, as in a patch): each
@@ -1260,7 +1265,18 @@ async function readPartOnce(from, tags, waiting, visited, done, release) {
   // The fetch stops when a part it waits for leaves, as its answer can no longer be drawn, or when
   // the last of its tags does with no part named (after it ends, that does nothing).
   const stop = new AbortController();
-  stop.signal.addEventListener("abort", release);
+  // Whether it drew, or has ended without drawing.
+  let drew = false;
+  let ended = false;
+  // Stopped before it drew: its answer, even one waiting for a stylesheet, is never drawn (a part
+  // it waits for has left), so its other parts are settled now, not when that wait ends.
+  stop.signal.addEventListener("abort", () => {
+    release();
+    if (drew || ended) return;
+    ended = true;
+    for (const el of waiting) unmarkBusy(el, mine);
+    if (page === swapped) for (const el of waiting) if (inPage(el)) markFailed(el);
+  });
   let holding = tags.length + waiting.length;
   for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done });
   for (const el of waiting) signalOf(el).addEventListener("abort", () => stop.abort(), { signal: done });
@@ -1296,13 +1312,13 @@ async function readPartOnce(from, tags, waiting, visited, done, release) {
   }
   // A success that is not a patch is the app's mistake (the route answered its page).
   if (html === undefined && res?.ok && !to) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
-  let drew = false;
   // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
   // changes anything: the check is made then, and says whether it drew.
   const ask = { get aborted() { return !(drew = here()); } };
   if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0], undefined, visited).catch(reportError);
   for (const el of waiting) unmarkBusy(el, mine);
-  if (drew || page !== swapped) return;
+  if (drew || ended || page !== swapped) return;
+  ended = true;
   if (moved()) return retry();
   for (const el of waiting) if (inPage(el)) markFailed(el);
 }
@@ -2604,7 +2620,7 @@ function readAgainLater() {
   const page = ++readAgainPage;
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
-  if (!(seconds > 0) || document.querySelector(`main ${PART_LATER}, ${PAGE_PARTS} ${PART_LATER}`)) return;
+  if (!(seconds > 0) || document.querySelector(PARTS_LATER)) return;
   // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
   const entry = navigation?.currentEntry?.key;
   const path = location.pathname;
@@ -2615,6 +2631,8 @@ function readAgainLater() {
       // A part the page waits for is read first: the page read whole meanwhile would replace the
       // part, and its read with it, as often as it is read again (a part slower than that never came).
       if (partReads) return readAgainLater();
+      // Its answer may have asked for a part to be read again, which then reads in its place.
+      if (document.querySelector(PARTS_LATER)) return;
       if (!navigation) return reload();
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read
