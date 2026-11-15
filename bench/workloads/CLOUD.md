@@ -419,10 +419,22 @@ read-only polling of its exact droplet/action identity, never a repeated POST.
 An `in-progress` create action may have `resource_id: null` or numeric zero;
 both remain pending, not ownership or completion proof. Completion still requires
 the exact positive droplet ID returned by the single POST, the matching action
-ID/type/resource type, and the existing exact action-link URL. Zero never extends
-the polling deadline or permits another create. This covers a synthetic instance
+ID/type/resource type. The POST must still return exactly one action link with a
+positive safe-integer ID. Its advisory `rel` and `href` fields may be absent, as
+the [published action-link schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml)
+permits; when present they must be `create` and the exact fixed-origin action URL.
+Polling constructs `/v2/actions/ID` from the numeric ID, never fetches `href`, and
+requires the authoritative response to prove the action ID, create type, droplet
+resource type, exact POST droplet ID and completed status. This agrees with
+[godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go#L114-L117).
+The [broader response schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/responses/droplet_create.yml)
+permits missing actions or IDs, but those still fail
+closed here: without a unique numeric action ID this adapter cannot prove
+completion. It does not discover another action or repeat POST. Neither optional
+link fields nor zero resource IDs extend the original deadline or bypass
+cancellation. This covers synthetic instances, including one
 permitted by the [published action model](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/actions/models/action.yml),
-not an observed response from the failed r21 launch, whose initial action body was
+not observed responses from the failed r21 launch, whose initial create body was
 not retained; that launch's exact cause remains unconfirmed.
 Responses have a body bound and whole-request deadline; in-flight timeout,
 cancellation or malformed responses conservatively retain lifecycle locks.
