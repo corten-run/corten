@@ -760,6 +760,219 @@ bytes, not automatic retry authority. The native live process owns full receipt
 and source/image validation; this transport never resumes it from serialized JSON.
 Real OS behavior of that publication step remains an integration/host check.
 
+### Read-Only Review Export
+
+The subject is produced **after launch**, not by a prelaunch source review. JSON
+waits after its check-only build and captures actual built-image identities;
+mixed waits before building and captures committed source and deterministic build
+contexts. `collect` returns 3 for a live unit **before downloading anything**.
+Do not collect, package a terminal archive, stop, restart, signal or change the
+job to obtain review bytes. There is no controller export CLI mode. The following
+is an explicitly authorized operator read-only inspection using existing host
+access, not a new approval mechanism or permission to launch/deliver/delete.
+
+1. Obtain operator authorization for reading one exact saved reservation, its
+   waiting campaign and the paths below into a new private local directory outside
+   the checkout and controller state. Serialize with the reservation's operator:
+   no concurrent collect, delivery or state editing; never remove an operation
+   lock. Use the measured, reviewed checkout, not a newer collector. Read the
+   child's `groups-ROUND/state.json` through its verified physical state root;
+   validate it with `cloud-options.mjs::controllerState`.
+   For a fleet, use that group's saved child state root, not the fleet root or a
+   sibling. Retain its exact bytes locally; require `starting`/`running`, a bound
+   ID/IP, no collection/deletion intent and no previous audit attempt for this
+   group (including legacy JSON `auditIntent`). The reservation token is the
+   ownership nonce, **not** the campaign ID's independently generated suffix.
+2. Before **each** SSH/SFTP session, re-establish the same saved account/context
+   and exact provider ID, name, run/shared tags, size, region and unique public IP
+   using the existing read-only ownership checks (`providerAccount` before/after
+   the exact-ID observation, then `cloud-contract.mjs::ownedDroplet`, with the
+   controller's additional unique-public-IP check). Never select by name alone,
+   reuse an old census or infer ownership from an IP. Use the saved private
+   `known_hosts`; require its already recorded host key (`StrictHostKeyChecking=yes`),
+   batch authentication, no client config, agent forwarding, local hooks, port
+   forwarding or multiplexing, and the same controlled environment as the existing
+   transport. Do not export credentials, process environments or raw image `Env`.
+   Missing host-key/ownership evidence stops this procedure, not a first-contact
+   accept or a switch to another host.
+3. Through that bounded read-only SSH session, save `systemctl show` for the exact
+   saved unit with `Id`, `LoadState`, `FragmentPath`, `ActiveState`, `Restart`,
+   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. Require the expected
+   loaded unit/path, `Restart=no`, active state and nonzero MainPID. Read
+   `/bench/bootstrap-ready.json` and `/bench/campaign/.host-attempt.json` to obtain
+   the exact campaign ID. In that campaign directory identify the **latest**
+   five-digit journal event, not merely an older `review-needed` event. Require
+   its status to be `blocked-review-needed` for the requested group, with the
+   expected campaign/round/plan hash, subject field and group-specific inbox.
+   Refuse an existing delivery inbox. Record the unit observation and latest
+   event name/bytes before transfer. Bound each observation to 30 seconds and
+   16 MiB of output; do not poll until a different state looks acceptable.
+
+Only these fixed review paths are allowed, relative to that campaign directory:
+
+| Group | Subject | Immutable snapshot | Waiting journal kind |
+| --- | --- | --- | --- |
+| `json-api` | `json-audit-subject.json` | `audit-sources/` (`blobs/SHA256`) | `review-needed` |
+| `mixed-production` | `mixed-audit-subject.json` | `mixed-audit-sources/` (`blobs/SHA256`, `contexts/APP.tar`) | `mixed-review-needed` |
+
+The snapshot is `subject.sourcesManifest.snapshot`, not the mutable working tree
+or a freshly regenerated context. JSON also binds `nativeManifest`, `images` and
+the complete `identities` in the subject; mixed binds ordered `requests`, each
+context archive hash and its build-input inventory. Neither review scope implies
+the other's built-image or source qualification. Native preparation results, if
+the reviewer needs them, require a separately scoped read-only export matching
+JSON's `nativeManifest`; they are not supplied by this minimal source export.
+
+4. Preflight the fixed paths on the owned host: physical directories, same entry
+   UID, private control files, regular single-link files, no symlinks, special
+   files or case-colliding names. Admit only `blobs/[a-f0-9]{64}` and, for mixed,
+   the selected apps' `contexts/APP.tar` from the sealed snapshot. Check the full
+   snapshot against its manifest before transfer. Use a private local filesystem
+   with a 1 GiB quota for this export, at most 100,000 entries and 256 MiB per
+   file, and a 180-second transfer deadline. These are conservative **inspection
+   limits**, not campaign/measurement overrides or evidence of actual size. If
+   the snapshot exceeds them, stop and retain the host; do not truncate it or
+   silently enlarge the limits. A timeout/partial transfer is untrusted evidence,
+   never permission to restart the job or overwrite an earlier local attempt.
+
+For example, after those checks, a POSIX operator shell can use this **download-only**
+SFTP batch. `IP`, `UNIT`, `ROUND`, `CAMPAIGN`, `WAIT_EVENT`, `SUBJECT`, `SNAPSHOT`,
+`KNOWN_HOSTS` and `EXPORT` are explicitly checked values from steps 1-4, not paths
+selected by a receipt. Validate the campaign as `ROUND-[a-f0-9]{16}` and the event
+as five digits plus the table's exact waiting kind and `.json`; choose subject
+and snapshot from the table. Local paths must be absolute physical paths without
+quotes, backslashes, newlines or SSH expansion characters (`$`, `%`). `EXPORT`
+must be fresh, mode 0700, quota-limited, and disjoint from state and checkout;
+use `umask 077`. The shell variables below contain no credential material.
+
+```sh
+timeout 180 sftp -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
+  -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
+  -oServerAliveInterval=15 -oServerAliveCountMax=2 \
+  -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
+  -oControlMaster=no -oControlPath=none -b - "root@$IP" <<EOF
+get /bench/bootstrap-ready.json "$EXPORT/bootstrap-ready.json"
+get /bench/campaign/.host-attempt.json "$EXPORT/reservation.json"
+get /bench/campaign/$CAMPAIGN/plan.json "$EXPORT/plan.json"
+get /bench/campaign/$CAMPAIGN/$WAIT_EVENT "$EXPORT/wait-event.json"
+get /bench/campaign/$CAMPAIGN/$SUBJECT "$EXPORT/$SUBJECT"
+get -R /bench/campaign/$CAMPAIGN/$SNAPSHOT "$EXPORT/$SNAPSHOT"
+EOF
+```
+
+The batch contains no `put`, `mkdir`, `rename`, removal or remote shell escape.
+No remote archive or controller-state file is created. Enforce the local quota
+and preflight before recursive transfer, not just a size check after downloading.
+Keep partial attempts separate; never merge them with a later download.
+
+5. Recheck ownership and the same live unit, latest event name/bytes, reservation,
+   plan, subject, snapshot and unchanged local controller state **after** transfer.
+   Require equality with the first
+   observations and an absent inbox. If the job exited, advanced, expired or any
+   byte/identity changed, the copy cannot support delivery. Preserve it as a
+   failed inspection; use ordinary collection only when independently terminal.
+   The entry's existing 24-hour review wait and the unit's 48-hour lifetime keep
+   running during inspection/review. Never extend either deadline. Require review
+   to finish before the earlier deadline; do not treat a still-active stopping
+   unit or an old waiting event as fresh authority.
+
+Inspect locally without importing/running downloaded code or unpacking the context
+tars. From the trusted measured checkout, the following read-only check binds the
+downloaded data to the operator's previously observed identity. Supply the saved
+reservation token, campaign plan hash and subject hash from the verified first
+observation, **not values automatically copied out of the subject being checked**.
+The preflight/quotas and before/after host observations above remain prerequisites.
+
+```sh
+node --input-type=module - "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+  "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" <<'JS'
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { deploymentSha256 } from './bench/workloads/deployments.mjs';
+import { digest, readRegular, tree } from './bench/workloads/isolated/evidence.mjs';
+const [root, round, commit, campaign, group, token, planHash, subjectHash] = process.argv.slice(2);
+assert.ok(['json-api', 'mixed-production'].includes(group));
+assert.match(round, /^r[1-9][0-9]*$/); assert.match(commit, /^[a-f0-9]{40}$/);
+assert.match(token, /^[a-f0-9]{16}$/);
+assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
+for (const hash of [planHash, subjectHash]) assert.match(hash, /^[a-f0-9]{64}$/);
+const mixed = group === 'mixed-production', prefix = mixed ? 'mixed' : 'json';
+const read = name => JSON.parse(readRegular(join(root, name)));
+const reservation = read('reservation.json'), plan = read('plan.json');
+const { campaignSha256, ...planBody } = plan;
+assert.equal(campaignSha256, planHash); assert.equal(deploymentSha256(planBody), planHash);
+assert.equal(plan.round, round); assert.equal(plan.commit, commit); assert.ok(plan.order.includes(group));
+assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
+assert.equal(reservation.campaignSha256, planHash);
+assert.deepEqual(read('bootstrap-ready.json'), { schema: 'benchmark-common-bootstrap/v1',
+  round, commit, token, group: plan.order.length === 1 ? group : 'all' });
+const event = read('wait-event.json'), status = event.status;
+assert.equal(event.kind, mixed ? 'mixed-review-needed' : 'review-needed');
+assert.equal(status.campaign, campaign); assert.equal(status.round, round);
+assert.equal(status.campaignSha256, planHash); assert.equal(status.state, 'blocked-review-needed');
+assert.equal(status.auditGroup, group); assert.equal(status.auditInbox, `${campaign}/${prefix}-audit-delivery.json`);
+assert.equal(status[mixed ? 'mixedAuditSubjectSha256' : 'auditSubjectSha256'], subjectHash);
+const started = Date.parse(event.at);
+assert.ok(Number.isFinite(started) && started <= Date.now() && Date.now() < started + 24 * 60 * 60 * 1000);
+const subject = read(`${prefix}-audit-subject.json`), { subjectSha256, ...body } = subject;
+assert.equal(subjectSha256, subjectHash); assert.equal(deploymentSha256(body), subjectHash);
+assert.equal(subject.schema, `benchmark-${prefix}-audit-subject/v1`);
+assert.equal(subject.campaignSha256, planHash); assert.equal(subject.commit, commit);
+const binding = plan.bindings.find(b => b.request.group === group); assert.ok(binding);
+assert.equal(subject.round, mixed ? binding.request.round : `j${2 * Number(round.slice(1))}`);
+if (mixed) assert.equal(subject.bindingSha256, deploymentSha256(binding));
+else assert.equal(subject.sourceSha256, plan.sourceSha256);
+const { sha256, ...manifest } = subject.sourcesManifest;
+assert.equal(deploymentSha256(manifest), sha256);
+const sources = join(root, mixed ? 'mixed-audit-sources' : 'audit-sources');
+assert.ok(isDeepStrictEqual(tree(sources), manifest.snapshot), 'snapshot differs');
+for (const file of manifest.files) {
+  assert.match(file.sha256, /^[a-f0-9]{64}$/); assert.equal(file.storedAs, `blobs/${file.sha256}`);
+  const bytes = readRegular(join(sources, file.storedAs));
+  assert.equal(bytes.length, file.bytes); assert.equal(digest(bytes), file.sha256);
+}
+if (mixed) for (const request of subject.requests) {
+  assert.match(request.identity.app, /^[a-z][a-z0-9-]*$/);
+  assert.equal(digest(readRegular(join(sources, 'contexts', `${request.identity.app}.tar`))), request.identity.contextArchiveSha256);
+}
+console.log('Review copy matches observed subject; not approval or campaign qualification.');
+JS
+```
+
+6. Give a fresh independent reviewer the verified subject, complete snapshot and
+   applicable native audit contract (`isolated/json-staging.mjs` plus
+   `json-api/contract.mjs`, or `isolated/mixed-staging.mjs` plus the mixed native
+   build-context contract). Source names are data in `sourcesManifest.files`;
+   read their `storedAs` blobs, never reconstruct paths from untrusted names or
+   run package/build hooks. Contexts are retained byte-for-byte and hashed as tar
+   files; inspect their content only in a separately bounded offline sandbox with
+   traversal/link/special-file rejection, no credentials or host mounts. The
+   reviewer must inspect semantics, every required native receipt identity and
+   source claim, not just endorse matching hashes. JSON's exact image identities
+   cannot be replaced by a prelaunch/source-only receipt. Mixed's scope is
+   committed source/context, **not** a review of a subsequently built image.
+   Unresolved findings or insufficient evidence mean no approved delivery.
+7. Only after independent review and explicit operator approval of this exact
+   subject, use the existing delivery command against the **same child state
+   root**, group and campaign. Preview and independently approve its exact action
+   hash; never automatically feed preview output into execution:
+
+```sh
+node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --print-approval
+node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --approve-reviewed-merged-ready REVIEWED_ACTION_SHA256
+```
+
+Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
+exact canonical subject, records its single durable attempt and cannot overwrite
+an inbox. The live process, not the exported JSON, accepts the full native receipt
+and advances. A delivery result of 3 is not qualification; a failed/uncertain
+attempt is not automatic retry authority. Observe normally, then use the existing
+separately approved `--collect` only after the exact unit is terminal. Terminal
+archive integrity, native replay, exit agreement and cleanup/deletion gates remain
+unchanged. This manual export does not exercise or qualify those operations;
+real target-host transport and review-to-delivery composition still need verification.
+
 ## Readiness And Verification
 
 Fresh independent exact-head review cleared the provider worker-snapshot security
