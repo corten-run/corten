@@ -102,10 +102,11 @@ link or GET form that started it, with the form's button, until the new page is 
 (through a redirect too). A button outside its form (`form="open"`, a row's action for one form
 the rows share) is marked as well, so the one pressed shows it is working, and the kit's `Button`
 draws that. When another navigation replaces one, or another button sends the same form by GET,
-the first one's marks go at once, and the newer one's stay. A write is never cut short that way:
-a button pressed while it is on its way is marked beside it and sends once its answer is drawn,
-when that answer took the write or refused only its input (a 2xx or a 422); after any other (a
-409, a 5xx, a failed network, another page) its mark goes and it is not sent.
+the first one's marks go at once, and the newer one's stay; an element two of them mark (a form a
+part's read and a submit both wait on) stays busy until the last ends. A write is never cut
+short that way: a button pressed while it is on its way is marked beside it and sends once its
+answer is drawn, when that answer took the write or refused only its input (a 2xx or a 422);
+after any other (a 409, a 5xx, a failed network, another page) its mark goes and it is not sent.
 Showing which control is working is then CSS
 alone, in the component's stylesheet:
 

@@ -3050,7 +3050,8 @@ rules something out.
     Speculation Rules) gets the page, which reads no part. The read is a `fetch` from the page's
     own origin, which the CSP's `default-src 'self'` allows, and the tag is a `<template>`, not a
     script. While the read is on its way the runtime marks the elements with an id beside the tag
-    `aria-busy="true"`, as it does a form and a navigation, and removes it when the read ends; a
+    `aria-busy="true"`, as it does a form and a navigation, and takes its mark away when the read
+    ends (one a submit also marks stays busy until both have ended); a
     read that ends without a patch (offline, the server unreachable, an error page, a page) marks
     them `data-corten-read-failed`, as does one whose parts were not all still there when its patch
     was ready to draw (one replaced or removed while it was on its way), which is not applied over

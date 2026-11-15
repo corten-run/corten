@@ -1185,7 +1185,7 @@ async function readPart(from, tags, waiting) {
   const held = [...tags, ...waiting];
   let left = held.length;
   for (const el of held) signalOf(el).addEventListener("abort", () => --left || stop.abort());
-  for (const el of waiting) busyBy.set(el, mine), elementOwn.setAttribute.call(el, "aria-busy", "true");
+  for (const el of waiting) markBusy(el, mine);
   const res = await fetch(from, { headers: { corten: "action" }, signal: stop.signal }).catch(() => {});
   const html = res?.headers.has("corten-patch") && fromHere(res.url) ? await res.text().catch(() => undefined) : undefined;
   // A success that is not a patch is the app's mistake (the route answered its page).
@@ -1195,7 +1195,7 @@ async function readPart(from, tags, waiting) {
   // changes anything: the check is made then, and says whether it drew.
   const ask = { get aborted() { return !(drew = here()); } };
   if (html !== undefined && here()) await apply(html, ask, null, undefined, true, tags.find(inPage) ?? tags[0]).catch(reportError);
-  for (const el of waiting) if (busyBy.get(el) === mine) elementOwn.removeAttribute.call(el, "aria-busy");
+  for (const el of waiting) unmarkBusy(el, mine);
   if (drew || page !== swapped) return;
   if (moved()) return readNow(tags.filter(inPage));
   for (const el of waiting) if (inPage(el)) elementOwn.setAttribute.call(el, "data-corten-read-failed", "");
@@ -2332,11 +2332,11 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   const mine = {};
   const form = source instanceof HTMLButtonElement || source instanceof HTMLInputElement ? source.form : null;
   const busy = again ? [] : [document.querySelector("main"), form ?? source, form && source];
-  for (const el of busy) if (el) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
+  for (const el of busy) if (el) markBusy(el, mine);
   // Cleared when the visit ends, or at once when it is abandoned: a prefetched answer it awaits
   // is not cancelled with it.
   const idle = () => {
-    for (const el of busy) if (el && busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    for (const el of busy) if (el) unmarkBusy(el, mine);
   };
   signal.addEventListener("abort", idle);
   if (going) fetching = going;
@@ -2428,8 +2428,27 @@ function readHeaders(whole, again) {
   return headers;
 }
 
-/** The visit that last marked each element busy. @type {WeakMap<Element, object>} */
+/** The visits, submits and part reads at work on each element, which is busy while any is. @type {WeakMap<Element, Set<object>>} */
 const busyBy = new WeakMap();
+/**
+ * Marks `el` busy as `owner`'s (a visit's, a submit's, a part's read): it is `aria-busy` while
+ * any of them is at work, so one that ends first does not clear another's.
+ * @param {Element} el @param {object} owner
+ */
+function markBusy(el, owner) {
+  let owners = busyBy.get(el);
+  if (!owners) busyBy.set(el, (owners = new Set()));
+  owners.add(owner);
+  formCall(el, "setAttribute", "aria-busy", "true");
+}
+/**
+ * Ends `owner`'s busy on `el`; the mark goes with the last owner's.
+ * @param {Element} el @param {object} owner
+ */
+function unmarkBusy(el, owner) {
+  const owners = busyBy.get(el);
+  if (owners?.delete(owner) && !owners.size) formCall(el, "removeAttribute", "aria-busy");
+}
 
 /** The last page `visit` swapped in, as the server sent it. */
 let swapped = "";
@@ -3065,8 +3084,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
     previous.nextWithin = within;
-    if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
-    if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
+    if (waiting && waiting !== previous.next && waiting !== previous.by) unmarkBusy(waiting, previous.mine);
+    if (previous.next) previous.busy.push(previous.next), markBusy(previous.next, previous.mine);
     return;
   }
   if (previous?.key === key) return;
@@ -3081,7 +3100,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   // Cleared at once when it is abandoned (a newer submit of the form, a navigation), not when its
   // own code next runs, after its fetch rejects or once what it waits on to draw has loaded (#1108).
   signal.addEventListener("abort", () => {
-    for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    for (const el of busy) unmarkBusy(el, mine);
   });
   const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
@@ -3096,7 +3115,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     init.body = plain ? entries.map(([name, value]) => `${name}=${value}\r\n`).join("") : fields.toString();
     init.headers = { corten: "action", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
-  for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
+  for (const el of busy) markBusy(el, mine);
   // The submit this one replaces ends once this one holds the marks they share, so the form and a
   // button sending again are not cleared and marked again.
   previous?.controller.abort();
@@ -3196,7 +3215,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
     const current = submits.get(form)?.controller === controller;
-    for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    for (const el of busy) unmarkBusy(el, mine);
     if (current) {
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.

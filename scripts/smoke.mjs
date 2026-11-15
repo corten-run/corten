@@ -4106,6 +4106,22 @@ async function run(browser) {
     release.post();
     await page.waitForFunction(() => !document.querySelector("#busy-form[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
     check("a part's read that ends during a submit leaves the form busy for the submit", afterRead === "true" && (await busyOf()) === null, `after the read ${afterRead}, after the submit ${await busyOf()}`);
+    // The submit ends first: the form stays busy for the read, and the read's end ends it.
+    held.read = hold("read");
+    held.post = hold("post");
+    for (const name of ["read", "post"]) sent[name] = new Promise((resolve) => (release[`${name}-sent`] = () => resolve(undefined)));
+    await placed("/smoke/busy-read");
+    await Promise.race([sent.read, page.waitForTimeout(5000)]);
+    await page.click("#busy-go");
+    await Promise.race([sent.post, page.waitForTimeout(5000)]);
+    const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/busy-post", { timeout: 5000 }).catch(() => {});
+    release.post();
+    await answered;
+    await page.waitForTimeout(300);
+    const afterSubmit = await busyOf();
+    release.read();
+    await page.waitForFunction(() => !document.querySelector("#busy-form[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    check("a submit that ends during a part's read leaves the form busy for the read", afterSubmit === "true" && (await busyOf()) === null, `after the submit ${afterSubmit}, after the read ${await busyOf()}`);
     // A script changes the tag's address while the read is held: the old answer is not drawn, and
     // the new address is read and drawn.
     held.read = hold("read");
