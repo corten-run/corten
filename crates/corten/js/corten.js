@@ -995,8 +995,11 @@ export function patch(html, signal) {
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
+ * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
+ *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
+ *   it replaces takes ({@link opened})
  */
-async function apply(html, signal, sent, took, own = true, asked) {
+async function apply(html, signal, sent, took, own = true, asked, within) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
@@ -1028,7 +1031,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
       elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
-      replaceKeeping(target, el, sent, took);
+      replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
   }
@@ -1292,10 +1295,18 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it.
- * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids @returns {() => void}
+ * sending it open closes it. `root` itself, closed by the user and drawn open in answer to a
+ * press outside it (a form's trigger beside a dialog), opens: the press is newer than their
+ * close, so a dialog they closed and ask for again opens. One they opened stays open whatever the
+ * answer draws. Outside is where the control was when it was pressed (`within`), so one removed,
+ * or a dialog redrawn, while the answer was on its way does not turn a press inside into one
+ * outside. A popover has no markup that shows it, so it stays as the user left it.
+ * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
+ * @param {Set<string>} [within] the ids of the dialogs and details the control that asked for the
+ *   patch was in when it was pressed ({@link asking})
+ * @returns {() => void}
  */
-function opened(root, fresh, ids) {
+function opened(root, fresh, ids, within) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
@@ -1312,9 +1323,11 @@ function opened(root, fresh, ids) {
     if (!to || to.localName !== el.localName) continue;
     if (shown && hasAttr(to, "popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
     if (!toggles) continue;
+    const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
-    if (now === (served.has(el) ? served.get(el) : /** @type {HTMLDialogElement} */ (to).open)) continue;
+    // Closed by the user and drawn open in answer to a press outside it: the answer's.
+    if (now === (served.has(el) ? served.get(el) : drawnOpen) || (el === root && within && !now && drawnOpen && !within.has(attrOf(root, "id") ?? ""))) continue;
     if (!dialog) /** @type {HTMLDetailsElement} */ (to).open = now;
     else if (!now) to.removeAttribute("open");
     else {
@@ -1345,14 +1358,15 @@ function opened(root, fresh, ids) {
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
  *   page's part a link replaces leaves it to the navigation, which moves it as a link does
+ * @param {Set<string>} [within] where the control that asked for `fresh` was ({@link opened})
  */
-function replaceKeeping(root, fresh, sent, took, focus = true) {
+function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
   // Every lookup until `fresh` is in the page, where a script may change it.
   const ids = idsIn(fresh);
-  const reopen = opened(root, fresh, ids);
+  const reopen = opened(root, fresh, ids, within);
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
@@ -2884,7 +2898,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2920,11 +2934,31 @@ function patchSubmit(event) {
 }
 
 /**
+ * The ids of the dialogs and details the control that sent `form`'s submit is in, read when it is
+ * pressed, so its answer knows what it was asked from inside ({@link opened}). The control is the
+ * submitter; with none (Enter in a form without a button, a script's `requestSubmit()`), the
+ * focused control if it is one of the form's, else the form.
+ * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @returns {Set<string>}
+ */
+function asking(form, submitter) {
+  const focused = document.activeElement;
+  const el = submitter ?? (focused && Array.from(formProperty(form, "elements")).includes(focused) ? focused : form);
+  const ids = new Set();
+  for (let at = closestOf(el, "dialog, details"); at; at = at.parentElement && closestOf(at.parentElement, "dialog, details")) {
+    const id = attrOf(at, "id");
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/**
  * Sends a `data-patch` form's submit, by `submitter`, as `sends` says (its method, action and
  * encoding).
  * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @param {ReturnType<typeof sendsAs>} sends
+ * @param {Set<string>} [within] where it was pressed ({@link asking}): read now, unless it waited
+ *   for a write's answer, which read it at the press
  */
-async function send(form, submitter, sends) {
+async function send(form, submitter, sends, within = asking(form, submitter)) {
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -2938,6 +2972,7 @@ async function send(form, submitter, sends) {
     // button that waits is busy with the write's marks, one it replaced no longer.
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
+    previous.nextWithin = within;
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
@@ -2956,7 +2991,7 @@ async function send(form, submitter, sends) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3024,7 +3059,7 @@ async function send(form, submitter, sends) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok);
+      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, within);
       else {
         const notice = noticeOf(res);
         await swapPage(body, signal, false, notice);
@@ -3073,8 +3108,8 @@ async function send(form, submitter, sends) {
     if (current) {
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
-      const next = pending.next;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next));
+      const { next, nextWithin } = pending;
+      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
     }
   }
 }
@@ -3085,10 +3120,11 @@ async function send(form, submitter, sends) {
  * validation again (the server checks what it gets). A form the answer replaced is found by its
  * id; one it removed (its row is gone) sends nothing, and so does one without an id that is no
  * longer on the page, whose values are the ones from before the answer.
- * The button is the one pressed, or the one the answer put in its place.
- * @param {HTMLFormElement} form @param {HTMLElement | null} submitter
+ * The button is the one pressed, or the one the answer put in its place; where it was is where it
+ * was pressed (`within`), not where the answer drew it.
+ * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
-function sendAgain(form, submitter) {
+function sendAgain(form, submitter, within) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
@@ -3101,7 +3137,7 @@ function sendAgain(form, submitter) {
             el.localName === submitter.localName &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by !== undefined) send(now, by, sendsAs(now, by));
+  if (by !== undefined) send(now, by, sendsAs(now, by), within);
 }
 
 /**
