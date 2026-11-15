@@ -74,9 +74,10 @@ Corten is pre-1.0, so any minor version may change the API.
   inputs of `type="hidden"` out of its index, so a repeated filter field in a hidden input no
   longer takes its place, nor does a copy in another form when the filter's form or rail has an
   id. Disabled controls, ones with the `hidden` attribute and ones inside an `inert` element still
-  count. A control found that cannot take focus leaves focus unrestored rather than another
-  taking it, and the control is looked for again in `<main>` only when nothing under its ancestor
-  matches
+  count, and the control is looked for again in `<main>` only when nothing under its ancestor
+  matches. A matching field that switches to or from `type="hidden"` across the swap now counts as
+  inserted or removed, so focus may be left unrestored or go to another field; give the control
+  its own id ([Limit 28](docs/design.md#limit-keep-place-identity))
   ([#1372 A data-keep-place navigation gives focus to a hidden input with the focused control's name and value: placeOf matches any input in main by index](https://github.com/corten-run/corten/issues/1372)).
 
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's

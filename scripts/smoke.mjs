@@ -4803,10 +4803,11 @@ async function run(browser) {
     // hidden never take the user's place, nor does a copy in another form when the filter has an id.
     // Without ids, a copy that cannot take focus inserted ahead of it takes its index: focus is
     // left alone there, as before this lookup (docs/design.md#limit-keep-place-identity).
-    for (const [kind, anchored, excluded] of [["hidden", true, ""], ["checkbox", true, ""], ["hidden", false, ""], ["checkbox", false, "disabled"], ["checkbox", false, "hidden"], ["checkbox", false, "inert"]]) {
+    // One more: a hidden input inside the filter form itself, ahead of the box.
+    for (const [kind, anchored, excluded, inside] of [["hidden", true, "", false], ["checkbox", true, "", false], ["hidden", false, "", false], ["checkbox", false, "disabled", false], ["checkbox", false, "hidden", false], ["checkbox", false, "inert", false], ["hidden", true, "", true]]) {
       const label = excluded
         ? `a data-keep-place filter without ids leaves focus alone when an earlier ${excluded} checkbox duplicate is inserted`
-        : `a data-keep-place filter keeps focus past an earlier ${kind} duplicate (${anchored ? "anchored" : "main"})`;
+        : `a data-keep-place filter keeps focus past an earlier ${kind} duplicate${inside ? " inside its form" : ""} (${anchored ? "anchored" : "main"})`;
       const duplicatePage = await (await browser.newContext()).newPage();
       await duplicatePage.goto(`${base}/news`);
       if (!(await duplicatePage.evaluate(() => "navigation" in window))) {
@@ -4822,10 +4823,11 @@ async function run(browser) {
           delete headers["content-encoding"];
           delete headers["content-length"];
           const applied = new URL(route.request().url()).searchParams.has("mine");
-          const duplicate = applied ? `<form ${excluded === "disabled" ? "" : excluded}><input type="${kind}" ${excluded === "disabled" ? "disabled" : ""} name="mine" value="on"><button>Export</button></form>` : "";
+          const copy = `<input type="${kind}" ${excluded === "disabled" ? "disabled" : ""} name="mine" value="on">`;
+          const duplicate = applied && !inside ? `<form ${excluded === "disabled" ? "" : excluded}>${copy}<button>Export</button></form>` : "";
           const body = (await res.text())
             .replace(/(<input\b[^>]*name="mine")/, '$1 value="on"')
-            .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${duplicate}${anchored ? form.replace("<form", '<form id="smoke-filter"') : form}`);
+            .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${duplicate}${anchored ? form.replace("<form", '<form id="smoke-filter"') : form}${applied && inside ? copy : ""}`);
           await route.fulfill({ status: res.status(), headers, body });
         },
       );

@@ -1502,15 +1502,17 @@ by its name inside its nearest ancestor with an id, falling back to `<main>`, an
 a checkbox or radio). Among repeated matches there it keeps the same index, leaving out inputs of
 `type="hidden"` but counting controls that are disabled, carry the `hidden` attribute or sit
 inside an `inert` element, so a preceding control entering or leaving those states does not move
-focus. If the control at that index cannot take focus, or the ancestor now holds fewer matches,
-focus is not restored. Only when nothing under the ancestor matches (it is gone, or every match
-in it) does it look for the control in `<main>`, by the index it had there.
+focus. If the control at that index cannot take focus, or the ancestor holds no match at that
+index, focus is not restored. Only when nothing under the ancestor matches (it is gone, or every
+match in it) does it look for the control in `<main>`, by the index it had there.
 Give the filter form or rail a `#[derive(Id)]` id to keep other forms' copies out of the count.
 **Limit:** Without the control's own stable id, correspondence depends on matching controls
 keeping their order, inside that ancestor or in `<main>`. Inserting, removing or reordering
 matches ahead of the control can leave focus unrestored or move it to another one, and a
 matching field that switches to or from `type="hidden"` across the swap counts as inserted or
-removed. Give the control, or its form, a `#[derive(Id)]` id when its matches can change
+removed. A control that moves to another ancestor, or itself turns `type="hidden"`, can lose
+focus to another match too. Give the control its own `#[derive(Id)]` id when its matches can
+change; an id on its form only keeps other forms' copies out of the count
 ([Limit 28](../design.md#limit-keep-place-identity)). Focus returns with its caret to the one they changed, or for
 a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open

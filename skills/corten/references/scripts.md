@@ -130,11 +130,12 @@ division: end statements with `;` and keep a division on the line it continues.
    from other forms' copies. The index skips inputs of `type="hidden"` but counts disabled
    controls, ones with the `hidden` attribute and ones inside an `inert` element, so a preceding
    control entering or leaving those states does not change its identity. A control at that
-   index that cannot take focus, or an ancestor now holding fewer matches, leaves focus
+   index that cannot take focus, or an ancestor holding no match at that index, leaves focus
    unrestored; only when nothing under the ancestor matches is it looked for by its index in
-   `<main>`. A page reading itself again (`ReadAgain`) finds it the same way. Give the control or
-   its form a stable id if matches can be inserted, removed or reordered ahead of it, or switch to
-   or from `type="hidden"` (that counts as inserted or removed). Never save and
+   `<main>`. A page reading itself again (`ReadAgain`) finds it the same way. Give the control
+   its own stable id if matches can be inserted, removed, reordered or moved between ancestors,
+   or switch to or from `type="hidden"` (that counts as inserted or removed); a form id only
+   keeps other forms' copies out. Never save and
    restore them yourself. `on:change` on the form applies every control (a text field and a
    `<textarea>` too, when they lose focus); `form.requestSubmit(button)` sends it as a submit
    button of the form (its `formaction` decides where); to apply for one control only, put the
