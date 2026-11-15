@@ -754,6 +754,13 @@ fn checks_href(name: &str, attrs: &[Attr]) -> bool {
 const URL_ATTRS: &[&str] =
     &["href", "xlink:href", "src", "srcset", "imagesrcset", "poster", "action", "formaction", "data", "ping"];
 
+/// Whether `attr` takes a URL that is not a form's address, where a page's post's address
+/// (`route::Action`, which only a form sends to) does not compile.
+fn link_attr(attr: &str) -> bool {
+    let attr = attr.to_ascii_lowercase();
+    URL_ATTRS.contains(&attr.as_str()) && attr != "action" && attr != "formaction"
+}
+
 /// The URL in `value`, the text of the attribute `name` (lowercase), that is a path in this app
 /// (`is_local_path`). `srcset` and `imagesrcset` hold a list of candidates and `ping` a list of
 /// URLs, and each URL in them is read. A link is a route and a static file its constant, so a path
@@ -1898,14 +1905,36 @@ impl Gen {
                 Attr::Expr(attr, expr) if !self.svg && attr.eq_ignore_ascii_case("href") && checks_href(name, attrs) => {
                     // The error points at the href's expression, not the whole `html!`.
                     let at = expr.clone().into_iter().next().map_or_else(Span::call_site, |t| t.span());
-                    let check = respan(q("(&::corten::view::__private::NamedHref(__corten_href)).__named_href();", &[]), at);
+                    let check = respan(
+                        q(
+                            "(&::corten::view::__private::NamedHref(__corten_href)).__named_href();
+                            (&::corten::view::__private::NotPost(__corten_href)).__not_post();",
+                            &[],
+                        ),
+                        at,
+                    );
                     // A `match`, not a `let`: temporaries in the expression live through the write.
                     self.code(q(
                         "match &(__A0) {
                             __corten_href => {
-                                use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _};
+                                use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _, NotPostAny as _, NotPostOwn as _};
                                 __A2
                                 (&::corten::view::__private::Attr(__corten_href)).__attr(__A1, __OUT);
+                            }
+                        }",
+                        &[expr.clone(), literal(&format!(" {attr}")), check],
+                    ))
+                }
+                // A link, a source or a ping is no page's post: one in it does not compile.
+                Attr::Expr(attr, expr) if link_attr(attr) => {
+                    let at = expr.clone().into_iter().next().map_or_else(Span::call_site, |t| t.span());
+                    let check = respan(q("(&::corten::view::__private::NotPost(__corten_url)).__not_post();", &[]), at);
+                    self.code(q(
+                        "match &(__A0) {
+                            __corten_url => {
+                                use ::corten::view::__private::{NotPostAny as _, NotPostOwn as _};
+                                __A2
+                                (&::corten::view::__private::Attr(__corten_url)).__attr(__A1, __OUT);
                             }
                         }",
                         &[expr.clone(), literal(&format!(" {attr}")), check],
