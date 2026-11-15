@@ -2715,6 +2715,9 @@ function address(to, patched) {
   if (patched && from) addressed.add(from);
   history.pushState(null, "", to);
   addressed.add(navigation?.currentEntry?.key ?? "");
+  // The entries the new one dropped (those it was ahead of) are forgotten.
+  const live = new Set(navigation?.entries().map((e) => e.key));
+  for (const key of addressed) if (!live.has(key)) addressed.delete(key);
 }
 
 /**
@@ -2728,14 +2731,24 @@ function address(to, patched) {
  * @param {URL} url @param {AbortSignal} signal
  */
 async function readAddress(url, signal) {
-  const page = () => visit(url, signal, undefined, false, undefined, undefined, stale);
+  // A page read: the traversal kept focus for the patch, so it goes where the browser would have
+  // put it for a page, the document's start.
+  const page = async () => {
+    await visit(url, signal, undefined, false, undefined, undefined, stale);
+    if (!signal.aborted && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  };
   const res = await fetch(url, { headers: { corten: "action" }, signal }).catch(() => null);
   signal.throwIfAborted();
-  if (!res?.ok || !res.headers.has("corten-patch") || res.redirected || !fromHere(res.url)) return page();
+  if (!res?.ok || !res.headers.has("corten-patch") || res.redirected || !fromHere(res.url)) {
+    // Its body is not read: the page's read does not share the connection with it.
+    res?.body?.cancel().catch(() => {});
+    return page();
+  }
   const html = await res.text().catch(() => null);
   signal.throwIfAborted();
   if (html === null) return page();
   await apply(html, signal, null);
+  signal.throwIfAborted();
   drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 }
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page

@@ -2118,6 +2118,10 @@ impl Req {
     /// }
     /// # fn main() {
     /// assert!(scope().to_html().contains("data-patch data-address"));
+    /// // A spread after the method: the browser keeps the first `method`, this one.
+    /// let extra: [(&str, &str); 1] = [("class", "scope")];
+    /// let spread = html! { <form method="get" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// assert!(spread.to_html().contains(r#"data-address class="scope""#));
     /// # }
     /// ```
     ///
@@ -2146,7 +2150,7 @@ impl Req {
     ///
     /// and on a form that posts, whose answer stays at the page's address. A `method` written as an
     /// expression is known only when the form is sent, and the runtime changes the address only for
-    /// a GET.
+    /// a GET; so is one after a spread, which may write the `method` the browser keeps, the first.
     ///
     /// ```compile_fail
     /// use corten::prelude::*;
@@ -2155,6 +2159,17 @@ impl Req {
     ///     html! { <form method="post" data-patch data-address><button>"Apply"</button></form> }
     /// }
     /// # fn main() {}
+    /// ```
+    ///
+    /// A `method` before every spread is the one the browser keeps:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// # fn main() {
+    /// let extra: [(&str, &str); 1] = [("class", "scope")];
+    /// let _ = html! { <form method="post" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// # }
     /// ```
     pub fn patch_or<For, Kind, F, Fut>(
         &self,

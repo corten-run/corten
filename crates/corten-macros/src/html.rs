@@ -707,9 +707,10 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
 /// Why `data-address` would never change the address: the runtime puts the address a `data-patch`
 /// form asked for by GET in the address bar once its answer is drawn, so the mark goes on a
 /// `<form>` with `data-patch` whose `method` sends it as a GET (none, `get`, or one the browser
-/// reads as GET). A spread may write either attribute, and a `method` written as an expression is
-/// known only when the form is sent, so those are left to the runtime, which changes the address
-/// only for a GET.
+/// reads as GET). A spread may write either attribute, so a form with one may lack `data-patch`
+/// here, and a `method` after a spread may not be the one the browser keeps (the first); one before
+/// every spread is. A `method` written as an expression is known only when the form is sent. Those
+/// are left to the runtime, which changes the address only for a GET.
 fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
     attr_named(attrs, "data-address")?;
     if !is_form {
@@ -717,16 +718,15 @@ fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
             "data-address: only a <form data-patch method=\"get\"> says its answer is the page at the address it asked for; a link changes the address already",
         );
     }
-    if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
-        return None;
-    }
-    if attr_named(attrs, "data-patch").is_none() {
+    let spread = attrs.iter().position(|a| matches!(a, Attr::Spread(_)));
+    if spread.is_none() && attr_named(attrs, "data-patch").is_none() {
         return Some(
             "data-address: a form without data-patch is sent by the browser, which changes the address itself: add data-patch, or remove data-address",
         );
     }
     let not_get = |m: &str| m.eq_ignore_ascii_case("post") || m.eq_ignore_ascii_case("dialog");
-    if attr_named(attrs, "method").flatten().is_some_and(not_get) {
+    let kept = &attrs[..spread.unwrap_or(attrs.len())];
+    if attr_named(kept, "method").flatten().is_some_and(not_get) {
         return Some(
             "data-address: only a GET form's answer is the page at the address it asked for; a form that posts, or closes its dialog, leaves the address as it is: give it method=\"get\", or remove data-address",
         );
