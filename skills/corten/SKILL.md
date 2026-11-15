@@ -101,7 +101,7 @@ Read only the recipe the task needs. For concepts, read the guides in the Corten
    --check` (both), that each component with a stylesheet, script or view is in a list in its
    crate or a member that depends on it (it names any that is not), clippy with warnings denied, the tests (which rewrite `types/app.d.ts`; a stale
    one fails once, then passes), and `tsc` over the scripts in `src/` and `static/`. The compiler checks each `js::` call against the script's JSDoc; `tsc` checks the
-   function bodies (install TypeScript: an app with scripts fails `corten check` without it;
+   function bodies (install TypeScript 6.0 or later: an app with scripts fails `corten check` without it;
    `--no-script-types` skips them and says so, for a machine that cannot run `tsc`). At a workspace root it checks each member that depends on `corten`. When the app's
    `Cargo.lock` pins another corten than the command was built from, `dev`, `fmt`, `check` and
    `ui` first print a note with the `cargo install` line for the matching command (and `ui add`

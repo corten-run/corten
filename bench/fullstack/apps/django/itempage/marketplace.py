@@ -22,7 +22,7 @@ def _object(value, fields):
 
 
 def validate_record(record, requested_id):
-    """Validate a write's complete source record, not what the template happens to use."""
+    """Validate a complete source record, not what the template happens to use."""
     text, number = (str,), (int,)
     nullable_text, nullable_number = (str, type(None)), (int, type(None))
     arrays = ("categories", "badges", "tags", "images", "fields", "listings", "offers", "contents", "included_in")
@@ -75,6 +75,10 @@ class MarketplaceSource:
         if os.environ.get("MARKETPLACE_SOURCE") == "fixture":
             with open(os.environ.get("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"), encoding="utf-8") as file:
                 self.fixture = json.load(file)
+            if not isinstance(self.fixture, dict):
+                raise ValueError("Invalid marketplace fixture")
+            for record_id, record in self.fixture.items():
+                validate_record(record, record_id)
 
     def get(self, record_id, traceparent=None):
         if self.fixture is not None:
@@ -88,7 +92,9 @@ class MarketplaceSource:
         response.raise_for_status()
         if not 200 <= response.status_code < 300:
             raise requests.HTTPError("Marketplace API returned a non-success status")
-        return response.json()
+        record = response.json()
+        validate_record(record, record_id)
+        return record
 
 
 class MarketplaceFormat:

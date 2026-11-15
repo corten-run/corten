@@ -1235,8 +1235,7 @@ function counterpart(root, fresh, el, exact, ids) {
   if (el === root) return fresh;
   const id = idOf(el);
   if (id) return ids ? ids(id) : queryOne(fresh, `#${CSS.escape(id)}`);
-  let anchor = /** @type {Element} */ (el.parentElement);
-  while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
+  const anchor = anchorOf(root, el);
   const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
   const name = attrOf(el, "name");
   if (!home) return null;
@@ -2421,10 +2420,10 @@ function readLater(seconds, wanted, read) {
 /**
  * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
  * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
- * @typedef {import("./navigation").NavigateEvent<Info>} NavigateEvent
+ * @typedef {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} RuntimeNavigateEvent
  */
-// The Navigation API, where the browser has it; TypeScript's DOM library does not declare it yet.
-const navigation = /** @type {Window & { navigation?: import("./navigation").Navigation<Info> }} */ (window).navigation;
+// The Navigation API, where the browser has it.
+const navigation = /** @type {Navigation | undefined} */ (window.navigation);
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2477,7 +2476,7 @@ function sendsAs(form, submitter) {
 
 /**
  * What started a navigation, if anything: a link, a form, or the button that sent one.
- * @param {NavigateEvent} event
+ * @param {RuntimeNavigateEvent} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
@@ -2504,7 +2503,8 @@ function posts(event) {
  */
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
-navigation?.addEventListener("navigate", (event) => {
+// Only this module has these symbol keys; another script's info has none of them.
+navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -2557,9 +2557,11 @@ navigation?.addEventListener("navigate", (event) => {
   const after = () => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
-    const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
+    const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? placeAt(place) : undefined);
     if (!el || !place) return;
     focusOn(el);
+    // One that cannot take focus (disabled, hidden, inert) did not: no other control is tried.
+    if (document.activeElement !== el) return;
     try {
       const [start, end, direction] = place.caret;
       if (start !== null) el.setSelectionRange(start, end, direction);
@@ -2581,7 +2583,8 @@ navigation?.addEventListener("navigate", (event) => {
  */
 function go(url, options) {
   // Called only where the browser has the Navigation API.
-  const { committed, finished } = /** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options);
+  // navigate() returns both promises; lib.dom models the Web IDL dictionary's fields as optional.
+  const { committed, finished } = /** @type {Required<NavigationResult>} */ (/** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options));
   committed.catch(() => {});
   return finished;
 }
@@ -2609,7 +2612,7 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * @param {NavigateEvent} event
  * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after
- * @param {import("./navigation").NavigationInterceptOptions} options
+ * @param {NavigationInterceptOptions} options
  * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
  */
 function interceptVisit(event, run, after, options, early = true) {
@@ -2804,15 +2807,21 @@ function fieldsAt(root, wanted) {
 
 /**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by
- * its name in <main>, and which of the controls with that name it is), and its caret. Null when
- * nothing is focused.
+ * its name inside the nearest ancestor with an id (else <main>), and which control with that name
+ * it is, counting those that cannot take focus now but not inputs of type hidden), the same in
+ * <main> for when nothing under that ancestor matches any more, and its caret. Null when nothing
+ * is focused.
  * @param {Element | null} el
- * @returns {{ at: string, nth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
+ * @returns {{ at: string, nth: number, main: string, mainNth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
  */
 function placeOf(el) {
   const name = el && attrOf(el, "name");
   const id = el && idOf(el);
-  const at = id ? `#${CSS.escape(id)}` : name && el ? `main ${named(el, name)}` : "";
+  const root = el && closestOf(el, "main");
+  const anchor = !id && name && root && el && idOf(anchorOf(root, el));
+  const control = name && el ? `${named(el, name)}:not([type=hidden i])` : "";
+  const main = !id && control ? `main ${control}` : "";
+  const at = id ? `#${CSS.escape(id)}` : anchor ? `#${CSS.escape(anchor)} ${control}` : main;
   if (!at) return null;
   const f = /** @type {HTMLInputElement} */ (el);
   /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
@@ -2820,7 +2829,29 @@ function placeOf(el) {
   try {
     caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
-  return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), caret };
+  const nth = (/** @type {string} */ selector) => Array.prototype.indexOf.call(document.querySelectorAll(selector), el);
+  return { at, nth: nth(at), main, mainNth: main ? nth(main) : -1, caret };
+}
+
+/**
+ * The same control, at its index among the matches under its ancestor (none when fewer are left).
+ * Only when nothing there matches (the ancestor is gone, or every match in it) is it looked for in
+ * <main>, by its index there.
+ * @param {NonNullable<ReturnType<typeof placeOf>>} place
+ */
+function placeAt(place) {
+  const at = document.querySelectorAll(place.at);
+  return at.length || !place.main ? at[place.nth] : document.querySelectorAll(place.main)[place.mainNth];
+}
+
+/** The nearest ancestor with an id, bounded by `root`. @param {Element} root @param {Element} el */
+function anchorOf(root, el) {
+  let anchor = el;
+  while (anchor !== root) {
+    anchor = /** @type {Element} */ (anchor.parentElement);
+    if (idOf(anchor)) break;
+  }
+  return anchor;
 }
 
 /**

@@ -5144,6 +5144,148 @@ async function run(browser) {
       );
       await keptPage.context().close();
     } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);
+    // Applying a filter adds another form ahead of it, repeating the chosen field. Inputs of type
+    // hidden never take the user's place, nor does a copy in another form when the filter has an id.
+    // Without ids, a copy that cannot take focus inserted ahead of it takes its index: focus is
+    // left alone there, as before this lookup (docs/design.md#limit-keep-place-identity).
+    // One more: a hidden input inside the filter form itself, ahead of the box.
+    for (const [kind, anchored, excluded, inside] of [["hidden", true, "", false], ["checkbox", true, "", false], ["hidden", false, "", false], ["checkbox", false, "disabled", false], ["checkbox", false, "hidden", false], ["checkbox", false, "inert", false], ["hidden", true, "", true]]) {
+      const label = excluded
+        ? `a data-keep-place filter without ids leaves focus alone when an earlier ${excluded} checkbox duplicate is inserted`
+        : `a data-keep-place filter keeps focus past an earlier ${kind} duplicate${inside ? " inside its form" : ""} (${anchored ? "anchored" : "main"})`;
+      const duplicatePage = await (await browser.newContext()).newPage();
+      await duplicatePage.goto(`${base}/news`);
+      if (!(await duplicatePage.evaluate(() => "navigation" in window))) {
+        skip(label, noSwaps);
+        await duplicatePage.context().close();
+        continue;
+      }
+      await duplicatePage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const applied = new URL(route.request().url()).searchParams.has("mine");
+          const copy = `<input type="${kind}" ${excluded === "disabled" ? "disabled" : ""} name="mine" value="on">`;
+          const duplicate = applied && !inside ? `<form ${excluded === "disabled" ? "" : excluded}>${copy}<button>Export</button></form>` : "";
+          const body = (await res.text())
+            .replace(/(<input\b[^>]*name="mine")/, '$1 value="on"')
+            .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${duplicate}${anchored ? form.replace("<form", '<form id="smoke-filter"') : form}${applied && inside ? copy : ""}`);
+          await route.fulfill({ status: res.status(), headers, body });
+        },
+      );
+      await duplicatePage.goto(`${base}/news`);
+      // Stay inside the page across the swap, as in the WebKit navigation probe above.
+      const after = await duplicatePage.evaluate(async () => {
+        const box = /** @type {HTMLInputElement} */ (document.querySelector("main form[data-keep-place] input[name=mine]"));
+        /** @type {HTMLDetailsElement} */ (box.closest("details")).open = true;
+        box.focus();
+        const before = document.activeElement === box;
+        box.click();
+        const done = () => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks" && !document.querySelector("main[aria-busy]");
+        for (let i = 0; i < 100 && !done(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return {
+          before,
+          swapped: done() && !box.isConnected,
+          // The box, not a hidden copy put ahead of it in the same form.
+          focused: document.activeElement === document.querySelector('main form[data-keep-place] input[name=mine]:not([type="hidden"])'),
+          matches: document.querySelectorAll('main input[name=mine][value="on"]').length,
+          body: document.activeElement === document.body,
+          active: document.activeElement?.outerHTML.slice(0, 150),
+        };
+      });
+      check(label, after.before && after.swapped && after.matches === 3 && (excluded ? after.body : after.focused), JSON.stringify(after));
+      await duplicatePage.context().close();
+    }
+    // Focus correspondence does not change when a preceding duplicate's eligibility changes. A
+    // control that is still there but cannot take focus keeps it from no other control, and one
+    // missing from an ancestor that still holds matches is not looked for elsewhere; only when
+    // nothing under the ancestor matches is it looked for again in <main>, by its index there.
+    const shownKind = "become hidden but shown by a style";
+    const turningKind = "turn an earlier copy type=hidden";
+    for (const kind of ["enable preceding", "disable preceding", "lose ancestor", "lose ancestor beside an unchanged duplicate", "move between forms", "become disabled", "become hidden", "become inert", shownKind, turningKind]) {
+      const shown = kind === shownKind;
+      const turning = kind === turningKind;
+      const becoming = shown ? "hidden" : kind.startsWith("become ") ? kind.slice("become ".length) : "";
+      const alone = (!!becoming && !shown) || turning;
+      const label = turning
+        ? "a data-keep-place swap leaves focus alone when an earlier copy in its form turns type=hidden, beside a later form's copy"
+        : alone
+          ? `a data-keep-place swap leaves focus alone when its control must become ${becoming}, beside another form's copy`
+          : `a data-keep-place swap keeps focus and caret when it must ${kind}`;
+      const correspondencePage = await (await browser.newContext()).newPage();
+      await correspondencePage.goto(`${base}/news`);
+      if (!(await correspondencePage.evaluate(() => "navigation" in window))) {
+        skip(label, noSwaps);
+        await correspondencePage.context().close();
+        continue;
+      }
+      await correspondencePage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const applied = new URL(route.request().url()).searchParams.has("mine");
+          const losing = kind.startsWith("lose ancestor");
+          const moved = kind === "move between forms" && applied;
+          const target = `<input name="q" value="abcdef" data-smoke-focused ${becoming && applied ? becoming : ""}>`;
+          const preceding = kind.endsWith(" preceding")
+            ? `<input name="q" value="abcdef" ${applied === (kind === "disable preceding") ? "disabled" : ""}>`
+            : turning
+              ? `<input name="q" value="abcdef" ${applied ? 'type="hidden"' : ""}>`
+              : "";
+          // After the filter form, so its index in <main> is the focused control's once the copy
+          // turns. (A swap's answer is <main>'s part, without its closing tag.)
+          const later = turning ? '<form><input name="q" value="abcdef"></form>' : "";
+          const other =
+            kind === "lose ancestor beside an unchanged duplicate"
+              ? '<form><input name="q" value="abcdef"></form>'
+              : kind === "move between forms"
+                ? `<form id="smoke-other"><input name="q" value="abcdef">${moved ? target : ""}</form>`
+                : becoming
+                  ? '<form id="smoke-export"><input name="q" value="abcdef"></form>'
+                  : "";
+          const body = (await res.text())
+            .replace(/(<form\b[^>]*data-keep-place[^>]*>)/, (_, form) => `${other}${losing && applied ? form : form.replace("<form", '<form id="smoke-filter"')}${preceding}${moved ? "" : target}`)
+            .replace(/(<form id="smoke-filter"[\s\S]*?<\/form>)/, (_, form) => `${form}${later}`);
+          await route.fulfill({ status: res.status(), headers, body });
+        },
+      );
+      await correspondencePage.goto(`${base}/news`);
+      const after = await correspondencePage.evaluate(async (shown) => {
+        if (shown) {
+          // A hidden attribute the app's style overrides: the control can still take focus.
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync("[data-smoke-focused][hidden] { display: inline-block !important }");
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }
+        const input = /** @type {HTMLInputElement} */ (document.querySelector("[data-smoke-focused]"));
+        input.focus();
+        input.setSelectionRange(1, 4, "backward");
+        const before = document.activeElement === input;
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main form[data-keep-place] input[name=mine]"));
+        mine.click();
+        const done = () => new URL(location.href).searchParams.has("mine") && document.getElementById("stories-title")?.textContent === "Stories about your stocks" && !document.querySelector("main[aria-busy]");
+        for (let i = 0; i < 100 && !done(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const fresh = /** @type {HTMLInputElement} */ (document.querySelector("[data-smoke-focused]"));
+        return {
+          before,
+          swapped: done() && !input.isConnected,
+          focused: document.activeElement === fresh,
+          caret: [fresh.selectionStart, fresh.selectionEnd, fresh.selectionDirection],
+          body: document.activeElement === document.body,
+          active: document.activeElement?.outerHTML.slice(0, 150),
+        };
+      }, shown);
+      check(label, after.before && after.swapped && (alone ? after.body : after.focused && after.caret.join() === "1,4,backward"), JSON.stringify(after));
+      await correspondencePage.context().close();
+    }
     // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it
     // closed though the new page draws it open too, which takes what the load recorded of it.
     const loadedGroupCheck = "a data-keep-place swap keeps closed a group the loaded page drew open and the user closed";

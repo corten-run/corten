@@ -62,7 +62,8 @@ gives the component a module `js` with one Rust function per export, its paramet
 the JSDoc. A ref's element type is inferred from the tag it is put on, `event`'s from the
 `on:` name as lib.dom's `HTMLElementEventMap` types it (`on:click` is a `PointerEvent`,
 `on:formdata` a `FormDataEvent`, a name it does not list an `Event`; an element's `error`,
-`abort`, `progress` and `resize` are `Event`s, as the element fires them) and `target`'s from
+`abort`, `progress` and `resize` are `Event`s, as the element fires them; `input` is an `Event`
+because selects and checkboxes fire one, even though text edits fire an `InputEvent`) and `target`'s from
 the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `MouseEvent` where
 it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
 does not export is a compile error that points at the call. A call takes as many arguments as
@@ -92,7 +93,7 @@ so `JSON.parse(text).x.y` passes the check: give it the type `unknown`
 reads: a feed's envelope is checked, while its rows are trusted as the server's own type
 ([Live rows](#live-rows)). Corten's own scripts (the runtime, the kit, the template and these
 examples) have no explicit `any` and no `@ts-ignore`, which `npm run check` holds them to; where
-the DOM library lacks a type (the Navigation API, a service worker's global) they declare what
+the DOM library lacks a type (a service worker's global, `navigator.connection`) they declare what
 they use and cast once, with a comment saying what vouches for the value
 ([design Choice 40](../design.md#choice-script-boundaries)).
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
@@ -117,9 +118,9 @@ sets first is taken as declared, even when the class declares its fields, so a m
 class's fields (`/** @this {Fields} */` on a method, `/** @type {Fields} */ (this).name = ..` in
 the constructor), and a read of `naem` only when a method other than the constructor set it and
 `undefined` is not accepted. Keep behavior in exported functions, as components do, and have a
-class set only the fields it declares; write a class rather than a function called with `new`,
-which TypeScript 5.9.3 accepts in JavaScript and 7.0.2 refuses, and a rest parameter (`...rest`)
-rather than reading `arguments`, which lets 5.9.3 take any number of arguments. A value whose type
+class set only the fields it declares. For a function called with `new` and a call with more
+arguments than a function reading `arguments` declares, 6.x accepts these in JavaScript and
+7.0.2 refuses them; use a class and a rest parameter (`...rest`) instead. A value whose type
 nothing fixes (`new Promise((resolve) => ..)`, a type parameter no argument decides) is `any` in
 JavaScript and `unknown` in TypeScript: give it one (`/** @type {Promise<boolean>} */`). TypeScript
 source would also need a pass that removes TypeScript's syntax before a browser could run the
