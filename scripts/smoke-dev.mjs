@@ -38,6 +38,8 @@ try {
   /** @param {string} name */
   const reportOf = (name) => drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${name} `), timeout: 10000 }).then(() => true, () => false);
   await drawn.route(base + "/", async (route) => {
+    // The page's own load only: the runtime's read of its picks (`corten: action`) goes as it is.
+    if (route.request().headers().corten) return route.continue();
     const res = await route.fetch();
     const controls = [
       '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required>',

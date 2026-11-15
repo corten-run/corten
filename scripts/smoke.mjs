@@ -1242,6 +1242,8 @@ async function run(browser) {
       await held.waitForFunction(() => document.title === "News | Watchlist");
       await held.click('header nav a[href="/"]');
       await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
+      // The part is busy once its fetch starts, which in Firefox can be before the route sees it.
+      for (let waited = 0; reads < 2 && waited < 5000; waited += 100) await held.waitForTimeout(100);
       const drawn = { ...(await placeholder()), documents };
       check("and so does it in a page a client navigation drew", drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
     } else skip("and so does it in a page a client navigation drew", noSwaps);
