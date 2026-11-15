@@ -4845,7 +4845,8 @@ async function run(browser) {
         return {
           before,
           swapped: done() && !box.isConnected,
-          focused: document.activeElement === document.querySelector("main form[data-keep-place] input[name=mine]"),
+          // The box, not a hidden copy put ahead of it in the same form.
+          focused: document.activeElement === document.querySelector('main form[data-keep-place] input[name=mine]:not([type="hidden"])'),
           matches: document.querySelectorAll('main input[name=mine][value="on"]').length,
           body: document.activeElement === document.body,
           active: document.activeElement?.outerHTML.slice(0, 150),
