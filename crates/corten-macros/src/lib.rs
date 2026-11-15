@@ -344,16 +344,7 @@ fn fields(input: TokenStream) -> Result<String, String> {
             }
             Kind::Rows => {
                 let (key, row) = map_types(&ident, &ty)?;
-                // Rows of the struct itself would let a client choose how deep the form is read.
-                // Only the struct's own name, or `Self`, with any generics: a path may name another
-                // type of that name. A cycle through other types, or through a path, is refused by
-                // reading their `SHAPE`, below.
-                let own = row.split('<').next().unwrap_or_default().trim();
-                if own == name.as_str() || own == "Self" {
-                    return Err(format!(
-                        "Fields: `{ident}` is rows of `{name}` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs"
-                    ));
-                }
+                rows_of_itself(&ident, &name, &row)?;
                 Shape::Rows(key, row)
             }
             Kind::Map => Shape::Map(map_types(&ident, &ty)?.0),
@@ -632,6 +623,23 @@ fn no_option(field: &str, ty: &[TokenTree], what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rows of the struct itself, which would let a client choose how deep the form is read, a level
+/// for each `[key]` it sends. `row` is the rows' type as [`nested_type`] writes it: the struct's
+/// own name or `Self`, with any generics, is refused; a path is not, since it may name another type
+/// of that name (a rows type written as a path does not compile today for another reason: the type
+/// is written back with its tokens spaced apart). Rows that reach the struct through another type,
+/// named without a path, are refused when the derive reads that type's `SHAPE`, which is then a
+/// cycle (E0391).
+fn rows_of_itself(field: &str, name: &str, row: &str) -> Result<(), String> {
+    let own = row.split('<').next().unwrap_or_default().trim();
+    if own == name || own == "Self" {
+        return Err(format!(
+            "Fields: `{field}` is rows of `{name}` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs"
+        ));
+    }
+    Ok(())
+}
+
 /// The key and row types of a rows field: `BTreeMap<Domain, DomainLimits>`.
 fn map_types(field: &str, ty: &[TokenTree]) -> Result<(String, String), String> {
     let usage =
@@ -753,4 +761,23 @@ pub(crate) fn apply_rule(field: &str, rule: &str) -> Result<String, String> {
         }
         other => return Err(format!("unknown rename_all rule {other:?}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rows of the struct itself are refused in the derive's own words, by the struct's name or
+    /// `Self`, with generics as `nested_type` writes them; another type, a longer name and a path
+    /// (which may name another type of that name) are not.
+    #[test]
+    fn rows_of_the_struct_itself_are_refused_by_its_name_or_self() {
+        let refused = "Fields: `then` is rows of `Step` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs";
+        for row in ["Step", "Self", "Step < u8 >", "Self < T >"] {
+            assert_eq!(rows_of_itself("then", "Step", row), Err(refused.to_string()), "{row}");
+        }
+        for row in ["Rule", "Steps", "StepRow", "other :: Step", "Rule < Step >"] {
+            assert_eq!(rows_of_itself("then", "Step", row), Ok(()), "{row}");
+        }
+    }
 }

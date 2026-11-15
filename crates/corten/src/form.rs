@@ -297,7 +297,7 @@
 //! ```
 //!
 //! Rows that reach it through another type are a cycle in reading the types' `SHAPE`, which
-//! rustc reports as one (E0391, "cycle detected when elaborating drops for `...::SHAPE`"):
+//! rustc reports as a cycle error (E0391) naming `SHAPE`:
 //!
 //! ```compile_fail,E0391
 //! # use std::collections::BTreeMap;
@@ -1433,7 +1433,7 @@ impl<K, P: Place> Keyed<K, P> {
 
 /// Field to message, in the order they were added, and a message about the whole form. A field
 /// keeps its first message, and so does the form.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Errors {
     fields: Vec<(Kept, String)>,
     form: Option<String>,
@@ -1443,6 +1443,18 @@ pub struct Errors {
     /// Made with the first row's message, so a form without rows builds and drops no map.
     rows: Option<Box<RowIndex>>,
     refusal: Refusal,
+}
+
+/// The messages and the refusal; not where the rows' messages are, which is by hashes keyed for
+/// each process.
+impl fmt::Debug for Errors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Errors")
+            .field("fields", &self.fields)
+            .field("form", &self.form)
+            .field("refusal", &self.refusal)
+            .finish_non_exhaustive()
+    }
 }
 
 /// [`Errors`]' messages of rows: by the hash of the row's chain ([`Place::hash_rows`]), where each
@@ -1459,10 +1471,9 @@ impl std::hash::Hasher for RowHashed {
         self.0
     }
 
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 = self.0.rotate_left(8) ^ u64::from(*byte);
-        }
+    // A `RowIndex` key is a `u64`, which `HashMap` hashes with `write_u64` alone.
+    fn write(&mut self, _: &[u8]) {
+        unreachable!("a row index is keyed by a u64 alone")
     }
 
     fn write_u64(&mut self, n: u64) {

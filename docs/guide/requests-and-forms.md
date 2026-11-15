@@ -704,9 +704,9 @@ Rows go as deep as the types do, and the reader follows a key only as deep as th
 into, however many brackets a client sends. A type whose rows reach its own type would let a
 client choose the depth, so it does not compile: rows of the type itself are refused in so many
 words, and rows that reach it through another type (a `Rule` with rows of `Group`, whose rows are
-`Rule`s) are a cycle rustc reports as "cycle detected when elaborating drops for `...::SHAPE`"
-(E0391). That error from a `#[derive(Fields)]` means such rows. A group of groups and rows in a
-group do not compile, and neither does `#[serde(flatten)]`: a group is named under its field so
+`Rule`s) are a cycle in reading the types' `SHAPE`, which rustc reports as a cycle error (E0391)
+naming `SHAPE`. That error at a `#[derive(Fields)]` means such rows. A group of groups and rows in
+a group do not compile, and neither does `#[serde(flatten)]`: a group is named under its field so
 two of one type cannot clash.
 
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
