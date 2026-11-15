@@ -496,7 +496,8 @@
 //! A route passed for a `ScreenUrl<SetListing>` that does not say its data is a `SetListing`
 //! (`url::Home` answers a page):
 //!
-//! ```compile_fail
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
 //! use corten::prelude::*;
 //!
 //! #[derive(ToJson)]
@@ -523,7 +524,8 @@
 //! A screen of other data with the same name (`order::SetListing`, where the component's
 //! `SetListing` is this module's):
 //!
-//! ```compile_fail
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
 //! use corten::prelude::*;
 //!
 //! #[derive(ToJson)]

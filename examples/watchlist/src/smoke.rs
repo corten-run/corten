@@ -43,10 +43,11 @@ pub mod url {
     pub struct OpenMore;
 
     /// A screen whose data (`Reading`) its page's script reads with `read()`; `missing` answers
-    /// 404 instead.
+    /// 404 instead, and `moved` a redirect, as middleware might send.
     #[route("/smoke/reading", get = reading, data = Reading)]
     pub struct Reading {
         pub missing: Option<bool>,
+        pub moved: Option<bool>,
     }
 }
 
@@ -185,7 +186,7 @@ fn Reader() -> impl Render {
     let out = refs();
     html! {
         <div>
-            <button type="button" on:click={js::show(out, url::Reading { missing: None }, signal)}>"Read"</button>
+            <button type="button" on:click={js::show(out, url::Reading { missing: None, moved: None }, signal)}>"Read"</button>
             <output id={ReaderId} ref={out}></output>
         </div>
     }
@@ -197,7 +198,15 @@ async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<Scree
     }
     let data =
         Reading { name: "Reading".into(), rows: (0..40).map(|i| format!("Row {i} of the screen a script reads")).collect() };
-    req.screen(&data, html! { <Layout req={&req} title="Reading" viewer={None} head=""><Reader /></Layout> })
+    let mut res = req.screen(&data, html! { <Layout req={&req} title="Reading" viewer={None} head=""><Reader /></Layout> })?;
+    if at.moved == Some(true) {
+        // A response replaced through `DerefMut` is not checked against the route's data, so a
+        // script's read() must not follow it.
+        *res = corten::http::IntoResponse::into_response(
+            req.redirect::<corten::ForOne>(&url::Reading { missing: None, moved: None })?,
+        );
+    }
+    Ok(res)
 }
 
 /// One large event and then nothing: the browser must show it without more of the stream coming.

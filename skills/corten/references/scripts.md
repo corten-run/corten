@@ -295,17 +295,26 @@ import { read } from "corten/read";
 /** @typedef {import("../types/app").SetListing} SetListing */
 
 // ScreenUrl<SetListing> takes only a route with data = SetListing (checked when the crate compiles);
+// SetListing must be the generated declaration (above), never a @typedef of the script's own.
 // read() asks it with Accept: application/json through the HTTP cache (a 304 when unchanged).
 /** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
 export async function switchTo(rows, set, signal) {
-  const listing = await read(set, { signal }); // a SetListing
+  try {
+    const listing = await read(set, { signal }); // a SetListing
+  } catch (error) {
+    if (signal.aborted) return; // the element left the page
+    throw error;
+  }
 }
 ```
 
 It rejects with a `ReadError` (`status` the answer's, or 0 with a `cause` when there was none it
-could use) and with `signal`'s reason once it aborts; a handler whose element can leave while it
-reads catches that and returns when `signal.aborted`. Never `fetch` a screen's JSON by hand or
-write its type: the route types it.
+could use, a redirect included: it follows none) and with `signal`'s reason once it aborts; a
+handler whose element can leave while it reads catches that and returns when `signal.aborted`.
+Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
+the handler gives `req.screen` to any script with the user's cookie: only what the page may show.
+A patch-making method (`req.patch`, `patch_or`, `invalid`) does not compile in a handler that
+returns `HtmlResult<Screen<T>>`.
 
 ## Many rows: views
 

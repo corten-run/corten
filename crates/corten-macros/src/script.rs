@@ -711,6 +711,21 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         let resolved = resolve(ty);
         let named = ["Holds<", "FeedUrl<", "ScreenUrl<"].iter().any(|p| resolved.starts_with(p));
         let ty = if named { resolved } else { expand(ty) };
+        // A screen's data is the declaration `corten::types` writes for the route's data, named
+        // there or through a `@typedef` of it: a type the script declares itself (a local
+        // `@typedef {{ .. }} SetListing`) would match the Rust type by its name alone, whatever
+        // its shape. The parameter names the Rust type the declaration was written from.
+        if let (Some(inner), Param::Screen(_)) =
+            (ty.strip_prefix("ScreenUrl<").and_then(|t| t.strip_suffix('>')), param_type(&ty))
+        {
+            let inner = inner.trim();
+            return match generated_name(&resolve(inner)) {
+                Some(name) => Param::Screen(name),
+                None => Param::Unreadable(format!(
+                    "ScreenUrl<{inner}>: a screen's data is the declaration corten::types writes for the route's data, import(\"../types/app\").Name, written there or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
+                )),
+            };
+        }
         match param_type(&ty) {
             Param::Any => event_of(&ty).map_or(Param::Any, Param::Event),
             other => other,
@@ -2290,9 +2305,24 @@ function helper() {}
             Param::Screen("Listing".into()),
             "the generated declaration, imported where it is used"
         );
+        let (handlers, _) = parse(
+            "/** @typedef {import(\"../types/app\").Listing} Data */\n/** @param {ScreenUrl<Data>} a */\nexport function f(a) {}",
+        )
+        .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Screen("Listing".into()), "the Rust type an alias names");
         for ty in ["ScreenUrl<Listing[]>", "ScreenUrl<Listing | null>", "ScreenUrl<>"] {
             let why = refusal(&format!("/** @param {{{ty}}} a */\nexport function f(a) {{}}"));
             assert!(why.contains("a screen's data is one named type"), "{ty}: {why}");
+        }
+        // A name that is not the generated declaration matches the Rust type by its name alone,
+        // whatever its shape: a type of the script's own, or one never declared.
+        for source in [
+            "/** @typedef {{ name: string }} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @typedef {import(\"./listing.js\").Listing} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+        ] {
+            let why = refusal(source);
+            assert!(why.contains("the declaration corten::types writes for the route's data"), "{source}: {why}");
         }
         // In another shape (with null, in a list) it is a browser value no call is checked against.
         let why = refusal("/** @param {ScreenUrl<Listing> | null} a */\nexport function f(a) {}");

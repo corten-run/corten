@@ -411,6 +411,177 @@ pub trait ScreenKind<T: ?Sized>: sealed::Kind {}
 impl<T: ?Sized> ScreenKind<T> for AnyAnswer {}
 impl<T: ?Sized> ScreenKind<T> for Screen<T> {}
 
+/// The kinds the `Req` methods that answer a patch make ([`Req::patch`](crate::Req::patch),
+/// [`Req::patch_with_status`](crate::Req::patch_with_status), [`Req::patch_or`](crate::Req::patch_or),
+/// [`Req::invalid`](crate::Req::invalid), [`Req::invalid_with`](crate::Req::invalid_with)):
+/// [`AnyAnswer`] and [`Patches`]. Not [`Screen<T>`], which only `Req::screen`, given a `T`,
+/// makes: a patch, a redirect or another value's screen in `patch_or`'s other side would answer
+/// a script's `read()` with something other than the route's data. Sealed.
+///
+/// Each answers a handler that returns `HtmlResult`:
+///
+#[cfg_attr(feature = "json", doc = "```")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn patch(req: Req) -> HtmlResult {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// async fn patch_with_status(req: Req) -> HtmlResult {
+///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// async fn patch_or(req: Req) -> HtmlResult {
+///     let order = Order { id: "7".into() };
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async {
+///         req.screen(&order, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+///     })
+///     .await
+/// }
+/// async fn patch_or_redirect(req: Req) -> HtmlResult {
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
+/// }
+/// async fn invalid(req: Req, errors: Errors) -> HtmlResult {
+///     req.invalid(&errors, html! { <p id={PartId}>"Refused"</p> }, || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) }).await
+/// }
+/// async fn invalid_with(req: Req, errors: Errors) -> HtmlResult {
+///     req.invalid_with(
+///         &errors,
+///         |form| async move { form.draw(html! { <p id={PartId}>"Refused"</p> }) },
+///         || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) },
+///     )
+///     .await
+/// }
+/// ```
+///
+/// None of them compiles where the handler says its answer is a screen: not a patch,
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// ```
+///
+/// nor one with a status,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// ```
+///
+/// nor `patch_or` with another value's screen on its other side,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+///     let order = Order { id: "7".into() };
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async {
+///         req.screen(&order, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+///     })
+///     .await
+/// }
+/// ```
+///
+/// or a redirect there,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<Screen<SetListing>> {
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
+/// }
+/// ```
+///
+/// nor a refusal,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req, errors: Errors) -> HtmlResult<Screen<SetListing>> {
+///     req.invalid(&errors, html! { <p id={PartId}>"Refused"</p> }, || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) }).await
+/// }
+/// ```
+///
+/// nor one whose form needs a read.
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req, errors: Errors) -> HtmlResult<Screen<SetListing>> {
+///     req.invalid_with(
+///         &errors,
+///         |form| async move { form.draw(html! { <p id={PartId}>"Refused"</p> }) },
+///         || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) },
+///     )
+///     .await
+/// }
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "a patch-making `Req` method cannot answer as `{Self}`: only req.screen, given the route's data, makes a `Screen<..>`",
+    label = "this answer is said to be `{Self}`",
+    note = "answer the data with req.screen(&data, page), or return `HtmlResult` (or `HtmlResult<Patches>`) from a handler whose route does not say `data`"
+)]
+pub trait PatchingKind: sealed::Kind {}
+impl PatchingKind for AnyAnswer {}
+impl PatchingKind for Patches {}
+
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
     message = "a `Public` answer is the same for everyone, so it cannot set a cookie",

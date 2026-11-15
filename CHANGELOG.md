@@ -10,12 +10,22 @@ Corten is pre-1.0, so any minor version may change the API.
   handler returning `HtmlResult<Screen<T>>`, which only `req.screen` given a `T` makes) is a
   handler argument of type `ScreenUrl<T>`, and `read()` asks it with `Accept: application/json`
   through the browser's HTTP cache (an unchanged answer is a 304) and resolves to its `data`, typed
-  as `T` from `corten::types`. It rejects with a `ReadError` (`status` the answer's, or 0 with a
-  `cause`) and with `signal`'s reason once it aborts. The module (560 bytes, 387 with gzip, 320
+  as `T` from `corten::types` (the parameter must name that declaration,
+  `import("../types/app").T`, or a `@typedef` of it; a type the script declares itself does not
+  compile). It follows no redirect, and rejects with a `ReadError` (`status` the answer's, or 0
+  with a `cause`, a redirect included) and with `signal`'s reason once it aborts. `req.patch`,
+  `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as `AnyAnswer` or
+  `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
+  `HtmlResult<Screen<T>>` cannot answer through them. The module (577 bytes, 394 with gzip, 327
   with brotli) is served and preloaded only for apps whose scripts import it; the runtime is
-  unchanged. `req.screen` and `req.screen_with_status` gained a type parameter for the answer's
-  kind, so a call that named their types with a turbofish names three now
-  (`req.screen::<ForOne, AnyAnswer, _>`); other calls are unchanged
+  unchanged
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
+- **Breaking:** `req.screen` and `req.screen_with_status` take a type parameter for the answer's
+  kind, `<For, Kind, T>`, so a call that names their types with a turbofish names three. Where
+  `req.screen::<ForOne, _>(&data, doc)` was written, write
+  `req.screen::<ForOne, corten::AnyAnswer, _>(&data, doc)` (or leave the types to the handler's
+  return type); calls without a turbofish are unchanged
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
 - Distinguish five benchmark provider create-link refusal predicates with closed

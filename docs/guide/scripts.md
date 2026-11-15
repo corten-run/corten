@@ -920,8 +920,13 @@ import { read } from "corten/read";
 
 /** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
 export async function switchTo(rows, set, signal) {
-  const listing = await read(set, { signal });
-  // listing.products is SetListing's, as the server declared it.
+  try {
+    const listing = await read(set, { signal });
+    // listing.products is SetListing's, as the server declared it.
+  } catch (error) {
+    if (signal.aborted) return; // the element left the page: nothing went wrong
+    throw error;
+  }
 }
 ```
 
@@ -930,12 +935,18 @@ The type goes from the route to the script, checked at each step, as a feed's ro
 must return `HtmlResult<Screen<SetListing>>`, which only `req.screen` and `req.screen_with_status`
 make, given a `SetListing`: a handler that answers a page or a redirect, or a screen of other
 data, does not compile at its name in `#[route(..)]`, since a script's read would get no data or
-the wrong data. `SetListing` in `ScreenUrl<SetListing>` is the Rust type of that name in the
-component's module, so the call takes only a route whose data is that type; a route that names
-no data, or other data, does not compile at the call. In the script a plain string is not a
+the wrong data. `SetListing` in `ScreenUrl<SetListing>` must be the declaration `corten::types`
+writes, `import("../types/app").SetListing`, written there or named by a `@typedef` of it as
+above; a type the script declares itself does not compile, since it would match by name whatever
+its shape. It stands for the Rust type of that name in the component's module, so the call takes
+only a route whose data is that type; a route that names no data, or other data, does not compile
+at the call. In the script a plain string is not a
 `ScreenUrl`, so `read("/sets/m21")` fails `tsc`, and so does a field the data does not have. A
-route mounted by hand (`Area::route`) is not checked against its data, as one with `rows` is not
-checked against its feed. The data must be a type without a borrowed lifetime (`SetListing`,
+route says `data` only in its routes module, which mounts it with the `get` it checked; the same
+route mounted again by hand (`Area::route`) is not checked against its data, as one with `rows`
+is not checked against its feed, since a route does not carry its data's type for a mount to
+compare (it carries `patches` as a flag). A response a handler replaces through `DerefMut` or
+middleware answers instead is not checked either. The data must be a type without a borrowed lifetime (`SetListing`,
 not `SetListing<'a>`), since the handler's return type names it.
 
 The read goes through the browser's HTTP cache. Corten tags a `200` it may be asked about again
@@ -944,16 +955,20 @@ kept and an unchanged answer is a `304` with no body; a `Public` route's `max-ag
 within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
 keeps a cached page from answering a read. A read rejects with a `ReadError` (from `corten/read`)
 when the answer is not a success (`status` is its status, a 404 or a 503) or when there is none it
-can use (`status` 0, with the error as `cause`: offline, or an answer that is not a screen's JSON),
-and with `signal`'s reason once it aborts. In a handler pass `signal`, so a read the element no
+can use (`status` 0, with the error as `cause`: offline, a redirect, or an answer that is not a
+screen's JSON), and with `signal`'s reason once it aborts. A redirect is not followed: middleware
+that sends a signed-out visitor to sign in would otherwise hand the script another route's answer. In a handler pass `signal`, so a read the element no
 longer needs is dropped when it leaves the page; the runtime reports a handler's rejected promise,
 so a handler whose element can leave while it reads catches the rejection and returns when
-`signal.aborted`. The envelope is checked; the data is trusted as the route's own type, as a
-feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)).
+`signal.aborted`, as `switchTo` does. The envelope is checked; the data is trusted as the route's own type, as a
+feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)). `read()` returns
+what the handler gives `req.screen`, and any script running with the user's cookie can read it,
+so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (560 bytes, 387 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (577 bytes, 394 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
-not download it and the runtime is unchanged
+not download it and the runtime is unchanged; such an app's import map names it on every page (60
+bytes, under 10 compressed)
 ([why a read and not a data block](../design.md#choice-screen-read)).

@@ -6,6 +6,12 @@ import { read } from "corten/read";
 
 /** @param {HTMLOutputElement} out @param {ScreenUrl<Reading>} reading @param {AbortSignal} signal */
 export async function show(out, reading, signal) {
-  const data = await read(reading, { signal });
-  out.value = `${data.name} ${data.rows.length}`;
+  try {
+    const data = await read(reading, { signal });
+    out.value = `${data.name} ${data.rows.length}`;
+  } catch (error) {
+    // The element left the page: nothing to show, and nothing went wrong.
+    if (signal.aborted) return;
+    throw error;
+  }
 }

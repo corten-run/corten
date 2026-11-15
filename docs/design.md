@@ -3956,25 +3956,37 @@ rules something out.
     fetched JSON by hand under a type written beside the server's. The route already answers that
     data: `req.screen` gives a data client `{"title","data"}`, tagged and revalidated as any page
     is. So a route says `data = T`, and its `get` handler must return `HtmlResult<Screen<T>>`,
-    which only `req.screen` given a `T` makes, checked at the handler's name in `#[route(..)]`;
-    the route is then a handler argument of type `ScreenUrl<T>`, and `read(url, { signal })` from
-    `corten/read` asks it with `Accept: application/json` and resolves to `data`, typed as `T` by
-    the declaration `corten::types` writes. The read is a `fetch` in the default cache mode, so the
+    which only `req.screen` given a `T` makes, checked at the handler's name in `#[route(..)]`
+    (the methods that answer a patch, `patch_or`'s other side included, answer only as
+    `AnyAnswer` or `Patches`, so none of them reaches `Screen<T>`); the route is then a handler
+    argument of type `ScreenUrl<T>`, where `T` must be the declaration `corten::types` writes (a
+    type the script declares would match the Rust type by name alone), and `read(url, { signal })`
+    from `corten/read` asks it with `Accept: application/json` and resolves to `data`, typed as
+    `T` by that declaration. The read is a `fetch` in the default cache mode, so the
     browser's HTTP cache does for it what it does for any `GET`: an answer it kept is asked about
     with its weak `ETag` and an unchanged one is a 304 with no body, and a `Public` route's
     `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
-    from answering it. A failure is a `ReadError` whose `status` is the answer's, or 0 when there
-    was none, as `corten:error` gives a submit the network fails; an abort rejects with
+    from answering it. A redirect is not followed (`redirect: "error"`): what answers before the
+    handler or replaces its answer (middleware sending a signed-out visitor to sign in) is not
+    checked against the route's data, and its target is another route's. A failure is a
+    `ReadError` whose `status` is the answer's, or 0 when there was none it could use (a redirect
+    included), as `corten:error` gives a submit the network fails; an abort rejects with
     `signal`'s reason, as `fetch` does. No new endpoint, header or format: the URL, the
     negotiation and the envelope are the ones native screens already read.
 
-    What it costs: nothing for a page whose scripts do not import it. `corten/read` is a module
+    What it costs: nothing for an app whose scripts do not import it. `corten/read` is a module
     of its own, as `corten/keys` is, in the import map and preloaded only for apps whose listed
-    scripts import it, so the runtime is the same bytes (43,095, 15,218 with gzip, 13,725 with
-    brotli, before and after) and so is every other app's import map. The module is 560 bytes,
-    387 with gzip and 320 with brotli, which the users of an app that reads download once a
-    release. A read costs a request where a handler argument costs none, so data a page needs when
-    it loads stays a handler argument; a read is for data a choice picks or the page may never need.
+    scripts import it, so the runtime is the same bytes (43,395, 15,341 with gzip, 13,846 with
+    brotli, on `dea1788d2` and on this change) and so is every other app's import map. In an app
+    that imports it, each page's import map names it
+    (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
+    is compressed), and the pages whose scripts import it preload it (a 77-byte
+    `<link rel="modulepreload">`). The module is 577 bytes, 394 with gzip and 327 with brotli,
+    which the users of an app that reads download once a release. The server's work is
+    unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
+    data client's JSON on `dea1788d2` and on this change, within 0.2 of each other in every run
+    (the answer's kind is a type only). A read costs a request where a handler argument costs
+    none, so data a page needs when it loads stays a handler argument; a read is for data a choice picks or the page may never need.
 
     Not chosen: the `<script type="application/json">` block
     [Choice 45](#choice-data-on-single-quoted) left open. It makes the pages that hand a script
@@ -3988,26 +4000,40 @@ rules something out.
     `read` in the runtime itself (every user would download it to help the pages that read).
 
     Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
-    at level 6 and brotli at quality 11, on `2298bfe32` and `7122cd141`, once each); platform
-    (`fetch` in the default cache mode keeps a 200 the server tags and revalidates it with
-    `If-None-Match`, a 304 answering it from the kept copy: the smoke's read checks, where in
-    Chromium the second read names the first answer's tag and in Firefox it is answered 304, and
-    the server answers that tag with a 304 and no body; Playwright's WebKit asks again without the
-    tag and is sent the whole answer, as it does the runtime's navigation fetch); reasoned (an app whose scripts do not import `corten/read`
-    gets the same runtime and import map, so its pages pay nothing; `data`'s type comes from the
-    route's `data = T` and the declaration of `T`, so no script writes it, and a route whose
-    handler can answer without a `T` does not compile); value (a rich screen in the browser is as
+    at level 6 and brotli at quality 11, on `dea1788d2` and this change, once each; a
+    `req.screen` page's instructions a request under callgrind, 1,200 requests through the
+    router in process less 200, over 1,000, in both modes, three alternated runs of each build,
+    release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
+    37,949.75 on this change, JSON 41,211.21 to 41,211.38 and 41,211.29 to 41,211.40;
+    the import-map entry on three of the watchlist's pages, `/`, `/smoke/reading` and `/news`,
+    the page's size by `zlib` with and without it: 60 bytes raw, 9, 7 and 8 with gzip, 4, 5 and
+    8 with brotli); platform (`fetch` in the default cache mode keeps a 200 the server tags and
+    revalidates it with `If-None-Match`, a 304 answering it from the kept copy: the smoke's read
+    checks, where in Chromium the second read names the first answer's tag and in Firefox it is
+    answered 304, and the server answers that tag with a 304 and no body; Playwright's WebKit asks
+    again without the tag and is sent the whole answer, as it does the runtime's navigation fetch;
+    `redirect: "error"` rejects a redirect without following it, a `ReadError` 0 in all three);
+    reasoned (an app whose scripts do not import `corten/read` gets the same runtime and import
+    map, so its pages pay nothing; `data`'s type comes from the route's `data = T` and the
+    declaration of `T`, so no script writes it, and a route whose handler can answer without a
+    `T` does not compile, through `req.page`, a redirect or a patch-making method, which the
+    `compile_fail` doctests on `Req::screen` and `PatchingKind` show; what middleware answers or
+    a handler replaces through `DerefMut` is not checked, which is why a read follows no
+    redirect); value (a rich screen in the browser is as
     possible as one the server draws, and only the apps that read pay for it, README Value 1;
     types at the seam come from Rust, Value 4; one way to a screen's data, the route that answers
     it, with no second endpoint, Values 5 and 6).
 
     Revisit when: `corten/read` grows past 1 KB with gzip; most apps' scripts import it, when a
     reader in the runtime may cost less than the module's own request; a page needs a screen's
-    data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would pay (its Revisit when); or Chromium or
-    Firefox stops revalidating a read it kept, which the 304 rests on.
+    data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would
+    pay (its Revisit when); Chromium or Firefox stops revalidating a read it kept, which the 304
+    rests on; a `Req` method other than `req.screen` comes to answer as `Screen<T>`; or a
+    `req.screen` page's instructions a request move by more than 1%.
 
-    Last checked: 2026-11-15, the sizes on `2298bfe32` and `7122cd141`; 2026-11-15, the smoke's read
-    checks on `7122cd141` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+    Last checked: 2026-11-15, the sizes, the instruction counts and the import-map entry on
+    `dea1788d2` and this change; 2026-11-15, the smoke's read checks on this change in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules
 

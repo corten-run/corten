@@ -595,16 +595,17 @@ async function run(browser) {
           (e) => (e instanceof ReadError ? `ReadError ${e.status}` : e instanceof DOMException ? e.name : String(e)),
         );
       const missing = await settled(read(/** @type {any} */ ("/smoke/reading?missing=true")));
+      const moved = await settled(read(/** @type {any} */ ("/smoke/reading?moved=true")));
       const stop = new AbortController();
       const reading = read(/** @type {any} */ ("/smoke/reading"), { signal: stop.signal });
       stop.abort();
       const aborted = await settled(reading);
       const before = await settled(read(/** @type {any} */ ("/smoke/reading"), { signal: AbortSignal.abort(new Error("left")) }));
-      return { missing, aborted, before };
+      return { missing, moved, aborted, before };
     });
     check(
-      "read() rejects with a ReadError of the status when the answer is not a success, and with the signal's reason once it aborts",
-      outcomes.missing === "ReadError 404" && outcomes.aborted === "AbortError" && outcomes.before === "Error: left",
+      "read() rejects with a ReadError of the status when the answer is not a success, with a ReadError 0 for a redirect it does not follow, and with the signal's reason once it aborts",
+      outcomes.missing === "ReadError 404" && outcomes.moved === "ReadError 0" && outcomes.aborted === "AbortError" && outcomes.before === "Error: left",
       JSON.stringify(outcomes),
     );
     await reader.close();

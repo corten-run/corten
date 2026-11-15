@@ -1366,6 +1366,12 @@ impl Req {
 
     /// [`Req::page`] with another status.
     pub fn page_with_status<For>(&self, status: StatusCode, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
+        self.page_as(status, doc)
+    }
+
+    /// The page, as an answer of any kind: `Req::screen`'s page is its `Kind`'s, made in place
+    /// rather than moved out of an `HtmlResponse<For>`.
+    fn page_as<For, Kind>(&self, status: StatusCode, doc: impl Document) -> crate::Result<HtmlResponse<For, Kind>> {
         // The last size of each part, so the buffer is allocated once.
         static FULL: AtomicUsize = AtomicUsize::new(16 * 1024);
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
@@ -2089,7 +2095,7 @@ impl Req {
         doc: impl Document,
     ) -> crate::Result<HtmlResponse<For, Kind>> {
         if self.mode != Mode::Data {
-            return Ok(self.page_with_status(status, doc)?.of());
+            return self.page_as(status, doc);
         }
         use crate::json::ToJson;
         let mut title = String::new();
@@ -2112,12 +2118,15 @@ impl Req {
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
     /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
     /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
-    pub fn patch<For, Kind>(&self, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For, Kind>> {
+    pub fn patch<For, Kind: crate::answer::PatchingKind>(
+        &self,
+        view: impl crate::view::Patch,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         self.patch_with_status(StatusCode::OK, view)
     }
 
     /// Same as [`Req::patch`] with another status.
-    pub fn patch_with_status<For, Kind>(
+    pub fn patch_with_status<For, Kind: crate::answer::PatchingKind>(
         &self,
         status: StatusCode,
         view: impl crate::view::Patch,
@@ -2187,7 +2196,7 @@ impl Req {
     /// }
     /// # let _ = App::new(url::router()).router();
     /// ```
-    pub fn patch_or<For, Kind, F, Fut>(
+    pub fn patch_or<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         view: impl crate::view::Patch,
         page: F,
@@ -2226,7 +2235,7 @@ impl Req {
     /// `role="alert"` that is announced where it lands.
     ///
     /// As [`Req::patch_or`], its answer may be an `HtmlResult<Patches>` ([`crate::Patches`]).
-    pub async fn invalid<For, Kind, F, Fut>(
+    pub async fn invalid<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         errors: &crate::Errors,
         form: impl crate::view::Patch,
@@ -2306,7 +2315,7 @@ impl Req {
     ///     req.invalid_with(&errors, |_form| async { req.redirect(&corten::Local::parse("/").unwrap()) }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
     /// }
     /// ```
-    pub async fn invalid_with<'r, For, Kind, F, FormFut, P, PageFut>(
+    pub async fn invalid_with<'r, For, Kind: crate::answer::PatchingKind, F, FormFut, P, PageFut>(
         &'r self,
         errors: &crate::Errors,
         form: F,
