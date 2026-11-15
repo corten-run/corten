@@ -413,7 +413,7 @@ macro_rules! float {
                 // the step wanted is found by halving that span.
                 let spacing = if last { end - end.next_down() } else { end.next_up() - end };
                 let span = (spacing as f64 / step as f64).ceil() + 1.0;
-                if !span.is_finite() || span >= 1e30 {
+                if !span.is_finite() || span >= i128::MAX as f64 {
                     return None;
                 }
                 let span = span as i128;
@@ -424,8 +424,8 @@ macro_rules! float {
                     Some(if last { value < end } else { value > end })
                 };
                 let (mut lo, mut hi) = match (last, nearest) {
-                    (true, -1) => (-1 - span, -1),
-                    (true, _) => ((nearest - span).max(0), nearest),
+                    (true, -1) => ((-1i128).checked_sub(span)?, -1),
+                    (true, _) => (nearest.saturating_sub(span).max(0), nearest),
                     (false, _) => (1, span),
                 };
                 // The first step inside above `min`, or the last one below `max`.
@@ -433,15 +433,17 @@ macro_rules! float {
                     return None;
                 }
                 while lo < hi {
+                    // Halfway, rounded up for the last step, without overflowing.
+                    let (half, odd) = ((hi - lo) / 2, (hi - lo) % 2);
                     if last {
-                        let mid = lo + (hi - lo + 1) / 2;
+                        let mid = lo + half + odd;
                         if inside(mid)? {
                             lo = mid;
                         } else {
                             hi = mid - 1;
                         }
                     } else {
-                        let mid = lo + (hi - lo) / 2;
+                        let mid = lo + half;
                         if inside(mid)? {
                             hi = mid;
                         } else {
@@ -787,6 +789,10 @@ mod tests {
         offset.render_attrs(&mut out);
         assert_eq!(out, r#" min="1.20000011" max="2" step="0.00000001""#);
         assert!(offset.drawn().0 > 1.2 && offset.holds(offset.drawn().0) && !offset.holds(1.2));
+        // A step 10^30 times finer than the float tells apart, whose digits still line up.
+        let finest = Bounds::new(1.0f32, 2.0).step(1e-37).exclusive_min();
+        assert_eq!(finest.drawn().0, 1.0f32.next_up());
+        assert!(finest.holds(finest.drawn().0) && !finest.holds(1.0));
         // A step 60 times finer than the float tells apart at 1.
         let finer = Bounds::new(1.0f32, 2.0).step(1e-9).exclusive_min();
         let mut out = String::new();
