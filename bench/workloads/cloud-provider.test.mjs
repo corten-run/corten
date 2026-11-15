@@ -283,6 +283,30 @@ test("published create example and nullable in-progress action already satisfy t
   }
 });
 
+// The documented droplet-scoped endpoint reads the same action as the global
+// endpoint. This is a synthetic contract case, not a retained r21 response:
+// https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/dropletActions_get.yml
+test("documented droplet-scoped create href still polls only the canonical exact action", async (t) => {
+  for (const actionId of [7515, 3_000_000_001]) for (const pendingResource of [null, 0, 3164444]) {
+    await t.test(`${actionId}/${pendingResource}`, async () => {
+      const response = publishedCreate(), calls = []; let clock = 0;
+      response.value.links.actions[0] = { id: actionId, rel: "create",
+        href: `https://api.digitalocean.com/v2/droplets/${response.value.droplet.id}/actions/${actionId}` };
+      const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, sleep: async (ms) => { clock += ms; },
+        request({ method, path, timeout }) {
+          calls.push({ method, path, timeout });
+          if (method === "POST") return response;
+          const action = createAction(clock ? "completed" : "in-progress", clock ? response.value.droplet.id : pendingResource);
+          action.value.action.id = actionId; return action;
+        } });
+      assert.deepEqual(JSON.parse((await run(create, 5000)).stdout), [response.value.droplet]);
+      assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets", timeout: 5000 },
+        { method: "GET", path: `/v2/actions/${actionId}`, timeout: 5000 },
+        { method: "GET", path: `/v2/actions/${actionId}`, timeout: 4000 }]);
+    });
+  }
+});
+
 // These omissions are permitted by shared/models/action_link.yml, not observed
 // r21 responses. The example's rel/href values are not required schema fields:
 // https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml
@@ -352,11 +376,42 @@ test("accepted create rejects ambiguous links before any action read and never r
     ...["http://api.digitalocean.com/v2/actions/7515", "https://synthetic.invalid/v2/actions/7515",
       "https://api.digitalocean.com/v2/actions/7516", "https://api.digitalocean.com/v2/actions/7515?next=1",
       "https://api.digitalocean.com/v2/actions/7515#fragment",
-      "https://synthetic@api.digitalocean.com/v2/actions/7515"].map((href) => ["href", [{ id: link.id, href }]])]) {
+      "https://synthetic@api.digitalocean.com/v2/actions/7515",
+      "https://api.digitalocean.com/v2/droplets/3164445/actions/7515",
+      "https://api.digitalocean.com/v2/droplets/3164444/actions/7516",
+      "https://api.digitalocean.com/v2/images/3164444/actions/7515",
+      "https://api.digitalocean.com/v2/droplets/03164444/actions/7515",
+      "https://api.digitalocean.com/v2/droplets/3164444/actions/07515",
+      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515/",
+      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515?next=1",
+      "https://api.digitalocean.com/v2/droplets/3164444/actions/7515#fragment",
+      "https://synthetic@api.digitalocean.com/v2/droplets/3164444/actions/7515",
+      "https://api.digitalocean.com:443/v2/droplets/3164444/actions/7515",
+      "http://api.digitalocean.com/v2/droplets/3164444/actions/7515",
+      "https://synthetic.invalid/v2/droplets/3164444/actions/7515",
+      "/v2/droplets/3164444/actions/7515"].map((href) => ["href", [{ id: link.id, href }]])]) {
     const calls = [], response = publishedCreate(); response.value.links.actions = actions;
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) { calls.push({ method, path }); return response; } });
     await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === `create-link-${predicate}`);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }]);
+  }
+});
+
+test("droplet-scoped create href cannot qualify a wrong, failed or unbound action", async () => {
+  for (const mutate of [
+    (a) => { a.id = 7516; }, (a) => { a.id = "7515"; }, (a) => { delete a.id; },
+    (a) => { a.type = "snapshot"; }, (a) => { a.resource_type = "image"; },
+    ...[null, 0, 3164445, "3164444", undefined].map((id) => (a) => { a.resource_id = id; }),
+    ...["errored", "unknown", undefined].map((status) => (a) => { a.status = status; }),
+  ]) {
+    const response = publishedCreate(), action = createAction(), calls = [];
+    response.value.links.actions[0].href = "https://api.digitalocean.com/v2/droplets/3164444/actions/7515";
+    mutate(action.value.action);
+    const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
+      calls.push({ method, path }); return method === "POST" ? response : action;
+    } });
+    await assert.rejects(run(create, 1000, true), (error) => error.providerDiagnostic?.code === "create-action-response");
+    assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
   }
 });
 
@@ -397,14 +452,15 @@ test("first action failures after accepted POST stop without retry or leaking pr
   }
 });
 
-test("ID-only create link never extends the original deadline or bypasses cancellation", async () => {
-  for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
+test("ID-only and droplet-scoped create links never extend the original deadline or bypass cancellation", async () => {
+  for (const scoped of [false, true]) for (const mode of ["pending", "post-deadline", "cancelled", "transport"]) {
     let clock = 0, cancelled = false; const calls = [];
     const run = providerTransport({ repo: resolve("."), spawn, now: () => clock, interrupted: () => cancelled,
       sleep: async (ms) => { clock += ms; if (mode === "cancelled") cancelled = true; }, request({ method, path, timeout }) {
         calls.push({ method, path, timeout });
         if (method === "POST") {
-          const response = publishedCreate(); response.value.links.actions = [{ id: 7515 }];
+          const response = publishedCreate(); response.value.links.actions = [{ id: 7515,
+            ...(scoped ? { href: "https://api.digitalocean.com/v2/droplets/3164444/actions/7515" } : {}) }];
           clock = mode === "post-deadline" ? 2500 : 500; return response;
         }
         if (mode === "transport") throw new Error(credential);
