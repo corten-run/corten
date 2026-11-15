@@ -277,17 +277,20 @@
 //! ```
 //!
 //! Rows go as deep as the types do, and the reader goes only as deep as the type it reads, however
-//! many brackets a client sends. A type whose rows are of its own type, directly or through
-//! another's, would let a client choose the depth, so it does not compile, even where only its
-//! values are read:
+//! many brackets a client sends. A type whose rows reach its own type would let a client choose
+//! the depth, so it does not compile, even where only its values are read. Rows of the type itself
+//! are refused in so many words:
 //!
-//! ```compile_fail,E0391
+//! ```compile_fail
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
 //! #[derive(Fields)]
 //! struct Step { name: String, #[fields(rows)] #[serde(default)] then: BTreeMap<u32, Step> }
 //! let _: Result<Step, _> = corten::form::from_bytes(b"name=a");
 //! ```
+//!
+//! Rows that reach it through another type are a cycle in reading the types' `SHAPE`, which
+//! rustc reports as one (E0391, "cycle detected when elaborating drops for `...::SHAPE`"):
 //!
 //! ```compile_fail,E0391
 //! # use std::collections::BTreeMap;
@@ -783,11 +786,12 @@ pub trait Place: Copy + PartialEq + std::hash::Hash + fmt::Debug + private::Seal
     fn is_outer(&self, at: Option<&At>) -> bool {
         at.is_some_and(|at| self.is_kept(at))
     }
-    /// The rows and key of a row's field (of its outermost row, for rows in a row), which
-    /// [`Errors`] finds by an index.
+    /// Hashes the rows' field and the key of every row it is in, outermost first, into `state`,
+    /// and says whether it is in a row: [`Errors`] finds a row's messages by the whole chain, so
+    /// the messages of many rows in one row are not kept together.
     #[doc(hidden)]
-    fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
-        None
+    fn hash_rows(&self, _state: &mut std::hash::DefaultHasher) -> bool {
+        false
     }
 }
 
@@ -927,8 +931,13 @@ impl<P: Place> Place for Row<'_, P> {
     fn is_kept(&self, at: &At) -> bool {
         self.is(at, "")
     }
-    fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
-        self.outer.row().or(Some((self.rows, self.key)))
+    fn hash_rows(&self, state: &mut std::hash::DefaultHasher) -> bool {
+        use std::hash::Hash;
+        self.outer.hash_rows(state);
+        // A `str` hashes its bytes and a byte no UTF-8 has, so no two chains run together.
+        self.rows.hash(state);
+        self.key.key_text(&mut KeyBuf::new()).hash(state);
+        true
     }
 }
 
@@ -987,8 +996,8 @@ impl<P: Place> Place for RowGroup<'_, P> {
     fn is_kept(&self, at: &At) -> bool {
         self.row.is(at, self.group)
     }
-    fn row(&self) -> Option<(&'static str, &(dyn RowKey + Sync))> {
-        self.row.row()
+    fn hash_rows(&self, state: &mut std::hash::DefaultHasher) -> bool {
+        self.row.hash_rows(state)
     }
 }
 
@@ -1410,15 +1419,23 @@ impl<K, P: Place> Keyed<K, P> {
 pub struct Errors {
     fields: Vec<(Kept, String)>,
     form: Option<String>,
-    /// Where each row's messages are in `fields`, by the rows' field and the row's key, so a form
-    /// with many rows finds a row's message without reading every other row's.
+    /// Where each row's messages are in `fields`, by its chain of rows (the rows' field and key of
+    /// every row it is in), so a form with many rows, or a row with many rows in it, finds a row's
+    /// message without reading every other row's.
     /// Made with the first row's message, so a form without rows builds and drops no map.
     rows: Option<Box<RowIndex>>,
     refusal: Refusal,
 }
 
-/// [`Errors`]' messages of rows: by the rows' field, then the row's key, where each is in the list.
-type RowIndex = std::collections::HashMap<&'static str, std::collections::HashMap<Box<str>, Vec<u32>>>;
+/// [`Errors`]' messages of rows: by the hash of the row's chain ([`Place::hash_rows`]), where each
+/// is in the list. Two chains with one hash share a list, and [`Kept::is`] tells them apart.
+type RowIndex = std::collections::HashMap<u64, Vec<u32>>;
+
+/// The hash [`RowIndex`] keeps a place's messages by, or none for a place in no row.
+fn row_hash<P: Place>(at: &P) -> Option<u64> {
+    let mut state = std::hash::DefaultHasher::new();
+    at.hash_rows(&mut state).then(|| std::hash::Hasher::finish(&state))
+}
 
 /// A [`FieldName`] an [`Errors`] keeps: where it is (its row's key copied) and its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1537,20 +1554,13 @@ impl Errors {
     }
 
     fn add_untyped<P: Place>(&mut self, field: FieldName<Untyped, P>, message: String) {
-        if self.find(&field).is_some() {
+        let row = row_hash(&field.at);
+        if self.find_in(&field, row).is_some() {
             return;
         }
-        if let Some((rows, key)) = field.at.row() {
+        if let Some(row) = row {
             let at = u32::try_from(self.fields.len()).unwrap_or(u32::MAX);
-            let mut buf = KeyBuf::new();
-            let key = key.key_text(&mut buf);
-            let row = self.rows.get_or_insert_with(Box::default).entry(rows).or_default();
-            match row.get_mut(key) {
-                Some(at_key) => at_key.push(at),
-                None => {
-                    row.insert(key.into(), vec![at]);
-                }
-            }
+            self.rows.get_or_insert_with(Box::default).entry(row).or_default().push(at);
         }
         self.fields.push((Kept::new(field), message));
     }
@@ -1558,13 +1568,24 @@ impl Errors {
     /// Where `field`'s message is: a row's by the index, any other by reading the list of messages
     /// (one per field given one, rows' included).
     fn find<P: Place>(&self, field: &FieldName<Untyped, P>) -> Option<usize> {
-        match field.at.row() {
+        self.find_in(field, row_hash(&field.at))
+    }
+
+    /// [`Errors::find`] with the field's [`row_hash`].
+    fn find_in<P: Place>(&self, field: &FieldName<Untyped, P>, row: Option<u64>) -> Option<usize> {
+        match row {
             None => self.fields.iter().position(|(f, _)| f.is(field)),
-            Some((rows, key)) => {
-                let at = self.rows.as_ref()?.get(rows)?.get(key.key_text(&mut KeyBuf::new()))?;
+            Some(row) => {
+                let at = self.rows.as_ref()?.get(&row)?;
                 at.iter().map(|&i| i as usize).find(|&i| self.fields[i].0.is(field))
             }
         }
+    }
+
+    /// The most messages one entry of the row index holds: how many a row's lookup may compare.
+    #[cfg(test)]
+    pub(crate) fn most_in_a_row(&self) -> usize {
+        self.rows.as_ref().map_or(0, |rows| rows.values().map(Vec::len).max().unwrap_or(0))
     }
 
     /// Records a message about the whole form, unless it has one: a rule no single field breaks,

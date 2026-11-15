@@ -9,8 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
   the maps inside the map and gives it its own error, so a list whose items own a list needs no
-  key the app joins and splits by hand. Rows go as deep as the types do; naming the fields of a
-  type whose rows are of its own type does not compile
+  key the app joins and splits by hand. Rows go as deep as the types do; a type whose rows reach
+  its own type does not compile
   ([#1395 A form's row cannot hold rows, so a list whose items own a list (rules and their conditions, lines and their parts) needs a hand-built composite key](https://github.com/corten-run/corten/issues/1395)).
 
 - Permit one fresh complete benchmark provider census after a transient count or

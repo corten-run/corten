@@ -3853,6 +3853,102 @@ fn rows_in_rows_name_each_field_through_its_rows() {
     );
 }
 
+#[derive(Debug, PartialEq, Fields)]
+struct Condition {
+    kind: String,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Rule {
+    #[fields(rows)]
+    #[serde(default)]
+    conditions: std::collections::BTreeMap<u32, Condition>,
+}
+
+#[derive(Debug, PartialEq, Fields)]
+struct Rules {
+    #[fields(rows)]
+    #[serde(default)]
+    rules: std::collections::BTreeMap<u32, Rule>,
+}
+
+/// Many rows in one row find their messages as many rows of the form do: by their own entry of
+/// the index, which holds that row's messages and no other's, so adding and finding each costs
+/// about the same however many rows the row holds (a client can send tens of thousands).
+#[test]
+fn rows_in_one_row_find_their_errors_as_the_forms_own_rows_do() {
+    let f = Rules::FIELDS;
+    let mut errors = Errors::new();
+    for row in 0..20_000u32 {
+        errors.add(f.rules.at(&1).conditions.at(&row).kind, "Unknown condition.");
+        errors.add(f.rules.at(&1).conditions.at(&row).kind, "dropped: the row has one");
+    }
+    assert_eq!(errors.len(), 20_000);
+    assert_eq!(errors.most_in_a_row(), 1, "each inner row's message in an entry of its own");
+    assert_eq!(errors.get(f.rules.at(&1).conditions.at(&19_999).kind), Some("Unknown condition."));
+    assert!(!errors.has(f.rules.at(&1).conditions.at(&20_000).kind));
+    // The same key in another outer row, and keys swapped between the two levels, are other rows.
+    assert!(!errors.has(f.rules.at(&2).conditions.at(&7).kind));
+    errors.add(f.rules.at(&7).conditions.at(&1).kind, "Swapped.");
+    assert_eq!(errors.get(f.rules.at(&1).conditions.at(&7).kind), Some("Unknown condition."));
+    assert_eq!(errors.get(f.rules.at(&7).conditions.at(&1).kind), Some("Swapped."));
+
+    let mut outer = Errors::new();
+    for row in 0..20_000u32 {
+        outer.add(Numbered::FIELDS.lines.at(&row).qty, "Too many.");
+    }
+    assert_eq!(outer.most_in_a_row(), 1);
+}
+
+/// What adding `ROW_ERRORS` messages to rows costs (2,000 if unset): the form's own rows, or with
+/// `ROW_ERRORS_IN=inner` rows in one row. Measured with callgrind on the release build, as
+/// `what_reading_a_form_costs` is.
+#[test]
+fn what_row_errors_cost() {
+    let count: u32 = std::env::var("ROW_ERRORS").ok().and_then(|n| n.parse().ok()).unwrap_or(2_000);
+    let mut errors = Errors::new();
+    if std::env::var("ROW_ERRORS_IN").as_deref() == Ok("inner") {
+        let f = Rules::FIELDS;
+        for row in 0..count {
+            errors.add(std::hint::black_box(f.rules.at(&1).conditions.at(&row).kind), "Unknown condition.");
+        }
+    } else {
+        let f = Numbered::FIELDS;
+        for row in 0..count {
+            errors.add(std::hint::black_box(f.lines.at(&row).qty), "Too many.");
+        }
+    }
+    assert_eq!(std::hint::black_box(errors).len(), count as usize);
+}
+
+/// A form's input is a `FromJson` and an agent tool's input too: rows in a row are read from JSON
+/// objects in objects, and the schema describes each level.
+#[cfg(feature = "json")]
+#[test]
+fn rows_in_rows_read_from_json_as_from_a_form() {
+    let rules: Rules =
+        crate::json::from_str(r#"{"rules":{"1":{"conditions":{"0":{"kind":"price"},"4":{"kind":"stock"}}},"2":{}}}"#)
+            .expect("reads");
+    assert_eq!(rules.rules[&1].conditions[&0].kind, "price");
+    assert_eq!(rules.rules[&1].conditions[&4].kind, "stock");
+    assert!(rules.rules[&2].conditions.is_empty());
+    #[cfg(feature = "types")]
+    {
+        let schema = crate::json::schema::Generator::root_for_read::<Rules>();
+        assert_eq!(
+            schema["properties"]["rules"]["additionalProperties"],
+            serde_json::json!({ "$ref": "#/$defs/Rule" }),
+            "{schema}"
+        );
+        assert_eq!(
+            schema["$defs"]["Rule"]["properties"]["conditions"]["additionalProperties"],
+            serde_json::json!({ "$ref": "#/$defs/Condition" }),
+            "{schema}"
+        );
+        assert_eq!(schema["$defs"]["Condition"]["properties"]["kind"], serde_json::json!({ "type": "string" }), "{schema}");
+    }
+}
+
 #[test]
 fn field_names_follow_serde_and_reach_markup() {
     assert_eq!((SignUp::FIELDS.email.as_str(), SignUp::FIELDS.password.as_str()), ("email", "pw"));

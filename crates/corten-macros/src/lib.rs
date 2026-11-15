@@ -344,6 +344,14 @@ fn fields(input: TokenStream) -> Result<String, String> {
             }
             Kind::Rows => {
                 let (key, row) = map_types(&ident, &ty)?;
+                // Rows of the struct itself would let a client choose how deep the form is read.
+                // A cycle through other types is refused by reading their `SHAPE`, below.
+                let last = row.split('<').next().unwrap_or_default().rsplit("::").next().unwrap_or_default().trim();
+                if last == name.as_str() || last == "Self" {
+                    return Err(format!(
+                        "Fields: `{ident}` is rows of `{name}` itself, so a client would choose how deep the form is read, a level for each [key] it sends; give the inner rows a type of their own, as deep as the form needs"
+                    ));
+                }
                 Shape::Rows(key, row)
             }
             Kind::Map => Shape::Map(map_types(&ident, &ty)?.0),
