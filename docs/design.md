@@ -3093,12 +3093,14 @@ rules something out.
     listening for `beforeunload` all the time would keep the page out of some browsers'
     back-forward caches), and a
     read whose fetch or body the browser ended by hiding the page (its back-forward cache) is made
-    again when the page is shown, not marked failed, if its parts are still the ones it waited for.
+    again when the page is shown, not marked failed, if its parts are still the ones it waited for;
+    the page shown is the one the user is on, so that read counts navigations from then.
     A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's read is
     on its way: each whole read would replace the part and its read, so a part slower than the
     page's interval would never come, and not once a part's answer has asked for it to be read
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside what it
-    drew when the tag it answered was inside the part it replaced, never in place of another part's.
+    drew when the tag it answered was inside the part it replaced, never in place of another part's
+    (inside it when that part is one of the layout's elements that are the page's).
     A part read again stops its read, and its listener, when its part leaves the page, and its
     answer is checked again once its stylesheets have loaded, as a slow part's is. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
@@ -3166,14 +3168,16 @@ rules something out.
     at a moved address, and a part a first answer or a part read again drew waiting, read again at
     a moved address too and with a full load) not, a part slower than its page's read again drawn
     and the page not read whole once its answer asked to be read again, its tag inside its part or
-    beside it, two such parts side by side each keeping its tag, a read whose part a form replaced stopped so its page's read again goes on, whether
+    beside it or the part a layout element that is the page's, two such parts side by side each
+    keeping its tag, a read whose part a form replaced stopped so its page's read again goes on, whether
     its server never answered or its answer waited for a stylesheet that never loaded, and the
     other part of such a stalled shared read shown failed at once and its `beforeunload` listener
     gone, as for a part read again whose part is replaced while its read is on its way, its answer
     not drawn when its stylesheet loads after that and its body cut short with no error, a redirect
     for a part drawn waiting while a navigation is on its way, after a link to another site or a
     full load without the API not followed, and one after a link to another site answered 204 and a
-    navigation since followed, a read cut by a hidden page read
+    navigation since followed, as is one a read made again when a page that began to leave is shown
+    again is answered with, a read cut by a hidden page read
     again when shown and not over a part a form replaced meanwhile (`pagehide` and `pageshow`
     dispatched by the test), a client navigation away
     leaving nothing marked, a page left whole and come back to with its part, a part in a layout

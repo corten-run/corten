@@ -1045,14 +1045,19 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
-    // A slow part's answer (`ReadAgain::now`'s tag asked) whose tag it replaced with the part (one
-    // inside the element it waited for) puts its own beside what it drew, never in place of
-    // another part's tag there: the page knows the part is read again ({@link readAgainLater}) and
-    // its next read finds it.
-    const waited = !!asked && matchesOf(asked, PART_NOW);
-    const beside = asked?.isConnected ? asked : waited ? null : partTagBeside(put);
+    // A part's answer whose tag it replaced with the part (one that was inside the element it drew,
+    // so it still has a parent) puts its own beside what it drew, never in place of another part's
+    // tag there: the page knows the part is read again ({@link readAgainLater}) and its next read
+    // finds it. Inside it when that is one of the layout's elements that are the page's, which the
+    // page's tags are read in. A tag that never reached the page takes that of the part beside it.
+    const inside = !!asked && !asked.isConnected && !!asked.parentElement;
+    const beside = asked?.isConnected ? asked : inside ? null : partTagBeside(put);
     if (beside) beside.replaceWith(again);
-    else if (waited) put.find(inPage)?.after(again);
+    else if (inside) {
+      const drawn = put.find(inPage);
+      if (drawn && matchesOf(drawn, PAGE_PARTS)) drawn.append(again);
+      else drawn?.after(again);
+    }
     readPatchAgain(again, put);
   }
   // A part the patch draws waiting (a form's answer that puts it back) is read as on a page,
@@ -1300,9 +1305,11 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // Read again (at an address a script moved it to, or once a page the browser hid is shown) only
   // while its parts are the ones it waited for: one a form's answer replaced meanwhile is not read
   // over, and the rest are marked failed, as when a patch is not drawn over them.
-  const retry = () => {
+  // A page the browser shows again is the one the user is on, whatever navigations it began
+  // before (`fresh`): its read counts from then.
+  const retry = (fresh = false) => {
     if (page !== swapped) return;
-    if (waiting.every(inPage)) readNow(tags.filter(inPage), null, visited);
+    if (waiting.every(inPage)) readNow(tags.filter(inPage), null, fresh ? visits : visited);
     else for (const el of waiting) if (inPage(el)) markFailed(el);
   };
   // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.
@@ -1337,8 +1344,8 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // to bring.
   if (cut && left !== leftAt && !stop.signal.aborted) {
     for (const el of waiting) unmarkBusy(el, mine);
-    if (away) addEventListener("pageshow", retry, { once: true });
-    else retry();
+    if (away) addEventListener("pageshow", () => retry(true), { once: true });
+    else retry(true);
     return;
   }
   // A redirect (a `Caller` sending someone to sign in) is followed as a form's answer's is, by the

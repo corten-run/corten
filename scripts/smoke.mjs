@@ -1677,10 +1677,19 @@ async function run(browser) {
         const body = new ReadableStream({
           start(controller) {
             controller.enqueue(new TextEncoder().encode('<p id="later-b">Old'));
-            init?.signal?.addEventListener("abort", () => controller.error(new DOMException("stopped", "AbortError")));
+            init?.signal?.addEventListener("abort", () => {
+              /** @type {any} */ (window).__bodyCut = true;
+              controller.error(new DOMException("stopped", "AbortError"));
+            });
+          },
+          pull() {
+            /** @type {any} */ (window).__bodyRead = true;
           },
         });
-        return Promise.resolve(new Response(body, { headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" } }));
+        const response = new Response(body, { headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" } });
+        // A response the runtime fetched from this origin says where it came from.
+        Object.defineProperty(response, "url", { value: new URL("/smoke/poll-body", location.href).href });
+        return Promise.resolve(response);
       };
     });
     later.on("console", (m) => m.type() === "error" && m.text().startsWith("unhandled") && unhandled.push(m.text()));
@@ -1720,7 +1729,12 @@ async function run(browser) {
       styleAsked && texts[0] === "Drawn by a form",
       JSON.stringify(texts),
     );
-    check("and a read again whose body is cut short when its part is replaced throws no error", texts[1] === "Drawn by a form" && unhandled.length === 0, JSON.stringify({ texts, unhandled }));
+    const body = await later.evaluate(() => ({ read: !!(/** @type {any} */ (window).__bodyRead), cut: !!(/** @type {any} */ (window).__bodyCut) }));
+    check(
+      "and a read again whose body is cut short when its part is replaced throws no error",
+      body.read && body.cut && texts[1] === "Drawn by a form" && unhandled.length === 0,
+      JSON.stringify({ body, texts, unhandled }),
+    );
     await later.unrouteAll({ behavior: "ignoreErrors" });
     await later.context().close();
   }
@@ -1934,6 +1948,40 @@ async function run(browser) {
     await hidden.unrouteAll({ behavior: "ignoreErrors" });
     await hidden.context().close();
   }
+  // The same, where the page began to leave for another site before it was hidden (the browser
+  // counts that navigation): once it is shown again it is the page the user is on, so the read made
+  // again follows the redirect it is answered with (#1400).
+  if (swaps && crossBase) {
+    const restored = await (await browser.newContext()).newPage();
+    let restoredAsked = 0;
+    let releaseRestored = () => {};
+    await restored.route("**/smoke/hidden-r", async (route) => {
+      restoredAsked += 1;
+      if (restoredAsked === 1) {
+        await new Promise((resolve) => (releaseRestored = () => resolve(undefined)));
+        return route.abort().catch(() => {});
+      }
+      await route.fulfill({ status: 204, headers: { "corten-location": "/news?restored=1", vary: "corten" } }).catch(() => {});
+    });
+    await restored.route(`${crossBase}/smoke/no-content`, (route) => route.fulfill({ status: 204 }));
+    await restored.goto(`${base}/`);
+    await restored.evaluate(async (href) => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="restored-0"></div><a id="restored-away" href="${href}">Away</a>`));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="restored-0"><p id="restored-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/hidden-r" data-part="restored-a"></template></div>'));
+    }, `${crossBase}/smoke/no-content`);
+    for (let waited = 0; !restoredAsked && waited < 5000; waited += 50) await restored.waitForTimeout(50);
+    await restored.click("#restored-away", { noWaitAfter: true });
+    await restored.waitForTimeout(300);
+    await restored.evaluate(() => dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+    releaseRestored();
+    await restored.waitForTimeout(300);
+    await restored.evaluate(() => dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+    await restored.waitForFunction(() => location.search === "?restored=1", null, { timeout: 5000 }).catch(() => {});
+    check("a page shown again after it began to leave follows the redirect its part's read made again is answered with", new URL(restored.url()).search === "?restored=1", `${restored.url()} (${restoredAsked} reads)`);
+    await restored.unrouteAll({ behavior: "ignoreErrors" });
+    await restored.context().close();
+  } else skip("a page shown again after it began to leave follows the redirect its part's read made again is answered with", swaps ? "the app is not at localhost" : noSwaps);
   // A page the browser prerenders reads its parts once it is shown, not before: the server's slow
   // read is for a page someone sees (#1400). Playwright's headless Chromium did not prerender a
   // Speculation Rules page when this was written, so the browser's state is stood in for:
@@ -1987,6 +2035,48 @@ async function run(browser) {
     check("a waiting part in a layout element that is the page's is read and drawn", (await laid.textContent("#layout-a")) === "Layout part drawn", `${await laid.textContent("#layout-a")}`);
     await laid.unrouteAll({ behavior: "ignoreErrors" });
     await laid.context().close();
+  }
+  // Such an element that is the part itself, its tag inside it, whose answer asks to be read again:
+  // the answer's tag goes inside what it drew, where the page's tags are read, so the page whose head
+  // asks to be read again is not read whole after it (#1400).
+  {
+    const root = await (await browser.newContext()).newPage();
+    await root.route(`${base}/`, async (route) => {
+      if (route.request().headers().corten) return route.continue();
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const part = '<aside id="layout-root" data-corten-page><p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/layout-root" data-part="layout-root"></template></aside>';
+      const body = (await res.text())
+        .replace("<main", `${part}<main`)
+        .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+      await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+    });
+    await root.route("**/smoke/layout-root", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route
+        .fulfill({
+          status: 200,
+          headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+          body: '<aside id="layout-root" data-corten-page><p id="layout-root-p">Root drawn</p></aside><template data-corten-read-again="30" data-from="/smoke/layout-root"></template>',
+        })
+        .catch(() => {});
+    });
+    let [drawn, wholeAfter] = [false, 0];
+    root.on("request", (r) => drawn && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeAfter++);
+    await root.goto(`${base}/`);
+    await root.waitForSelector("#layout-root-p", { state: "attached", timeout: 5000 }).catch(() => {});
+    drawn = (await root.$("#layout-root-p")) !== null;
+    await root.waitForTimeout(2500);
+    const inside = await root.$('#layout-root > template[data-corten-read-again="30"]');
+    check(
+      "a layout element that is the part itself keeps the tag its answer brings to read it again",
+      drawn && inside !== null && wholeAfter === 0,
+      `drawn ${drawn}, tag inside ${inside !== null}, page read whole ${wholeAfter} times after`,
+    );
+    await root.unrouteAll({ behavior: "ignoreErrors" });
+    await root.context().close();
   }
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
   // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
