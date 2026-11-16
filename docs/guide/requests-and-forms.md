@@ -408,7 +408,7 @@ whole number: above 0 in tenths is `Bounds::new(0.1, 16.0).step(0.1)`, and `Boun
 above 0. So an exclusive end on stepped bounds does not compile, nor `.step(..)` on any-step ones,
 nor `Bounds::any_step(0u32, 3)`: `step="any"` would let the browser send `2.5`, which no integer
 reads. What the input says and where a browser and the handler can still differ is
-[Choice 56](../design.md#choice-exclusive-ends).
+[Choice 57](../design.md#choice-exclusive-ends).
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
