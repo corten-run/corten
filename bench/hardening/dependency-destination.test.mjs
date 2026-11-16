@@ -6,6 +6,8 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { digest, savedFiles, snapshotDependencies } from "./evidence.mjs";
 
+const nativeLinuxOutputTypes = [0xef53n, 0x01021994n, 0x794c7630n];
+
 function fixture(t) {
   const root = fs.mkdtempSync(join(tmpdir(), "hardening-destination-"));
   const from = join(root, "installed"), parent = join(root, "output"), to = join(parent, "snapshot"), outside = join(root, "outside");
@@ -24,6 +26,52 @@ function fixture(t) {
   });
   return { root, from, parent, to, outside, put, pathIs, reject };
 }
+
+for (const type of [0x01021997n, 0x65735546n, 0x6969n, 0n]) test(`unqualified Linux output filesystem ${type.toString(16)} refuses before output creation`, { skip: process.platform !== "linux" }, (t) => {
+  const f = fixture(t); f.put("worker"); let creates = 0, reads = 0, probes = 0;
+  t.mock.method(fs, "statfsSync", () => { probes++; return { type }; });
+  t.mock.method(fs, "mkdirSync", () => { creates++; throw new Error("must refuse before any output directory create"); });
+  t.mock.method(fs, "readSync", () => { reads++; throw new Error("must refuse before reading content"); }); syncBuiltinESMExports();
+  assert.throws(() => snapshotDependencies(f.from, f.to), (error) => {
+    assert.equal(error.code, "ERR_DEPENDENCY_SNAPSHOT");
+    assert.equal(JSON.parse(error.message.slice(error.message.indexOf("{"))).reason, "unsupported-output-filesystem"); return true;
+  });
+  assert.ok(probes > 0); assert.equal(creates, 0); assert.equal(reads, 0); assert.equal(fs.existsSync(f.to), false);
+});
+
+for (const code of ["EACCES", "EIO"]) test(`Linux output filesystem ${code} refuses without creating output and closes handles`, { skip: process.platform !== "linux" }, (t) => {
+  const f = fixture(t); f.put("worker"); const open = fs.openSync, close = fs.closeSync, held = new Set(); let creates = 0;
+  t.mock.method(fs, "openSync", (...args) => { const fd = open(...args); held.add(fd); return fd; });
+  t.mock.method(fs, "closeSync", (fd) => { held.delete(fd); return close(fd); });
+  t.mock.method(fs, "statfsSync", () => { throw Object.assign(new Error("PRIVATE"), { code }); });
+  t.mock.method(fs, "mkdirSync", () => { creates++; throw new Error("must refuse before creating output"); }); syncBuiltinESMExports();
+  assert.throws(() => snapshotDependencies(f.from, f.to), (error) => {
+    assert.equal(error.code, "ERR_DEPENDENCY_SNAPSHOT");
+    const detail = JSON.parse(error.message.slice(error.message.indexOf("{")));
+    assert.equal(detail.reason, "output-io"); assert.equal(detail.fsCode, code); assert.ok(!error.message.includes("PRIVATE")); return true;
+  });
+  assert.equal(creates, 0); assert.equal(held.size, 0); assert.equal(fs.existsSync(f.to), false);
+});
+
+for (const at of ["root", "descendant"]) test(`real Linux filesystem pins ${at} creates or refuses before output creation`, { skip: process.platform !== "linux" }, (t) => {
+  const f = fixture(t), file = at === "root" ? "worker" : "pkg/worker"; f.put(file);
+  const type = fs.statfsSync(f.parent, { bigint: true }).type, supported = nativeLinuxOutputTypes.includes(type);
+  const open = fs.openSync, mkdir = fs.mkdirSync; let changed = false, creates = 0;
+  t.mock.method(fs, "mkdirSync", (...args) => { creates++; return mkdir(...args); });
+  t.mock.method(fs, "openSync", (path, ...args) => {
+    if (!changed && f.pathIs(path, join(f.to, file))) {
+      changed = true; const target = at === "root" ? f.to : join(f.to, "pkg"); fs.renameSync(target, target + ".held"); fs.mkdirSync(target);
+    }
+    return open(path, ...args);
+  }); syncBuiltinESMExports();
+  assert.throws(() => snapshotDependencies(f.from, f.to), (error) => {
+    assert.equal(error.code, "ERR_DEPENDENCY_SNAPSHOT");
+    assert.equal(JSON.parse(error.message.slice(error.message.indexOf("{"))).reason, supported ? "changed-output" : "unsupported-output-filesystem"); return true;
+  });
+  assert.equal(changed, supported); assert.equal(fs.existsSync(join(f.to, file)), false);
+  if (!supported) { assert.equal(creates, 0); assert.equal(fs.existsSync(f.to), false); }
+  console.log(JSON.stringify({ control: "real-output-filesystem-boundary", at, type: type.toString(16), supported, substitutionAttempted: changed, outputCreates: creates, redirectedFile: false }));
+});
 
 for (const at of ["root", "ancestor", "descendant"]) for (const kind of ["directory", "junction"])
   test(`destination ${at} ${kind} substitution at output open is rejected without redirected bytes`, (t) => {

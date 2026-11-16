@@ -31,7 +31,14 @@ identity before reading, and requires unchanged source identity, metadata and
 recursive membership bookends. Symlinks, special files and changing inputs fail
 closed. Linux traversal uses pinned directory descriptors and no-follow opens;
 Windows uses path bookends plus descriptor identity checks before content reads.
-Output creates are anchored to pinned directory descriptors on Linux. Windows
+Linux output storage is restricted to native ext-family, tmpfs and overlayfs
+filesystems, checked through the opened parent descriptor before any output
+creation and through active output descriptors before subsequent creates. Other
+types, including WSL DrvFS/9p, are refused as `unsupported-output-filesystem`.
+DrvFS descriptor child paths can follow a replaced directory name and create an
+empty file before identity checks reject it; no output tree is created there.
+Output creates are anchored to pinned directory descriptors on supported Linux
+filesystems. This is not a blanket Linux filesystem qualification. Windows
 temporarily pins the existing output parent while creating the root, then holds
 exclusive handles on active owned output directories to prevent rename/junction
 substitution before writes. Handles are bounded by traversal depth and released

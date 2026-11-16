@@ -10,6 +10,8 @@ Corten is pre-1.0, so any minor version may change the API.
   single-link saved evidence. Report bounded relative-path rejection diagnostics.
   Pin snapshot output directories before creates/writes and retain output
   identities through sealing, rejecting directory/junction and file replacement.
+  Refuse unqualified Linux output filesystems before creation, including WSL
+  DrvFS/9p where descriptor child paths can create through a replaced directory.
 
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.

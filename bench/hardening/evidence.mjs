@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { constants, closeSync, fstatSync, openSync, readSync, writeSync, readFileSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, statfsSync, openSync, readSync, writeSync, readFileSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, isAbsolute, posix, win32 } from "node:path";
@@ -112,6 +112,12 @@ export function snapshotDependencies(from, to) {
   const directoryFlags = constants.O_RDONLY | (process.platform === "win32" ? 0x10000000
     : (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const fdPath = (fd) => `${process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
+  const outputFilesystem = (fd, path) => {
+    // Native ext-family, tmpfs and overlayfs only. DrvFS/9p can resolve a
+    // descriptor child through a replaced name; bookends are too late for wx.
+    if (process.platform === "linux" && ![0xef53n, 0x01021994n, 0x794c7630n].includes(
+      io(path, () => statfsSync(fdPath(fd), { bigint: true }), "output-io").type)) reject("unsupported-output-filesystem", path);
+  };
   const outputSame = (before, after, path, fields = directoryKeys) => {
     if (type(before) !== type(after) || fields.some((key) => before[key] !== after[key])) reject("changed-output", path, after);
   };
@@ -126,8 +132,10 @@ export function snapshotDependencies(from, to) {
     }
     if (complete) for (const [at, stat] of outputFiles) outputSame(stat, info(join(to, at), at), at, keys);
   };
-  const outputDirectoryPath = (path) => process.platform === "win32"
-    ? path === "." ? to : join(to, path) : fdPath(outputDirectories.get(path).fd);
+  const outputDirectoryPath = (path) => {
+    const fd = outputDirectories.get(path).fd; outputFilesystem(fd, path);
+    return process.platform === "win32" ? path === "." ? to : join(to, path) : fdPath(fd);
+  };
   const createOutputDirectory = (access, path) => {
     guardOutput(path); io(path, () => mkdirSync(access, { mode: 0o700 }), "output-io");
     const stat = directory(access, path);
@@ -248,6 +256,7 @@ export function snapshotDependencies(from, to) {
   try {
     parent = io(".", () => openSync(dirname(to), directoryFlags), "output-io");
     outputSame(outputAncestors.at(-1).stat, io(".", () => fstatSync(parent, { bigint: true })), ".");
+    outputFilesystem(parent, ".");
     createOutputDirectory(process.platform === "win32" ? to : join(fdPath(parent), posix.basename(to)), ".");
     // The root now pins its ancestry on Windows. Do not retain an exclusive
     // handle on a pre-existing parent during copying or read-only sealing.
