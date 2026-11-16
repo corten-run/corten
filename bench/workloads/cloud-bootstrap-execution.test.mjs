@@ -40,10 +40,16 @@ reset-failed)
 *) exit 93 ;;
 esac
 `, { mode: 0o700 });
-  const result = spawnSync("/bin/bash", ["-c", `set -Eeuo pipefail\n${preflight}`], {
-    cwd: root, env: { PATH: `${root}:/usr/bin:/bin`, HOME: root, LANG: "C", TEST_ROOT: root,
+  const env = { PATH: `${root}:/usr/bin:/bin`, HOME: root, LANG: "C", TEST_ROOT: root,
       TEST_LOAD: load, TEST_PID: pid, TEST_RESET_FAILS: resetFails ? "yes" : "no",
-      TEST_RESET_LOAD: resetLoad, TEST_RESET_PID: resetPid, TEST_RESET_ACTIVE: resetActive },
+      TEST_RESET_LOAD: resetLoad, TEST_RESET_PID: resetPid, TEST_RESET_ACTIVE: resetActive };
+  const fixture = spawnSync(shim, ["show", units[0], "--property=LoadState", "--value"], {
+    cwd: root, env, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
+  });
+  assert.equal(fixture.error, undefined, "systemctl fixture must be executable; never fall back to the real host service");
+  assert.equal(fixture.status, 0); assert.equal(fixture.stdout, `${load}\n`);
+  const result = spawnSync("/bin/bash", ["-c", `set -Eeuo pipefail\n${preflight}`], {
+    cwd: root, env,
     encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
   assert.equal(result.error, undefined); assert.equal(result.signal, null);
