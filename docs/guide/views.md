@@ -123,7 +123,7 @@ that returns `impl Document`; `req.page`, `req.screen` and the error page take o
 markup is checked when it compiles: one `<head>` with one `<title>` and one `<Corten />`, and
 one `<main>`, not inside a `for`, `if` or `match`. Each part renders for the requests that use it:
 
-| Part | Full load | Client navigation | Data client (`req.screen`) |
+| Part | Full load | Client navigation | Data client (`req.screen`, or a script's [`read()`](scripts.md#a-screens-data)) |
 |---|---|---|---|
 | `<title>`'s text | yes | yes | yes, as `"title"` |
 | an expression or component in `<head>` (`{head}`): the page's own tags | yes | yes, each marked `data-corten-head` so the next page's replace them | no |

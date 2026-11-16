@@ -26,6 +26,9 @@ struct Routed {
     args: Option<String>,
     /// The rows its `get` serves when that is a feed (`rows = Level`), as written.
     rows: Option<TokenStream>,
+    /// The data its `get` answers a data client with when it is a screen a script reads
+    /// (`data = SetListing`), as written.
+    data: Option<TokenStream>,
     /// `prefetch = cheap`, as written.
     prefetch: Option<TokenStream>,
     /// `no_store`: which handlers' answers are kept by no cache, as `NoStore` would make them.
@@ -72,6 +75,8 @@ struct Serves {
     handlers: Vec<(Ident, TokenStream)>,
     /// `rows = Level`: the rows of the feed its `get` serves.
     rows: Option<TokenStream>,
+    /// `data = SetListing`: the data of the screen its `get` answers (`HtmlResult<Screen<..>>`).
+    data: Option<TokenStream>,
     /// `prefetch = cheap`: the function of the route that says which URLs a hover may fetch.
     prefetch: Option<TokenStream>,
     /// Where `prefetch = ..` is, whatever its value (`false` too).
@@ -401,6 +406,21 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             let mut call = call;
             call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
+            // `data = SetListing`: the `get` handler answers a screen of that data, checked at its
+            // name as `patches` is.
+            if let (Some(data), "get") = (&route.data, method.to_string().as_str()) {
+                let mut check = respan(
+                    q("const _: () = ::corten::route::__private::screen::<_, _, __A0, __A1>", &[state_ty.clone(), data.clone()]),
+                    at,
+                );
+                let mut argument = respan(q("&", &[]), at);
+                argument.extend(handler.clone());
+                let mut argument = Group::new(Delimiter::Parenthesis, argument);
+                argument.set_span(at);
+                check.extend([TokenTree::Group(argument)]);
+                check.extend(respan(q(";", &[]), at));
+                checks.extend(check);
+            }
             // An action's handler is the route's post for its `do`.
             if let Some(action) = action {
                 call = q(
@@ -444,6 +464,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         // `patches`: its `get` checked above, the methods say so, as `get` of such a handler does.
         if route.patches.is_some() {
             methods = q("::corten::Methods::__patches(__A0)", &[methods]);
+        }
+        // `data = SetListing`: likewise, the methods answer a screen of it, as its `get` does.
+        if let Some(data) = &route.data {
+            methods = q("::corten::Methods::__screen::<__A1>(__A0)", &[methods, data.clone()]);
         }
         // An unstaged route is added apart from the others, in an area's or API's module too: the
         // app serves it outside the stages, its host check aside.
@@ -502,6 +526,20 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 "#[automatically_derived]
                 impl ::corten::route::__private::FeedRows<__A1> for __A0 {}",
                 &[ty, rows.clone()],
+            ));
+        }
+        // A screen's route says what its data is, for a script's `ScreenUrl<SetListing>`
+        // parameter; its `get` handler was checked above to answer that data.
+        if let (Some(data), Some(args)) = (&route.data, &route.args) {
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            feeds.extend(q(
+                "#[automatically_derived]
+                impl ::corten::route::__private::ScreenData<__A1> for __A0 {}
+                #[automatically_derived]
+                impl ::corten::route::__private::RouteData for __A0 {
+                    type Data = ::corten::route::HasData<__A1>;
+                }",
+                &[ty, data.clone()],
             ));
         }
         // Each action's address, a method of the route named for it: `page.save()`, for a form's
@@ -977,6 +1015,10 @@ fn scan(
                         if let Some(patches) = serves.patches {
                             return err(patches, format!("unstaged serves {name} with a handler that takes no Req, so it cannot answer a patch: say unstaged or patches, not both"));
                         }
+                        if let Some(data) = &serves.data {
+                            let at = data.clone().into_iter().last().map_or(span, |t| t.span());
+                            return err(at, format!("unstaged serves {name} with a handler that takes no Req, so it cannot answer a screen's data: say unstaged or data, not both"));
+                        }
                     }
                     if serves.handlers.is_empty()
                         && prefix != Some(name.to_string().as_str())
@@ -1025,6 +1067,7 @@ fn scan(
                             handlers: Vec::new(),
                             args: None,
                             rows: None,
+                            data: None,
                             prefetch: None,
                             no_store: NoStore::Not,
                             doc: std::mem::take(&mut docs),
@@ -1076,6 +1119,23 @@ fn scan(
                             );
                         }
                     }
+                    if let Some(data) = &serves.data {
+                        let at = data.clone().into_iter().last().map_or(span, |t| t.span());
+                        if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
+                            return err(
+                                at,
+                                format!("data names what {name}'s get answers a data client with: #[route(\"{path}\", get = .., data = ..)]"),
+                            );
+                        }
+                        if args.is_none() {
+                            return err(
+                                at,
+                                format!(
+                                    "{name} has a type parameter, so it cannot name its data: give its fields concrete types"
+                                ),
+                            );
+                        }
+                    }
                     routed.push(Routed {
                         name: name.clone(),
                         path,
@@ -1083,6 +1143,7 @@ fn scan(
                         handlers: serves.handlers,
                         args,
                         rows: serves.rows,
+                        data: serves.data,
                         prefetch: serves.prefetch,
                         no_store: serves.no_store,
                         doc: std::mem::take(&mut docs),
@@ -1217,6 +1278,16 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.rows = Some(stream(rows.iter().cloned()));
             }
+            [TokenTree::Ident(key), TokenTree::Punct(eq), data @ ..] if eq.as_char() == '=' && key.to_string() == "data" => {
+                if serves.data.is_some() {
+                    return err(key.span(), "data is named twice");
+                }
+                if data.is_empty() || !is_path(data) {
+                    let span = data.first().map_or(key.span(), TokenTree::span);
+                    return err(span, "data names the screen's data type: data = SetListing (a path, as HtmlResult<Screen<SetListing>> names it)");
+                }
+                serves.data = Some(stream(data.iter().cloned()));
+            }
             // `unstaged`: the route is served outside the app's stages.
             [TokenTree::Ident(key), ..] if key.to_string() == "unstaged" => {
                 if part.len() > 1 {
@@ -1335,7 +1406,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show, post(sku) = set_sku), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount), unstaged or patches",
+                    "expected a handler (get = show, post(sku) = set_sku), rows = .., data = .., prefetch = .., no_store, no_store(post), gives(CartCount), unstaged or patches",
                 )
             }
         }
@@ -1348,6 +1419,21 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             if !named && !serves.handlers.iter().any(|(m, _)| m.to_string() == method.to_string()) {
                 return err(method.span(), format!("no_store({method}) names a method this route has no handler for: #[route(\"{path}\", {method} = .., no_store({method}))]"));
             }
+        }
+    }
+    // A screen's data is one answer of its `get`: `req.screen`'s, not a patch the runtime
+    // applies nor a feed's rows, so a route says `data` alone of the three.
+    if let Some(data) = &serves.data {
+        if let Some(patches) = serves.patches {
+            return err(patches, format!("data says the get of \"{path}\" answers a screen with its data, and patches that it answers the runtime's read with a patch: a route is one or the other, so say data or patches, not both"));
+        }
+        if let Some(rows) = &serves.rows {
+            let at = rows
+                .clone()
+                .into_iter()
+                .next()
+                .map_or_else(|| data.clone().into_iter().next().map_or(Span::call_site(), |t| t.span()), |t| t.span());
+            return err(at, format!("data says the get of \"{path}\" answers a screen with its data, and rows that it is a feed: a route is one or the other, so say data or rows, not both"));
         }
     }
     // An unstaged route is not a page, so a link to it is not fetched ahead of a click: it says
@@ -1372,6 +1458,13 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     }
     if !serves.actions.is_empty() {
         marked.extend(q(", __actions", &[]));
+    }
+    // `data = SetListing`, likewise: the route's `Route::Data`, which `Area::route` and
+    // `Api::route` require the `get` they are given to answer. The type is named where the routes
+    // module is declared, in `RouteData` (below), since the module may be declared in a function,
+    // whose items no path from inside it reaches.
+    if serves.data.is_some() {
+        marked.extend(q(", __data", &[]));
     }
     marked.append(&mut keep);
     keep = marked;
