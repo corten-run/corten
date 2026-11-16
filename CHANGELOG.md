@@ -26,6 +26,33 @@ Corten is pre-1.0, so any minor version may change the API.
   fragment panics, naming the element lost and the one that came first; a release build is
   unchanged ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
+- Add an explicitly approved, single-attempt cancellation path for the exact old
+  r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,
+  preserve the wrapper's terminal archive and all nine contexts, and require
+  separate terminal custody and fresh retirement guards without audit approval or
+  source qualification. Retain uncertainty and prohibit repeated signal/DELETE.
+  Bind cancellation and mixed terminal custody to the original uploaded control
+  manifest, independently of later launch-template changes.
+
+- Bound matched Spring marketplace upstream reads with the native ten-second
+  timeout and map typed header timeouts to MVC 504 responses; retain default
+  behavior and the documented caller-disconnect limitation.
+
+- Bound Drogon marketplace page source reads with the existing native deadline and
+  caller-disconnect lifetime, preserving request-local trace context.
+
+- Save bounded, structural same-page browser diagnostics when native compiled
+  alert hydration checks fail. Retain only closed categories and numbers, not
+  browser text or URL paths; keep readiness gates and their errors unchanged.
+
+- Include the observer's durable writer in the fixed native replay source closure;
+  keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
+
+- Verify the standard cloud-init instance selector by pinned descriptor and exact
+  owned host ID during failed-native custody. Keep all other paths link-free,
+  require matching instance identity and empty regular user data, and refuse
+  selector, ancestry or file replacement during each terminal proof.
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
@@ -36,6 +63,38 @@ Corten is pre-1.0, so any minor version may change the API.
   stream directory admission within global evidence budgets and carry the final
   proof's absolute expiry through private provider dispatch. Keep ordinary
   collection gates and uncertain-delete reconciliation unchanged.
+
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
+- Copy stable installed dependency hardlinks into independent hardening evidence,
+  retaining source identity and mutation checks, bounded no-follow reads and
+  single-link saved evidence. Report bounded relative-path rejection diagnostics.
+  Pin snapshot output directories before creates/writes and retain output
+  identities through sealing, rejecting directory/junction and file replacement.
+  Refuse unqualified Linux output filesystems before creation, including WSL
+  DrvFS/9p where descriptor child paths can create through a replaced directory.
+
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; roll back executable captures from rejected
+  attempts and observations without closing earlier accepted inputs. Do not
+  reinterpret retained failed evidence.
+
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
 
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
@@ -1164,6 +1223,13 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
+  with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
+  field's message when it is `None`, which redraws the form with the message without JavaScript;
+  a `<select>`, or radios drawn with one checked, stays the enum. A word the page never offers is
+  still a 422. A doctest and a router test hold the reading and the redraw
+  ([#1413 An enum form field that is missing or holds an unknown word fails the whole form with a 422, where a string field could draw a message on the field](https://github.com/corten-run/corten/issues/1413)).
 
 - Benchmark deployment refreshes target the newest stable framework, runtime and build
   tools rather than LTS alone. Record incompatible inputs without forcing dependencies,

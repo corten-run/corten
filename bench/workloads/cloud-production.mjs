@@ -1,6 +1,6 @@
 // Operator-gated production composition. No provider or state operations on import.
 import assert from "node:assert/strict";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { controller, publicError } from "./droplet.mjs";
@@ -11,9 +11,10 @@ import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativeRoots } from "./cloud-retirement.mjs";
+import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
+export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
 const policyPaths = [...new Set([...controllerPaths, ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/json-api/contract.mjs", "bench/workloads/registry.mjs"])];
 const loadedSources = new Map(policyPaths.map((path) => [path, regular(join(checkout, path), 1024 * 1024).toString("utf8").replaceAll("\r\n", "\n")]));
@@ -57,11 +58,19 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
-    if (options.retireFailedNative) {
+    if (options.cancelMixedWait) {
+      ownedMixedWait(saved); assert.equal(saved.status, "running");
+      for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
+      for (const name of ["mixed-cancel-reservation.json", "mixed-cancel-intent.json", "mixed-cancel-signal.json"])
+        assert.ok(!existsSync(join(physicalRequest, `groups-${options.round}`, name)), "prior cancellation attempt requires custody, never another signal");
+      assert.notEqual(head, saved.commit); await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      recovery = { measuredCommit: saved.commit, wait: mixedWait, policy: "one-owned-mixed-wait-cancel-no-audit-no-delete" };
+    } else if (options.retireFailedNative) {
       const roots = failedNativeRoots(saved);
       assert.notEqual(saved.commit, head, "merged repair controller required");
       await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
-      assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
+      if (saved.group === "mixed-production") verifyMixedSignal(join(physicalRequest, `groups-${options.round}`), saved);
+      else assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
       recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
         policy: "r21-9f-failed-native-custody-only-no-qualification" };
     } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
@@ -69,10 +78,11 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   }
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
-  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
+  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.cancelMixedWait ? "cancel-mixed-wait" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
     ...(recovery ? { recovery } : {}),
-    declaration: recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
+    declaration: options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
+      : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
@@ -148,13 +158,13 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative ? {
+    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative || options.cancelMixedWait ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
     } : {}) });
   let result;
-  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.retireFailedNative ? "controller-retirement" : "controller-audit";
+  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.cancelMixedWait ? "controller-cancellation" : options.retireFailedNative ? "controller-retirement" : "controller-audit";
   if (options.detach) { await task.launch(); result = 3; }
-  else result = options.collect ? await task.collect() : options.retireFailedNative ? await task.retireFailedNative() : await task.deliverAudit();
+  else result = options.collect ? await task.collect() : options.cancelMixedWait ? await task.cancelMixedWait() : options.retireFailedNative ? await task.retireFailedNative() : await task.deliverAudit();
   stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;

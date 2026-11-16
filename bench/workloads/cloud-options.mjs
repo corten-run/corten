@@ -37,7 +37,7 @@ export function providerFailure(error) {
 }
 
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
-  "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-retirement", "controller-checkpoint", "provider-settlement"];
+  "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement"];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;
@@ -49,13 +49,13 @@ export function full(value, pattern, label) {
 }
 export function validateOptions(o) {
   assert.ok(o && typeof o === "object" && !Array.isArray(o));
-  const allowed = ["round", "stateDir", "detach", "collect", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
+  const allowed = ["round", "stateDir", "detach", "collect", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
   assert.ok(Object.keys(o).every((k) => allowed.includes(k)), "unknown option/override");
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17, "official campaigns start at r17");
   assert.ok(typeof o.stateDir === "string" && isAbsolute(o.stateDir) && !/[\r\n\0]/.test(o.stateDir)
     && !/^[\\/]{2}/.test(o.stateDir), "absolute local state root required");
-  assert.equal([o.detach, o.collect, o.retireFailedNative, o.deliverAudit !== undefined].filter(Boolean).length, 1, "choose exactly one controller action");
-  for (const flag of ["detach", "collect", "retireFailedNative"]) if (o[flag] !== undefined) assert.equal(o[flag], true);
+  assert.equal([o.detach, o.collect, o.cancelMixedWait, o.retireFailedNative, o.deliverAudit !== undefined].filter(Boolean).length, 1, "choose exactly one controller action");
+  for (const flag of ["detach", "collect", "cancelMixedWait", "retireFailedNative"]) if (o[flag] !== undefined) assert.equal(o[flag], true);
   if (o.detach) {
     full(o.commit, /[a-f0-9]{40}/, "full measured commit required"); full(o.sshKey, /[1-9]\d*/, "SSH key ID required");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -80,6 +80,7 @@ export function parseDropletArgs(args) {
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "duplicate option"); seen.add(flag);
     if (flag === "--retire-failed-native") o.retireFailedNative = true;
+    else if (flag === "--cancel-mixed-wait") o.cancelMixedWait = true;
     else if (flag === "--detach" || flag === "--collect") o[flag.slice(2)] = true;
     else if (Object.hasOwn(values, flag)) { const value = args[++i]; assert.ok(value && !value.startsWith("--"), "option needs value"); o[values[flag]] = value; }
     else assert.fail(`unknown option ${flag}`);
@@ -102,11 +103,21 @@ export function providerAccount(value) {
   full(uuid, /[A-Za-z0-9][A-Za-z0-9-]{0,127}/, "account identity unavailable");
   return `${team ? "team" : "user"}:${uuid}`;
 }
+// Shape only, like the other saved-state validators here. Exact old-host/wait
+// authority belongs to the controller-only cancellation module, never the
+// credential worker's deny-unlisted import closure.
+export function cancellationState(value) {
+  assert.deepEqual(Object.keys(value).sort(), ["controllerCommit", "intentSha256", "reservationSha256", ...(value.signalSha256 === undefined ? [] : ["signalSha256"])].sort());
+  full(value.controllerCommit, /[a-f0-9]{40}/, "cancellation controller commit");
+  assert.notEqual(value.controllerCommit, "9f3d35884c67d90524f978d173fabeb3a17bc970");
+  for (const key of ["intentSha256", "reservationSha256", ...(value.signalSha256 === undefined ? [] : ["signalSha256"])])
+    full(value[key], /[a-f0-9]{64}/, "cancellation evidence hash");
+}
 export function controllerState(s, round) {
   validateState(s, round);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "mixedCancellation"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -115,6 +126,14 @@ export function controllerState(s, round) {
   if (s.status === "reserved") assert.ok(!s.createIntentAt && !s.id, "reserved host already has create intent");
   if (s.status === "creating") assert.ok(!s.id, "creating host unexpectedly bound");
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
+  if (s.mixedCancellation !== undefined) {
+    assert.equal(s.group, "mixed-production"); assert.equal(s.round, "r21");
+    assert.equal(s.commit, "9f3d35884c67d90524f978d173fabeb3a17bc970");
+    assert.ok(!s.auditIntent && !s.auditIntents, "cancellation cannot consume an audit attempt");
+    cancellationState(s.mixedCancellation);
+    assert.ok(s.status === "running" || s.status === "retired" && s.retirement?.kind === "native-failed");
+    for (const key of ["collectedAt", "validation", "evidenceOutcome", "exitCode"]) assert.equal(s[key], undefined, "cancellation cannot qualify a campaign");
+  }
   if (s.bootstrapReady !== undefined) {
     assert.ok(s.group !== undefined && s.group === s.fleet.jobs[0].group
       && (["running", "collected"].includes(s.status) || s.status === "retired" && ["setup-failed", "native-failed"].includes(s.retirement?.kind)), "only the first started fleet group records bootstrap admission");

@@ -148,8 +148,8 @@ test("completed negative qualification never cleans up an uncreated CPU reader o
           if (path.endsWith("/missing")) return path.startsWith("/api") ? p.json404 : p.page404;
           if (headers.host === "unrecognized.invalid") return p.badHost;
           if (headers["x-qualification"]) return p.bigHead;
+          if (method === "POST" && path.startsWith("/api/marketplace/")) return p.json405;
           if (method === "POST") return headers.origin !== config.base ? p.crossSite : input.body.length > 2 ** 20 ? p.bigBody : p.ownPost;
-          if (method === "DELETE") return p.json405;
           if (method === "HEAD") return p.head;
           if (headers["accept-encoding"] !== "identity") return path.startsWith("/api") ? p.jsonGzip : p.pageBr;
           if (upstreamMode.hang) return p.slow;

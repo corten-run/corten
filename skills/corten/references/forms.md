@@ -322,3 +322,7 @@ script of the app's, and the handler checks the same rule. A field with a fixed 
 (a select, radios, a `corten_ui::ComboBox`) is a `#[derive(UrlValue)]` enum in the form
 struct, and the markup writes its variants (`value={Kind::Partial}`, `Choice { value: Kind::Partial, .. }`),
 not their words as strings.
+Radios drawn with none checked send nothing until the user picks one, so that field is
+`Option<Kind>` with `required` on each radio, and the handler adds the field's message when it
+is `None` (a bare `Kind` would refuse the whole form with a 422 instead); a select, or radios
+drawn with one checked, is the bare enum.

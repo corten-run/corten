@@ -37,8 +37,25 @@ export function hashExecutableDescriptor(fd, identity) {
 
 /** Pin the actual sampled inode, not a pathname that could be replaced after exit. */
 export function participantExecutables() {
-  const entries = new Map(); let closed = false;
+  const entries = new Map(), transactions = []; let closed = false;
   return Object.freeze({
+    transaction(action) {
+      assert.equal(closed, false);
+      const added = []; transactions.push(added); let committed = false;
+      try {
+        const value = action();
+        assert.ok(!value || typeof value.then !== "function", "executable capture transactions must be synchronous");
+        committed = true; return value;
+      } finally {
+        assert.equal(transactions.pop(), added);
+        if (committed) {
+          // A successful inner census still belongs to its enclosing observation.
+          if (transactions.length) for (const ref of added) transactions.at(-1).push(ref);
+        } else {
+          for (const ref of added) { closeSync(entries.get(ref).fd); entries.delete(ref); }
+        }
+      }
+    },
     capture(pid) {
       assert.equal(closed, false); assert.equal(process.platform, "linux");
       assert.ok(Number.isSafeInteger(pid) && pid > 0);
@@ -48,7 +65,10 @@ export function participantExecutables() {
         const identity = executableIdentity(fd), info = statSync(path, { bigint: true });
         assert.deepEqual(Object.fromEntries(keys.map((key) => [key, String(info[key])])), identity);
         const ref = executableReference(identity);
-        if (!entries.has(ref)) { entries.set(ref, { fd, identity }); retained = true; }
+        if (!entries.has(ref)) {
+          entries.set(ref, { fd, identity }); retained = true;
+          transactions.at(-1)?.push(ref);
+        }
         return { executableRef: ref, executableIdentity: identity };
       } finally { if (!retained) closeSync(fd); }
     },
@@ -59,7 +79,7 @@ export function participantExecutables() {
       assert.deepEqual(Object.fromEntries(keys.map((key) => [key, String(info[key])])), evidence.executableIdentity);
     },
     finish() {
-      assert.equal(closed, false); closed = true;
+      assert.equal(closed, false); assert.equal(transactions.length, 0); closed = true;
       const values = [...entries].map(([ref, { identity }]) => ({ ref, identity }));
       try {
         // Hash only after the final resource sample. The fixed helper receives
@@ -81,6 +101,7 @@ export function participantExecutables() {
       } finally { for (const { fd } of entries.values()) closeSync(fd); entries.clear(); }
     },
     close() {
+      assert.equal(transactions.length, 0);
       if (!closed) { closed = true; for (const { fd } of entries.values()) closeSync(fd); entries.clear(); }
     },
   });
