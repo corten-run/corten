@@ -59,12 +59,22 @@ function assertPrefix(before, after) {
 export class UpstreamAudit {
   constructor(counters) {
     this.counters = counters;
+    this.eventVersions = new Map();
     this.ledger = { schema: "native-browser-upstream-ledger/v1", baseline: null, phases: [], terminal: null,
       scope: "Independent numeric-source request finish/close receipts only; not app server-peer closure or worker-network coverage" };
   }
   async sample() {
     const row = { startedAt: performance.now(), finishedAt: null, snapshot: null, error: null };
-    try { row.snapshot = structuredClone(await this.counters()); } catch (error) { row.error = error.message; }
+    try {
+      row.snapshot = structuredClone(await this.counters());
+      // Counter samples remain complete snapshots. Share only byte-identical
+      // immutable event versions, never a mutable pending/completed receipt.
+      if (Array.isArray(row.snapshot?.events)) row.snapshot.events = row.snapshot.events.map((event) => {
+        const key = JSON.stringify(event);
+        if (!this.eventVersions.has(key)) this.eventVersions.set(key, Object.freeze(event));
+        return this.eventVersions.get(key);
+      });
+    } catch (error) { row.error = error.message; }
     row.finishedAt = performance.now(); return row;
   }
   async start() { this.ledger.baseline = await this.sample(); }

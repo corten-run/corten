@@ -33,6 +33,11 @@ Corten is pre-1.0, so any minor version may change the API.
   page, as a child of a host still open, and `scripts/dsd-probe.mjs` checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
+  records and incremental raw-case hashing instead of one growing inline summary. The
+  complete matrix, raw observations, native settings, safety ceilings and proof gates
+  are preserved; bounded historical summaries remain read-only diagnostics.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression
