@@ -3567,9 +3567,10 @@ rules something out.
     Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
-    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-15, a leading `<col>`'s
-    patch losing its stylesheet link in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
-    (Playwright 1.64.1), on main `83a9c9fb`.
+    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-16, a leading `<col>`'s
+    patch losing its stylesheet link, a case of `crates/corten/src/patch-parsing.json` that
+    `scripts/smoke.mjs` loaded on `1f0bc47b7`, in Chromium 156.0.8078.80, Firefox 157.0 and
+    WebKit 27.2 (Playwright 1.64.1).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
@@ -4350,13 +4351,15 @@ rules something out.
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
     in the body and in an `<svg>`'s `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` and a
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
-    it, load such a page in the three engines and count the matches; 2026-11-15, for a patch's top
+    it, load such a page in the three engines and count the matches; 2026-11-16, for a patch's top
     level, the "in template", "in table", "in table body", "in row" and "in column group"
-    insertion modes read that day against `TEMPLATE_HEAD`, `TABLE_PARTS` and `patch_top` in
-    `html.rs`, and `scripts/smoke.mjs` loading the shapes in
-    `crates/corten/src/patch-parsing.json` as a `<template>`'s content, which passed in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium and WebKit
-    letting a leading `<title>` decide.
+    insertion modes read again that day against `TEMPLATE_HEAD`, `TABLE_PARTS` and `patch_top`
+    in `crates/corten-macros/src/html.rs`, and `scripts/smoke.mjs` loading the 175 shapes in
+    `crates/corten/src/patch-parsing.json` (among them both refused shapes, written first and
+    after each of the nine table parts) as a `<template>`'s content on `1f0bc47b7`, which passed
+    in Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium
+    and WebKit letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
+    `<noframes>` decide.
 
 ## Rules
 
