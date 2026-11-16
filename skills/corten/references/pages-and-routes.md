@@ -301,7 +301,7 @@ merge a router for any of them (the app guide, Other protocols).
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
 `App::zoned_dates()`. Dates then render in the visitor's zone on
-their own (no zone argument, no zone prop); a picked day or date and time converts with `req.zone()` (`day.start(req.zone())`, `input.when.at(req.zone())` for an `Entry<LocalDateTime>`; [forms.md](forms.md)), for which `App::client_zone()` is enough alone; a date the
+their own (no zone argument, no zone prop); a picked day converts with `req.zone()` (`day.start(req.zone())`), and a form's date and time is drawn in `FormZone::from(req.zone())` and read in the `FormZone` it posts back ([forms.md](forms.md)), for which `App::client_zone()` is enough alone; a date the
 first page shows goes in `corten_ui::LocalTime`. A `Public` page is the same for everyone, so its
 dates are UTC: draw each in `LocalTime`, which writes it again in the browser's zone. A value that
 is a day, not an instant (a report window, a week's start, an API's `"2026-09-02"`), is a

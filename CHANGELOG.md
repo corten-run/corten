@@ -6,12 +6,19 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - Read a date and time a visitor picks (`<input type="datetime-local">`) as the instant it
-  names in their zone: `corten::i18n::LocalDateTime` reads and writes HTML's local date and time
-  syntax, `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does) and
-  `entry.at(req.zone())` gives the instant, a skipped time moved forward by the gap and a
-  repeated one the earlier (Temporal's default, RFC 5545); `LocalDateTime::of(at, zone)` draws
-  an instant as the input's `value`, `min` or `max`. `Entry` also holds a `Day`
-  (`<input type="date">`), and `day.start(zone)` is where a day begins in a zone
+  names in the zone its form was drawn in: `corten::i18n::LocalDateTime` reads and writes HTML's
+  local date and time syntax (`InvalidLocalDateTime` when it does not read), and
+  `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does). A
+  `corten::form::FormZone` field carries the zone: drawn as a hidden input
+  (`zone.field(f.zone)`, from `FormZone::from(req.zone())`) and shown by its name (`UTC` without
+  JavaScript), it is read back with the post, and `entry.at(&input.zone)` takes only it, so a
+  time is never read in a post's zone that differs from the page's. A skipped time moves forward by
+  the gap and a repeated one is the earlier (Temporal's default, RFC 5545).
+  `LocalDateTime::of(at, zone)` draws an instant as the input's `value`, `min` or `max`, and
+  `ceil_minute` and `floor_minute` keep a `min` and a `max` on the input's minute steps.
+  `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
+  `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
+  zone; `day.midnight_utc()` is deprecated for `day.start(Utc)`
   ([design Choice 55](docs/design.md#choice-local-date-time)).
 
 - Include the observer's durable writer in the fixed native replay source closure;

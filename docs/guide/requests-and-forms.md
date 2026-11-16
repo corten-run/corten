@@ -356,6 +356,7 @@ type of its own that implements `Deserialize`.
 | `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group |
 | `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
 | `Entry<Day>`, `Entry<LocalDateTime>` | the text as sent and the day, or the date and time on the visitor's clock, it reads as, `None` when blank or not one | an `<input type="date">` or `<input type="datetime-local">` the user fills in |
+| `FormZone` | the zone the form was drawn in, its date and time fields read in it; not one is a 422 that names the field | the hidden input `zone.field(f.zone)` draws |
 | `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
 | `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=` |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
@@ -400,39 +401,56 @@ the browser's console names such a control in a form when the page, a navigation
 it, whether its attributes come from `Bounds` or are written by hand.
 
 A date and time the user picks (`<input type="datetime-local">`) is what their clock read
-(`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. `entry.at(zone)` is
-the instant it names in the visitor's zone, `req.zone()` with the `zones` feature and
-`App::client_zone()` (without them, `Utc`, an `Offset` or a `Zone` of the app's own), and `None`
-for the field's message. `LocalDateTime::of(at, zone)` writes an instant as the input's `value`,
-`min` or `max` in the same zone, so the form shows what the visitor's clock read and the handler
-reads back what it showed:
+(`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. It is drawn in a
+zone and read in the same one, which the form carries: a `corten::form::FormZone` field, drawn as
+a hidden input with `zone.field(f.zone)` and read back with the post. `input.when.at(&input.zone)`
+is the instant, `None` for the field's message, and `LocalDateTime::of(at, &zone)` writes an
+instant as the input's `value`, `min` or `max`. The draw takes its zone from the request
+(`FormZone::from(req.zone())`, with the `zones` feature and `App::client_zone()`; else `Utc` or an
+`Offset`), and the post reads in the zone the form came back with, never `req.zone()`: that is
+UTC on a browser's first page and in a `Public` page, and the visitor's own zone on the post after
+it, so a form read in it would store a time moved by the visitor's offset. `Entry::at` takes only a
+`FormZone`, so that mistake does not compile. A form drawn again after a refused post draws in the
+posted zone, and its `zone.field(f.zone)` sends it again.
 
 ```rust,ignore
 #[derive(Fields)]
-struct Repair { live_at: Entry<LocalDateTime> }
+struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
 
-let zone = req.zone();
-let Some(live_at) = input.live_at.at(&zone).filter(|at| *at >= listed && *at <= now) else {
+// The post.
+let zone = &input.zone;
+let Some(live_at) = input.live_at.at(zone).filter(|at| *at >= listed && *at <= now) else {
     errors.add(f.live_at, t.live_at_between(..));
     return req.invalid(&errors, ..).await;
 };
 
-// <input type="datetime-local" name={f.live_at} value={&input.live_at}
-//     min={LocalDateTime::of(listed, &zone)} max={LocalDateTime::of(now, &zone)}>
+// The form, drawn with `let zone = FormZone::from(req.zone())`, or the posted zone when drawn again:
+// {zone.field(f.zone)}
+// <label>{t.goes_live(zone.name())}
+//   <input type="datetime-local" name={f.live_at} value={&input.live_at}
+//       min={LocalDateTime::of(listed, zone).and_then(LocalDateTime::ceil_minute)}
+//       max={LocalDateTime::of(now, zone).map(LocalDateTime::floor_minute)}>
+// </label>
 ```
 
-Where the clocks change, a time on the clock names no instant (`02:30` on the morning they go
-from 2 to 3) or two (`01:30` on the night they go back), and `at` has one answer, Temporal's
+Show the zone's name (`zone.name()`: `UTC`, `-06:00`, `America/Chicago`) with the field. Without
+JavaScript the browser never reports its zone, so the form is drawn and read in UTC, and the
+visitor sees that and types a time in UTC; a browser's first page is the same until the next
+page. Where the clocks change, a time on the clock names no instant (`02:30` on the morning they
+go from 2 to 3) or two (`01:30` on the night they go back), and `at` has one answer, Temporal's
 default and iCalendar's: a skipped time moves forward by the gap (`03:30`), and a repeated one is
-the earlier instant, before the clocks go back. A `LocalDateTime` is not an instant, so `t.date`
-and a field typed as one do not take it. An input counts its steps (a minute) from its `min`,
-else its `value`, so a `min` with seconds puts every whole minute off its step and the form is
-not sent (`corten dev` names one drawn with a value): keep the instants a minute input is drawn
-with to the minute, or give it `step="1"`. A day (`<input type="date">`) is an `Entry<Day>` in no
-zone, and
-`day.start(zone)` is the instant it begins there, for a query's bound. A time of day alone
-(`<input type="time">`) names no day, so it has no reader; a date and a time the user picks
-together are one `datetime-local`.
+the earlier instant, before the clocks go back. So an instant in the repeated hour, drawn and sent
+back unchanged, reads as the earlier one: a form that edits a stored instant keeps it when
+`input.when.value() == LocalDateTime::of(stored, zone)`. A `LocalDateTime` is not an instant, so
+`t.date` and a field typed as one do not take it. An input counts its steps (a minute) from its
+`min`, else its `value`, so a `min` with seconds or a fraction of one puts every whole minute off a
+step and the form is not sent until the visitor picks a time on one (`corten dev` names such a
+control drawn with a value): round a `min` up to the minute and a `max` down (`ceil_minute`,
+`floor_minute`), as above, and every minute the input allows reads as an instant within the
+handler's own comparison with `listed` and `now`. A day (`<input type="date">`) is an `Entry<Day>`
+in no zone, and `day.start(zone)` is the instant it begins there, for a query's bound. A time of
+day alone (`<input type="time">`) names no day, so it has no reader; a date and a time the user
+picks together are one `datetime-local`.
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a

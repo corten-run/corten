@@ -216,7 +216,8 @@
 //!   offset (`GMT-5`).
 //! - A date and time a person picked (`<input type="datetime-local">`) is a [`LocalDateTime`],
 //!   what their clock read: no instant until [`LocalDateTime::at`] reads it in a zone, and
-//!   [`LocalDateTime::of`] writes an instant back as the input's value there.
+//!   [`LocalDateTime::of`] writes an instant back as the input's value there; a form is read in
+//!   the zone it was drawn in, which it sends back ([`crate::form::FormZone`]).
 //! - `t.date(at, MonthStyle)`: the month and year without the day (`Short` is `Mar 2026`, `Long`
 //!   `March 2026`), in the locale's order and words, for a "Member since" line or a release
 //!   month. It has no time, so `t.date_time` does not take one.
@@ -1042,7 +1043,7 @@ mod tests {
         assert_eq!(day.plus(-245).map(|d| d.to_string()).as_deref(), Some("2025-12-31"));
         assert_eq!(Day::new(9999, 12, 31).unwrap().plus(1), None);
         assert_eq!(
-            Day::new(1969, 12, 31).unwrap().midnight_utc(),
+            Day::new(1969, 12, 31).unwrap().start(Utc),
             Some(std::time::UNIX_EPOCH - std::time::Duration::from_secs(86_400))
         );
         assert!(Day::new(2026, 9, 1).unwrap() < day);
@@ -1052,7 +1053,7 @@ mod tests {
         assert_eq!(en.date(day, MonthStyle::Long).to_string(), "September 2026");
         assert_eq!(en.date(day, DateStyle::Medium).datetime().to_string(), "2026-09-02");
         // An instant at the same midnight is still an instant, in the zone it is given.
-        assert_eq!(en.date(day.midnight_utc().unwrap(), DateStyle::Medium).zone(Offset::hours(-5)).to_string(), "Sep 1, 2026");
+        assert_eq!(en.date(day.start(Utc).unwrap(), DateStyle::Medium).zone(Offset::hours(-5)).to_string(), "Sep 1, 2026");
         // Every day is written from its calendar date, before the earliest instant a platform has
         // too (1601 on Windows).
         for (text, written) in [

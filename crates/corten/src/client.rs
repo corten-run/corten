@@ -191,7 +191,7 @@ pub struct ClientZone(pub String);
 pub(crate) const ZONE_COOKIE: &str = "corten-zone";
 
 /// An IANA zone name as a browser writes it: letters, digits and `/ _ + -`, at most 64 bytes.
-fn zone_name(value: &str) -> bool {
+pub(crate) fn zone_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && !value.starts_with(['/', '-', '+'])

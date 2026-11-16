@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 
-use crate::form::Numeric;
-use crate::i18n::{Day, LocalDateTime, Zone};
+use crate::form::{FormZone, Numeric};
+use crate::i18n::{Day, LocalDateTime};
 use crate::view::{AttrValue, Render};
 
 /// `text` read as a number of type `T`, in HTML's syntax for a number (what an
@@ -155,32 +155,35 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// typed field: one that does not read came from no page of the app's. A number made in code
 /// (`Entry::from(1)`) is drawn as the number.
 ///
-/// A date and time is read in the visitor's zone ([`Entry::at`], `req.zone()` with the `zones`
-/// feature), and an instant is drawn in it ([`LocalDateTime::of`]), so the form shows what the
+/// A date and time is drawn in a zone ([`LocalDateTime::of`]) and read in the same one
+/// ([`Entry::at`]), the [`FormZone`] the form sent back with it, so the form shows what the
 /// visitor's clock read, and a time their clocks skip or repeat has one answer
 /// ([`LocalDateTime`]):
 ///
 /// ```
 /// use corten::prelude::*;
+/// use corten::form::FormZone;
 /// use corten::i18n::{parse_timestamp, LocalDateTime, Offset};
 ///
 /// #[derive(Fields)]
-/// struct Repair { live_at: Entry<LocalDateTime> }
+/// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
 ///
-/// let zone = Offset::hours(-6); // in a handler, req.zone()
-/// let repair: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05").unwrap();
-/// assert_eq!(repair.live_at.at(zone), parse_timestamp("2026-11-13T20:05:00Z"));
+/// let repair: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05&zone=-06%3A00").unwrap();
+/// assert_eq!(repair.live_at.at(&repair.zone), parse_timestamp("2026-11-13T20:05:00Z"));
 ///
+/// // Drawn again in the zone it was sent in.
 /// let listed = parse_timestamp("2026-11-12T15:30:00Z").unwrap();
-/// let f = Repair::FIELDS;
+/// let (f, zone) = (Repair::FIELDS, &repair.zone);
 /// let view = html! {
-///     <input type="datetime-local" name={f.live_at} value={&repair.live_at} min={LocalDateTime::of(listed, zone)}>
+///     {zone.field(f.zone)}
+///     <input type="datetime-local" name={f.live_at} value={&repair.live_at}
+///         min={LocalDateTime::of(listed, zone).and_then(LocalDateTime::ceil_minute)}>
 /// };
 /// assert!(view.to_html().contains(r#"value="2026-11-13T14:05" min="2026-11-12T09:30""#));
 ///
 /// // Text another client sent: kept for the form, and no instant.
-/// let repair: Repair = corten::form::from_bytes(b"live_at=yesterday").unwrap();
-/// assert_eq!((repair.live_at.text(), repair.live_at.at(zone)), (Some("yesterday"), None));
+/// let repair: Repair = corten::form::from_bytes(b"live_at=yesterday&zone=UTC").unwrap();
+/// assert_eq!((repair.live_at.text(), repair.live_at.at(&repair.zone)), (Some("yesterday"), None));
 /// ```
 ///
 /// An `Entry` holds a number, a [`Day`] or a [`LocalDateTime`], each read in the syntax its input
@@ -201,7 +204,26 @@ pub struct Entry<T> {
 }
 
 /// What an [`Entry`] holds: a number ([`Numeric`], read as [`read_number`] reads it), a [`Day`]
-/// (`2026-09-02`) or a [`LocalDateTime`] (`2026-11-13T14:05`). Sealed.
+/// (`2026-09-02`) or a [`LocalDateTime`] (`2026-11-13T14:05`). Sealed: each reads the syntax its
+/// input sends, which an app's own type has no input for.
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten::form::EntryValue;
+///
+/// #[derive(Clone, Copy, Debug)]
+/// struct Grade(u8);
+/// impl Render for Grade {
+///     fn render(&self, out: &mut String) {
+///         out.push_str("A");
+///     }
+/// }
+/// impl EntryValue for Grade {
+///     fn read_entry(_: &str) -> Option<Self> {
+///         None
+///     }
+/// }
+/// ```
 #[diagnostic::on_unimplemented(message = "an Entry holds a number, a Day or a LocalDateTime, not `{Self}`")]
 pub trait EntryValue: Copy + Render + fmt::Debug + sealed::Sealed + 'static {
     /// `text` read as the field's value, `None` when it does not read.
@@ -258,11 +280,23 @@ impl<T: EntryValue> Entry<T> {
 }
 
 impl Entry<LocalDateTime> {
-    /// The instant it reads as in `zone`, the one the visitor's clock is in (`req.zone()`), as
-    /// [`LocalDateTime::at`] reads one: a time the clocks skip moves forward by the gap, and one
-    /// they repeat is the earlier. `None` when it is blank or not a date and time, the field's
-    /// message.
-    pub fn at(&self, zone: impl Zone) -> Option<SystemTime> {
+    /// The instant it reads as in `zone`, the [`FormZone`] the form was drawn in and sent back,
+    /// as [`LocalDateTime::at`] reads one: a time the clocks skip moves forward by the gap, and
+    /// one they repeat is the earlier. `None` when it is blank or not a date and time, the
+    /// field's message.
+    ///
+    /// It takes only the form's zone, not the request's: `req.zone()` on the post may not be the
+    /// zone the form was drawn in (UTC on a browser's first page), and reading in it would move
+    /// the time by the visitor's offset.
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    /// use corten::i18n::{LocalDateTime, Utc};
+    ///
+    /// let when = Entry::<LocalDateTime>::typed("2026-11-13T14:05");
+    /// let _ = when.at(Utc); // as req.zone() would be
+    /// ```
+    pub fn at(&self, zone: &FormZone) -> Option<SystemTime> {
         self.value?.at(zone)
     }
 }
@@ -421,16 +455,17 @@ mod tests {
 
     #[test]
     fn a_day_or_a_date_and_time_entry_keeps_its_text_and_reads_it() {
-        use crate::i18n::{parse_timestamp, Offset};
+        use crate::i18n::{parse_timestamp, Offset, Utc};
+        let (chicago_winter, utc) = (FormZone::from(Offset::hours(-6)), FormZone::from(Utc));
         let day = Entry::<Day>::typed("2026-09-02");
         assert_eq!(day.value().map(|d| d.to_string()).as_deref(), Some("2026-09-02"));
         let bad = Entry::<Day>::typed("09/02/2026");
         assert_eq!((bad.value(), bad.text(), bad.is_blank()), (None, Some("09/02/2026"), false));
         let when = Entry::<LocalDateTime>::typed("2026-11-13T14:05");
-        assert_eq!(when.at(Offset::hours(-6)), parse_timestamp("2026-11-13T20:05:00Z"));
+        assert_eq!(when.at(&chicago_winter), parse_timestamp("2026-11-13T20:05:00Z"));
         for text in ["", "  ", "2026-11-13", "2026-11-13T14:05Z", "2026-02-30T12:00"] {
             let e = Entry::<LocalDateTime>::typed(text);
-            assert_eq!((e.value(), e.at(Offset::hours(0)), e.text()), (None, None, Some(text)), "{text:?}");
+            assert_eq!((e.value(), e.at(&utc), e.text()), (None, None, Some(text)), "{text:?}");
             assert_eq!(e.is_blank(), text.trim().is_empty(), "{text:?}");
         }
         let mut out = String::new();
@@ -444,6 +479,6 @@ mod tests {
             at: Entry<LocalDateTime>,
         }
         let none = crate::form::from_bytes::<Repair>(b"").unwrap().at;
-        assert!(none.is_blank() && none.at(Offset::hours(0)).is_none());
+        assert!(none.is_blank() && none.at(&utc).is_none());
     }
 }

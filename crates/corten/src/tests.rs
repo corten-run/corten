@@ -9667,6 +9667,94 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     );
 }
 
+/// A form's date and time is read in the zone the form was drawn in, which it sends back
+/// (`FormZone`), not in the zone of the request that posts it: a browser's first page is drawn in
+/// UTC before the browser has reported its zone, and the post after it carries the zone. Without
+/// JavaScript no zone is ever reported, and the form says it is in UTC.
+#[cfg(feature = "zones")]
+#[tokio::test]
+async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
+    use crate::form::{Entry, FormZone};
+    use crate::i18n::{parse_timestamp, LocalDateTime};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    #[derive(crate::Fields)]
+    struct Repair {
+        live_at: Entry<LocalDateTime>,
+        zone: FormZone,
+    }
+    let stored = parse_timestamp("2026-11-13T20:05:00Z").unwrap();
+    let secs =
+        |at: Option<SystemTime>| at.map_or("none".into(), |at| at.duration_since(UNIX_EPOCH).unwrap().as_secs().to_string());
+    let routes = Routes::from(
+        Table::new()
+            .route(
+                "/edit",
+                get(move |req: Req| async move {
+                    let (f, zone) = (Repair::FIELDS, FormZone::from(req.zone()));
+                    req.test_page(
+                        "Edit",
+                        html! {
+                            <form method="post" action="/save">
+                                {zone.field(f.zone)}
+                                <label>
+                                    "Goes live, " {zone.name()}
+                                    <input type="datetime-local" name={f.live_at} value={LocalDateTime::of(stored, &zone)}>
+                                </label>
+                            </form>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/save",
+                crate::router::post(move |req: Req, Form(posted): Form<Repair>| async move {
+                    // What the form was drawn in, and what the request's own zone would have read.
+                    let request = posted.live_at.value().and_then(|t| t.at(req.zone()));
+                    format!("{} {}", secs(posted.live_at.at(&posted.zone)), secs(request))
+                }),
+            ),
+    );
+    let router = App::new(routes).client_zone().router();
+    let send = |method: &'static str, uri: &'static str, body: &'static str, cookie: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::builder().method(method).uri(uri).header("sec-fetch-site", "same-origin");
+            if let Some(cookie) = cookie {
+                req = req.header("cookie", cookie);
+            }
+            let req = req.header("content-type", "application/x-www-form-urlencoded").body(Body::from(body)).unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            let status = res.status();
+            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        }
+    };
+    let chicago = Some("corten-zone=America/Chicago");
+    let at = secs(Some(stored));
+    let six_hours_on = (stored.duration_since(UNIX_EPOCH).unwrap().as_secs() + 6 * 3600).to_string();
+
+    // A browser's first page, and every page without JavaScript: drawn in UTC, and says so.
+    let (_, page) = send("GET", "/edit", "", None).await;
+    assert!(page.contains(r#"<input type="hidden" name="zone" value="UTC">"#), "{page}");
+    assert!(page.contains("Goes live, UTC") && page.contains(r#"value="2026-11-13T20:05""#), "{page}");
+    // Sent unchanged from that first page, by a browser that has reported Chicago since: the
+    // instant it was drawn from, where the request's zone would have moved it six hours.
+    let (status, read) = send("POST", "/save", "live_at=2026-11-13T20%3A05&zone=UTC", chicago).await;
+    assert_eq!((status, read), (StatusCode::OK, format!("{at} {six_hours_on}")));
+    // Without JavaScript: UTC both ways.
+    let (_, read) = send("POST", "/save", "live_at=2026-11-13T20%3A05&zone=UTC", None).await;
+    assert_eq!(read, format!("{at} {at}"));
+
+    // Once the browser has reported its zone, the form is drawn in it and read back in it.
+    let (_, page) = send("GET", "/edit", "", chicago).await;
+    assert!(page.contains(r#"<input type="hidden" name="zone" value="America/Chicago">"#), "{page}");
+    assert!(page.contains("Goes live, America/Chicago") && page.contains(r#"value="2026-11-13T14:05""#), "{page}");
+    let (_, read) = send("POST", "/save", "live_at=2026-11-13T14%3A05&zone=America%2FChicago", chicago).await;
+    assert_eq!(read, format!("{at} {at}"));
+    // A post without the zone came from no page of the app's.
+    let (status, _) = send("POST", "/save", "live_at=2026-11-13T14%3A05", chicago).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 #[tokio::test]
 async fn only_a_swap_says_it_is_a_page_swap() {
     let (_, headers, _) = call(app(routes(), None), "GET", None).await;

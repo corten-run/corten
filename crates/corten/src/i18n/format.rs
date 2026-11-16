@@ -1600,19 +1600,16 @@ impl Day {
         (1..=9999).contains(&year).then_some(Day { days })
     }
 
-    /// Midnight UTC of the day, for something that needs an instant (a query's bound); writing
-    /// it is `t.date(day, ..)`, not this. `None` for a day before the earliest `SystemTime` the
-    /// platform has (1601-01-01 on Windows); `t.date` writes every day.
+    /// Midnight UTC of the day: [`start`](Day::start) in [`Utc`].
+    #[deprecated(note = "use day.start(Utc), the same instant; day.start(zone) is where the day begins in any zone")]
     pub fn midnight_utc(self) -> Option<SystemTime> {
-        let seconds = i64::from(self.days) * 86_400;
-        match u64::try_from(seconds) {
-            Ok(after) => UNIX_EPOCH.checked_add(Duration::from_secs(after)),
-            Err(_) => UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs())),
-        }
+        self.start(Utc)
     }
 
-    /// The day's first instant in `zone`: where a picked day (`<input type="date">`) begins for
-    /// the person who picked it (`day.start(req.zone())`), for a query's bound. Its midnight, or,
+    /// The day's first instant in `zone`, for something that needs an instant (a query's bound);
+    /// writing it is `t.date(day, ..)`, not this. `day.start(Utc)` is its midnight UTC, and in
+    /// the zone a form was drawn in (a [`FormZone`](crate::form::FormZone)) it is where a picked
+    /// day (`<input type="date">`) begins for the person who picked it. Its midnight, or,
     /// where the clocks skip midnight, the instant they skip to, as
     /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`. `None` before the earliest
     /// `SystemTime` the platform has.

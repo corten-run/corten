@@ -77,6 +77,11 @@ mod zones {
         pub fn is_known(&self) -> bool {
             self.0.is_some()
         }
+
+        /// The database's name for it (`America/Chicago`), `None` for the UTC it falls back to.
+        pub(crate) fn name(&self) -> Option<&str> {
+            self.0.as_ref().and_then(jiff::tz::TimeZone::iana_name)
+        }
     }
 
     impl Zone for Visitor {

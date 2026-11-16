@@ -12,15 +12,16 @@ const DAY: i64 = 86_400_000;
 
 /// A date and a time of day on a clock, with no zone: what `<input type="datetime-local">`
 /// sends (`2026-11-13T14:05`), the time a person reads off the clock where they are. It names an
-/// instant only in a zone, so it is not one: [`at`](LocalDateTime::at) reads it in a zone (the
-/// visitor's, `req.zone()`, with the `zones` feature), and [`of`](LocalDateTime::of) writes an
-/// instant in a zone as the input's `value`, `min` or `max`. A field the user fills in is an
-/// [`Entry<LocalDateTime>`](crate::form::Entry), which keeps the text when it does not read.
+/// instant only in a zone, so it is not one: [`at`](LocalDateTime::at) reads it in a zone, and
+/// [`of`](LocalDateTime::of) writes an instant in a zone as the input's `value`, `min` or
+/// `max`. A field the user fills in is an [`Entry<LocalDateTime>`](crate::form::Entry), which
+/// keeps the text when it does not read and is read in the zone its form was drawn in, a
+/// [`FormZone`](crate::form::FormZone) the form sends back with it.
 ///
 /// ```
 /// use corten::i18n::{parse_timestamp, LocalDateTime, Offset};
 ///
-/// let zone = Offset::hours(-6); // in a handler, req.zone()
+/// let zone = Offset::hours(-6); // in a handler, the form's FormZone
 /// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
 /// let at = read.at(zone).unwrap();
 /// assert_eq!(Some(at), parse_timestamp("2026-11-13T20:05:00Z"));
@@ -47,14 +48,34 @@ const DAY: i64 = 86_400_000;
 /// # }
 /// ```
 ///
+/// [`of`](LocalDateTime::of) then [`at`](LocalDateTime::at) gives the instant back, except in
+/// an hour the clocks repeat: the second `01:30` (`07:30Z` in Chicago) is drawn as `01:30`,
+/// which reads as the first (`06:30Z`). A form that edits a stored instant keeps it when the
+/// field comes back as it was drawn: compare the field's value with `LocalDateTime::of(stored,
+/// zone)` before reading it.
+///
 /// It reads and writes HTML's syntax for a local date and time: a [`Day`], `T` (or a space) and
 /// the time to the minute, with seconds and up to three digits of a second when the input's
 /// `step` asks for them (`2026-11-13T14:05:09.5`). It is written as HTML normalizes one, which
 /// is what a browser sends: with `T`, and with the seconds and their fraction only where they are
 /// not zero. An input counts its steps (a minute unless `step` says otherwise) from its `min`,
-/// else its `value`, so one drawn with a `min` that has seconds holds no whole minute and its
-/// form is not sent (`corten dev` names one drawn with a value): keep the instants a minute input
-/// is drawn with to the minute, or give it `step="1"`.
+/// else its `value`, so a `min` with seconds or a fraction of one puts every whole minute off a
+/// step and the form is not sent until the visitor picks a time that is on one (`corten dev`
+/// names such a control drawn with a value). Draw a `min` rounded up to the minute and a `max`
+/// rounded down ([`ceil_minute`](LocalDateTime::ceil_minute),
+/// [`floor_minute`](LocalDateTime::floor_minute)): every minute between them is then a step, and
+/// each one reads as an instant inside the bounds the handler compares with.
+///
+/// ```
+/// use corten::i18n::{parse_timestamp, LocalDateTime, Utc};
+///
+/// let listed = parse_timestamp("2026-11-12T15:30:09.250Z").unwrap();
+/// let min = LocalDateTime::of(listed, Utc).and_then(LocalDateTime::ceil_minute).unwrap();
+/// assert_eq!(min.to_string(), "2026-11-12T15:31");
+/// assert!(min.at(Utc).unwrap() >= listed, "the earliest time the input allows is not before it");
+/// let max = LocalDateTime::of(listed, Utc).unwrap().floor_minute();
+/// assert_eq!(max.to_string(), "2026-11-12T15:30");
+/// ```
 ///
 /// A time on the clock is not an instant, so it is not written as one without its zone:
 ///
@@ -109,10 +130,29 @@ impl LocalDateTime {
         self.millis % 1000
     }
 
+    /// The minute it is in (`14:05:09` is `14:05`), for an input's `max`.
+    pub fn floor_minute(self) -> Self {
+        LocalDateTime { millis: self.millis - self.millis % 60_000, ..self }
+    }
+
+    /// The first whole minute at or after it (`14:05:09` is `14:06`), for an input's `min`;
+    /// `None` past `9999-12-31T23:59`.
+    pub fn ceil_minute(self) -> Option<Self> {
+        let down = self.floor_minute();
+        if down == self {
+            return Some(self);
+        }
+        match down.millis + 60_000 {
+            next if i64::from(next) < DAY => Some(LocalDateTime { millis: next, ..self }),
+            _ => Day::from_days(self.day.days() + 1).map(LocalDateTime::midnight),
+        }
+    }
+
     /// What the clock in `zone` reads at `at`, to the millisecond (rounded down): for the
-    /// `value`, `min` or `max` of an `<input type="datetime-local">` the visitor reads in their
-    /// zone (`min={LocalDateTime::of(listed, req.zone())}`), in the zone [`at`](LocalDateTime::at)
-    /// reads what they send. `None` outside the years a [`Day`] has (1 to 9999).
+    /// `value`, `min` or `max` of an `<input type="datetime-local">`, drawn in the form's zone
+    /// (`min={LocalDateTime::of(listed, &zone)}`, a [`FormZone`](crate::form::FormZone)) that the
+    /// form sends back and the handler reads what the visitor picked in. `None` outside the years a
+    /// [`Day`] has (1 to 9999).
     pub fn of(at: impl Into<SystemTime>, zone: impl Zone) -> Option<Self> {
         let at = at.into();
         let local = unix_millis(at)?.checked_add(i64::from(zone.offset(at)) * 1000)?;
@@ -120,8 +160,7 @@ impl LocalDateTime {
         Some(LocalDateTime { day, millis: local.rem_euclid(DAY) as u32 })
     }
 
-    /// The instant this time on the clock is in `zone` (the visitor's, `req.zone()`): a skipped
-    /// time moves forward by the gap, and a repeated time is the earlier instant, as the
+    /// The instant this time on the clock is in `zone`: a skipped time moves forward by the gap, and a repeated time is the earlier instant, as the
     /// [type](LocalDateTime) says. `None` before the earliest `SystemTime` the platform has
     /// (1601-01-01 on Windows).
     ///
@@ -242,12 +281,9 @@ impl AttrValue for LocalDateTime {
     }
 }
 
-impl serde::Serialize for LocalDateTime {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
+/// Read from text, as a form's or a query's field (a hidden input a page writes itself). It has no
+/// `Serialize`: JSON an app sends carries an instant with its offset (RFC 3339), not a clock
+/// reading with no zone.
 impl<'de> serde::Deserialize<'de> for LocalDateTime {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Visit;
@@ -405,7 +441,7 @@ mod tests {
         assert_eq!(Day::new(2018, 11, 4).unwrap().start(&zone), Some(ts("2018-11-04T03:00:00Z")));
         assert_eq!(Day::new(2019, 2, 16).unwrap().start(&zone), Some(ts("2019-02-16T02:00:00Z")));
         assert_eq!(Day::new(2019, 2, 17).unwrap().start(&zone), Some(ts("2019-02-17T03:00:00Z")));
-        assert_eq!(Day::new(2026, 9, 2).unwrap().start(Utc), Day::new(2026, 9, 2).unwrap().midnight_utc());
+        assert_eq!(Day::new(2026, 9, 2).unwrap().start(Utc), parse_timestamp("2026-09-02T00:00:00Z"));
     }
 
     /// At real changes in the bundled tz database: a 30-minute change, a skipped day and a
@@ -437,39 +473,40 @@ mod tests {
         assert_eq!(LocalDateTime::of(ts("2026-11-15T09:00:00Z"), &sao_paulo).unwrap().to_string(), "2026-11-15T06:00");
     }
 
-    /// Around every change from 1970 to 2040 in zones that move their clocks in different ways,
-    /// `at` gives the instant jiff's `compatible()` gives (Temporal's default), and `of` reads it
-    /// back as jiff's clock does.
+    /// In every zone in the bundled tz database, around every change of offset from 1970 to 2040,
+    /// `at` gives the instant jiff's `compatible()` gives (Temporal's default) and `of` reads it back
+    /// as jiff's clock does; and no zone changes its offset twice within two days, which `at`'s
+    /// reading a day either side relies on.
     #[cfg(feature = "zones")]
     #[test]
-    fn every_change_reads_as_temporal_compatible_reads_it() {
+    fn every_change_in_every_zone_reads_as_temporal_compatible_reads_it() {
         use crate::i18n::Visitor;
         use jiff::{tz::TimeZone, Timestamp};
-        let mut checked = 0;
-        for name in [
-            "America/Chicago",
-            "America/St_Johns",
-            "America/Sao_Paulo",
-            "America/Havana",
-            "Europe/London",
-            "Europe/Dublin",
-            "Australia/Lord_Howe",
-            "Pacific/Apia",
-            "Antarctica/Troll",
-            "Asia/Tehran",
-        ] {
+        let from = Timestamp::from_second(0).unwrap();
+        let until = Timestamp::from_second(2_208_988_800).unwrap(); // 2040
+        let (mut zones, mut changes, mut checked) = (0, 0, 0);
+        for name in jiff::tz::db().available() {
+            let name = name.as_str();
             let (tz, zone) = (TimeZone::get(name).unwrap(), Visitor::named(name));
-            let from = Timestamp::from_second(0).unwrap();
-            let until = Timestamp::from_second(2_208_988_800).unwrap(); // 2040
+            assert!(zone.is_known(), "{name}");
+            zones += 1;
+            let mut last: Option<i64> = None;
             for change in tz.following(from).take_while(|c| c.timestamp() < until) {
                 let at = change.timestamp().as_millisecond();
                 let before = i64::from(tz.to_offset(Timestamp::from_millisecond(at - 1).unwrap()).seconds()) * 1000;
                 let after = i64::from(change.offset().seconds()) * 1000;
-                // Clock readings from two hours before either side of the change to two after,
-                // every 15 minutes, and a millisecond each side of where each side starts and ends.
-                let (low, high) = (at + before.min(after) - 2 * 3_600_000, at + before.max(after) + 2 * 3_600_000);
+                if before == after {
+                    continue; // a new abbreviation or daylight flag, the clock unmoved
+                }
+                if let Some(last) = last {
+                    assert!(at - last >= 2 * DAY, "{name} changes its offset at {last} and again at {at} ms, within two days");
+                }
+                last = Some(at);
+                changes += 1;
+                // A millisecond each side of where the clock reads each side of the change, and
+                // the middle of the time it skips or repeats.
                 let edges = [at + before, at + after].into_iter().flat_map(|e| [e - 1, e, e + 1]);
-                for local in (low..=high).step_by(900_000).chain(edges) {
+                for local in edges.chain([at + (before + after) / 2]) {
                     let clock = LocalDateTime::of(instant(local).unwrap(), Utc).unwrap();
                     let civil = Timestamp::from_millisecond(local).unwrap().to_zoned(TimeZone::UTC).datetime();
                     let theirs = tz.to_ambiguous_timestamp(civil).compatible().unwrap().as_millisecond();
@@ -482,6 +519,23 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 10_000, "{checked} readings");
+        assert!(zones > 300 && changes > 10_000, "{zones} zones, {changes} changes");
+        assert_eq!(checked, changes * 7);
+    }
+
+    #[test]
+    fn a_bound_is_rounded_to_the_minute_an_input_steps_by() {
+        for (text, down, up) in [
+            ("2026-11-13T14:05", "2026-11-13T14:05", Some("2026-11-13T14:05")),
+            ("2026-11-13T14:05:00.001", "2026-11-13T14:05", Some("2026-11-13T14:06")),
+            ("2026-11-13T14:05:59.999", "2026-11-13T14:05", Some("2026-11-13T14:06")),
+            ("2026-11-13T23:59:30", "2026-11-13T23:59", Some("2026-11-14T00:00")),
+            ("2026-12-31T23:59:59.999", "2026-12-31T23:59", Some("2027-01-01T00:00")),
+            ("9999-12-31T23:59:01", "9999-12-31T23:59", None),
+        ] {
+            let t = read(text);
+            assert_eq!(t.floor_minute().to_string(), down, "{text}");
+            assert_eq!(t.ceil_minute().map(|t| t.to_string()).as_deref(), up, "{text}");
+        }
     }
 }
