@@ -8,6 +8,9 @@ COPY . .
 # debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
 # this line.
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
+# `--build-arg CARD_MARKET_SMOKE=1` builds the browser test's own routes in (src/smoke.rs, through
+# build.rs); a deploy's image leaves it empty and cannot serve them.
+ARG CARD_MARKET_SMOKE=
 # The workspace's target directory is one cache for the examples (`id`; without one, every image
 # built on this machine with a /src/target would share it): they take turns (`locked`), each
 # building on the crates the last one compiled, and other apps build alongside. The sources are

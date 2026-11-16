@@ -573,15 +573,15 @@ input, runs nothing and reports
 control of the name is `[]`, as a group of radios the form left out is.
 Under `corten dev` the console says which as soon as the page draws such a call, before anything
 calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
-([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
+([design Limit 33](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
 could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
 control outside any form, and an `<input type="image">`,
 which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
-and `name.y`, never its field. The page's handlers that take a field load a small module that finds
-it (`corten-field`, 893 bytes, 549 gzipped), as a format argument loads `corten-format`; a page with none
-does not.
+and `name.y`, never its field. A page whose handlers take a field loads the module that finds it,
+`corten-field` (893 bytes, 549 gzipped), as a format argument loads `corten-format`; a page with
+none does not.
 
 ## Shared scripts
 
@@ -669,10 +669,10 @@ export function pauseKey(event, button, prices, changes) {
 ```
 
 The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
-`corten/keys` is a module of its own (870 B gzip): an app serves it only when one of its listed
-scripts imports it (a component's or a `script!` module, not a static file's), and a page whose
-handlers are in that script fetches it with the script, on a full load and on a page the runtime
-swaps in (not a patch).
+`corten/keys` is a module of its own (1,691 bytes, 871 gzipped): an app serves it only when one
+of its listed scripts imports it (a component's or a `script!` module, not a static file's), and
+a page whose handlers are in that script fetches it with the script, on a full load and on a page
+the runtime swaps in (not a patch).
 Pages without shortcuts fetch nothing more; the import map names it on every page of such an app
 (about 60 B). It is `null` when the key belongs to something else:
 
@@ -739,8 +739,8 @@ format (below). A plural message (`t.js().grid_items()`, from `grid.items_one` a
 the same `Message<"count">`: the script passes the count as a number, `label({ count: 3 })`, and
 the form is picked as the server picks it, with the count written in the page's format. It is sent
 with the locale's plural table and number format (about 300 bytes more in the attribute) and
-loads `corten-format` (2.9 kB, 1.4 kB gzipped). Never choose between two messages with
-`count === 1` in a script.
+loads `corten-format` ([below](#numbers-money-and-dates-a-script-writes)). Never choose between
+two messages with `count === 1` in a script.
 
 ## Numbers, money and dates a script writes
 
@@ -777,9 +777,9 @@ rendered (`scripts/format.mjs` checks the two on every case), not what the brows
 writes, which differs by browser and version. A zone with daylight saving time has no fixed
 offset to send: write those dates on the server.
 
-The code that writes them is a module of its own (about 1 KB gzip), not part of the runtime: a
-page whose handlers take a format loads it as a module script next to theirs, and a page whose
-handlers take none does not download it.
+The code that writes them, `corten-format`, is a module of its own (3,005 bytes, 1,492 gzipped),
+not part of the runtime: a page whose handlers take a format loads it as a module script next to
+theirs, and a page whose handlers take none does not download it.
 
 ## State
 

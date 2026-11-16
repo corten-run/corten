@@ -4439,7 +4439,113 @@ rules something out.
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
     `f109794c6`.
 
-56. <a id="choice-field-arguments"></a>**A handler is given a form's control by its `#[derive(Fields)]` field, which
+56. <a id="choice-network-only-preload"></a>**The generated service worker answers a navigation
+    under a `network_only` prefix with the request navigation preload already sent, rather than
+    declining it.** The worker turns navigation preload on, so a page's request leaves while the
+    worker starts, and it declined every request under a `network_only` prefix (sign-in, checkout,
+    an OAuth callback, an agents' endpoint), so that nothing there was cached or given the offline
+    page. For a navigation the two did not fit: the browser sends the preload as the fetch event
+    starts, and when the worker does not call `respondWith` it drops the preload's answer and sends
+    the request again, so every network-only page was rendered twice and a one-time `GET` (an OAuth
+    `?code=`, a magic link) was redeemed twice, the user seeing the second answer
+    ([#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
+    Such a navigation is now answered with `(await event.preloadResponse) || fetch(request)`: the
+    preload's answer when one was sent, one fetch when none was. Where the browser has navigation
+    preload but sent none for this navigation (the worker that turns it on was not yet active when
+    the navigation began, or the app's script turned it off), `preloadResponse` resolves to
+    `undefined` and `fetch(request)` sends the request once, with the navigation's own mode and
+    redirect mode, as a declined navigation would have. No cache is read or written and no offline
+    page is given, so offline it fails as a declined one did, with the browser's error, and a
+    failed preload is not sent again as a fetch, since it may have reached the server. A redirect
+    (the callback's 302 or 303 to a page) keeps its meaning: a
+    navigation's redirect mode is `manual`, so the answer is an opaque redirect the browser follows
+    itself, and the page it lands on is a navigation of its own, through the worker as any page.
+    Still declined: a network-only navigation in a browser without navigation preload
+    (`registration.navigationPreload` absent), where declining sends it once; a posted form, for
+    which no preload is sent; and every request there that is not a navigation. An app's
+    `import_script` listener that already answers such a navigation keeps its answer, and the
+    worker's own `respondWith` then throws an `InvalidStateError` into the worker's console. It
+    costs every client 185 bytes more of worker (2,857 to 3,042 uncompressed as card-market's
+    default image serves it, 1,153 to 1,183 with gzip at level 9), and a request no more on the
+    server.
+
+    Not chosen: navigation preload off, so declining would be right (every navigation would wait
+    for the worker to start before its request leaves, to spare a case the worker can answer);
+    declining when no preload was sent (the worker must call `respondWith` before
+    `preloadResponse` settles, so it cannot tell); leaving it to the app's own `import_script`
+    listener (every app with a sign-in would rewrite the framework's worker); routing the prefixes
+    past the worker with the static routing API (`InstallEvent.addRoutes`, `source: "network"`),
+    which would start no worker and send no preload for them, but which only Chromium of the three
+    tested engines has.
+
+    Stands on: platform (the Service Workers standard's Handle Fetch: for a `GET` navigation with
+    navigation preload enabled the preload request is sent in parallel with the fetch event, and
+    when no handler calls `respondWith` the event's result is null and the navigation is fetched
+    again; a navigation's redirect mode is `manual`, so `respondWith` takes an opaque redirect for
+    it; and the engines: Chromium, Firefox and WebKit each run the generated worker with
+    navigation preload on, and of them only Chromium has `InstallEvent.addRoutes`; Chromium and
+    WebKit send a navigation's preload before the worker decides, and Firefox sends none for a
+    navigation the worker declines); measured
+    (card-market's browser smoke, which counts on the server the requests one navigation sends
+    under the worker, run once with each worker, and a count of ten navigations of each kind in
+    each engine with each worker, the requests counted by the app (`src/smoke.rs`): with the
+    worker that declined, a navigation to `/mcp` reached the server twice in Chromium (10 of 10)
+    and in WebKit (9 of 10, three times on the first), a one-time link twice in both (10 of 10),
+    and each once in Firefox; with this worker each reached it once in all three, 10 of 10; a
+    posted form and a page outside the prefixes reached it once in all three with either worker;
+    and a probe of each engine with each worker, logging on the server each request's
+    `Service-Worker-Navigation-Preload` header: with the worker that declined, Chromium and WebKit
+    sent a network-only navigation twice, the first with the header, and Firefox once, without it,
+    while the same worker's answered page had it in all three, so Firefox sends no preload for a
+    navigation the worker declines rather than reusing one; with this worker each sent it once,
+    with the header. In the same probe a link to another site that redirects (302) into the
+    network-only prefix, as an OAuth provider sends the user back, reached the callback once in
+    all three with this worker (twice in Chromium and WebKit with the one that declined), with the
+    app's `SameSite=Lax` cookie, and landed on the page the callback redirected to; a
+    `SameSite=Strict` cookie reached the callback with this worker exactly where it did with the
+    one that declined, so no engine sends it where it did not before: in Chromium when the link
+    was on one of the app's pages and not when it was on the other site's, in WebKit in both, and
+    in Firefox in neither; Firefox's preload of it said `Sec-Fetch-Site: same-origin` where its
+    declined navigation had said `cross-site`, as Chromium's and WebKit's still did; Corten reads
+    that header only for writes, which no preload is; and one fetch of `/service-worker.js` from
+    card-market's default image with `0c916b5a0`'s worker, against the same text with
+    `226b12b35`'s template in place of its own, the lines generated before the template being the
+    same, for the sizes);
+    reasoned (where the preload has gone out, answering with it is the only answer that sends the
+    request once); value (correctness first: a navigation reaches the server once; then
+    performance: a network-only page is rendered once, from the request already in flight).
+
+    Revisit when: Firefox and WebKit ship `InstallEvent.addRoutes`, so the prefixes can be routed
+    past the worker in every tested engine; Chromium and WebKit reuse a declined navigation's
+    preload, or stop sending one for it as Firefox does, so declining would send it once; Corten,
+    or an app's own middleware (a Fetch-Metadata policy), reads `Sec-Fetch-Site` on a `GET`
+    navigation, which Firefox's preload of a cross-site one calls `same-origin`; an engine sends a
+    `SameSite=Strict` cookie on the preload of a navigation whose own request would not carry it;
+    or an app needs a network-only navigation the worker does not see at all.
+
+    Last checked: 2026-11-16, the Service Workers Editor's Draft of 29 October 2026, built from
+    `w3c/ServiceWorker@57dfd24` (Handle Fetch, Create Fetch Event and Dispatch), read that day;
+    2026-11-16, card-market's smoke and the count
+    in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) on Windows,
+    against a build of `f61cf6cfe` and one of it with `412a3b4c9`'s worker; 2026-11-16, a one-off
+    probe, not a repository check, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1): a worker reporting whether its global has `InstallEvent.addRoutes`
+    (Chromium only) and navigation preload (all three). To repeat it, register a worker that
+    reads `"addRoutes" in InstallEvent.prototype` and `self.registration.navigationPreload`;
+    2026-11-16, card-market's smoke in the same three engines against a build of `0c916b5a0`, and
+    a second one-off probe in them: the worker of `0c916b5a0` and the declining one of `226b12b35`
+    (origin/main), each filled with the network-only prefix `/auth/` and served by a server that
+    logs each request's `Service-Worker-Navigation-Preload`, `Cookie` and `Sec-Fetch-Site`, with a
+    link to a server on another host that redirects (302) into `/auth/`. To repeat it, navigate
+    under each worker to a page, to a page under the prefix and through that link, and count the
+    requests the server logs; 2026-11-16, that probe again with the workers of `0c916b5a0` and
+    `226b12b35` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with
+    a `SameSite=Strict` cookie beside the `Lax` one and the link also on a page of the other host,
+    logging which cookies each request to `/auth/` carried; 2026-11-16, the worker's sizes,
+    one fetch of `/service-worker.js` from card-market's default image built with `0c916b5a0`'s
+    worker, and the same text with `226b12b35`'s template in place of its own.
+
+57. <a id="choice-field-arguments"></a>**A handler is given a form's control by its `#[derive(Fields)]` field, which
     the runtime finds by name in the handler's form when the handler runs.** A component that
     draws a form's fields for forms with a script and without one (a package's fields in two
     editors) has no refs to give the script, since refs do not reach outside a component, so a
@@ -4461,7 +4567,7 @@ rules something out.
     `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
     or every input of it for a group (`[]` for none); a control a patch replaced is the new one, as
     a ref's is. Anything else runs nothing and throws. Whether the form draws the field as the kind the
-    handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
+    handler takes cannot be known when the crate compiles ([Limit 33](#limit-field-kind)), so
     `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
     on the page. Behavior is still a function the markup calls, and the field is an argument as a
     ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
@@ -4559,7 +4665,7 @@ rules something out.
    the browser.
 3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, form fields (a form's
    control by its `#[derive(Fields)]` name, found in the handler's form,
-   [Choice 56](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
+   [Choice 57](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
@@ -5039,9 +5145,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
 
-32. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
+33. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
     against the handler's parameter when the crate compiles, but whether its form draws that
-    control is checked only when the handler runs ([Choice 56](#choice-field-arguments)). A
+    control is checked only when the handler runs ([Choice 57](#choice-field-arguments)). A
     field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a
     select or as radios, a call may name a field no control on the page has, and the markup that
     draws the control may be another component's, often in another crate, so no one expansion of
