@@ -1326,6 +1326,13 @@ pub trait Route {
     #[doc(hidden)]
     const PATCHES: bool = false;
 
+    /// What the route's screen answers a data client: [`NoData`], or [`HasData<SetListing>`] for
+    /// a route that says `data = SetListing` in its routes module, which tells `#[derive(Route)]`
+    /// so. [`crate::Area::route`] and [`crate::Api::route`] then take it only with a `get`
+    /// handler that answers a screen of that data ([`crate::Screen`]), checked when the crate
+    /// compiles. A `Route` written by hand says `type Data = corten::route::NoData;`.
+    type Data;
+
     /// Whether the runtime may fetch this URL ahead of a click (on a hover): `false` for a route
     /// declared `#[route("/..", prefetch = false)]`, a page costly to draw, so a link to it
     /// (`href={..}`, a nav's `{..req.nav(..)}` and `req.nav_of`, a `&dyn Href` prop) is written
@@ -1638,6 +1645,7 @@ impl<R: Route + ?Sized> Route for &R {
     const PATH: &'static str = R::PATH;
     const WRITTEN: &'static str = R::WRITTEN;
     const PATCHES: bool = R::PATCHES;
+    type Data = R::Data;
 
     fn write_href(&self, out: &mut String, html: bool) {
         (**self).write_href(out, html);
@@ -1648,6 +1656,15 @@ impl<R: Route + ?Sized> Route for &R {
         (**self).may_prefetch()
     }
 }
+
+/// What a route's screen answers a data client ([`Route::Data`]) when the route names no data:
+/// any `get` handler may serve it.
+pub struct NoData;
+
+/// What a route's screen answers a data client ([`Route::Data`]) when the route says
+/// `data = T`: only a `get` handler that answers a screen of `T` ([`crate::Screen<T>`]) may
+/// serve it, wherever it is mounted.
+pub struct HasData<T: ?Sized>(std::marker::PhantomData<fn(&T)>);
 
 /// A route whose `get` handler answers a patch whenever the runtime asks
 /// ([`crate::Patches`]): what [`crate::ReadAgain::from`] reads. `#[corten::routes]` makes a route
@@ -4063,6 +4080,14 @@ impl<S: Clone + Send + Sync + 'static, K> Methods<S, K> {
         Methods(self.0, self.1, self.2, std::marker::PhantomData)
     }
 
+    /// Used by `#[corten::routes]` for a route that says `data = T`, once it has checked the
+    /// route's `get` handler answers a screen of `T` (`__private::screen`), so the route's other
+    /// methods (`__merge`) keep its `get`'s kind. Not a public API.
+    #[doc(hidden)]
+    pub fn __screen<T: ?Sized + 'static>(self) -> Methods<S, crate::answer::Screen<T>> {
+        Methods(self.0, self.1, self.2, std::marker::PhantomData)
+    }
+
     /// Used by `#[corten::routes]`: the `post` handler of these methods as the page's post
     /// `name` (`post(name) = ..`), which a post whose `do` names it reaches ([`Action`]). Not a
     /// public API.
@@ -4088,10 +4113,14 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
 
 /// A route's handlers given by hand at `R` ([`crate::Area::route`], [`crate::Api::route`]) and
 /// by `#[corten::routes]` (`Routes::__route`): a route that says `patches` takes only a `get`
-/// that answers one (`K`, [`Methods`]), checked when the app is built. Its routes module checks
-/// its own `get` before this, with an error at the handler's name.
+/// that answers one (`K`, [`Methods`]), and one that says `data = T` only a `get` that answers
+/// a screen of `T` (`K: DataMatches<R::Data>`, which the callers' signatures carry), both
+/// checked when the crate compiles. Its routes module checks its own `get` before this, with an
+/// error at the handler's name.
 #[inline]
-pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind>(_: &Methods<S, K>) {
+pub(crate) fn mounted_with<R: Route + ?Sized, S, K: crate::answer::AnswerKind + __private::DataMatches<R::Data>>(
+    _: &Methods<S, K>,
+) {
     const {
         assert!(
             !R::PATCHES || K::PATCHES,
@@ -4243,7 +4272,10 @@ impl Routes {
 
     /// Used by `#[corten::routes]`: `R`'s handlers at its path. Not a public API.
     #[doc(hidden)]
-    pub fn __route<R: Route>(self, methods: Methods<(), impl crate::answer::AnswerKind>) -> Self {
+    pub fn __route<R: Route>(
+        self,
+        methods: Methods<(), impl crate::answer::AnswerKind + __private::DataMatches<R::Data>>,
+    ) -> Self {
         mounted_with::<R, _, _>(&methods);
         let mut paths = self.1;
         paths.push((R::WRITTEN, methods.1));
@@ -4430,6 +4462,7 @@ fn refuse(a: &str, b: &str) -> ! {
 ///
 /// struct Feed;
 /// impl corten::Route for Feed {
+///     type Data = corten::route::NoData;
 ///     const PATH: &'static str = "/feeds/{name}";
 ///     const WRITTEN: &'static str = "/feeds/{name}.x/extra";
 ///     fn write_href(&self, out: &mut String, _: bool) {
@@ -4452,6 +4485,7 @@ fn refuse(a: &str, b: &str) -> ! {
 ///
 /// struct Feed;
 /// impl corten::Route for Feed {
+///     type Data = corten::route::NoData;
 ///     const PATH: &'static str = "/feeds/{name}";
 ///     const WRITTEN: &'static str = "/feeds/{name}.";
 ///     fn write_href(&self, out: &mut String, _: bool) {
@@ -4473,6 +4507,7 @@ fn refuse(a: &str, b: &str) -> ! {
 ///
 /// struct Feed;
 /// impl corten::Route for Feed {
+///     type Data = corten::route::NoData;
 ///     const PATH: &'static str = "/feeds/{name}";
 ///     const WRITTEN: &'static str = "/feeds/{name}.x";
 ///     fn write_href(&self, out: &mut String, _: bool) {
@@ -4739,6 +4774,58 @@ pub mod __private {
         note = "a feed's route names its rows, #[route(\"/feed/levels\", get = levels, rows = Level)], and the script's parameter names the same type, @param {{FeedUrl<Level>}} feed"
     )]
     pub trait FeedRows<Row> {}
+
+    /// The type of a route's data (`data = SetListing`), written by its routes module where the
+    /// type is in scope, for the route's `Route::Data`.
+    pub trait RouteData {
+        /// `HasData<SetListing>`.
+        type Data;
+    }
+
+    /// The handlers' answer kind `Self` serves a route whose screen answers `Data`
+    /// ([`super::Route::Data`]): any kind a route with no data ([`super::NoData`]), and only
+    /// `Screen<T>` one that says `data = T` ([`super::HasData<T>`]).
+    #[diagnostic::on_unimplemented(
+        message = "the handlers mounted here may not serve the route, which names `{Data}` (their kind is `{Self}`: no get, or a get that may answer a page, a redirect or other data)",
+        label = "these handlers cannot serve this route",
+        note = "a route that says `data = T` takes a get that returns HtmlResult<corten::Screen<T>>, from req.screen, as its routes module does",
+        note = "code generic over the route it mounts handlers at bounds it `R: corten::Route<Data = corten::route::NoData>`, a route that names no data"
+    )]
+    pub trait DataMatches<Data> {}
+    impl<K> DataMatches<super::NoData> for K {}
+    impl<T: ?Sized> DataMatches<super::HasData<T>> for crate::answer::Screen<T> {}
+
+    /// A route whose `get` answers a screen of `Data` (`data = SetListing`): what a script's
+    /// `ScreenUrl<SetListing>` parameter takes.
+    #[diagnostic::on_unimplemented(
+        message = "{Self} is not the URL of a screen whose data is {Data}",
+        label = "the handler's JSDoc says ScreenUrl<{Data}>, and this route names other data or none",
+        note = "a screen's route names its data, #[route(\"/sets/{{set}}\", get = set, data = SetListing)], its get handler returns HtmlResult<Screen<SetListing>>, and the script's parameter names the same type, @param {{ScreenUrl<SetListing>}} set"
+    )]
+    pub trait ScreenData<Data: ?Sized> {}
+
+    /// The kind of an answer that is a screen of `D` ([`crate::answer::Screen`]), which only
+    /// `req.screen` makes given a `D`: what the `get` handler of a route that says `data = D`
+    /// returns, checked by its routes module on its [`crate::Answer::Kind`].
+    #[diagnostic::on_unimplemented(
+        message = "the route says `data = {D}`, and its get handler's answer is not a screen of {D} (its kind is `{Self}`)",
+        label = "this handler",
+        note = "return `HtmlResult<Screen<{D}>>`, which only req.screen and req.screen_with_status make, given a {D}; a page or a redirect would answer a script's read with no data"
+    )]
+    pub trait ScreenOf<D: ?Sized> {}
+    impl<D: ?Sized> ScreenOf<D> for crate::answer::Screen<D> {}
+
+    /// `data = D`: the route's `get` handler answers a screen of `D` ([`ScreenOf`]). A `const`
+    /// with nothing to run: the bounds are the check, at the handler's name in `#[route(..)]`.
+    #[inline]
+    pub const fn screen<H, T, S, D: ?Sized>(_: &H)
+    where
+        H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Out: crate::Answer,
+        <<H as crate::answer::Signature<T>>::Out as crate::Answer>::Kind: ScreenOf<D>,
+    {
+    }
 
     /// A route with a `post` (or `any`) handler in a module that requires no caller: one a
     /// browser can post a report to (`Policy::report_to`).

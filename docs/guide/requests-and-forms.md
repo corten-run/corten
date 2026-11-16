@@ -67,7 +67,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` once `req.mode == Mode::Action` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
-| any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
+| any, `Accept: application/json` | native screen, agent, a page's script ([`read()`](scripts.md#a-screens-data)), test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
@@ -211,7 +211,7 @@ what to answer instead, so an app's router test that sends the plain request fai
 handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
 `data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
 does not say which it answers, since one handler answers both from `req.mode`
-([design Choice 55](../design.md#choice-plain-request-patch)). Both checks here leave out a request
+([design Choice 56](../design.md#choice-plain-request-patch)). Both checks here leave out a request
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
 HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page. It does
 not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header (a response built by hand,

@@ -1510,17 +1510,28 @@ struct Options {
     tags: [&'static str; 2],
 }
 
-/// The doctests' `types/app.d.ts` writes `Options` by hand: it is what `corten::types` generates.
+/// `set_reader.show`'s screen data, as the doctests' `SetListing` is.
+#[cfg_attr(feature = "json", derive(crate::json::ToJson))]
+#[allow(dead_code)]
+struct SetListing {
+    name: String,
+    products: Vec<String>,
+}
+
+/// The doctests' `types/app.d.ts` writes `Options` and `SetListing` by hand: they are what
+/// `corten::types` generates.
 #[cfg(feature = "types")]
 #[test]
-fn the_hand_written_options_declaration_is_the_generated_one() {
-    let block = |ts: &str| {
-        let start = ts.find("export interface Options {").expect("an Options interface");
-        let end = start + ts[start..].find("\n}").expect("its end") + 2;
-        ts[start..end].to_string()
-    };
-    let generated = crate::types::Types::new().add::<Options>().typescript();
-    assert_eq!(block(include_str!("../types/app.d.ts")), block(&generated), "{generated}");
+fn the_hand_written_declarations_are_the_generated_ones() {
+    let generated = crate::types::Types::new().add::<Options>().add::<SetListing>().typescript();
+    for name in ["Options", "SetListing"] {
+        let block = |ts: &str| {
+            let start = ts.find(&format!("export interface {name} {{")).expect("the interface");
+            let end = start + ts[start..].find("\n}").expect("its end") + 2;
+            ts[start..end].to_string()
+        };
+        assert_eq!(block(include_str!("../types/app.d.ts")), block(&generated), "{generated}");
+    }
 }
 
 /// The strings handlers write, as the runtime's parser expects them (`wire.json`, which

@@ -783,7 +783,10 @@ async fn screen_is_html_for_browsers_and_json_for_data_clients() {
             "/",
             get(|req: Req| async move {
                 let data = Data { text: "<b>" };
-                req.screen::<ForOne, _>(&data, Shell { req: &req, title: "A & B", head: "", children: demo(data.text) })
+                req.screen::<ForOne, AnyAnswer, _>(
+                    &data,
+                    Shell { req: &req, title: "A & B", head: "", children: demo(data.text) },
+                )
             }),
         ),
         None,
@@ -841,9 +844,9 @@ async fn inline_page(req: Req) -> Public<HtmlResult> {
 async fn the_csp_allows_the_import_map_by_hash_and_a_nonce_only_when_the_shell_asks() {
     let (_, headers, body) = call(app(routes(), None), "GET", None).await;
     let csp = headers["content-security-policy"].to_str().unwrap();
-    let import_map = security::hash_source(&crate::import_map(None, None, None));
+    let import_map = security::hash_source(&crate::import_map(None, None, &[]));
     assert!(csp.contains(&format!("script-src 'self' {import_map};")) && !csp.contains("nonce"), "{csp}");
-    assert!(body.contains(&format!(r#"<script type="importmap">{}</script>"#, crate::import_map(None, None, None))));
+    assert!(body.contains(&format!(r#"<script type="importmap">{}</script>"#, crate::import_map(None, None, &[]))));
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["cross-origin-opener-policy"], "same-origin");
     let (_, again, same) = call(app(routes(), None), "GET", None).await;
@@ -2088,6 +2091,7 @@ fn a_nav_link_writes_its_route_once_and_says_when_it_is_the_page() {
     // compared unescaped.
     struct Terms;
     impl crate::Route for Terms {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/terms&privacy";
         fn write_href(&self, out: &mut String, html: bool) {
             out.push_str(if html { "/terms&amp;privacy" } else { "/terms&privacy" });
@@ -2705,6 +2709,77 @@ async fn opaque(
     let part: HtmlResult<crate::Patches> =
         req.patch_or(html! { <p id={MsgId}>"Opaque"</p> }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await;
     part
+}
+
+/// A route that says `data = ShownListing` (#1399): its routes module mounts it with its `get`,
+/// and with a `post` beside it, whose merged methods keep the `get`'s kind.
+#[cfg(feature = "json")]
+#[crate::routes]
+mod url_screen {
+    #[route("/listing", get = listing, post = relist, data = ShownListing)]
+    pub struct Listing;
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::json::ToJson)]
+pub struct ShownListing {
+    name: &'static str,
+}
+
+/// The listing's page, titled.
+#[cfg(feature = "json")]
+fn listing_page(name: &str) -> impl crate::Document + '_ {
+    html! {
+        <html>
+            <head>
+                <title>"Listing"</title>
+                <Corten />
+            </head>
+            <body><main>{name}</main></body>
+        </html>
+    }
+}
+
+/// Given the data in an `Arc`, as an app that shares it would: its JSON is the listing's.
+#[cfg(feature = "json")]
+async fn listing(req: Req) -> HtmlResult<crate::Screen<ShownListing>> {
+    let shown = std::sync::Arc::new(ShownListing { name: "Ashen" });
+    req.screen(&shown, listing_page(shown.name))
+}
+
+#[cfg(feature = "json")]
+async fn relist(req: Req) -> HtmlResult {
+    req.redirect(&url_screen::Listing)
+}
+
+/// Given a reference to the data, as a helper that takes `&ShownListing` would.
+#[cfg(feature = "json")]
+async fn listing_by_ref(req: Req) -> HtmlResult<crate::Screen<ShownListing>> {
+    let shown = ShownListing { name: "Borrowed" };
+    let by_ref = &shown;
+    req.screen(&by_ref, listing_page(by_ref.name))
+}
+
+/// The area a route that says `data` is mounted again in, by hand.
+#[cfg(feature = "json")]
+#[derive(crate::Route)]
+#[route("/listing")]
+struct ListingArea;
+
+/// Its routes module mounts it, a `post` beside its `get`; a data client gets the listing's JSON,
+/// read from an `Arc` as from the listing itself; and mounted by hand with a `get` that answers
+/// a screen of the same data, given by reference, it is the same.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_route_that_says_data_answers_its_data_in_its_module_and_mounted_by_hand() {
+    let module = App::new(url_screen::router()).test();
+    let read = module.get(&url_screen::Listing).header(http::header::ACCEPT, "application/json").await;
+    assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Ashen"}}"#);
+    let by_hand = App::new(Routes::new())
+        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(listing_by_ref)))
+        .test();
+    let read = by_hand.get(&url_screen::Listing).header(http::header::ACCEPT, "application/json").await;
+    assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Borrowed"}}"#);
 }
 
 /// `patch_or`, `invalid` and `invalid_with` answer `req.mode` as the handler leaves it, so a
@@ -4959,6 +5034,7 @@ fn a_router_conflict_names_both_routes() {
 async fn a_prefixed_hand_written_route_conflicts_in_one_order_only() {
     struct Prefixed;
     impl crate::Route for Prefixed {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/a{x}/{y}";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str("/ax/c");
@@ -4966,6 +5042,7 @@ async fn a_prefixed_hand_written_route_conflicts_in_one_order_only() {
     }
     struct Leading;
     impl crate::Route for Leading {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/{z}/b";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str("/q/b");
@@ -7384,6 +7461,7 @@ async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back()
     // writes, as a browser reads it: `\` is `/` to it, and it drops a tab.
     struct Evil(&'static str);
     impl crate::Route for Evil {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/evil";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str(self.0);
