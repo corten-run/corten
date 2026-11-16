@@ -14,7 +14,13 @@ Corten is pre-1.0, so any minor version may change the API.
   ("above 0", "below 1"). HTML has no exclusive `min` or `max`, so the input says the type's next
   number inside a refused end (`5e-324` above 0), which the browser checks and its arrow keys never
   step past; the handler refuses the end too, and a number that reads as it in the field's type (`1e-50`
-  in an `f32`) (docs/design.md, Choice 58). Any step is a float's alone, and an exclusive end is
+  in an `f32`). A browser may still refuse a number near a refused end that the handler holds
+  (Chromium and WebKit refuse a typed `4e-324`), and none was measured taking one it refuses
+  (docs/design.md, Choice 58). A number the input says past 18 digits written out, a drawn end or
+  a value made in code (`Entry::from(1e-20)`), is written with an exponent (`1e-20`), which
+  Chromium and WebKit read exactly where they refused `0.00000000000000000001` as below
+  `min="5e-324"`, and any-step bounds that hold nothing (an exclusive `min` at `f64::MAX`, whose
+  next is infinite) are drawn as `min="1" max="0"`. Any step is a float's alone, and an exclusive end is
   any step's alone: stepped bounds stay off an end by starting a step inside it
   (`Bounds::new(0.1, 16.0).step(0.1)` is above 0 in tenths), so an exclusive end on them, a step
   on any-step bounds and `Bounds::any_step(0u32, 3)` do not compile. corten-ui's `NumberField`

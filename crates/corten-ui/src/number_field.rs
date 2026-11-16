@@ -168,11 +168,16 @@ pub fn NumberField<'a, I: Id, T: Numeric, S: Spacing<T>>(field: &'a Number<'a, I
     let stepless = step.is_none();
     let at_min = stepless || number.is_some_and(|v| v <= f.bounds.min());
     let at_max = stepless || number.is_some_and(|v| v >= f.bounds.max());
-    // What was sent, as typed; a number made in code with its step's decimals, or as it is.
+    // What was sent, as typed; a number made in code with its step's decimals, or as it is
+    // (`1e-20` in exponent form, which every browser reads as it).
     let shown = match (f.value.text(), number, step) {
         (Some(text), _, _) => Some(std::borrow::Cow::Borrowed(text)),
         (None, Some(v), Some(step)) => Some(std::borrow::Cow::Owned(v.shown(step))),
-        (None, Some(v), None) => Some(std::borrow::Cow::Owned(v.to_html())),
+        (None, Some(v), None) => {
+            let mut text = String::new();
+            v.write_value(&mut text);
+            Some(std::borrow::Cow::Owned(text))
+        }
         (None, None, _) => None,
     };
     html! {
@@ -254,7 +259,14 @@ mod tests {
         let share = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
         let field = Number { value: 37.5.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
         let html = NumberField { field: &field }.to_html();
-        assert!(html.contains(r#"value="37.5" min="5e-324" max="9.999999999999999e1" step="any""#), "{html}");
+        assert!(html.contains(r#"value="37.5" min="5e-324" max="99.99999999999999" step="any""#), "{html}");
         assert_eq!(html.matches(r#"tabindex="-1" disabled"#).count(), 2, "{html}");
+        // A tiny number made in code is drawn in exponent form, which Chromium and WebKit hold
+        // above `5e-324`, where `0.00000000000000000001` underflows it.
+        let tiny = Number { value: 1e-20.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
+        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="1e-20" min="5e-324""#));
+        let below = Bounds::any_step(-1.0, 0.0).exclusive_max();
+        let tiny = Number { value: (-1e-20).into(), ..Number::new(ShareId, Form::FIELDS.p, below, "Less", "More") };
+        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="-1e-20" min="-1" max="-5e-324""#));
     }
 }

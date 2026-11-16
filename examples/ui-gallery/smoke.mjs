@@ -459,6 +459,40 @@ async function run(browser) {
   check("step any: ArrowDown from 0.5 stays above the refused 0, at a value the browser and the handler hold", down.valid && Number(down.value) > 0 && Number(down.value) <= 0.5, JSON.stringify(down));
   const up = await arrow("99.5", "ArrowUp");
   check("step any: ArrowUp from 99.5 stays below the refused 100, at a value the browser and the handler hold", up.valid && Number(up.value) >= 99.5 && Number(up.value) < 100, JSON.stringify(up));
+  // A number made in code is drawn with an exponent past 18 digits written out (NumberField's
+  // test: `value="1e-20"`), which each engine holds above the drawn 5e-324; Chromium and WebKit
+  // refuse `0.00000000000000000001`, reading about 19 digits.
+  const drawnTiny = await discount.evaluate((input) => {
+    const [min, max] = [input.getAttribute("min") ?? "", input.getAttribute("max") ?? ""];
+    // The discount's own ends, and the mirror: below 0 (exclusive_max), from -1.
+    return [["1e-20", min, max], ["-1e-20", "-1", "-5e-324"]].map(([value, min, max]) => {
+      const i = document.createElement("input");
+      Object.assign(i, { type: "number", step: "any", min, max });
+      i.setAttribute("value", value);
+      return i.validity.valid;
+    }).join(" ");
+  });
+  check("step any: a tiny number drawn with an exponent is inside the drawn ends, above 0 and below it", drawnTiny === "true true", drawnTiny);
+  // Typed numbers near the ends (docs/design.md#choice-exclusive-ends): a browser may refuse one the handler
+  // holds (Chromium and WebKit compare the typed decimal with the drawn one, so `4e-324`, which
+  // reads as 5e-324, is below min="5e-324"), but takes none it refuses. The handler reads a
+  // number as the nearest double, as `Number` does, and holds it above 0 and below 100.
+  const nearEnds = ["0", "-0", "1e-400", "2e-324", "2.5e-324", "4e-324", "4.9e-324", "5e-324", "1e-323", "1e-310", "1e-20", "0.00000000000000000001",
+    "0.0000000000000000000000000000001", "0.5", "99.99999999999999", "99.999999999999992", "99.999999999999993", "99.999999999999995", "99.99999999999999999",
+    "99.9999999999999999999999", "100", "100.0000000000000001", "1e2", "-1", "1e3"];
+  const looser = await discount.evaluate((input, typed) => {
+    const i = /** @type {HTMLInputElement} */ (input);
+    return typed.filter((t) => { i.value = t; const n = Number(t); return i.validity.valid && !(Number.isFinite(n) && n > 0 && n < 100); });
+  }, nearEnds);
+  check("step any: the browser takes no number near the refused ends that the handler refuses", looser.length === 0, looser.join(" "));
+  // Bounds that hold nothing (an exclusive min at f64::MAX, whose next is infinite) are drawn as
+  // min="1" max="0", which each engine refuses whole, as the handler does; `min="inf"` it ignores.
+  const empty = await page.evaluate(() => {
+    const i = document.createElement("input");
+    Object.assign(i, { type: "number", min: "1", max: "0", step: "any" });
+    return ["0", "0.5", "1", "-1", "1e308"].filter((v) => { i.value = v; return i.validity.valid; }).join(" ");
+  });
+  check("step any: min=1 max=0 takes no number", empty === "", empty);
   await discount.fill("");
 
   // ComboBox
@@ -5040,6 +5074,14 @@ async function run(browser) {
   }
   const precise = await postDiscount("12.345");
   check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
+  // The handler holds the least double above 0 however it is typed: `4e-324` reads as it. Chromium
+  // and WebKit refuse that text (the decimal is below min="5e-324"), Firefox takes it; `1e-20`
+  // every engine takes.
+  for (const [typed, browsers] of [["4e-324", "either"], ["1e-20", "true"]]) {
+    const tiny = await postDiscount(typed);
+    const [valid, status] = tiny.split(" ");
+    check(`no script: a discount of ${typed} is held by the handler (browser: ${valid})`, status === "200" && (browsers === "either" || valid === browsers), tiny.slice(0, 80));
+  }
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

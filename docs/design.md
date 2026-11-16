@@ -4687,21 +4687,28 @@ rules something out.
     `Bounds::new(1, 9)` above 0), so only `Bounds::any_step`, a `Bounds<T, AnyStep>`, takes
     `exclusive_min` and `exclusive_max`, and an exclusive end on stepped bounds or a step on
     any-step ones does not compile (`compile_fail` examples of `Bounds`). For a refused end the
-    input says the float's next number inside it, written in exponent form, the shortest
-    decimal that reads as it (`min="5e-324"` above 0 in an `f64`, `max="9.999999999999999e1"`
-    below 100). The browser's range check then refuses the end as the handler does, and its arrow
-    keys, which with `step="any"` add 1, never step past `min` or `max`: within 1 of a drawn end,
-    Chromium and WebKit leave the value as it is, and Firefox leaves it or moves it to the drawn end
-    (`5e-324` from 0.5), which the handler holds. The handler still refuses the end itself, for a client that does not
-    check.
+    input says the float's next number inside it, the shortest decimal that reads as it, with an
+    exponent where written out it would take more than 18 digits (`min="5e-324"` above 0 in an
+    `f64`, `max="99.99999999999999"` below 100); a number made in code for the input's `value` is
+    written the same way (`1e-20`). Bounds that hold no number, an exclusive `min` at the type's
+    largest number among them (its next is infinite, and a browser ignores `min="inf"`), are
+    drawn as `min="1" max="0"`, which takes nothing. The browser's range check then refuses the
+    end as the handler does, and its arrow keys, which with `step="any"` add 1, never step past
+    `min` or `max`: within 1 of a drawn end, Chromium and WebKit leave the value as it is, and
+    Firefox leaves it or moves it to the drawn end (`5e-324` from 0.5), which the handler holds.
+    The handler still refuses the end itself, for a client that does not check.
 
-    Where the two can still differ: an `f64` field's drawn end is the double next to the end,
-    and a browser reads a number input's value as a double, so its check and `Bounds::holds`
-    agree on every value. An `f32` field's drawn end is the shortest decimal that reads as the
-    `f32` next to the end (`1e-45` above 0, `9.9999994e-1` below 1), which the browser reads as a
-    nearby double. Within one `f32` spacing of the end, the browser refuses a few values the
-    handler would take (`0.99999994039` below 1), never the other way round. A typed number that
-    reads as the end in an `f32` (`1e-50`) the browser refuses too, being below `1e-45`.
+    Where the two can still differ: a browser may refuse a number the handler holds; none was
+    measured taking one the handler refuses. Chromium and WebKit compare the decimal typed with
+    the decimal drawn, not the doubles they read as, and read about 19 digits: `4e-324`, which
+    reads as `5e-324`, is below `min="5e-324"`, `1.00000000000000019`, which reads as the double
+    after 1, is below `min="1.0000000000000002"`, and `0.00000000000000000001` is below
+    `5e-324`, though the handler holds each. Firefox reads about 15 significant digits, and took
+    what the handler holds in every case measured. An `f32` field's drawn end is the shortest
+    decimal for the `f32` next to the end (`1e-45` above 0, `0.99999994` below 1), which a browser
+    reads as a nearby double: within one `f32` spacing of the end it refuses a few numbers the
+    handler takes (`0.99999994039` below 1), and a typed number that reads as the end in an `f32`
+    (`1e-50`), being below `1e-45`.
 
     Not chosen: drawing the end itself, which this change first did: the browser let a typed end
     through for the handler to refuse, and its arrow keys landed on it (ArrowDown from 0.5 went
@@ -4710,24 +4717,33 @@ rules something out.
     still reach the handler as values the browser had allowed. An exclusive end on stepped
     bounds, drawn as the first step inside it: it holds the same values as the inclusive min a
     step in, so a field could be written two ways, and it cost about 250 lines and a search on
-    every render.
+    every render. Refusing bounds that hold nothing at compile time: a `const fn` generic over
+    the float can neither compare nor step it on stable Rust, and per-type methods would lose the
+    `E0277` messages that say why an integer or stepped bounds take no exclusive end; `min` above
+    `max` already holds nothing at run time.
 
     Stands on: platform (HTML's number input: `min` and `max` are inclusive, with no exclusive
     form; with `step="any"` its arrow keys step by the default step, 1, and do not step past `min`
-    or `max`; a valid floating-point number takes an exponent, and a browser reads it as a double);
-    measured (`examples/ui-gallery/smoke.mjs` presses ArrowDown from 0.5 and ArrowUp from 99.5 on
-    the gallery's discount, above 0 and below 100, and finds a valid value inside them in each
-    engine, and finds a typed 0 and 100 refused by the browser and by the handler); reasoned (an `f64`'s next
-    number is a double, so the browser's range check and `holds` agree on every double, and an
-    `f32`'s is within one `f32` spacing of the end); value (correct output first: the browser and
-    the handler agree on a field's values, the README's conflict order 1; one way to write a
+    or `max`; a valid floating-point number takes an exponent);
+    measured (`examples/ui-gallery/smoke.mjs`, on the gallery's discount, above 0 and below 100,
+    in each engine: ArrowDown from 0.5 and ArrowUp from 99.5 stay inside; a typed 0 and 100 are
+    refused by the browser and by the handler; of 25 numbers typed near the ends the browser takes
+    none the handler refuses; `1e-20` drawn as the value is inside the drawn ends, and so is
+    `-1e-20` below 0; `min="1" max="0"` takes no number; `4e-324` and `1e-20` sent are held. A
+    probe on this change found the same in 52 numbers typed near the ends of three fields, Chromium
+    and WebKit refusing 11 the handler holds and Firefox none, and of 6,222 numbers each drawn
+    between the doubles next to it, Chromium and WebKit took all in exponent form and all written
+    out in up to 19 digits, and refused about half of those in 20 or more); reasoned (an `f32`'s
+    drawn end is within one `f32` spacing of the end); value (correct output first: the browser
+    takes no value the handler refuses, the README's conflict order 1; one way to write a
     field and a mistake the compiler can see as a compile error, its 3).
 
     Revisit when: HTML gains an exclusive `min` or `max` for a number input, when the input says
-    the end itself and the next number goes; or a browser's arrow keys with `step="any"` step
-    past `min` or `max`.
+    the end itself and the next number goes; a browser's arrow keys with `step="any"` step
+    past `min` or `max`; a browser takes a number near a drawn end that the handler refuses; or
+    Chromium and WebKit read 20 digits written out exactly, when the exponent form can go.
 
-    Last checked: 2026-11-16, the ui-gallery smoke's step-any checks on this change, which passed
+    Last checked: 2026-11-16, the ui-gallery smoke's step-any checks and the probe on this change,
     in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules

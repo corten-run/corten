@@ -194,7 +194,8 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 message) and drawn again with `value={&input.qty}`; a decimal with no step or an end it stays
 off is `Bounds::any_step(0.0, 1.0).exclusive_min()`, a `Bounds<f64, AnyStep>` (a float's alone;
 the input says the type's next number inside a refused end, `5e-324` above 0, so the browser
-checks it as the handler does; the message says "above"), and a stepped field stays off an end by
+refuses the end as the handler does, though Chromium and WebKit may refuse a few numbers right next
+to it that the handler holds; the message says "above"), and a stepped field stays off an end by
 starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`), never a rule beside the `Entry`;
 a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A value the app stores and

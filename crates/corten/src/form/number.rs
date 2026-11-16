@@ -204,7 +204,7 @@ impl<T: Numeric> AttrValue for Entry<T> {
     fn write_attr(&self, name: &str, out: &mut String) {
         match (&self.text, self.value) {
             (Some(text), _) => text.write_attr(name, out),
-            (None, Some(value)) => crate::view::quoted(name, &value, out),
+            (None, Some(value)) => super::bounds::number_attr(name, value, out),
             (None, None) => {}
         }
     }

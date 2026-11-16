@@ -396,7 +396,7 @@ is the app's, as every rule's is, and says "above" where the bound does:
 const DISCOUNT: Bounds<f64, AnyStep> = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
 
 // <input type="number" name={f.discount} value={&input.discount} {..DISCOUNT}> writes
-// min="5e-324" max="9.999999999999999e1" step="any"; DISCOUNT.read is None for 0, 100 and 100.5,
+// min="5e-324" max="99.99999999999999" step="any"; DISCOUNT.read is None for 0, 100 and 100.5,
 // Some for 37.5
 let Some(discount) = DISCOUNT.read(&input.discount) else {
     let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
@@ -409,7 +409,11 @@ Bounds with a step stay off an end by starting a step inside it, as a count does
 whole number: above 0 in tenths is `Bounds::new(0.1, 16.0).step(0.1)`, and `Bounds::new(1, 9)` is
 above 0. So an exclusive end on stepped bounds does not compile, nor `.step(..)` on any-step ones,
 nor `Bounds::any_step(0u32, 3)`: `step="any"` would let the browser send `2.5`, which no integer
-reads. What the input says and where a browser and the handler can still differ is
+reads. A number past 18 digits written out, a drawn end or a value made in code, is written with
+an exponent (`1e-20`), which Chromium and WebKit read exactly, and bounds that hold nothing
+(`min` above `max`, or an exclusive `min` at `f64::MAX`) are drawn as `min="1" max="0"`. A browser
+can still refuse a number the handler holds near a refused end (Chromium and WebKit refuse a
+typed `4e-324`, which reads as `5e-324`); what the input says and where the two differ is
 [Choice 58](../design.md#choice-exclusive-ends).
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the

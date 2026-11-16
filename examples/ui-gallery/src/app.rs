@@ -587,7 +587,7 @@ mod tests {
         // Without JavaScript the form comes back with the discount as sent.
         let page = sent("100").await;
         assert!(
-            page.text().contains(r#"name="discount" value="100" min="5e-324" max="9.999999999999999e1" step="any""#),
+            page.text().contains(r#"name="discount" value="100" min="5e-324" max="99.99999999999999" step="any""#),
             "{}",
             page.text()
         );

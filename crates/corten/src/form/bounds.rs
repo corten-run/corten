@@ -1,6 +1,6 @@
 //! A number field's allowed values, written once for the input and the handler.
 
-use crate::view::{quoted, Attrs, Render};
+use crate::view::{Attrs, Render};
 
 /// The values a number field allows: from `min` to `max`, in steps of `step` counted from
 /// `min` (1 unless set, as in HTML). One constant gives the input its `min`, `max` and `step`
@@ -45,7 +45,9 @@ use crate::view::{quoted, Attrs, Render};
 /// [`exclusive_min`](Bounds::exclusive_min) and [`exclusive_max`](Bounds::exclusive_max). HTML
 /// has no exclusive `min` or `max`, so the input says the type's next number inside the end
 /// (`5e-324` above 0 in an `f64`), which the browser checks a typed value against and its arrow
-/// keys never step past, and the handler's message, the app's, says "above":
+/// keys never step past, and the handler's message, the app's, says "above". Each number the
+/// input says is the shortest decimal that reads back as it, in exponent form where written out
+/// it would take more than 18 digits, which Chromium and WebKit do not read exactly:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -60,7 +62,7 @@ use crate::view::{quoted, Attrs, Render};
 /// let view = html! { <input type="number" name={f.discount} {..DISCOUNT}> };
 /// assert_eq!(
 ///     view.to_html(),
-///     r#"<input type="number" name="discount" min="5e-324" max="9.999999999999999e1" step="any">"#
+///     r#"<input type="number" name="discount" min="5e-324" max="99.99999999999999" step="any">"#
 /// );
 ///
 /// assert!(DISCOUNT.holds(37.5) && DISCOUNT.holds(5e-324));
@@ -114,7 +116,10 @@ use crate::view::{quoted, Attrs, Render};
 /// ```
 ///
 /// A step not above zero holds nothing, so every value is refused: a browser ignores such a step
-/// and steps by 1, and the handler must not agree to values the input never offered.
+/// and steps by 1, and the handler must not agree to values the input never offered. Any-step
+/// bounds that hold no number, `min` above `max` or an exclusive `min` at the type's largest
+/// number (whose next is infinite, and a browser ignores `min="inf"`), are drawn as the empty
+/// range `min="1" max="0"`.
 ///
 /// The spread writes `min`, `max` and `step`, so a tag that writes one of them as well does
 /// not compile:
@@ -245,9 +250,9 @@ impl<T: Numeric> Spacing<T> for T {
     }
 
     fn render_attrs(bounds: &Bounds<T>, out: &mut String) {
-        quoted(" min", &bounds.min, out);
-        quoted(" max", &bounds.max, out);
-        quoted(" step", &bounds.step, out);
+        number_attr(" min", bounds.min, out);
+        number_attr(" max", bounds.max, out);
+        number_attr(" step", bounds.step, out);
     }
 
     fn size(self) -> Option<T> {
@@ -272,15 +277,23 @@ impl<T: Float> Spacing<T> for AnyStep {
     fn render_attrs(bounds: &Bounds<T, AnyStep>, out: &mut String) {
         // HTML has no exclusive `min` or `max`: a refused end is drawn as the type's next number
         // inside it, which the browser's range check and arrow keys then keep inside.
-        let ends = [(" min", bounds.min, bounds.above, true), (" max", bounds.max, bounds.below, false)];
-        for (name, end, refused, up) in ends {
-            if refused {
-                end.write_next(name, up, out);
-            } else {
-                quoted(name, &end, out);
-            }
+        let min = if bounds.above { bounds.min.next(true) } else { bounds.min };
+        let max = if bounds.below { bounds.max.next(false) } else { bounds.max };
+        // No number from `min` to `max`: past the type's largest number the next is infinite (or
+        // an end is NaN), and a browser ignores a `min` or `max` it cannot read, so it would take
+        // what the handler refuses. A range with nothing in it says so instead.
+        let empty = match min.partial_cmp(&max) {
+            Some(std::cmp::Ordering::Less) => false,
+            Some(std::cmp::Ordering::Equal) => !min.is_finite(),
+            _ => true,
+        };
+        if empty {
+            out.push_str(r#" min="1" max="0" step="any""#);
+            return;
         }
-        out.push_str(" step=\"any\"");
+        number_attr(" min", min, out);
+        number_attr(" max", max, out);
+        out.push_str(r#" step="any""#);
     }
 
     fn size(self) -> Option<T> {
@@ -318,11 +331,17 @@ pub trait Float: Numeric {
     /// Not an infinity or NaN.
     #[doc(hidden)]
     fn is_finite(self) -> bool;
-    /// Writes ` name="…"` with the type's next number above `self` (`up`) or below it, in the
-    /// shortest decimal that reads back as it, in exponent form (`5e-324`), which HTML's numbers
-    /// take and which stays short at the type's ends.
+    /// The type's next number above `self` (`up`) or below it.
     #[doc(hidden)]
-    fn write_next(self, name: &str, up: bool, out: &mut String);
+    fn next(self, up: bool) -> Self;
+}
+
+/// Writes ` name="…"` with `value` as an input's number ([`Numeric::write_value`]).
+pub(super) fn number_attr<T: Numeric>(name: &str, value: T, out: &mut String) {
+    out.push_str(name);
+    out.push_str("=\"");
+    value.write_value(out);
+    out.push('"');
 }
 
 /// A number a [`Bounds`] holds: an integer or a float. Sealed.
@@ -343,6 +362,14 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
     fn shown(self, step: Self) -> String;
+    /// Writes `self` as an input's number (a `min`, or a `value` made in code): the shortest
+    /// decimal that reads back as it, in exponent form where written out it would take more than
+    /// 18 digits (`1e-20`, not `0.00000000000000000001`), which Chromium and WebKit read as a
+    /// different number. A whole number as it is.
+    #[doc(hidden)]
+    fn write_value(self, out: &mut String) {
+        self.render(out)
+    }
 }
 
 mod sealed {
@@ -397,16 +424,27 @@ macro_rules! float {
             fn is_finite(self) -> bool {
                 <$t>::is_finite(self)
             }
-            fn write_next(self, name: &str, up: bool, out: &mut String) {
-                use std::fmt::Write;
-                let next = if up { self.next_up() } else { self.next_down() };
-                // Digits, a point, `e` and `-`: nothing to escape.
-                let _ = write!(out, "{name}=\"{next:e}\"");
+            fn next(self, up: bool) -> Self {
+                if up { self.next_up() } else { self.next_down() }
             }
         }
         impl Numeric for $t {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
+            fn write_value(self, out: &mut String) {
+                // Written out first, as most numbers are short. Measured on 6,222 numbers, each
+                // between the doubles next to it: Chromium and WebKit took every one written out
+                // in up to 19 digits and refused about half of those in 20 or more; in exponent
+                // form, none. Firefox took them all.
+                let start = out.len();
+                self.render(out);
+                if out.as_bytes()[start..].iter().filter(|b| b.is_ascii_digit()).count() > 18 {
+                    use std::fmt::Write;
+                    out.truncate(start);
+                    // Digits, a point, `e` and `-`: nothing to escape.
+                    let _ = write!(out, "{self:e}");
+                }
+            }
             fn read(text: &str) -> Option<Self> {
                 // Rust's grammar is HTML's plus a leading `+`, a point with no digit after it
                 // (`5.`, `5.e3`), and `inf` and `NaN`, which no finite value is.
@@ -529,6 +567,7 @@ impl<const N: usize> std::fmt::Write for Buf<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::AttrValue;
 
     #[test]
     fn whole_numbers_hold_from_min_to_max_on_a_step() {
@@ -695,10 +734,10 @@ mod tests {
             out
         }
         let percent = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
-        assert_eq!(drawn(percent), r#" min="5e-324" max="9.999999999999999e1" step="any""#);
-        assert_eq!(drawn(Bounds::any_step(-1.0, 1.0).exclusive_min()), r#" min="-9.999999999999999e-1" max="1" step="any""#);
+        assert_eq!(drawn(percent), r#" min="5e-324" max="99.99999999999999" step="any""#);
+        assert_eq!(drawn(Bounds::any_step(-1.0, 1.0).exclusive_min()), r#" min="-0.9999999999999999" max="1" step="any""#);
         let ratio = Bounds::any_step(0.0f32, 1.0).exclusive_min().exclusive_max();
-        assert_eq!(drawn(ratio), r#" min="1e-45" max="9.9999994e-1" step="any""#);
+        assert_eq!(drawn(ratio), r#" min="1e-45" max="0.99999994" step="any""#);
         // Each drawn end, sent back as the browser writes it, reads and holds, where the end itself
         // does not: the browser's range check and the handler's agree at the ends.
         let attr = |out: &str, name: &str| {
@@ -718,6 +757,71 @@ mod tests {
             let sent = attr(&drawn(ratio), name).unwrap();
             assert!(ratio.read(&super::super::Entry::typed(&sent)).is_some(), "{sent}");
         }
+    }
+
+    #[test]
+    fn bounds_that_hold_nothing_are_drawn_as_an_empty_range() {
+        fn drawn(bounds: impl Attrs) -> String {
+            let mut out = String::new();
+            bounds.render_attrs(&mut out);
+            out
+        }
+        const EMPTY: &str = r#" min="1" max="0" step="any""#;
+        // Past the type's largest number the next is infinite, and a browser ignores `min="inf"`:
+        // it would take `1`, which the handler refuses.
+        let above_max = Bounds::any_step(f64::MAX, f64::MAX).exclusive_min();
+        assert_eq!(drawn(above_max), EMPTY);
+        assert!(!above_max.holds(f64::MAX) && !above_max.holds(1.0));
+        let below_min = Bounds::any_step(f64::MIN, f64::MIN).exclusive_max();
+        assert_eq!(drawn(below_min), EMPTY);
+        assert!(!below_min.holds(f64::MIN) && !below_min.holds(-1.0));
+        assert_eq!(drawn(Bounds::any_step(f32::MAX, f32::MAX).exclusive_min()), EMPTY);
+        assert_eq!(drawn(Bounds::any_step(f32::MIN, f32::MIN).exclusive_max()), EMPTY);
+        assert_eq!(drawn(Bounds::any_step(1.0, 1.0).exclusive_min()), EMPTY);
+        assert_eq!(drawn(Bounds::any_step(1.0f32, 0.0)), EMPTY);
+        assert_eq!(drawn(Bounds::any_step(f64::NAN, 1.0)), EMPTY);
+        assert!(!Bounds::any_step(f32::MAX, f32::MAX).exclusive_min().holds(f32::MAX));
+        // At the largest number, included, its one number is drawn in exponent form.
+        assert_eq!(
+            drawn(Bounds::any_step(f64::MAX, f64::MAX)),
+            r#" min="1.7976931348623157e308" max="1.7976931348623157e308" step="any""#
+        );
+        assert!(Bounds::any_step(f64::MAX, f64::MAX).holds(f64::MAX));
+        // Infinite ends, which a browser ignores as the handler holds every finite number.
+        let open = Bounds::any_step(f64::NEG_INFINITY, f64::INFINITY);
+        assert_eq!(drawn(open), r#" min="-inf" max="inf" step="any""#);
+        assert_eq!(drawn(open.exclusive_min()), r#" min="-1.7976931348623157e308" max="inf" step="any""#);
+    }
+
+    #[test]
+    fn a_number_past_18_digits_written_out_is_written_with_an_exponent() {
+        let written = |v: &dyn Fn(&mut String)| {
+            let mut out = String::new();
+            v(&mut out);
+            out
+        };
+        assert_eq!(written(&|o| 37.5f64.write_value(o)), "37.5");
+        assert_eq!(written(&|o| 0.1f64.write_value(o)), "0.1");
+        assert_eq!(written(&|o| 1e-18f64.write_value(o)), "0.000000000000000001");
+        assert_eq!(written(&|o| 1e-19f64.write_value(o)), "1e-19");
+        assert_eq!(written(&|o| 1e-20f64.write_value(o)), "1e-20");
+        assert_eq!(written(&|o| (-1e-20f64).write_value(o)), "-1e-20");
+        assert_eq!(written(&|o| 1e-20f32.write_value(o)), "1e-20");
+        assert_eq!(written(&|o| 0.30000000000000004f64.write_value(o)), "0.30000000000000004");
+        assert_eq!(written(&|o| 0.12345678901234568f64.write_value(o)), "0.12345678901234568");
+        assert_eq!(written(&|o| 1.2345678901234567e-5f64.write_value(o)), "1.2345678901234567e-5");
+        assert_eq!(written(&|o| 1e18f64.write_value(o)), "1000000000000000000");
+        assert_eq!(written(&|o| 1e19f64.write_value(o)), "1e19");
+        assert_eq!(written(&|o| u64::MAX.write_value(o)), "18446744073709551615");
+        // Each reads back as the same number.
+        for v in [1e-20, 1.2345678901234567e-5, 5e-324, f64::MAX, -1e-300, 1.5e25] {
+            assert_eq!(written(&|o| v.write_value(o)).parse::<f64>(), Ok(v));
+        }
+        // A number made in code is written so in an input's `value`; a typed one as typed.
+        let mut out = String::new();
+        super::super::Entry::from(1e-20).write_attr(" value", &mut out);
+        super::super::Entry::<f64>::typed("0.00000000000000000001").write_attr(" value", &mut out);
+        assert_eq!(out, r#" value="1e-20" value="0.00000000000000000001""#);
     }
 
     #[test]
