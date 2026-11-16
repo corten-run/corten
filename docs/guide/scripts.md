@@ -569,7 +569,7 @@ input, runs nothing and reports
 control of the name is `[]`, as a group of radios the form left out is.
 Under `corten dev` the console says which as soon as the page draws such a call, before anything
 calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
-([design Limit 31](../design.md#limit-field-kind)). A group is an array, not the
+([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
 could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
@@ -996,3 +996,139 @@ through [views](#views):
 |---|---|---|
 | Live rows | `corten::feed::Feed<Row>`: `write(\|tx\| ...)`, `snapshot()`, `live(since)` (feature `feed`), at a route with `rows = Row` | `subscribe(feed, { snapshot, patch, status }, { signal })` in an `on:connect` handler, `feed` a `FeedUrl<Row>` parameter |
 | Rendering | the rows, rendered with `html!` as `#[component(view)]`s | `rows(body, Row).get(row.id).price = row.price` for each changed row, in the same handler |
+
+## A screen's data
+
+A script that needs data the page did not draw (another set's products, the package for another
+shipping service) reads it from the route that already answers it, typed. A route's `req.screen`
+answers a data client (`Accept: application/json`) with `{"title", "data"}`; `read()` from
+`corten/read` asks it for that, the way a native screen does, and returns `data` typed by the
+route:
+
+| Piece | Server | Browser |
+|---|---|---|
+| The data | a `ToJson` view model, added with `Types::add` | `import("../types/app").SetListing` |
+| The route | `#[route("/sets/{set}", get = set, data = SetListing)]`, whose `get` handler returns `HtmlResult<Screen<SetListing>>` from `req.screen(&listing, doc)` | a handler parameter `@param {ScreenUrl<SetListing>} set` (from `corten/read`), given `url::Set { set }` in the markup |
+| The read | the same handler: a browser gets the page, a script the JSON | `await read(set, { signal })`, which resolves to a `SetListing` |
+
+```rust,ignore
+#[corten::routes]
+pub mod url {
+    #[route("/sets/{set}", get = set, data = SetListing)]
+    pub struct Set<'a> { pub set: &'a str }
+}
+
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+    let listing = SetListing::read(at.set).await?;
+    req.screen(&listing, set_page(&req, &listing))
+}
+
+// In another page's markup: a link per set it can switch to. Without JavaScript it opens the
+// set's page; with it, its click reads the set's data and draws it here, and the address stays.
+// `data-no-prefetch`, or a hover fetches the set's page, which the click then does not use.
+<nav data-no-prefetch>
+    for s in &sets {
+        <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a>
+    }
+</nav>
+```
+
+```js
+import { read, ReadError } from "corten/read";
+/** @import { ScreenUrl } from "corten/read" */
+/** @typedef {import("../types/app").SetListing} SetListing */
+
+/** Each table's switch in progress, aborted by the next, so a slower older answer is not drawn. */
+/** @type {WeakMap<HTMLTableSectionElement, AbortController>} */
+const switching = new WeakMap();
+
+/**
+ * @param {MouseEvent} event @param {HTMLTableSectionElement} rows
+ * @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal
+ */
+export async function switchTo(event, rows, set, signal) {
+  // A click that opens a new tab or window is the link's own.
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  // Aborted when the link leaves the page or the next switch starts. Made before the click is
+  // taken, so a browser that cannot (no AbortSignal.any) throws here and the link opens the page.
+  const mine = new AbortController();
+  const stop = AbortSignal.any([signal, mine.signal]);
+  event.preventDefault();
+  switching.get(rows)?.abort();
+  switching.set(rows, mine);
+  try {
+    const listing = await read(set, { signal: stop });
+    // listing.products is SetListing's, as the server declared it: draw it into rows.
+  } catch (error) {
+    if (stop.aborted) return; // the link left the page, or a later switch took over
+    if (!(error instanceof ReadError)) throw error;
+    location.assign(set); // the read failed (offline, a 401, a redirect): the set's page instead
+  }
+}
+```
+
+The type goes from the route to the script, checked at each step, as a feed's rows do
+([Live rows](#live-rows)). The route names its data (`data = SetListing`), and its `get` handler
+must return `HtmlResult<Screen<SetListing>>`, which only `req.screen` and `req.screen_with_status`
+make, given a `SetListing`: a handler that answers a page or a redirect, or a screen of other
+data, does not compile at its name in `#[route(..)]`, since a script's read would get no data or
+the wrong data. `Screen` is `corten::Screen`, not in the prelude, so an app's own `Screen` type
+is not made ambiguous. `req.screen` takes the data, or a reference, `Box`, `Rc` or `Arc` of
+it, whose JSON is the data's (`req.screen(&listing, ..)` with `listing: &SetListing`). A route
+says `data` without `patches` or `rows`: its `get` answers a screen, not a patch or a feed.
+
+`SetListing` in `ScreenUrl<SetListing>` must come from the declarations `corten::types` writes:
+`import("../types/app").SetListing` written there, `/** @import { SetListing } from "../types/app" */`
+(at any depth, `../../types/app`), or a `@typedef` of either as above; a type the script
+declares itself does not compile, since it would match by name whatever its shape. Corten checks
+the path the name comes from, not the file: a file written by hand at that path is not detected,
+so leave `types/app.d.ts` to `corten::types`. It stands for the Rust type of that name in the component's module, so the call takes
+only a route whose data is that type; a route that names no data, or other data, does not compile
+at the call. In the script a plain string is not a
+`ScreenUrl`, so `read("/sets/m21")` fails `tsc`, and so does a field the data does not have. A
+route says `data` only in its routes module, which mounts it with the `get` it checked; the same
+route mounted again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a
+screen of its data, and one that answers a page or other data does not compile. A response a handler replaces through `DerefMut` or
+middleware answers instead is not checked either. The data must be a type without a borrowed lifetime (`SetListing`,
+not `SetListing<'a>`), since the handler's return type names it.
+
+The read goes through the browser's HTTP cache. Corten tags a `200` it may be asked about again
+with a weak `ETag` and sends it `private, no-cache` by default, so each read asks with the tag it
+kept and an unchanged answer is a `304` with no body; a `Public` route's `max-age` lets a read
+within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
+keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
+while nothing else fetched that URL in between: once the page itself is fetched there again (a
+navigation back to it, or the runtime's hover prefetch of a link to it), the next read gets the
+whole answer. So a link whose click reads, as `switchTo`'s do, sits under `data-no-prefetch`, as
+a sorting table's `<thead>` does ([UI guide](ui.md)): a hover would otherwise have the server
+draw the page, which the click does not use, and replace the read's cached answer. A read rejects with a `ReadError` (from `corten/read`)
+when the answer is not a success (`status` is its status: a 404, a 503, or the 401 that Corten's
+own sign-in refusal, a `Caller` or `Refused::sign_in`, answers a data client where a browser gets
+a redirect) or when there is none it can use (`status` 0, with the error as `cause`: `fetch`'s
+`TypeError` offline, a `SyntaxError` for a success that is not JSON, a `TypeError` for JSON that
+is not a screen's), and with `signal`'s reason once it aborts, even when a failed answer came
+first. A redirect is not followed, since its target is another route's answer: it is a
+`ReadError` 0 with `redirected` true. Corten answers a data client with none, so a redirect is one
+the app writes (its own middleware, or an answer it replaced): send a signed-out visitor to sign
+in with `Refused::sign_in` ([Who is asking](app.md#who-is-asking)), which a script reads as a 401.
+On either, a script can navigate to the URL, and the browser follows the sign-in or the redirect,
+as `switchTo` does ([Limits](../design.md#limit-read-redirect)). In a handler pass `signal`, so a read the element no
+longer needs is dropped when it leaves the page; the runtime reports a handler's rejected promise,
+so a handler whose element can leave while it reads catches the rejection and returns when
+its signal is aborted, as `switchTo` does. A read the user can start again before the last one
+answers gets a controller of its own that the next one aborts, joined to `signal` with
+`AbortSignal.any`, so an older answer that arrives last is never drawn. `switchTo` keeps the
+address: a reload, the back button or a shared link shows the page the address names, not the set
+it drew, so a switch that should be in the address is a plain link the runtime navigates, with no
+handler. The envelope is checked; the data is trusted as the route's own type, as a
+feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)). `read()` returns
+what the handler gives `req.screen`, and any script on this origin can read it with the user's
+cookie, so give it only what the page itself may show that user.
+
+Data the page needs when it loads is a handler argument, which costs no request; data it may never
+need, or that a choice the user makes picks, is a read; a change to what the server draws is a
+`data-patch` form. `corten/read` is a module of its own (749 bytes, 486 gzipped), served only to
+apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
+not download it and the runtime is unchanged; such an app's import map names it on every page (60
+bytes, under 10 compressed)
+([why a read and not a data block](../design.md#choice-screen-read)).

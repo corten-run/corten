@@ -71,9 +71,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
                     match part {
                         [] => {}
-                        // What `#[corten::routes]` passes for a route that says `patches`, and for
-                        // one with actions (`post(sku) = ..`).
-                        [TokenTree::Ident(i)] if i.to_string() == "__patches" || i.to_string() == "__actions" => {}
+                        // What `#[corten::routes]` passes for a route that says `patches`, for one
+                        // with actions (`post(sku) = ..`), and for one that says `data = SetListing`.
+                        [TokenTree::Ident(i)]
+                            if i.to_string() == "__patches" || i.to_string() == "__actions" || i.to_string() == "__data" => {}
                         [key, ..] if is_ident(Some(key), "prefetch") => {
                             if prefetched {
                                 return err(key.span(), "prefetch is named twice");
@@ -118,7 +119,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ),
         );
     }
-    let (attrs, prefetch, patches, actions) = route_prefetch(&item.attrs, item.name.span())?;
+    let (attrs, prefetch, patches, actions, data) = route_prefetch(&item.attrs, item.name.span())?;
     let item = Item { attrs, ..item };
     let Some((path, span)) = item.attr_string("route")? else {
         return err(
@@ -225,6 +226,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         if suffixes.is_empty() { TokenStream::new() } else { q("const WRITTEN: &'static str = __A0;", &[string(&path).into()]) };
     if patches {
         written.extend(q("const PATCHES: bool = true;", &[]));
+    }
+    if data {
+        written.extend(q("type Data = <Self as ::corten::route::__private::RouteData>::Data;", &[]));
+    } else {
+        written.extend(q("type Data = ::corten::route::NoData;", &[]));
     }
     let mut out = item.impl_block(
         "::corten::route::Route",
@@ -837,12 +843,15 @@ fn is_route_query(attr: &proc_macro::Group) -> bool {
 /// `#[route("/..", prefetch = false)]` or `prefetch = costly` (a function of the route): the
 /// attributes with the route's cut to its path, the body of `Route::may_prefetch` (`true`
 /// unless it says otherwise), whether `#[corten::routes]` said the route says `patches`
-/// (`"/..", __patches`, right after the path), for `Route::PATCHES`, and whether it said the
-/// route has actions (`__actions`, after it), whose `do` its query parameters may not be.
-fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool, bool), Error> {
+/// (`"/..", __patches`, right after the path), for `Route::PATCHES`, whether it said the route
+/// has actions (`__actions`, after it), whose `do` its query parameters may not be, and whether
+/// it said the route's screen answers data (`__data`, after those), for `Route::Data`, which
+/// reads the type from the `RouteData` impl the routes module writes where the type is in scope.
+fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool, bool, bool), Error> {
     let mut prefetch: TokenStream = TokenTree::Ident(Ident::new("true", span)).into();
     let mut patches = false;
     let mut actions = false;
+    let mut data = false;
     let mut out = Vec::with_capacity(attrs.len());
     for attr in attrs {
         let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
@@ -862,6 +871,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
             match marker.to_string().as_str() {
                 "__patches" => patches = true,
                 "__actions" => actions = true,
+                "__data" => data = true,
                 _ => break,
             }
             inner.drain(1..3);
@@ -926,7 +936,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
         cut.set_span(attr.span());
         out.push(cut);
     }
-    Ok((out, prefetch, patches, actions))
+    Ok((out, prefetch, patches, actions, data))
 }
 
 /// Where a `prefetch` value that is whole (`false`, `true` or a function's path) is followed by
