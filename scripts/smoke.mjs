@@ -5219,6 +5219,34 @@ async function run(browser) {
     await ind.unrouteAll({ behavior: "ignoreErrors" });
     await ind.context().close();
   }
+  // A part read again whose answer only removes one of the elements it read for, and asks again,
+  // goes on reading for the rest (#1400).
+  {
+    const rm = await (await browser.newContext()).newPage();
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await rm.route("**/smoke/rm-first", (route) => route.fulfill(patchOf('<p id="rm-a">A</p><p id="rm-b">B</p><template data-corten-read-again="1" data-from="/smoke/rm-poll"></template>')));
+    await rm.route("**/smoke/rm-poll", (route) => route.fulfill(patchOf('<template id="rm-a" data-remove></template><template data-corten-read-again="1" data-from="/smoke/rm-poll-2"></template>')));
+    let rmAsked = 0;
+    await rm.route("**/smoke/rm-poll-2", (route) => {
+      rmAsked += 1;
+      return route.fulfill(patchOf('<p id="rm-b">B again</p>'));
+    });
+    await rm.goto(`${base}/`);
+    await rm.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="rm-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="rm-0"><p id="rm-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/rm-first" data-part="rm-a"></template><p id="rm-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/rm-first" data-part="rm-b"></template></div>',
+        ),
+      );
+    });
+    await rm.waitForFunction(() => document.getElementById("rm-b")?.textContent === "B again", null, { timeout: 6000 }).catch(() => {});
+    const rmState = await rm.evaluate(() => [document.getElementById("rm-a") === null, document.getElementById("rm-b")?.textContent]);
+    check("a part read again whose answer removes one of its elements and asks again reads on for the rest", rmAsked === 1 && rmState[0] === true && rmState[1] === "B again", JSON.stringify({ rmAsked, rmState }));
+    await rm.unrouteAll({ behavior: "ignoreErrors" });
+    await rm.context().close();
+  }
   // Nor when one of its tags left while its other moved: read again for one tag, it would no longer
   // guard the other's part, which a form's answer could then replace under it (#1400).
   {
