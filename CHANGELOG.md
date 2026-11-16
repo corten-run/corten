@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Save bounded, structural same-page browser diagnostics when native compiled
+  alert hydration checks fail. Retain only closed categories and numbers, not
+  browser text or URL paths; keep readiness gates and their errors unchanged.
+
 - Include the observer's durable writer in the fixed native replay source closure;
   keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
 
