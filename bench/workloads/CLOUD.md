@@ -21,6 +21,43 @@ systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
 
+## Public Source Permissions
+
+The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
+runs only the fixed public Git clone, fetch and exact detached checkout in a
+`umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
+directories, so unprivileged load generators can read the read-only source bind
+mounts. The same bootstrap serves legacy all-group and every dedicated-group job.
+The source URL, merged-main ancestry, exact HEAD and clean-checkout checks remain
+mandatory. There is no recursive permission repair, contender-user override or
+change to measured templates, gates or workload settings.
+
+The subshell does not change the parent job's private defaults. Provenance logs,
+bootstrap markers and subsequent state files remain `0600`; the exclusive campaign
+root and its private subdirectories remain `0700`. Source readability is not
+permission to open campaign evidence or uploaded control files.
+
+`cloud-remote.test.mjs` includes a real Linux filesystem/Git regression. It redirects
+only the fixed public URL's transport to a local fixture repository, prohibits
+network protocols, and executes the generated clone/fetch/checkout shape against
+an older merged commit. A UID/GID 65534 reader with no root groups reads exact
+committed load-script bytes from the bind-root-equivalent working directory.
+The restrictive-umask negative control must still fail with `EACCES`; both paths
+must leave source clean and control/campaign files private. Success leaves the
+parent shell in `/bench/repo`. Real clone failure and an index-locked checkout
+must retain their nonzero exits and the parent's private umask for EXIT-handler
+output, without continuing to native entry. Run alongside the
+bootstrap and contract tests:
+
+```sh
+node --max-old-space-size=256 --test --test-concurrency=1 bench/workloads/cloud-remote.test.mjs bench/workloads/cloud-bootstrap.test.mjs bench/workloads/cloud-contract.test.mjs
+```
+
+The permission regression explicitly skips outside Linux or without root to
+launch the nonroot reader. It runs no provider, SSH, native workload or framework
+build. These controls do not qualify an official source or establish cloud-run
+readiness; this repair still requires independent source review before merge.
+
 ## Dedicated Group Hosts
 
 A fleet binds the complete current registry to one dedicated host per group. The
