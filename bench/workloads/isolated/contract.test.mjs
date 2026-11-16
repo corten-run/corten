@@ -132,6 +132,10 @@ test("browser recipe supplies only required build/output options, not subset or 
   assert.equal(e.settings.profiles.mobile.cpu, 4); assert.equal(e.settings.actionTimeoutMs, 15000);
   assert.equal(b.validation.validator, null);
   assert.ok(b.validation.requirements.some((g) => g.requirement.includes("summary qualification")));
+  for (const path of ["bench/fullstack-browser/json-records.mjs", "bench/fullstack-browser/cell-records.mjs", "bench/fullstack-browser/large-records.test.mjs"]) {
+    const actual = execFileSync("git", ["show", `${commit}:${path}`], { cwd: root });
+    assert.equal(b.sources.files.find((file) => file.path === path)?.sha256, createHash("sha256").update(actual).digest("hex"), path);
+  }
 });
 
 test("client-heavy keeps bounded sizes, fresh native generation and no --build/cargo override", () => {

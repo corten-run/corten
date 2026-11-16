@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { encoded, sha256 } from "./native-evidence.mjs";
+import { encodedSha256 } from "./json-records.mjs";
 
 const finite = (v) => Number.isFinite(v) && v >= 0;
 const text = (v) => typeof v === "string" && v.length > 0;
@@ -21,7 +21,8 @@ function base(journal) {
     finite(e.startedAt) && e.startedAt <= e.receivedAt && Array.isArray(e.targets))
     || initial[0]?.receivedAt > b.startedAt || terminal[0]?.startedAt < b.terminalStartedAt || terminal[0]?.receivedAt > b.endedAt) block("native-target-inventories-incomplete");
   if (discovery.length !== 1 || discovery[0].params?.discover !== true || !finite(discovery[0].startedAt)
-    || discovery[0].startedAt > discovery[0].receivedAt || JSON.stringify(discovery[0].result) !== "{}"
+    || discovery[0].startedAt > discovery[0].receivedAt || !discovery[0].result || Array.isArray(discovery[0].result)
+    || typeof discovery[0].result !== "object" || Object.keys(discovery[0].result).length !== 0
     || discovery[0].receivedAt > initial[0]?.startedAt) block("native-target-discovery-command-missing");
   for (const domain of ["Runtime", "Page", "Network"]) if (!events.some((e) => e.event === "domain-enabled"
     && e.domain === domain && e.receivedAt <= initial[0]?.startedAt)) block("native-domain-enable-missing");
@@ -29,7 +30,7 @@ function base(journal) {
   return { blocked, block, valid: blocked.length === 0, events, b, target, initial: initial[0], terminal: terminal[0] };
 }
 function result(schema, journal, blocked, fields = {}) {
-  return { schema, status: blocked.length ? "blocked" : "verified", blocked, journalSha256: sha256(encoded(journal ?? null)), ...fields };
+  return { schema, status: blocked.length ? "blocked" : "verified", blocked, journalSha256: encodedSha256(journal ?? null), ...fields };
 }
 /** No worker-network claim: prove only the empty population in a continuous scope. */
 export function replayWorkerAbsence(journal) {

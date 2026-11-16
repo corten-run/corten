@@ -16,7 +16,11 @@ export function remoteFiles(state) {
   const files = contractFiles(state), commit = quote(state.commit), round = quote(state.round);
   // Preserve the fixed packages, paths, unit and all-nine invocation from the contract.
   // Add source provenance before any native entry, rather than importing a sibling tree.
-  const provenance = `timeout 600 git -c core.autocrlf=false clone --quiet --no-checkout ${quote(sourceUrl)} '/bench/repo'
+  // Only public Git source is shared with nonroot bind-mount readers. Keep the
+  // job's private umask for tooling, control files, provenance and campaign data.
+  const provenance = `(
+umask 022
+timeout 600 git -c core.autocrlf=false clone --quiet --no-checkout ${quote(sourceUrl)} '/bench/repo'
 cd '/bench/repo'
 test "$(git config --get remote.origin.url)" = ${quote(sourceUrl)}
 timeout 600 git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
@@ -24,6 +28,8 @@ git merge-base --is-ancestor ${commit} 'origin/main'
 git -c core.autocrlf=false checkout --detach ${commit}
 test "$(git rev-parse HEAD)" = ${commit}
 test -z "$(git status --porcelain --untracked-files=all)"
+)
+cd '/bench/repo'
 { printf 'source-url=%s\\n' ${quote(sourceUrl)}; printf 'source-commit=%s\\n' ${commit}; git rev-parse 'HEAD^{tree}'; } >> '/bench/host.txt'`;
   const original = `timeout 600 git clone --quiet ${sourceUrl} /bench/repo
 cd /bench/repo
