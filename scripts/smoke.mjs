@@ -5257,8 +5257,12 @@ async function run(browser) {
       );
     });
     await rm.waitForSelector('#rmi-0 > template[data-from="/smoke/rmi-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
-    const rmiTags = await rm.evaluate(() => [document.getElementById("rmi-a") === null, Array.from(document.querySelectorAll("#rmi-0 > *")).map((el) => el.id || el.getAttribute("data-from"))]);
-    check("and one whose answer removes the part its tag was inside puts its next tag beside the part it still reads for", rmiTags[0] === true && JSON.stringify(rmiTags[1]) === JSON.stringify(["rmi-b", "/smoke/rmi-poll"]), JSON.stringify(rmiTags));
+    const rmiTags = await rm.evaluate(() => [
+      document.getElementById("rmi-a") === null,
+      document.getElementById("rmi-b")?.nextElementSibling?.getAttribute("data-from") ?? null,
+      Array.from(document.querySelectorAll("#rmi-0 > *")).map((el) => el.id || el.getAttribute("data-from")),
+    ]);
+    check("and one whose answer removes the part its tag was inside puts its next tag beside the part it still reads for", rmiTags[0] === true && rmiTags[1] === "/smoke/rmi-poll", JSON.stringify(rmiTags));
     // A shared read's answer that draws one part and asks again still reads for the other: a form's
     // answer replacing that one while the next read is held stops it.
     await rm.evaluate(() => {
