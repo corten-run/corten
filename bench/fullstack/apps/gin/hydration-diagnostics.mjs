@@ -19,18 +19,17 @@ function clipped(text, bytes = diagnosticLimits.textBytes) {
 function safeText(value) {
   // Event text is untrusted. Keep panic locations/reasons, not embedded values,
   // origins, query strings, quoted payloads or likely credential material.
-  const input = String(value ?? '').slice(0, 4096);
-  if (/(?:\b[\w-]*(?:cookie|authorization|password|secret|token|session|api[_-]?key|headers|origin)[\w-]*["']?\s*[:=]|process\.env|\b(?:Bearer|Basic)\s+\S+)/i.test(input)) return '[sensitive detail redacted]';
+  const input = String(value ?? '').slice(0, 4096)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+  if (/(?:\b[\w-]*(?:cookie|authorization|password|passwd|credential|secret|token|session|(?:api|access|private)[_-]?key|headers|origin)[\w-]*["']?\s*[:=]|process\.env|\b(?:Bearer|Basic)\s+\S+)/i.test(input)) return '[sensitive detail redacted]';
   const text = input
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\b(?:[a-z][a-z\d+.-]*:\/\/|data:|blob:)[^\s<>"'`)]*/gi, '[url]')
     .replace(/\/\/[^\s<>"'`)]+/g, '[url]')
     .replace(/[?#&][^\s<>"'`)]*/g, '[query]')
     .replace(/\b(?:Bearer|Basic)\s+\S+/gi, '[credential]')
     .replace(/\b[A-Z\d._%+-]+@[A-Z\d.-]+\.[A-Z]{2,}\b/gi, '[email]')
     .replace(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/g, '[quoted]')
-    .replace(/[A-Za-z\d+/_=-]{24,}/g, '[opaque]')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+    .replace(/[A-Za-z\d+/_=-]{24,}/g, '[opaque]');
   return clipped(text);
 }
 

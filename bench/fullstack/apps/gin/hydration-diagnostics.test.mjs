@@ -98,6 +98,7 @@ test('events, diagnostic text, resource lists and artifact bytes are capped and 
     'fetch /pkg/app.js?query=short-secret', 'email person@example.test',
     'value "short-secret"', 'value abcdef0123456789abcdef0123456789',
     'process.env={\nPRIVATE:short-secret\n}', 'Cookie:\nshort-secret',
+    'pass\u001b[31mword=short-secret', 'AWS_ACCESS_KEY_ID=AKIA1234567890123456',
   ];
   for (const text of secrets) page.emit('console', { type: () => 'error', text: () => text });
   for (let i = 0; i < 200; i++) page.emit('pageerror', new Error('panic hydration mismatch ' + '\u2603'.repeat(5000)));
@@ -113,7 +114,7 @@ test('events, diagnostic text, resource lists and artifact bytes are capped and 
   assert.ok(detail.dropped > 0);
   assert.ok(detail.state.scripts.length <= diagnosticLimits.resources);
   assert.ok(detail.state.resources.length <= diagnosticLimits.resources);
-  assert.doesNotMatch(raw, /short-secret|private\.invalid|person@|query=|secret=|https?:|abcdef0123456789/);
+  assert.doesNotMatch(raw, /short-secret|AKIA1234567890123456|private\.invalid|person@|query=|secret=|https?:|abcdef0123456789/);
   assert.equal(detail.state.cookies, undefined);
 });
 
