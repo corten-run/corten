@@ -851,9 +851,11 @@ Corten is pre-1.0, so any minor version may change the API.
   navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
   `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
   and an `unstaged` route are not checked, by this check or by the one for a page at a path with
-  no `GET`. Browsers send fetch metadata only over HTTPS or to `localhost`, so a debug build
-  opened over plain HTTP at a LAN address takes a page's own `fetch` that asks for HTML for a
-  navigation, a false 500.
+  no `GET`. Neither is a navigation a service worker passes on with `fetch(event.request)`,
+  which arrives as `navigate` to `empty`, the tab's and a frame's alike; one answered from
+  navigation preload, as Corten's worker does, is checked. Browsers send fetch metadata only
+  over HTTPS or to `localhost`, so a debug build opened over plain HTTP at a LAN address takes a
+  page's own `fetch` that asks for HTML for a navigation, a false 500.
   The watchlist's smoke-only styled-note route redirects without JavaScript, and its dialog and
   `<details>` routes draw the sheet page with them open
   ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).

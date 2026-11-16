@@ -215,6 +215,12 @@ does not say which it answers, since one handler answers both from `req.mode`
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
 HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page, and a
 relayed upstream answer ([a `Relay`](app.md#websockets-and-relays)), checked by the upstream.
+A navigation a service worker passes on with `fetch(event.request)` is left out too, though the
+worker may show its answer as the tab's page: it reaches the server as `navigate` to `empty`,
+the tab's and a frame's alike. Corten's own worker answers a navigation from navigation preload,
+which keeps the destination and is checked, and passes one on only when the browser sent no
+preload for it (the worker was not yet active as it began); an app's own worker that passes on
+every navigation turns the checks off for them.
 Browsers send fetch metadata only to a secure context (HTTPS or `localhost`), so a debug build
 opened over plain HTTP at another address (a phone on the LAN) gets none, and a page's own
 `fetch` that asks for HTML there is taken for a navigation and gets a false 500. The patch check

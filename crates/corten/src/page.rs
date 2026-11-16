@@ -2760,7 +2760,8 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
 /// route's, a false 500; an `unstaged` route skips the stages this runs in, so it is not checked;
 /// an `any = ..` route answers `GET` too; a post whose fetch metadata says it is not a top-level
 /// navigation ([`top_level`]: a page's own `fetch`, a form posted into an `<iframe>`), whose
-/// answer is not shown as the tab's page; a relayed upstream answer (`Relay`), checked by the
+/// answer is not shown as the tab's page, or a navigation a service worker passes on, which may
+/// be; a relayed upstream answer (`Relay`), checked by the
 /// upstream; and a release build compiles none of it, so it never runs in a production image or a
 /// smoke test against one.
 #[cfg(debug_assertions)]
@@ -2792,7 +2793,8 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
 ///
 /// What it does not see: a request whose fetch metadata says it is not a top-level navigation
 /// ([`top_level`]: a page's own `fetch`, an `<iframe>`'s load), whose answer is not shown as the
-/// tab's page; an `unstaged` route skips the stages this runs in; a fragment answered
+/// tab's page, or a navigation a service worker passes on with `fetch(event.request)`, whose
+/// answer may be; an `unstaged` route skips the stages this runs in; a fragment answered
 /// without `corten-patch` (a response built by hand, or one put in place of the handler's through
 /// `DerefMut`) is not a patch to it; a relayed upstream answer (`Relay`), checked by the
 /// upstream; and a release build compiles none of it, so it never runs in a production image or a
@@ -2817,6 +2819,11 @@ fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Met
 /// `Sec-Fetch-Dest: document`. A page's own `fetch` (`cors`, `same-origin`) and an `<iframe>`'s
 /// load (`iframe`) are not, so what answers them is not shown as the tab's page. A client that
 /// sends neither (a router test, an HTTP library) is taken at its `Accept`.
+///
+/// A navigation a service worker answers from navigation preload keeps its destination. One the
+/// worker passes on with `fetch(event.request)` arrives as `navigate` to `empty`, the tab's and
+/// a frame's alike, so it is not taken for the tab's: a known gap, since the worker may show its
+/// answer as the tab's page (design Choice 58).
 ///
 /// Browsers send fetch metadata only to a secure context (HTTPS, `localhost`): a debug build
 /// reached over plain HTTP at another address (a phone on the LAN) gets none, so a page's own

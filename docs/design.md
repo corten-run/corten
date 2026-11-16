@@ -4733,7 +4733,12 @@ rules something out.
 
     What it does not see: a request whose fetch metadata says it is not a top-level navigation (a
     page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
-    tab's page; an `unstaged` route, which skips the stages it runs in; a fragment sent
+    tab's page; a navigation a service worker passes on with `fetch(event.request)`, which reaches
+    the server as `navigate` to `empty` whether it was the tab's or a frame's, so it cannot be
+    told from a frame's and is not checked, though the worker may show its answer as the tab's
+    page (a known gap: Corten's own worker passes one on only when the browser sent no navigation
+    preload for it, as when the worker was not yet active as the navigation began; an app's own
+    worker may pass on every one); an `unstaged` route, which skips the stages it runs in; a fragment sent
     without `corten-patch` (a response built by hand, or one put in place of the handler's through
     `DerefMut`), which is not a patch to it; a relayed upstream answer (a `Relay`'s), checked by
     the upstream; and a release build. A request the runtime makes is
@@ -4752,7 +4757,18 @@ rules something out.
     and none to a URL that is not potentially trustworthy, so none over plain HTTP except to
     `localhost`; probed in Chromium 156: each of those values at `localhost`, and no
     `Sec-Fetch-*` header at all over plain HTTP to the machine's LAN address. That a script cannot
-    set them is [Choice 11](#choice-corten-request-header)'s probe); reasoned (every
+    set them is [Choice 11](#choice-corten-request-header)'s probe); platform (what a navigation
+    a service worker answers carries: the request navigation preload sends keeps the navigation's
+    destination, `document` or `iframe`, and adds `Service-Worker-Navigation-Preload: true`, so
+    it is judged as the browser's own; one the worker passes on with `fetch(event.request)` is a
+    new request, which the
+    [Fetch Request constructor](https://fetch.spec.whatwg.org/#dom-request) gives no destination,
+    and arrives as `navigate` to `empty`, with no `Sec-Fetch-User` and no preload header, for
+    the tab's navigation and a frame's alike; probed in Chromium 156 and WebKit 27.2 at
+    `localhost`, a link, a reload and a frame's load through a worker of each kind. Taking
+    `navigate` to `empty` for the tab's would answer a frame's patch, passed on, with a false
+    500; a header Corten's worker added to say which it was would be a format of Corten's own for
+    one worker's case, and an app's own worker would still pass on navigations unmarked); reasoned (every
     patch-making method sets `corten-patch` through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
     through `Req`);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
@@ -4785,7 +4801,9 @@ rules something out.
     requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
     runtime did not fetch it" stands; or a browser changes the fetch metadata it sends (a
     navigation without `navigate` and `document`, a frame or a script's fetch with them, or the
-    headers sent over plain HTTP too), on which "a top-level navigation" stands.
+    headers sent over plain HTTP too), on which "a top-level navigation" stands; or a navigation
+    a service worker passes on can be told from a frame's (a browser keeping its destination, or
+    an app needing the case checked), when the known gap above closes.
 
     Last checked: 2026-11-16, the router test
     `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
@@ -4794,7 +4812,10 @@ rules something out.
     `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on, on
     `855797ab6`; 2026-11-16, the fetch metadata a page's navigation, form submit, `<iframe>` and
     `fetch` (with `Accept: text/html`) send, probed in Chromium 156 at `localhost` and over plain
-    HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026.
+    HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026;
+    2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
+    and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
+    not run).
 
 ## Rules
 

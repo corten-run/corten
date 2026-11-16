@@ -2965,6 +2965,17 @@ mod post_page_url {
 
     #[route("/relay", any = post_page_drawn)]
     pub struct Relay;
+
+    #[route("/relayed", post = post_page_relayed)]
+    pub struct Relayed;
+}
+
+/// An upstream's page, relayed as it came at a post-only path: the upstream answers for it.
+async fn post_page_relayed() -> crate::Result<crate::Relay> {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("corten-shell", HeaderValue::from_static("0123456789abcdef"));
+    Ok(crate::Relay::new(StatusCode::OK, headers, Body::from("<p>upstream</p>")))
 }
 
 #[crate::routes(area = PostShop)]
@@ -3101,6 +3112,14 @@ async fn plain_patch_or(req: Req) -> HtmlResult {
     req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await
 }
 
+/// An upstream's patch, relayed as it came: the upstream answers for it.
+async fn plain_patch_relayed() -> crate::Result<crate::Relay> {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("corten-patch", HeaderValue::from_static("1"));
+    Ok(crate::Relay::new(StatusCode::OK, headers, Body::from(r#"<p id="msg">upstream</p>"#)))
+}
+
 /// A patch of its own status for the runtime, checked by the handler, and a redirect otherwise.
 async fn plain_patch_moded(req: Req) -> HtmlResult {
     if req.mode == crate::Mode::Action {
@@ -3127,6 +3146,9 @@ mod plain_patch_url {
 
     #[route("/moded", post = plain_patch_moded)]
     pub struct Moded;
+
+    #[route("/relayed", post = plain_patch_relayed)]
+    pub struct Relayed;
 }
 
 /// The app of `plain_patch_url`'s routes.
@@ -3203,6 +3225,19 @@ async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds(
         let (status, headers, body) = plain_patch_send(&router, "POST", "/note", headers).await;
         assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "{what}: {body}");
     }
+    // A navigation a service worker answers with navigation preload keeps its destination (probed
+    // in Chromium 156 and WebKit 27.2): the tab's is checked, a frame's is not. One the worker
+    // passes on with `fetch(event.request)` arrives as `navigate` to `empty`, the tab's and a
+    // frame's alike, so it is not checked (a known gap, design Choice 58).
+    let preload = |dest| [("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", dest), PRELOADED];
+    let (status, _, body) = plain_patch_send(&router, "GET", "/items/7", &preload("document")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a navigation preload for the tab: {body}");
+    let passed_on: &[(&str, &str)] = &[("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "empty")];
+    let framed = preload("iframe");
+    for (headers, what) in [(&framed[..], "a navigation preload for a frame"), (passed_on, "a navigation a worker passes on")] {
+        let (status, headers, body) = plain_patch_send(&router, "GET", "/items/7", headers).await;
+        assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "{what}: {body}");
+    }
 
     let (status, headers, body) = plain_patch_send(&router, "POST", "/or", browser).await;
     assert_eq!((status, headers.contains_key("corten-shell")), (StatusCode::OK, true), "patch_or draws the page: {body}");
@@ -3221,6 +3256,56 @@ async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds(
         let (status, headers, body) = plain_patch_send(app, method, path, &[]).await;
         assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "not a browser, {path}: {body}");
     }
+}
+
+/// The header a request navigation preload sends carries.
+#[cfg(debug_assertions)]
+const PRELOADED: (&str, &str) = ("service-worker-navigation-preload", "true");
+
+/// The runtime's fetch of a whole page (`corten: page`) asks for HTML as a browser does, and
+/// neither check sees it: the runtime puts in place what it gets. Each answer is asserted at once,
+/// so a check that saw it fails with every case it caught.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn the_runtimes_page_fetch_is_not_checked_in_debug_builds() {
+    let (patches, pages) = (plain_patch_router(), post_page_router());
+    let page_fetch: &[(&str, &str)] = &[("accept", "text/html"), ("corten", "page")];
+    let (note, item, saved) = (
+        plain_patch_send(&patches, "POST", "/note", page_fetch).await,
+        plain_patch_send(&patches, "GET", "/items/7", page_fetch).await,
+        post_page_send(&pages, "/save", page_fetch).await,
+    );
+    assert_eq!(
+        [
+            (note.0, note.1.contains_key("corten-patch"), note.2.contains(">saved</p>")),
+            (item.0, item.1.contains_key("corten-patch"), item.2.contains(">item</p>")),
+            (saved.0, saved.1.contains_key("corten-shell"), saved.2.contains("<p>saved</p>")),
+        ],
+        [(StatusCode::OK, true, true); 3],
+        "the patch at /note and /items/7, the page at /save: {} | {} | {}",
+        note.2,
+        item.2,
+        saved.2
+    );
+}
+
+/// An upstream's answer a `Relay` passes on as it came is the upstream's to check: neither check
+/// sees a relayed patch or a relayed page at a post-only path, each sent as it came.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_relayed_answer_is_not_checked_in_debug_builds() {
+    let (patch, page) = (
+        plain_patch_send(&plain_patch_router(), "POST", "/relayed", POST_PAGE_BROWSER).await,
+        post_page_send(&post_page_router(), "/relayed", POST_PAGE_BROWSER).await,
+    );
+    assert_eq!(
+        [
+            (patch.0, patch.1.contains_key("corten-patch"), patch.2.as_str()),
+            (page.0, page.1.contains_key("corten-shell"), page.2.as_str()),
+        ],
+        [(StatusCode::OK, true, r#"<p id="msg">upstream</p>"#), (StatusCode::OK, true, "<p>upstream</p>")],
+        "a relayed patch, and a relayed page at a post-only path"
+    );
 }
 
 /// A release build compiles none of the check: a browser's plain request gets the patch.
