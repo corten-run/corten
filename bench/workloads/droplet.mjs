@@ -429,7 +429,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
         assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
         await own(); check();
-        const deleteProofExpiresAtMs = finishedAtMs + 60000;
+        // Bound the whole local fence operation, including SSH response delivery.
+        // Its start precedes the observation without relying on remote clock skew.
+        const deleteProofExpiresAtMs = startedAtMs + 60000;
         assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
         const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
           rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };

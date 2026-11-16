@@ -292,12 +292,15 @@ running container. Only the probe's exact timeout parent is exempt from its
 process scan. Confirmation rehashes all roots and the custody archive, then
 local custody is checked again. A final fence requires the exact unchanged
 metadata inventory of every root, rehashes the custody archive and renews current
-quiescence before the fresh ownership/account check and 60-second deletion-proof
-deadline. Interrupted receipt rehashing also precedes the final fence. The absolute
+quiescence before the fresh ownership/account check. The 60-second deletion-proof
+window starts locally before the final fence request, conservatively including
+remote work and SSH response delivery without relying on remote clock skew.
+Interrupted receipt rehashing also precedes the final fence. The absolute
 expiry accompanies only this failed-retirement DELETE through asynchronous account
-preflight and private-worker IPC, and is enforced again at private HTTP dispatch;
-it is never restarted or widened by a provider call. Large local checks cannot
-consume that final freshness window. These are current retirement observations,
+preflight and private-worker IPC. Private HTTP dispatch keeps DELETE unbuffered
+until socket/TLS readiness, rechecks expiry before sending, and destroys an unsent
+request at expiry. It is never restarted or widened by a provider call. Large local
+checks cannot consume that final freshness window. These are current retirement observations,
 not a historical accounting or native qualification pass.
 
 `failed-native-host.json` records capture, fresh confirmation and their exact

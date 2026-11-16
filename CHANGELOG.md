@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Bound failed-native retirement proof age from the final SSH request's local
+  start, including response delivery, and refuse expired DELETEs after asynchronous
+  HTTPS socket/TLS setup without queuing a mutation before readiness.
+
 - Add an explicitly approved r21 failed-native custody/retirement action, separate
   from benchmark qualification. Preserve original failure evidence and all reserved
   native roots before fresh terminal-host checks and one owned deletion attempt;

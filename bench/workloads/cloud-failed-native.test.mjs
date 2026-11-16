@@ -122,6 +122,28 @@ test("uncertain worker settlement after failed retirement keeps the operation lo
   await assert.rejects(r.task().retireFailedNative()); assert.equal(r.h.deletes, 1);
 });
 
+test("failed-native proof expiry includes delayed delivery of the final SSH observation", async (t) => {
+  const r = await recoveryHarness(t), realNow = Date.now;
+  let offset = 0, observed;
+  const run = async (binary, args, ...rest) => {
+    const result = await r.run(binary, args, ...rest);
+    if (binary === "ssh" && args.at(-1).includes("CORTEN_FAILED_NATIVE_HOST") && r.probes === 3) {
+      observed = JSON.parse(result.stdout).observedAtMs;
+      await Promise.resolve(); offset = 61001;
+    }
+    return result;
+  };
+  Date.now = () => realNow() + offset;
+  try {
+    await assert.rejects(r.task({ run }).retireFailedNative(), /proof expired/);
+    assert.ok(Date.now() - observed > 60000);
+    assert.equal(r.h.deletes, 0);
+    assert.deepEqual(readFileSync(r.h.statePath), r.originalState);
+    assert.ok(existsSync(join(r.h.local, "failed-native-capture.json")));
+    assert.ok(!existsSync(join(r.h.local, "operation.lock")));
+  } finally { Date.now = realNow; }
+});
+
 test("failed-native proof expiry survives the last asynchronous account preflight", async (t) => {
   const flags = {}, r = await recoveryHarness(t, flags), realNow = Date.now;
   let offset = 0, accounts = 0;

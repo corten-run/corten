@@ -88,10 +88,25 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
         });
       });
       req.on("error", () => finish(stopped(true)));
-      timer = setTimeout(() => finish(stopped(true)), timeout);
-      cancellation = setInterval(() => { if (interrupted()) finish(stopped(true)); }, 25);
-      fresh();
-      req.end(input);
+      timer = setTimeout(() => finish(stopped(true)), deleteProofExpiresAtMs === undefined ? timeout
+        : Math.min(timeout, Math.max(1, deleteProofExpiresAtMs - Date.now())));
+      cancellation = setInterval(() => {
+        try { fresh(); if (interrupted()) finish(stopped(true)); } catch { finish(stopped(true)); }
+      }, 25);
+      const send = () => {
+        if (settled) return;
+        try { fresh(); assert.ok(!interrupted()); req.end(input); } catch { finish(stopped(true)); }
+      };
+      if (deleteProofExpiresAtMs === undefined) send();
+      else {
+        // end() can queue a mutation before an async Agent assigns a socket.
+        // Keep it unbuffered until connection/TLS readiness, then recheck expiry.
+        req.once("socket", (socket) => {
+          if (socket.encrypted && !socket.authorized) socket.once("secureConnect", send);
+          else if (socket.connecting) socket.once("connect", send);
+          else send();
+        });
+      }
     } catch { finish(stopped(true)); }
   });
 }
