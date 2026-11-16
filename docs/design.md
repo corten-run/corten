@@ -4564,9 +4564,9 @@ rules something out.
     costs no route of its own.
 
     Last checked: 2026-11-16, the runtime's size on `fd45ee99d` against `412a3b4c9`, and the
-    module split built from `fd45ee99d`'s runtime; 2026-11-16, the smoke on `41754b202`, its
+    module split built from `fd45ee99d`'s runtime; 2026-11-16, the smoke on `520dc014c`, its
     twenty-eight checks of the mark passing in each of Chromium 156.0.8078.4, Firefox 157.0 and
-    WebKit 27.2 (Playwright 1.64.1), 1,108 checks in all; 2026-11-15, the traversals'
+    WebKit 27.2 (Playwright 1.64.1), 1,116 checks in all; 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
     path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's count on
     `2d619cbb5` against `a3ee0c05f`.
