@@ -2986,6 +2986,149 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_sent_in_release_builds
     }
 }
 
+/// A write that answers a patch whatever asked, with a cookie, `Clear-Site-Data` and a header of
+/// the patch's own.
+async fn plain_patch_only(req: Req) -> HtmlResult {
+    let mut res = req.patch(html! { <p id={MsgId}>"saved"</p> })?;
+    res.headers_mut().insert("clear-site-data", HeaderValue::from_static("\"cache\""));
+    res.headers_mut().insert("x-drawn", HeaderValue::from_static("saved"));
+    Ok(res.with_cookie(SetCookie::new("saved", "1")))
+}
+
+/// The same, read from a route with a parameter.
+async fn plain_patch_item(req: Req, Params(_): Params<plain_patch_url::Item>) -> HtmlResult {
+    req.patch(html! { <p id={MsgId}>"item"</p> })
+}
+
+/// A refusal answered as a patch whatever asked.
+async fn plain_patch_refused(req: Req) -> HtmlResult {
+    req.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, html! { <p id={MsgId}>"refused"</p> })
+}
+
+/// The patch for the runtime, the page otherwise.
+async fn plain_patch_or(req: Req) -> HtmlResult {
+    req.patch_or(html! { <p id={MsgId}>"saved"</p> }, || async { req.test_page("Saved", html! { <p>"saved"</p> }) }).await
+}
+
+/// A patch of its own status for the runtime, checked by the handler, and a redirect otherwise.
+async fn plain_patch_moded(req: Req) -> HtmlResult {
+    if req.mode == crate::Mode::Action {
+        return req.patch_with_status(StatusCode::ACCEPTED, html! { <p id={MsgId}>"queued"</p> });
+    }
+    req.redirect(&plain_patch_url::Or)
+}
+
+#[crate::routes]
+mod plain_patch_url {
+    #[route("/note", post = plain_patch_only)]
+    pub struct Note;
+
+    #[route("/items/{id}", get = plain_patch_item)]
+    pub struct Item {
+        pub id: u32,
+    }
+
+    #[route("/refused", post = plain_patch_refused)]
+    pub struct Refused;
+
+    #[route("/or", get = plain_patch_or, post = plain_patch_or)]
+    pub struct Or;
+
+    #[route("/moded", post = plain_patch_moded)]
+    pub struct Moded;
+}
+
+/// The app of `plain_patch_url`'s routes.
+fn plain_patch_router() -> crate::Router {
+    App::new(plain_patch_url::router()).error_page(test_error_page, ()).router()
+}
+
+/// An app of one hand-built route, `/table`, which no routes module declares.
+fn plain_patch_table() -> crate::Router {
+    let table = Table::new().route("/table", crate::router::post(plain_patch_only));
+    App::new(Routes::from(table)).error_page(test_error_page, ()).router()
+}
+
+async fn plain_patch_send(
+    router: &crate::Router,
+    method: &str,
+    path: &str,
+    headers: &[(&'static str, &'static str)],
+) -> (StatusCode, HeaderMap, String) {
+    let mut req = Request::builder().method(method).uri(path);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (status, headers) = (res.status(), res.headers().clone());
+    let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, headers, String::from_utf8(body.to_vec()).unwrap())
+}
+
+/// A patch answering a browser's plain request (no `data-patch`, asking for HTML) is an error in a
+/// debug build: the browser would show the fragment as the whole page. The error names the method
+/// and the route (its pattern, or the path of a route the routes module does not declare) and says
+/// what to answer instead; the handler's cookies and `Clear-Site-Data` go out with it, and the
+/// patch's other headers do not. A refusal's patch is one too. `req.patch_or`, a handler that
+/// checks `req.mode == Mode::Action`, the runtime's `data-patch` fetch and a client that does not
+/// ask for HTML are not.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds() {
+    let (router, table) = (plain_patch_router(), plain_patch_table());
+    let browser = POST_PAGE_BROWSER;
+    let action: &[(&str, &str)] = &[("accept", "text/html"), ("corten", "action")];
+    let (status, headers, body) = plain_patch_send(&router, "POST", "/note", browser).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains("plain POST to /note (no data-patch, asking for HTML) was answered with a patch"),
+        "it names the route outside dev too: {body}"
+    );
+    assert!(body.contains("req.patch_or") && body.contains("req.mode == Mode::Action"), "and what to answer instead: {body}");
+    assert!(!headers.contains_key("corten-patch"), "the error page, not the patch: {headers:?}");
+    let cookies: Vec<_> = headers.get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
+    assert!(cookies.iter().any(|c| c.starts_with("saved=1;")), "the handler's cookie is kept: {cookies:?}");
+    assert_eq!(headers.get("clear-site-data").map(|v| v.to_str().unwrap()), Some("\"cache\""), "and Clear-Site-Data");
+    assert!(headers.get("x-drawn").is_none(), "the patch's own header is not: {headers:?}");
+    let (status, _, body) = plain_patch_send(&router, "GET", "/items/7", browser).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a link or a reload: {body}");
+    assert!(body.contains("plain GET to /items/{id} "), "the route's pattern: {body}");
+    let (status, _, body) = plain_patch_send(&router, "POST", "/refused", browser).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a refusal's patch: {body}");
+    let (status, _, body) = plain_patch_send(&table, "POST", "/table", browser).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a hand-built route: {body}");
+    assert!(body.contains("plain POST to /table "), "named by its path: {body}");
+
+    let (status, headers, body) = plain_patch_send(&router, "POST", "/or", browser).await;
+    assert_eq!((status, headers.contains_key("corten-shell")), (StatusCode::OK, true), "patch_or draws the page: {body}");
+    let (status, headers, _) = plain_patch_send(&router, "POST", "/or", action).await;
+    assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "and the patch for the runtime");
+    assert_eq!(plain_patch_send(&router, "POST", "/moded", browser).await.0, StatusCode::SEE_OTHER, "a Mode::Action check");
+    let (status, headers, _) = plain_patch_send(&router, "POST", "/moded", action).await;
+    assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::ACCEPTED, true), "its patch for the runtime");
+    for (app, method, path) in [(&router, "POST", "/note"), (&router, "GET", "/items/7"), (&table, "POST", "/table")] {
+        let (status, headers, body) = plain_patch_send(app, method, path, action).await;
+        assert_eq!(
+            (status, headers.contains_key("corten-patch")),
+            (StatusCode::OK, true),
+            "a data-patch fetch of {path}: {body}"
+        );
+        let (status, headers, body) = plain_patch_send(app, method, path, &[]).await;
+        assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "not a browser, {path}: {body}");
+    }
+}
+
+/// A release build compiles none of the check: a browser's plain request gets the patch.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_patch_answering_a_browsers_plain_request_is_sent_in_release_builds() {
+    let (router, table) = (plain_patch_router(), plain_patch_table());
+    for (app, method, path) in [(&router, "POST", "/note"), (&router, "GET", "/items/7"), (&table, "POST", "/table")] {
+        let (status, headers, body) = plain_patch_send(app, method, path, POST_PAGE_BROWSER).await;
+        assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "{path}: {body}");
+    }
+}
+
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in
 /// a debug build, as the browser stops it there; one the policy allows, a path, a page's own
 /// host and a `GET` are not, and an area's policy or the sending page's counts.

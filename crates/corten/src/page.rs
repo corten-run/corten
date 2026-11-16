@@ -2575,16 +2575,50 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
         return res;
     }
     let Some((route, false)) = crate::route::chosen(&shared.pages, path) else { return res };
-    let (parts, _) = res.into_parts();
-    let mut error = unserved(
+    in_place_of(
+        res,
         shared.dev,
         format!(
             "a browser's post to {route}, which has no GET handler, was answered with a page, so the browser shows it at an address that answers 405 when it is opened again: post a form that belongs to one page to that page's route (get = .., post = ..), or answer this write with req.redirect or req.redirect_with_notice once it is done and draw a page only to refuse it (req.invalid)"
         ),
     )
-    .into_response();
-    // What the browser would have done with the page's cookies and stored data, it does with the
-    // error's; the page's other headers are the page's own, which the error page's replace.
+}
+
+/// A patch answering a browser's plain request (no `data-patch`, asking for HTML): the browser
+/// shows the fragment as the whole document, with no layout, stylesheets or navigation, at the
+/// request's address. [`Req::patch_or`] answers the page or a redirect then, and a handler that
+/// checks `req.mode == Mode::Action` itself answers its patch only in that mode. The route is
+/// named as `#[corten::routes]` declares it, and by the request's path where no macro route
+/// matches it (a hand-built `Table`'s). The handler's cookies and `Clear-Site-Data` go out with
+/// the error page, as for [`page_where_no_page_is`].
+///
+/// What it does not see: an `unstaged` route skips the stages this runs in; a fragment answered
+/// without `corten-patch` (a response built by hand, or one put in place of the handler's through
+/// `DerefMut`) is not a patch to it; and a release build compiles none of it, so it never runs in
+/// a production image or a smoke test against one.
+#[cfg(debug_assertions)]
+fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Method, path: &str) -> Response {
+    if !res.headers().contains_key(PATCH_HEADER) || res.extensions().get::<crate::answer::Relayed>().is_some() {
+        return res;
+    }
+    let route = crate::route::chosen(&shared.pages, path).map_or(path, |(route, _)| route);
+    in_place_of(
+        res,
+        shared.dev,
+        format!(
+            "a browser's plain {method} to {route} (no data-patch, asking for HTML) was answered with a patch, which the browser shows as the whole page, with no layout, stylesheets or navigation: answer both with req.patch_or(view, || async {{ .. }}), which draws the page or a redirect when the runtime did not ask, or check req.mode == Mode::Action before req.patch"
+        ),
+    )
+}
+
+/// The error a debug build answers in place of `res`, an answer a browser would have shown wrongly.
+/// What the browser would have done with its cookies and stored data, it does with the error's
+/// (`Set-Cookie`, `Clear-Site-Data`); its other headers are its own, which the error page's
+/// replace.
+#[cfg(debug_assertions)]
+fn in_place_of(res: Response, dev: bool, message: String) -> Response {
+    let (parts, _) = res.into_parts();
+    let mut error = unserved(dev, message).into_response();
     for name in [header::SET_COOKIE, HeaderName::from_static("clear-site-data")] {
         for value in parts.headers.get_all(&name) {
             error.headers_mut().append(name.clone(), value.clone());
@@ -2772,14 +2806,26 @@ async fn page_or_error<S: crate::app::Steps>(
     let mut req = req;
     #[cfg(debug_assertions)]
     let check = req.extensions_mut().remove::<crate::security::FormCheck>();
-    // A browser's plain form post, which leaves it at the address it posted to.
+    // A browser's plain request (a link, a reload, a form without JavaScript), which shows what
+    // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
-    let plain_post = browser && !fetched && mode == Mode::Document && req.method() == http::Method::POST;
+    let plain = (browser && !fetched && mode == Mode::Document).then(|| req.method().clone());
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
-    let res = if plain_post { page_where_no_page_is(res, shared, asked.path()) } else { res };
+    let res = match &plain {
+        Some(method) => {
+            let res = patch_where_a_page_belongs(res, shared, method, asked.path());
+            // A plain form post, which leaves the browser at the address it posted to.
+            if *method == http::Method::POST {
+                page_where_no_page_is(res, shared, asked.path())
+            } else {
+                res
+            }
+        }
+        None => res,
+    };
     #[cfg(debug_assertions)]
     let mut res = redirect_outside_form_action(res, check.as_ref(), shared.dev);
     #[cfg(not(debug_assertions))]

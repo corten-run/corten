@@ -92,9 +92,10 @@ fn StyledNote() -> impl Patch {
 }
 
 /// Answers with the note: the patch brings the area's stylesheet, so the note is styled on a page
-/// outside the area as it is on one inside.
+/// outside the area as it is on one inside. Without JavaScript the form goes back to the
+/// watchlist, where the test writes it.
 async fn styled(req: Req) -> HtmlResult {
-    req.patch(StyledNote {})
+    req.patch_or(StyledNote {}, || async { req.redirect(&crate::app::url::Home::default()) }).await
 }
 
 #[derive(Id)]
@@ -129,19 +130,23 @@ fn Sheet() -> impl Patch {
     }
 }
 
-/// Answers any form that asks with the dialog drawn open.
+/// Answers any form that asks with the dialog drawn open; without JavaScript, the sheet's page.
 async fn open_sheet(req: Req) -> HtmlResult {
-    req.patch(Sheet {})
+    req.patch_or(Sheet {}, || async { req.redirect(&url::SheetPage) }).await
 }
 
-/// Answers with the `<details>` drawn open.
+/// Answers with the `<details>` drawn open; without JavaScript, the sheet's page.
 async fn open_more(req: Req) -> HtmlResult {
-    req.patch(html! {
-        <details id={SmokeMoreId} open>
-            <summary>"More"</summary>
-            <p>"Unfolded"</p>
-        </details>
-    })
+    req.patch_or(
+        html! {
+            <details id={SmokeMoreId} open>
+                <summary>"More"</summary>
+                <p>"Unfolded"</p>
+            </details>
+        },
+        || async { req.redirect(&url::SheetPage) },
+    )
+    .await
 }
 
 #[derive(Id)]
